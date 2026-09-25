@@ -1,0 +1,35 @@
+From 91c5ff0d455f822a8327dc657b68ce447a0fd028 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:52:23 -0500
+Subject: [PATCH 325/638] cef: register builtin trace categories
+
+Apply CEF's upstream trace_event patch so compile-time trace validation recognizes cef and cef.client.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-trace-category-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 17's Perfetto constexpr failure resolves to the missing cef.client builtin category, not a GCC constexpr defect
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 52dac911; 51c6ff3123
+---
+ base/trace_event/builtin_categories.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/base/trace_event/builtin_categories.h b/base/trace_event/builtin_categories.h
+index 5f6efb0e93..626830a66b 100644
+--- a/base/trace_event/builtin_categories.h
++++ b/base/trace_event/builtin_categories.h
+@@ -65,6 +65,8 @@
+   X("cc")                                                                \
+   X("cc.debug")                                                          \
+   X("cdp.perf")                                                          \
++  X("cef")                                                               \
++  X("cef.client")                                                        \
+   X("chromeos")                                                          \
+   X("cma")                                                               \
+   X("compositor")                                                        \

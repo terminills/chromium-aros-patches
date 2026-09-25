@@ -1,0 +1,42 @@
+From 15d8a11ad7f90a79b94a05ebcad7c9e36ae0c349 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:42:27 -0500
+Subject: [PATCH 035/638] variations: place AROS in the desktop Unix cohort
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: The closed Variations Study::Platform wire enum has no AROS or unknown value, so the native AROS build reached an intentional #error.
+
+FIX_REASON: Map AROS to the existing Linux desktop-study cohort alongside BSD and Solaris while retaining AROS as its native build identity.
+
+SCOPE: components/variations/client_filterable_state.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/components/variations/variations/client_filterable_state.o
+
+RISK: low; this affects server-side field-trial eligibility only and introduces no Linux API assumptions.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/variations/client_filterable_state.cc | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/components/variations/client_filterable_state.cc b/components/variations/client_filterable_state.cc
+index a65c1dfc6a..e289fd0696 100644
+--- a/components/variations/client_filterable_state.cc
++++ b/components/variations/client_filterable_state.cc
+@@ -56,9 +56,10 @@ Study::Platform ClientFilterableState::GetCurrentPlatform() {
+   return Study::PLATFORM_ANDROID;
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return Study::PLATFORM_FUCHSIA;
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_BSD) || BUILDFLAG(IS_SOLARIS)
+-  // Default BSD and SOLARIS to Linux to not break those builds, although these
+-  // platforms are not officially supported by Chrome.
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_BSD) || BUILDFLAG(IS_SOLARIS) || \
++    BUILDFLAG(IS_AROS)
++  // The Variations wire schema has no identifiers for these desktop targets.
++  // Use its Linux cohort without changing their native build identities.
+   return Study::PLATFORM_LINUX;
+ #else
+ #error Unknown platform

@@ -1,0 +1,39 @@
+From 13c983386d5834ad09526b25920b73f9f4c0f96e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:47:53 -0500
+Subject: [PATCH 07/43] cef: use Chromium user data path on AROS
+
+Add the missing AROS branch in CEF resource_util and delegate to chrome::GetDefaultUserDataDirectory, preserving Chromium's established AROS path policy.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-user-data-path-integrated
+
+AI_ASSUMPTION: CEF should share Chromium's AROS user-data location semantics instead of inventing a second path
+
+AI_VALIDATION: libcef_static build 17 failed because CEF declared no GetDefaultUserDataDirectory implementation for AROS
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 7034fe1f; Chromium chrome/common/chrome_paths.cc
+---
+ libcef/common/resource_util.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/libcef/common/resource_util.cc b/libcef/common/resource_util.cc
+index b8cba46b..e1b8ac90 100644
+--- a/libcef/common/resource_util.cc
++++ b/libcef/common/resource_util.cc
+@@ -54,6 +54,12 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+   return true;
+ }
+ 
++#elif BUILDFLAG(IS_AROS)
++
++bool GetDefaultUserDataDirectory(base::FilePath* result) {
++  return chrome::GetDefaultUserDataDirectory(result);
++}
++
+ #elif BUILDFLAG(IS_MAC)
+ 
+ // Based on chrome/common/chrome_paths_mac.mm.

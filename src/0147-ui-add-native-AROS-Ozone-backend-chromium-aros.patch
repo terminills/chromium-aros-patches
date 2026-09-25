@@ -1,0 +1,1314 @@
+From 522c7ed280d715761c14a3b26ea8b6fdd4316cd6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 19:25:01 -0500
+Subject: [PATCH 147/638] ui: add native AROS Ozone backend [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: implemented
+
+ROOT_CAUSE: The AROS port could render through Chromium's headless platform but had no PlatformWindow, screen, or SurfaceOzoneCanvas implementation capable of opening an Intuition window and presenting compositor pixels.
+
+FIX_REASON: Add an in-tree AROS Ozone backend with native Intuition window ownership, a shared IDCMP port, public-screen discovery, a Skia BGRA raster canvas, and cybergraphics damage presentation. Keep unsupported GPU and native-pixmap capabilities explicit so graphics.hidd/Gallium/Vulkan acceleration can be added behind the same platform boundary.
+
+SCOPE: New ui/ozone/platform/aros source set only; no platform is selected until the separate registration commit.
+
+VALIDATION: ninja -C out/aros-windowed -j1 ui/ozone:ozone completed successfully after compiling every new backend source.
+
+RISK: medium; the first slice is software-presented and polls IDCMP at 8 ms pending direct MessagePumpAROS signal integration, while shared-port teardown follows Intuition's explicit ownership contract.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/ozone/platform/aros/BUILD.gn               |  46 +++
+ ui/ozone/platform/aros/aros_screen.cc         |  91 +++++
+ ui/ozone/platform/aros/aros_screen.h          |  40 ++
+ .../platform/aros/aros_surface_factory.cc     |  94 +++++
+ ui/ozone/platform/aros/aros_surface_factory.h |  30 ++
+ ui/ozone/platform/aros/aros_window.cc         | 384 ++++++++++++++++++
+ ui/ozone/platform/aros/aros_window.h          | 106 +++++
+ ui/ozone/platform/aros/aros_window_manager.cc | 116 ++++++
+ ui/ozone/platform/aros/aros_window_manager.h  |  67 +++
+ .../aros/client_native_pixmap_factory_aros.cc |  15 +
+ .../aros/client_native_pixmap_factory_aros.h  |  18 +
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 164 ++++++++
+ ui/ozone/platform/aros/ozone_platform_aros.h  |  16 +
+ 13 files changed, 1187 insertions(+)
+ create mode 100644 ui/ozone/platform/aros/BUILD.gn
+ create mode 100644 ui/ozone/platform/aros/aros_screen.cc
+ create mode 100644 ui/ozone/platform/aros/aros_screen.h
+ create mode 100644 ui/ozone/platform/aros/aros_surface_factory.cc
+ create mode 100644 ui/ozone/platform/aros/aros_surface_factory.h
+ create mode 100644 ui/ozone/platform/aros/aros_window.cc
+ create mode 100644 ui/ozone/platform/aros/aros_window.h
+ create mode 100644 ui/ozone/platform/aros/aros_window_manager.cc
+ create mode 100644 ui/ozone/platform/aros/aros_window_manager.h
+ create mode 100644 ui/ozone/platform/aros/client_native_pixmap_factory_aros.cc
+ create mode 100644 ui/ozone/platform/aros/client_native_pixmap_factory_aros.h
+ create mode 100644 ui/ozone/platform/aros/ozone_platform_aros.cc
+ create mode 100644 ui/ozone/platform/aros/ozone_platform_aros.h
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+new file mode 100644
+index 0000000000..25a43504a3
+--- /dev/null
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -0,0 +1,46 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++visibility = [ "//ui/ozone/*" ]
++
++source_set("aros") {
++  sources = [
++    "aros_screen.cc",
++    "aros_screen.h",
++    "aros_surface_factory.cc",
++    "aros_surface_factory.h",
++    "aros_window.cc",
++    "aros_window.h",
++    "aros_window_manager.cc",
++    "aros_window_manager.h",
++    "client_native_pixmap_factory_aros.cc",
++    "client_native_pixmap_factory_aros.h",
++    "ozone_platform_aros.cc",
++    "ozone_platform_aros.h",
++  ]
++
++  defines = [ "OZONE_IMPLEMENTATION" ]
++
++  deps = [
++    "//base",
++    "//skia",
++    "//ui/base",
++    "//ui/base/cursor",
++    "//ui/base/ime",
++    "//ui/display",
++    "//ui/events",
++    "//ui/events/ozone/layout",
++    "//ui/events/platform",
++    "//ui/gfx/geometry",
++    "//ui/ozone:ozone_base",
++    "//ui/ozone/common",
++    "//ui/platform_window",
++  ]
++
++  libs = [
++    "cybergraphics",
++    "graphics",
++    "intuition",
++  ]
++}
+diff --git a/ui/ozone/platform/aros/aros_screen.cc b/ui/ozone/platform/aros/aros_screen.cc
+new file mode 100644
+index 0000000000..dfb454390c
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_screen.cc
+@@ -0,0 +1,91 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/aros_screen.h"
++
++#include "base/logging.h"
++#include "ui/display/display.h"
++
++#include <intuition/intuition.h>
++#include <proto/intuition.h>
++
++namespace ui {
++
++namespace {
++
++constexpr int64_t kArosDisplayId = 1;
++constexpr int kFallbackWidth = 1024;
++constexpr int kFallbackHeight = 768;
++
++gfx::Rect GetPrimaryScreenBounds() {
++  struct Screen* screen = LockPubScreen(nullptr);
++  if (!screen) {
++    return gfx::Rect(0, 0, kFallbackWidth, kFallbackHeight);
++  }
++  const gfx::Rect bounds(0, 0, screen->Width, screen->Height);
++  UnlockPubScreen(nullptr, screen);
++  return bounds;
++}
++
++}  // namespace
++
++ArosScreen::ArosScreen() {
++  display::Display display(kArosDisplayId);
++  display.SetScaleAndBounds(1.0f, GetPrimaryScreenBounds());
++  display_list_.AddDisplay(display, display::DisplayList::Type::PRIMARY);
++  LOG(INFO) << "[Chromium:Ozone:AROS] primary display="
++            << display.bounds().ToString();
++}
++
++ArosScreen::~ArosScreen() = default;
++
++const std::vector<display::Display>& ArosScreen::GetAllDisplays() const {
++  return display_list_.displays();
++}
++
++display::Display ArosScreen::GetPrimaryDisplay() const {
++  const auto it = display_list_.GetPrimaryDisplayIterator();
++  DCHECK(it != display_list_.displays().end());
++  return *it;
++}
++
++display::Display ArosScreen::GetDisplayForAcceleratedWidget(
++    gfx::AcceleratedWidget widget) const {
++  return GetPrimaryDisplay();
++}
++
++gfx::Point ArosScreen::GetCursorScreenPoint() const {
++  struct Screen* screen = LockPubScreen(nullptr);
++  if (!screen) {
++    return gfx::Point();
++  }
++  const gfx::Point point(screen->MouseX, screen->MouseY);
++  UnlockPubScreen(nullptr, screen);
++  return point;
++}
++
++gfx::AcceleratedWidget ArosScreen::GetAcceleratedWidgetAtScreenPoint(
++    const gfx::Point& point) const {
++  return gfx::kNullAcceleratedWidget;
++}
++
++display::Display ArosScreen::GetDisplayNearestPoint(
++    const gfx::Point& point) const {
++  return GetPrimaryDisplay();
++}
++
++display::Display ArosScreen::GetDisplayMatching(
++    const gfx::Rect& match_rect) const {
++  return GetPrimaryDisplay();
++}
++
++void ArosScreen::AddObserver(display::DisplayObserver* observer) {
++  display_list_.AddObserver(observer);
++}
++
++void ArosScreen::RemoveObserver(display::DisplayObserver* observer) {
++  display_list_.RemoveObserver(observer);
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_screen.h b/ui/ozone/platform/aros/aros_screen.h
+new file mode 100644
+index 0000000000..fa6033bd6b
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_screen.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_SCREEN_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_SCREEN_H_
++
++#include <vector>
++
++#include "ui/display/display_list.h"
++#include "ui/ozone/public/platform_screen.h"
++
++namespace ui {
++
++class ArosScreen : public PlatformScreen {
++ public:
++  ArosScreen();
++  ~ArosScreen() override;
++
++  const std::vector<display::Display>& GetAllDisplays() const override;
++  display::Display GetPrimaryDisplay() const override;
++  display::Display GetDisplayForAcceleratedWidget(
++      gfx::AcceleratedWidget widget) const override;
++  gfx::Point GetCursorScreenPoint() const override;
++  gfx::AcceleratedWidget GetAcceleratedWidgetAtScreenPoint(
++      const gfx::Point& point) const override;
++  display::Display GetDisplayNearestPoint(
++      const gfx::Point& point) const override;
++  display::Display GetDisplayMatching(
++      const gfx::Rect& match_rect) const override;
++  void AddObserver(display::DisplayObserver* observer) override;
++  void RemoveObserver(display::DisplayObserver* observer) override;
++
++ private:
++  display::DisplayList display_list_;
++};
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_SCREEN_H_
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+new file mode 100644
+index 0000000000..e7c350f4bc
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -0,0 +1,94 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/aros_surface_factory.h"
++
++#include <memory>
++
++#include "base/logging.h"
++#include "skia/ext/legacy_display_globals.h"
++#include "third_party/skia/include/core/SkCanvas.h"
++#include "third_party/skia/include/core/SkImageInfo.h"
++#include "third_party/skia/include/core/SkPixmap.h"
++#include "third_party/skia/include/core/SkSurface.h"
++#include "third_party/skia/include/core/SkSurfaceProps.h"
++#include "ui/gfx/vsync_provider.h"
++#include "ui/ozone/platform/aros/aros_window_manager.h"
++#include "ui/ozone/public/surface_ozone_canvas.h"
++
++namespace ui {
++
++namespace {
++
++class ArosCanvasSurface : public SurfaceOzoneCanvas {
++ public:
++  ArosCanvasSurface(ArosWindowManager* window_manager,
++                    gfx::AcceleratedWidget widget)
++      : window_manager_(window_manager), widget_(widget) {}
++
++  ~ArosCanvasSurface() override = default;
++
++  void ResizeCanvas(const gfx::Size& viewport_size, float scale) override {
++    size_ = viewport_size;
++    const SkImageInfo info =
++        SkImageInfo::Make(viewport_size.width(), viewport_size.height(),
++                          kBGRA_8888_SkColorType, kPremul_SkAlphaType);
++    const SkSurfaceProps props =
++        skia::LegacyDisplayGlobals::GetSkSurfaceProps();
++    surface_ = SkSurfaces::Raster(info, &props);
++    LOG(INFO) << "[Chromium:Ozone:AROS] resized software canvas widget="
++              << widget_ << " size=" << viewport_size.ToString()
++              << " scale=" << scale;
++  }
++
++  SkCanvas* GetCanvas() override {
++    return surface_ ? surface_->getCanvas() : nullptr;
++  }
++
++  void PresentCanvas(const gfx::Rect& damage) override {
++    if (!surface_) {
++      return;
++    }
++    SkPixmap pixels;
++    if (!surface_->peekPixels(&pixels)) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS] cannot access raster canvas widget="
++                 << widget_;
++      return;
++    }
++    if (!window_manager_->PresentCanvas(widget_, pixels.addr(),
++                                        pixels.rowBytes(), size_, damage)) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS] present failed widget=" << widget_
++                 << " damage=" << damage.ToString();
++    }
++  }
++
++  std::unique_ptr<gfx::VSyncProvider> CreateVSyncProvider() override {
++    return nullptr;
++  }
++
++ private:
++  raw_ptr<ArosWindowManager> window_manager_;
++  const gfx::AcceleratedWidget widget_;
++  gfx::Size size_;
++  sk_sp<SkSurface> surface_;
++};
++
++}  // namespace
++
++ArosSurfaceFactory::ArosSurfaceFactory(ArosWindowManager* window_manager)
++    : window_manager_(window_manager) {}
++
++ArosSurfaceFactory::~ArosSurfaceFactory() = default;
++
++std::vector<gl::GLImplementationParts>
++ArosSurfaceFactory::GetAllowedGLImplementations() {
++  return {};
++}
++
++std::unique_ptr<SurfaceOzoneCanvas> ArosSurfaceFactory::CreateCanvasForWidget(
++    gfx::AcceleratedWidget widget) {
++  return std::make_unique<ArosCanvasSurface>(window_manager_, widget);
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.h b/ui/ozone/platform/aros/aros_surface_factory.h
+new file mode 100644
+index 0000000000..33517b0d9d
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_surface_factory.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
++
++#include "base/memory/raw_ptr.h"
++#include "ui/ozone/public/surface_factory_ozone.h"
++
++namespace ui {
++
++class ArosWindowManager;
++
++class ArosSurfaceFactory : public SurfaceFactoryOzone {
++ public:
++  explicit ArosSurfaceFactory(ArosWindowManager* window_manager);
++  ~ArosSurfaceFactory() override;
++
++  std::vector<gl::GLImplementationParts> GetAllowedGLImplementations() override;
++  std::unique_ptr<SurfaceOzoneCanvas> CreateCanvasForWidget(
++      gfx::AcceleratedWidget widget) override;
++
++ private:
++  raw_ptr<ArosWindowManager> window_manager_;
++};
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+new file mode 100644
+index 0000000000..122fed651f
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -0,0 +1,384 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/aros_window.h"
++
++#include <algorithm>
++#include <limits>
++
++#include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "ui/base/cursor/platform_cursor.h"
++#include "ui/display/types/display_constants.h"
++#include "ui/ozone/platform/aros/aros_window_manager.h"
++
++#include <cybergraphx/cybergraphics.h>
++#include <intuition/intuition.h>
++#include <proto/cybergraphics.h>
++#include <proto/exec.h>
++#include <proto/graphics.h>
++#include <proto/intuition.h>
++
++namespace ui {
++
++namespace {
++
++constexpr int kDefaultWindowWidth = 1024;
++constexpr int kDefaultWindowHeight = 720;
++constexpr ULONG kWindowEventMask = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE |
++                                   IDCMP_CHANGEWINDOW | IDCMP_REFRESHWINDOW |
++                                   IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW;
++
++int PositiveOrDefault(int value, int fallback) {
++  return value > 0 ? value : fallback;
++}
++
++}  // namespace
++
++ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
++                       ArosWindowManager* manager,
++                       const gfx::Rect& requested_bounds)
++    : delegate_(delegate), manager_(manager), bounds_(requested_bounds) {
++  bounds_.set_width(PositiveOrDefault(bounds_.width(), kDefaultWindowWidth));
++  bounds_.set_height(PositiveOrDefault(bounds_.height(), kDefaultWindowHeight));
++
++  widget_ = manager_->AddWindow(this);
++  window_ = OpenWindowTags(
++      nullptr, WA_Title, reinterpret_cast<IPTR>("Chromium"), WA_Left,
++      bounds_.x(), WA_Top, bounds_.y(), WA_InnerWidth, bounds_.width(),
++      WA_InnerHeight, bounds_.height(), WA_CloseGadget, TRUE, WA_DepthGadget,
++      TRUE, WA_DragBar, TRUE, WA_SizeGadget, TRUE, WA_SizeBBottom, TRUE,
++      WA_Activate, FALSE, WA_Hidden, TRUE, WA_AutoAdjust, TRUE, WA_SmartRefresh,
++      TRUE, TAG_DONE);
++
++  if (!window_) {
++    LOG(ERROR) << "[Chromium:Ozone:AROS] OpenWindowTags failed widget="
++               << widget_ << " requested=" << bounds_.ToString();
++  } else {
++    window_->UserPort = manager_->event_port();
++    native_events_enabled_ = ModifyIDCMP(window_, kWindowEventMask);
++    if (!native_events_enabled_) {
++      window_->UserPort = nullptr;
++      CloseWindow(window_);
++      window_ = nullptr;
++      LOG(ERROR) << "[Chromium:Ozone:AROS] could not enable IDCMP widget="
++                 << widget_;
++    }
++  }
++
++  if (window_) {
++    manager_->AttachNativeWindow(widget_, this, window_);
++    UpdateBoundsFromNative();
++    LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
++              << widget_ << " native=" << window_
++              << " client=" << bounds_.ToString();
++  }
++
++  delegate_->OnAcceleratedWidgetAvailable(widget_);
++}
++
++ArosWindow::~ArosWindow() {
++  shutting_down_ = true;
++  if (window_) {
++    DisableNativeEvents();
++    manager_->DetachNativeWindow(widget_, this, window_);
++    CloseWindow(window_);
++    window_ = nullptr;
++  }
++  manager_->RemoveWindow(widget_, this);
++}
++
++void ArosWindow::Show(bool inactive) {
++  if (window_) {
++    ShowWindow(window_, nullptr);
++    if (!inactive) {
++      ActivateWindow(window_);
++    }
++  }
++  visible_ = true;
++}
++
++void ArosWindow::Hide() {
++  if (window_) {
++    HideWindow(window_);
++  }
++  visible_ = false;
++}
++
++void ArosWindow::Close() {
++  delegate_->OnClosed();
++}
++
++bool ArosWindow::IsVisible() const {
++  return visible_;
++}
++
++void ArosWindow::PrepareForShutdown() {
++  shutting_down_ = true;
++  DisableNativeEvents();
++}
++
++void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
++  bounds_ = bounds;
++  bounds_.set_width(PositiveOrDefault(bounds_.width(), 1));
++  bounds_.set_height(PositiveOrDefault(bounds_.height(), 1));
++  if (window_) {
++    const int outer_width =
++        bounds_.width() + window_->BorderLeft + window_->BorderRight;
++    const int outer_height =
++        bounds_.height() + window_->BorderTop + window_->BorderBottom;
++    ChangeWindowBox(window_, bounds_.x(), bounds_.y(), outer_width,
++                    outer_height);
++  }
++  delegate_->OnBoundsChanged({true});
++}
++
++gfx::Rect ArosWindow::GetBoundsInPixels() const {
++  return bounds_;
++}
++
++void ArosWindow::SetBoundsInDIP(const gfx::Rect& bounds) {
++  SetBoundsInPixels(delegate_->ConvertRectToPixels(bounds));
++}
++
++gfx::Rect ArosWindow::GetBoundsInDIP() const {
++  return delegate_->ConvertRectToDIP(bounds_);
++}
++
++void ArosWindow::SetTitle(const std::u16string& title) {
++  title_ = base::UTF16ToUTF8(title);
++  if (window_) {
++    SetWindowTitles(window_, const_cast<char*>(title_.c_str()),
++                    reinterpret_cast<char*>(~uintptr_t{0}));
++  }
++}
++
++void ArosWindow::SetCapture() {
++  capture_ = true;
++}
++
++void ArosWindow::ReleaseCapture() {
++  if (capture_) {
++    capture_ = false;
++    delegate_->OnLostCapture();
++  }
++}
++
++void ArosWindow::SetFullscreen(bool fullscreen, int64_t target_display_id) {
++  DCHECK_EQ(target_display_id, display::kInvalidDisplayId);
++  if (fullscreen) {
++    if (!restored_bounds_) {
++      restored_bounds_ = bounds_;
++    }
++    SetBoundsInPixels(PrimaryScreenBounds());
++    UpdateWindowState(PlatformWindowState::kFullScreen);
++  } else if (window_state_ == PlatformWindowState::kFullScreen) {
++    Restore();
++  }
++}
++
++bool ArosWindow::HasCapture() const {
++  return capture_;
++}
++
++void ArosWindow::Maximize() {
++  if (!restored_bounds_) {
++    restored_bounds_ = bounds_;
++  }
++  SetBoundsInPixels(PrimaryScreenBounds());
++  UpdateWindowState(PlatformWindowState::kMaximized);
++}
++
++void ArosWindow::Minimize() {
++  Hide();
++  UpdateWindowState(PlatformWindowState::kMinimized);
++}
++
++void ArosWindow::Restore() {
++  if (restored_bounds_) {
++    const gfx::Rect restored = *restored_bounds_;
++    restored_bounds_.reset();
++    SetBoundsInPixels(restored);
++  }
++  Show(false);
++  UpdateWindowState(PlatformWindowState::kNormal);
++}
++
++PlatformWindowState ArosWindow::GetPlatformWindowState() const {
++  return window_state_;
++}
++
++void ArosWindow::Activate() {
++  if (window_) {
++    ActivateWindow(window_);
++  }
++  if (!active_) {
++    active_ = true;
++    delegate_->OnActivationChanged(true);
++  }
++}
++
++void ArosWindow::Deactivate() {
++  if (active_) {
++    active_ = false;
++    delegate_->OnActivationChanged(false);
++  }
++}
++
++void ArosWindow::SetUseNativeFrame(bool use_native_frame) {}
++
++bool ArosWindow::ShouldUseNativeFrame() const {
++  return true;
++}
++
++void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {}
++
++void ArosWindow::MoveCursorTo(const gfx::Point& location) {}
++
++void ArosWindow::ConfineCursorToBounds(const gfx::Rect& bounds) {}
++
++void ArosWindow::SetRestoredBoundsInDIP(const gfx::Rect& bounds) {
++  restored_bounds_ = delegate_->ConvertRectToPixels(bounds);
++}
++
++gfx::Rect ArosWindow::GetRestoredBoundsInDIP() const {
++  return delegate_->ConvertRectToDIP(restored_bounds_.value_or(bounds_));
++}
++
++void ArosWindow::SetWindowIcons(const gfx::ImageSkia& window_icon,
++                                const gfx::ImageSkia& app_icon) {}
++
++void ArosWindow::SizeConstraintsChanged() {}
++
++void ArosWindow::HandleNativeEvent(uint32_t message_class,
++                                   uint16_t code,
++                                   uint16_t qualifier,
++                                   int16_t mouse_x,
++                                   int16_t mouse_y) {
++  if (shutting_down_) {
++    return;
++  }
++
++  switch (message_class) {
++    case IDCMP_CLOSEWINDOW:
++      delegate_->OnCloseRequest();
++      break;
++    case IDCMP_NEWSIZE:
++    case IDCMP_CHANGEWINDOW:
++      UpdateBoundsFromNative();
++      break;
++    case IDCMP_REFRESHWINDOW:
++      if (window_) {
++        BeginRefresh(window_);
++      }
++      delegate_->OnDamageRect(gfx::Rect(bounds_.size()));
++      if (window_) {
++        EndRefresh(window_, TRUE);
++      }
++      break;
++    case IDCMP_ACTIVEWINDOW:
++      if (!active_) {
++        active_ = true;
++        delegate_->OnActivationChanged(true);
++      }
++      break;
++    case IDCMP_INACTIVEWINDOW:
++      if (active_) {
++        active_ = false;
++        delegate_->OnActivationChanged(false);
++      }
++      break;
++    default:
++      break;
++  }
++}
++
++bool ArosWindow::PresentPixels(const void* pixels,
++                               size_t row_bytes,
++                               const gfx::Size& pixel_size,
++                               const gfx::Rect& damage) {
++  if (!window_ || !window_->RPort || !pixels || row_bytes == 0) {
++    return false;
++  }
++
++  const int client_width =
++      window_->Width - window_->BorderLeft - window_->BorderRight;
++  const int client_height =
++      window_->Height - window_->BorderTop - window_->BorderBottom;
++  gfx::Rect clipped = damage;
++  clipped.Intersect(gfx::Rect(pixel_size));
++  clipped.Intersect(gfx::Rect(client_width, client_height));
++  if (clipped.IsEmpty()) {
++    return true;
++  }
++
++  SetDrMd(window_->RPort, JAM1);
++  const LONG written = WritePixelArray(
++      const_cast<void*>(pixels), clipped.x(), clipped.y(), row_bytes,
++      window_->RPort, window_->BorderLeft + clipped.x(),
++      window_->BorderTop + clipped.y(), clipped.width(), clipped.height(),
++      RECTFMT_BGRA32);
++  if (written <= 0) {
++    LOG(ERROR) << "[Chromium:Ozone:AROS] WritePixelArray failed widget="
++               << widget_ << " damage=" << clipped.ToString();
++    return false;
++  }
++  return true;
++}
++
++void ArosWindow::UpdateBoundsFromNative() {
++  if (!window_) {
++    return;
++  }
++  const gfx::Rect new_bounds(
++      window_->LeftEdge, window_->TopEdge,
++      std::max<int>(
++          1, window_->Width - window_->BorderLeft - window_->BorderRight),
++      std::max<int>(
++          1, window_->Height - window_->BorderTop - window_->BorderBottom));
++  const bool origin_changed = new_bounds.origin() != bounds_.origin();
++  if (new_bounds != bounds_) {
++    bounds_ = new_bounds;
++    delegate_->OnBoundsChanged({origin_changed});
++  }
++}
++
++void ArosWindow::UpdateWindowState(PlatformWindowState state) {
++  if (state == window_state_) {
++    return;
++  }
++  const PlatformWindowState old_state = window_state_;
++  window_state_ = state;
++  delegate_->OnWindowStateChanged(old_state, state);
++}
++
++void ArosWindow::DisableNativeEvents() {
++  if (!window_ || !native_events_enabled_) {
++    return;
++  }
++
++  // This is a shared application port. Detach it before clearing IDCMP so
++  // ModifyIDCMP()/CloseWindow() cannot take ownership and delete it.
++  Forbid();
++  window_->UserPort = nullptr;
++  ModifyIDCMP(window_, 0);
++  Permit();
++  native_events_enabled_ = false;
++
++  // Messages queued before the detach still reference this window. Drain and
++  // reply them while the native-window mapping remains valid.
++  manager_->ProcessNativeEvents();
++}
++
++gfx::Rect ArosWindow::PrimaryScreenBounds() const {
++  struct Screen* screen = LockPubScreen(nullptr);
++  if (!screen) {
++    return gfx::Rect(0, 0, kDefaultWindowWidth, kDefaultWindowHeight);
++  }
++  const gfx::Rect bounds(0, 0, screen->Width, screen->Height);
++  UnlockPubScreen(nullptr, screen);
++  return bounds;
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+new file mode 100644
+index 0000000000..913b9cc432
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -0,0 +1,106 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_WINDOW_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_WINDOW_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <optional>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/raw_ptr_exclusion.h"
++#include "base/memory/scoped_refptr.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/native_widget_types.h"
++#include "ui/platform_window/platform_window.h"
++#include "ui/platform_window/platform_window_delegate.h"
++
++struct Window;
++
++namespace ui {
++
++class ArosWindowManager;
++
++class ArosWindow : public PlatformWindow {
++ public:
++  ArosWindow(PlatformWindowDelegate* delegate,
++             ArosWindowManager* manager,
++             const gfx::Rect& bounds);
++
++  ArosWindow(const ArosWindow&) = delete;
++  ArosWindow& operator=(const ArosWindow&) = delete;
++
++  ~ArosWindow() override;
++
++  void HandleNativeEvent(uint32_t message_class,
++                         uint16_t code,
++                         uint16_t qualifier,
++                         int16_t mouse_x,
++                         int16_t mouse_y);
++  bool PresentPixels(const void* pixels,
++                     size_t row_bytes,
++                     const gfx::Size& pixel_size,
++                     const gfx::Rect& damage);
++
++ private:
++  void Show(bool inactive) override;
++  void Hide() override;
++  void Close() override;
++  bool IsVisible() const override;
++  void PrepareForShutdown() override;
++  void SetBoundsInPixels(const gfx::Rect& bounds) override;
++  gfx::Rect GetBoundsInPixels() const override;
++  void SetBoundsInDIP(const gfx::Rect& bounds) override;
++  gfx::Rect GetBoundsInDIP() const override;
++  void SetTitle(const std::u16string& title) override;
++  void SetCapture() override;
++  void ReleaseCapture() override;
++  void SetFullscreen(bool fullscreen, int64_t target_display_id) override;
++  bool HasCapture() const override;
++  void Maximize() override;
++  void Minimize() override;
++  void Restore() override;
++  PlatformWindowState GetPlatformWindowState() const override;
++  void Activate() override;
++  void Deactivate() override;
++  void SetUseNativeFrame(bool use_native_frame) override;
++  bool ShouldUseNativeFrame() const override;
++  void SetCursor(scoped_refptr<PlatformCursor> cursor) override;
++  void MoveCursorTo(const gfx::Point& location) override;
++  void ConfineCursorToBounds(const gfx::Rect& bounds) override;
++  void SetRestoredBoundsInDIP(const gfx::Rect& bounds) override;
++  gfx::Rect GetRestoredBoundsInDIP() const override;
++  void SetWindowIcons(const gfx::ImageSkia& window_icon,
++                      const gfx::ImageSkia& app_icon) override;
++  void SizeConstraintsChanged() override;
++
++  void UpdateBoundsFromNative();
++  void UpdateWindowState(PlatformWindowState state);
++  void DisableNativeEvents();
++  gfx::Rect PrimaryScreenBounds() const;
++
++  raw_ptr<PlatformWindowDelegate> delegate_ = nullptr;
++  raw_ptr<ArosWindowManager> manager_ = nullptr;
++  gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
++  RAW_PTR_EXCLUSION struct Window* window_ = nullptr;
++  gfx::Rect bounds_;
++  std::optional<gfx::Rect> restored_bounds_;
++  std::string title_;
++  PlatformWindowState window_state_ = PlatformWindowState::kNormal;
++  bool visible_ = false;
++  bool active_ = false;
++  bool capture_ = false;
++  bool shutting_down_ = false;
++  bool native_events_enabled_ = false;
++};
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_WINDOW_H_
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+new file mode 100644
+index 0000000000..4541272584
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -0,0 +1,116 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/aros_window_manager.h"
++
++#include <utility>
++
++#include "base/check.h"
++#include "base/logging.h"
++#include "ui/ozone/platform/aros/aros_window.h"
++
++#include <exec/ports.h>
++#include <intuition/intuition.h>
++#include <proto/exec.h>
++
++#undef Remove
++
++namespace ui {
++
++ArosWindowManager::ArosWindowManager() {
++  event_port_ = CreateMsgPort();
++  CHECK(event_port_);
++  LOG(INFO) << "[Chromium:Ozone:AROS] shared IDCMP port=" << event_port_
++            << " signal=" << static_cast<int>(event_port_->mp_SigBit);
++}
++
++ArosWindowManager::~ArosWindowManager() {
++  {
++    base::AutoLock lock(lock_);
++    DCHECK(native_windows_.empty());
++    DCHECK(windows_.IsEmpty());
++  }
++  if (event_port_) {
++    DeleteMsgPort(event_port_);
++  }
++}
++
++gfx::AcceleratedWidget ArosWindowManager::AddWindow(ArosWindow* window) {
++  base::AutoLock lock(lock_);
++  return windows_.Add(window);
++}
++
++void ArosWindowManager::RemoveWindow(gfx::AcceleratedWidget widget,
++                                     ArosWindow* window) {
++  base::AutoLock lock(lock_);
++  DCHECK_EQ(window, windows_.Lookup(widget));
++  windows_.Remove(widget);
++}
++
++void ArosWindowManager::AttachNativeWindow(gfx::AcceleratedWidget widget,
++                                           ArosWindow* window,
++                                           struct Window* native_window) {
++  base::AutoLock lock(lock_);
++  DCHECK_EQ(window, windows_.Lookup(widget));
++  DCHECK(native_window);
++  const bool inserted = native_windows_.emplace(native_window, window).second;
++  DCHECK(inserted);
++}
++
++void ArosWindowManager::DetachNativeWindow(gfx::AcceleratedWidget widget,
++                                           ArosWindow* window,
++                                           struct Window* native_window) {
++  base::AutoLock lock(lock_);
++  DCHECK_EQ(window, windows_.Lookup(widget));
++  auto it = native_windows_.find(native_window);
++  DCHECK(it != native_windows_.end());
++  DCHECK_EQ(window, it->second);
++  native_windows_.erase(it);
++}
++
++uint32_t ArosWindowManager::event_signal_mask() const {
++  return event_port_ ? uint32_t{1} << event_port_->mp_SigBit : 0;
++}
++
++void ArosWindowManager::ProcessNativeEvents() {
++  if (!event_port_) {
++    return;
++  }
++
++  while (auto* message = reinterpret_cast<IntuiMessage*>(GetMsg(event_port_))) {
++    struct Window* const native_window = message->IDCMPWindow;
++    const uint32_t message_class = message->Class;
++    const uint16_t code = message->Code;
++    const uint16_t qualifier = message->Qualifier;
++    const int16_t mouse_x = message->MouseX;
++    const int16_t mouse_y = message->MouseY;
++
++    ArosWindow* target = nullptr;
++    {
++      base::AutoLock lock(lock_);
++      const auto it = native_windows_.find(native_window);
++      if (it != native_windows_.end()) {
++        target = it->second;
++      }
++    }
++
++    ReplyMsg(reinterpret_cast<Message*>(message));
++    if (target) {
++      target->HandleNativeEvent(message_class, code, qualifier, mouse_x,
++                                mouse_y);
++    }
++  }
++}
++
++bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
++                                      const void* pixels,
++                                      size_t row_bytes,
++                                      const gfx::Size& pixel_size,
++                                      const gfx::Rect& damage) {
++  base::AutoLock lock(lock_);
++  ArosWindow* const window = windows_.Lookup(widget);
++  return window && window->PresentPixels(pixels, row_bytes, pixel_size, damage);
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+new file mode 100644
+index 0000000000..3e53a5752c
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_WINDOW_MANAGER_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_WINDOW_MANAGER_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <map>
++
++#include "base/containers/id_map.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/raw_ptr_exclusion.h"
++#include "base/synchronization/lock.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/gfx/native_widget_types.h"
++
++struct MsgPort;
++struct Window;
++
++namespace ui {
++
++class ArosWindow;
++
++class ArosWindowManager {
++ public:
++  ArosWindowManager();
++
++  ArosWindowManager(const ArosWindowManager&) = delete;
++  ArosWindowManager& operator=(const ArosWindowManager&) = delete;
++
++  ~ArosWindowManager();
++
++  gfx::AcceleratedWidget AddWindow(ArosWindow* window);
++  void RemoveWindow(gfx::AcceleratedWidget widget, ArosWindow* window);
++
++  void AttachNativeWindow(gfx::AcceleratedWidget widget,
++                          ArosWindow* window,
++                          struct Window* native_window);
++  void DetachNativeWindow(gfx::AcceleratedWidget widget,
++                          ArosWindow* window,
++                          struct Window* native_window);
++
++  struct MsgPort* event_port() const { return event_port_; }
++  uint32_t event_signal_mask() const;
++  void ProcessNativeEvents();
++
++  bool PresentCanvas(gfx::AcceleratedWidget widget,
++                     const void* pixels,
++                     size_t row_bytes,
++                     const gfx::Size& pixel_size,
++                     const gfx::Rect& damage);
++
++ private:
++  base::Lock lock_;
++  base::IDMap<ArosWindow*> windows_ GUARDED_BY(lock_);
++  std::map<struct Window*, raw_ptr<ArosWindow>> native_windows_
++      GUARDED_BY(lock_);
++  RAW_PTR_EXCLUSION struct MsgPort* event_port_ = nullptr;
++};
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_WINDOW_MANAGER_H_
+diff --git a/ui/ozone/platform/aros/client_native_pixmap_factory_aros.cc b/ui/ozone/platform/aros/client_native_pixmap_factory_aros.cc
+new file mode 100644
+index 0000000000..7ce709b159
+--- /dev/null
++++ b/ui/ozone/platform/aros/client_native_pixmap_factory_aros.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/client_native_pixmap_factory_aros.h"
++
++#include "ui/ozone/common/stub_client_native_pixmap_factory.h"
++
++namespace ui {
++
++gfx::ClientNativePixmapFactory* CreateClientNativePixmapFactoryAros() {
++  return CreateStubClientNativePixmapFactory();
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/client_native_pixmap_factory_aros.h b/ui/ozone/platform/aros/client_native_pixmap_factory_aros.h
+new file mode 100644
+index 0000000000..d52eef49ab
+--- /dev/null
++++ b/ui/ozone/platform/aros/client_native_pixmap_factory_aros.h
+@@ -0,0 +1,18 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_CLIENT_NATIVE_PIXMAP_FACTORY_AROS_H_
++#define UI_OZONE_PLATFORM_AROS_CLIENT_NATIVE_PIXMAP_FACTORY_AROS_H_
++
++namespace gfx {
++class ClientNativePixmapFactory;
++}
++
++namespace ui {
++
++gfx::ClientNativePixmapFactory* CreateClientNativePixmapFactoryAros();
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_CLIENT_NATIVE_PIXMAP_FACTORY_AROS_H_
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+new file mode 100644
+index 0000000000..47cc5ee0c2
+--- /dev/null
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -0,0 +1,164 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/ozone_platform_aros.h"
++
++#include <memory>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/logging.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "ui/base/cursor/cursor_factory.h"
++#include "ui/base/ime/input_method_minimal.h"
++#include "ui/display/types/native_display_delegate.h"
++#include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
++#include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
++#include "ui/events/platform/platform_event_source.h"
++#include "ui/ozone/common/bitmap_cursor_factory.h"
++#include "ui/ozone/common/stub_overlay_manager.h"
++#include "ui/ozone/platform/aros/aros_screen.h"
++#include "ui/ozone/platform/aros/aros_surface_factory.h"
++#include "ui/ozone/platform/aros/aros_window.h"
++#include "ui/ozone/platform/aros/aros_window_manager.h"
++#include "ui/ozone/public/gpu_platform_support_host.h"
++#include "ui/ozone/public/input_controller.h"
++#include "ui/ozone/public/ozone_platform.h"
++#include "ui/ozone/public/system_input_injector.h"
++#include "ui/platform_window/platform_window_init_properties.h"
++
++namespace ui {
++
++namespace {
++
++// The first-window slice keeps IDCMP consumption local to Ozone. A subsequent
++// commit will register the port signal directly with MessagePumpAROS.
++class ArosPlatformEventSource : public PlatformEventSource {
++ public:
++  explicit ArosPlatformEventSource(ArosWindowManager* window_manager)
++      : window_manager_(window_manager) {
++    timer_.Start(FROM_HERE, base::Milliseconds(8), this,
++                 &ArosPlatformEventSource::ProcessEvents);
++  }
++
++  ArosPlatformEventSource(const ArosPlatformEventSource&) = delete;
++  ArosPlatformEventSource& operator=(const ArosPlatformEventSource&) = delete;
++
++  ~ArosPlatformEventSource() override = default;
++
++ private:
++  void ProcessEvents() { window_manager_->ProcessNativeEvents(); }
++
++  raw_ptr<ArosWindowManager> window_manager_;
++  base::RepeatingTimer timer_;
++};
++
++class OzonePlatformAros : public OzonePlatform {
++ public:
++  OzonePlatformAros() = default;
++
++  OzonePlatformAros(const OzonePlatformAros&) = delete;
++  OzonePlatformAros& operator=(const OzonePlatformAros&) = delete;
++
++  ~OzonePlatformAros() override = default;
++
++  SurfaceFactoryOzone* GetSurfaceFactoryOzone() override {
++    return surface_factory_.get();
++  }
++
++  OverlayManagerOzone* GetOverlayManager() override {
++    return overlay_manager_.get();
++  }
++
++  CursorFactory* GetCursorFactory() override { return cursor_factory_.get(); }
++
++  InputController* GetInputController() override {
++    return input_controller_.get();
++  }
++
++  GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
++    return gpu_platform_support_host_.get();
++  }
++
++  std::unique_ptr<SystemInputInjector> CreateSystemInputInjector() override {
++    return nullptr;
++  }
++
++  std::unique_ptr<PlatformWindow> CreatePlatformWindow(
++      PlatformWindowDelegate* delegate,
++      PlatformWindowInitProperties properties) override {
++    CHECK(window_manager_);
++    return std::make_unique<ArosWindow>(delegate, window_manager_.get(),
++                                        properties.bounds);
++  }
++
++  bool IsWindowCompositingSupported() const override { return false; }
++
++  std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
++      override {
++    return nullptr;
++  }
++
++  std::unique_ptr<PlatformScreen> CreateScreen() override {
++    return std::make_unique<ArosScreen>();
++  }
++
++  void InitScreen(PlatformScreen* screen) override {}
++
++  std::unique_ptr<InputMethod> CreateInputMethod(
++      ImeKeyEventDispatcher* ime_key_event_dispatcher,
++      gfx::AcceleratedWidget widget) override {
++    return std::make_unique<InputMethodMinimal>(ime_key_event_dispatcher);
++  }
++
++  bool InitializeUI(const InitParams& params) override {
++    LOG(INFO) << "[Chromium:Ozone:AROS] initializing native Intuition backend";
++    window_manager_ = std::make_unique<ArosWindowManager>();
++    surface_factory_ =
++        std::make_unique<ArosSurfaceFactory>(window_manager_.get());
++    if (!PlatformEventSource::GetInstance()) {
++      platform_event_source_ =
++          std::make_unique<ArosPlatformEventSource>(window_manager_.get());
++    }
++
++    keyboard_layout_engine_ = std::make_unique<StubKeyboardLayoutEngine>();
++    KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
++        keyboard_layout_engine_.get());
++    overlay_manager_ = std::make_unique<StubOverlayManager>();
++    input_controller_ = CreateStubInputController();
++    cursor_factory_ = std::make_unique<BitmapCursorFactory>();
++    gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
++    return true;
++  }
++
++  void InitializeGPU(const InitParams& params) override {
++    if (!window_manager_) {
++      window_manager_ = std::make_unique<ArosWindowManager>();
++    }
++    if (!surface_factory_) {
++      surface_factory_ =
++          std::make_unique<ArosSurfaceFactory>(window_manager_.get());
++    }
++  }
++
++ private:
++  std::unique_ptr<ArosWindowManager> window_manager_;
++  std::unique_ptr<ArosSurfaceFactory> surface_factory_;
++  std::unique_ptr<PlatformEventSource> platform_event_source_;
++  std::unique_ptr<KeyboardLayoutEngine> keyboard_layout_engine_;
++  std::unique_ptr<CursorFactory> cursor_factory_;
++  std::unique_ptr<InputController> input_controller_;
++  std::unique_ptr<GpuPlatformSupportHost> gpu_platform_support_host_;
++  std::unique_ptr<OverlayManagerOzone> overlay_manager_;
++};
++
++}  // namespace
++
++OzonePlatform* CreateOzonePlatformAros() {
++  return new OzonePlatformAros();
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.h b/ui/ozone/platform/aros/ozone_platform_aros.h
+new file mode 100644
+index 0000000000..03634253ca
+--- /dev/null
++++ b/ui/ozone/platform/aros/ozone_platform_aros.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_OZONE_PLATFORM_AROS_H_
++#define UI_OZONE_PLATFORM_AROS_OZONE_PLATFORM_AROS_H_
++
++namespace ui {
++
++class OzonePlatform;
++
++OzonePlatform* CreateOzonePlatformAros();
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_OZONE_PLATFORM_AROS_H_

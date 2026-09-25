@@ -1,0 +1,37 @@
+From 18a02030cf29e33ace97f56d7c70f70f1e07abf5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 09:32:18 -0500
+Subject: [PATCH 238/638] chrome: preserve native AROS profile paths [chromium]
+ [aros]
+
+---
+ chrome/app/chrome_main_delegate.cc | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 83e9c8e42f..a9310ee4e0 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -663,10 +663,21 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+   policy::path_parser::CheckUserDataDirPolicy(&user_data_dir);
+ #endif  // BUILDFLAG(IS_MAC)
+ 
++#if BUILDFLAG(IS_AROS)
++  // Native volume and assignment paths cannot be canonicalized by the POSIX
++  // realpath implementation. Relative values still resolve against
++  // DIR_CURRENT.
++  const bool user_data_dir_is_absolute = user_data_dir.IsAbsolute();
++#else
++  const bool user_data_dir_is_absolute = false;
++#endif
++
+   const bool specified_directory_was_invalid =
+       !user_data_dir.empty() &&
+       !base::PathService::OverrideAndCreateIfNeeded(chrome::DIR_USER_DATA,
+-                                                    user_data_dir, false, true);
++                                                    user_data_dir,
++                                                    user_data_dir_is_absolute,
++                                                    true);
+   // Save inaccessible or invalid paths so the user may be prompted later.
+   if (specified_directory_was_invalid)
+     chrome::SetInvalidSpecifiedUserDataDir(user_data_dir);

@@ -1,0 +1,154 @@
+From e36edb918e311037d4fda648bbb2b555347142df Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:44:04 -0500
+Subject: [PATCH 026/638] gpu: give AROS a distinct configuration identity
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: GPU expectation and production control-list metadata now classify AROS independently from Linux and from wildcard OS entries.
+
+ROOT_CAUSE: The GPU test classifier rejected AROS at compile time, while the production control list fell through to kOsAny, which violates its current-OS contract and risks applying unrelated platform rules.
+
+FIX_REASON: Add kOsAROS to both metadata models, parse the aros expectation token, select it at runtime, include it in validity masks, and cover the parser table.
+
+SCOPE: gpu/config GPU test config, expectation parser, parser test, and control-list OS identity
+
+VALIDATION: gpu_test_config.o, gpu_test_expectations_parser.o, and gpu_control_list.o compiled; the generated command for gpu_test_expectations_parser_unittest.o compiled directly; git diff --check passed.
+
+RISK: Existing upstream GPU blocklists have no AROS-specific entries, so only platform-agnostic rules apply until native GPU validation adds targeted expectations.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/config/gpu_control_list.cc                      | 2 ++
+ gpu/config/gpu_control_list.h                       | 1 +
+ gpu/config/gpu_test_config.cc                       | 5 ++++-
+ gpu/config/gpu_test_config.h                        | 1 +
+ gpu/config/gpu_test_expectations_parser.cc          | 5 +++++
+ gpu/config/gpu_test_expectations_parser_unittest.cc | 3 ++-
+ 6 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/gpu/config/gpu_control_list.cc b/gpu/config/gpu_control_list.cc
+index c98ea10ae8..b463b8ee38 100644
+--- a/gpu/config/gpu_control_list.cc
++++ b/gpu/config/gpu_control_list.cc
+@@ -817,6 +817,8 @@ GpuControlList::OsType GpuControlList::GetOsType() {
+   return kOsMacosx;
+ #elif BUILDFLAG(IS_IOS)
+   return kOsIOS;
++#elif BUILDFLAG(IS_AROS)
++  return kOsAROS;
+ #else
+   return kOsAny;
+ #endif
+diff --git a/gpu/config/gpu_control_list.h b/gpu/config/gpu_control_list.h
+index df72b268bf..9d50d43c2b 100644
+--- a/gpu/config/gpu_control_list.h
++++ b/gpu/config/gpu_control_list.h
+@@ -33,6 +33,7 @@ class GPU_EXPORT GpuControlList {
+     kOsAndroid,
+     kOsFuchsia,
+     kOsIOS,
++    kOsAROS,
+     kOsAny
+   };
+ 
+diff --git a/gpu/config/gpu_test_config.cc b/gpu/config/gpu_test_config.cc
+index d79b26334d..9b26af43f6 100644
+--- a/gpu/config/gpu_test_config.cc
++++ b/gpu/config/gpu_test_config.cc
+@@ -89,6 +89,8 @@ GPUTestConfig::OS GetCurrentOS() {
+   return GPUTestConfig::kOsFuchsia;
+ #elif BUILDFLAG(IS_IOS)
+   return GPUTestConfig::kOsIOS;
++#elif BUILDFLAG(IS_AROS)
++  return GPUTestConfig::kOsAROS;
+ #else
+ #error "unknown os"
+ #endif
+@@ -109,7 +111,7 @@ GPUTestConfig::~GPUTestConfig() = default;
+ 
+ void GPUTestConfig::set_os(int32_t os) {
+   DCHECK_EQ(0, os & ~(kOsAndroid | kOsWin | kOsMac | kOsLinux | kOsChromeOS |
+-                      kOsFuchsia | kOsIOS));
++                      kOsFuchsia | kOsIOS | kOsAROS));
+   os_ = os;
+ }
+ 
+@@ -231,6 +233,7 @@ bool GPUTestBotConfig::IsValid() const {
+     case kOsAndroid:
+     case kOsFuchsia:
+     case kOsIOS:
++    case kOsAROS:
+       break;
+     default:
+       return false;
+diff --git a/gpu/config/gpu_test_config.h b/gpu/config/gpu_test_config.h
+index c9cf9184de..77824fc253 100644
+--- a/gpu/config/gpu_test_config.h
++++ b/gpu/config/gpu_test_config.h
+@@ -50,6 +50,7 @@ class GPU_EXPORT GPUTestConfig {
+     kOsAndroid = 1 << 27,
+     kOsFuchsia = 1 << 28,
+     kOsIOS = 1 << 29,
++    kOsAROS = 1 << 30,
+     // If we run out of bits, please retire older OS versions, like WinXP,
+     // MacLeopard, etc., for which we no longer have bots.
+   };
+diff --git a/gpu/config/gpu_test_expectations_parser.cc b/gpu/config/gpu_test_expectations_parser.cc
+index 2eddf28255..e3aaf90105 100644
+--- a/gpu/config/gpu_test_expectations_parser.cc
++++ b/gpu/config/gpu_test_expectations_parser.cc
+@@ -51,6 +51,7 @@ enum Token {
+   kConfigLinux,
+   kConfigChromeOS,
+   kConfigAndroid,
++  kConfigAROS,
+   // gpu vendor
+   kConfigNVidia,
+   kConfigAMD,
+@@ -114,6 +115,7 @@ const TokenInfo kTokenData[] = {
+     {"linux", GPUTestConfig::kOsLinux},
+     {"chromeos", GPUTestConfig::kOsChromeOS},
+     {"android", GPUTestConfig::kOsAndroid},
++    {"aros", GPUTestConfig::kOsAROS},
+     {"nvidia", 0x10DE},
+     {"amd", 0x1002},
+     {"arm", 0x13b5},
+@@ -285,6 +287,7 @@ bool GPUTestExpectationsParser::ParseConfig(
+       case kConfigLinux:
+       case kConfigChromeOS:
+       case kConfigAndroid:
++      case kConfigAROS:
+       case kConfigNVidia:
+       case kConfigAMD:
+       case kConfigARM:
+@@ -352,6 +355,7 @@ bool GPUTestExpectationsParser::ParseLine(
+       case kConfigLinux:
+       case kConfigChromeOS:
+       case kConfigAndroid:
++      case kConfigAROS:
+       case kConfigNVidia:
+       case kConfigAMD:
+       case kConfigARM:
+@@ -482,6 +486,7 @@ bool GPUTestExpectationsParser::UpdateTestConfig(GPUTestConfig* config,
+     case kConfigLinux:
+     case kConfigChromeOS:
+     case kConfigAndroid:
++    case kConfigAROS:
+       if ((config->os() & kTokenData[token].flag) != 0) {
+         PushErrorMessage(kErrorMessage[kErrorEntryWithOsConflicts],
+                          line_number);
+diff --git a/gpu/config/gpu_test_expectations_parser_unittest.cc b/gpu/config/gpu_test_expectations_parser_unittest.cc
+index 8fd57d0df0..150ba56ad4 100644
+--- a/gpu/config/gpu_test_expectations_parser_unittest.cc
++++ b/gpu/config/gpu_test_expectations_parser_unittest.cc
+@@ -42,7 +42,8 @@ static const struct TestOsWithFamily {
+     {{"CHROMEOS", GPUTestConfig::kOsChromeOS},
+      {"CHROMEOS", GPUTestConfig::kOsChromeOS}},
+     {{"ANDROID", GPUTestConfig::kOsAndroid},
+-     {"ANDROID", GPUTestConfig::kOsAndroid}}};
++     {"ANDROID", GPUTestConfig::kOsAndroid}},
++    {{"AROS", GPUTestConfig::kOsAROS}, {"AROS", GPUTestConfig::kOsAROS}}};
+ 
+ TestOSEntry GetUnrelatedOS(const TestOSEntry& os) {
+   return (os.os & kOsFamilyWin.os) ? kOsFamilyMac : kOsFamilyWin;

@@ -1,0 +1,134 @@
+From 10fe44c4b42e8996841b5a1045c58f24aabe11cc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:37 -0500
+Subject: [PATCH 284/638] chrome: checkpoint AROS startup boundary telemetry
+
+Keep profile override, resource bundle, and persistent histogram startup boundaries visible while the hosted browser is still under bring-up. This also separates the existing instrumentation from the upcoming CEF runtime patch.
+
+AI_PHASE: chromium-aros-startup-bringup
+
+AI_STATUS: diagnostic-checkpoint
+
+AI_ASSUMPTION: startup pauses must remain attributable across profile, resources, and mapped histogram initialization
+
+AI_VALIDATION: current hosted shared-V8 Chromium session reached the browser UI; focused Blink build completed 15781/15781
+
+AI_LIMITATIONS: warning-level markers are temporary bring-up telemetry and do not establish startup performance
+
+AI_DECISION_CHAIN:
+---
+ chrome/app/chrome_main_delegate.cc | 52 +++++++++++++++++++++++++++---
+ 1 file changed, 47 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index a9310ee4e0..50f6cd529d 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -672,18 +672,33 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+   const bool user_data_dir_is_absolute = false;
+ #endif
+ 
++  bool user_data_dir_override_succeeded = true;
++  if (!user_data_dir.empty()) {
++    user_data_dir_override_succeeded =
++        base::PathService::OverrideAndCreateIfNeeded(
++            chrome::DIR_USER_DATA, user_data_dir,
++            user_data_dir_is_absolute, true);
++#if BUILDFLAG(IS_AROS)
++    if (!user_data_dir_override_succeeded) {
++      PLOG(ERROR) << "[Chromium:AROS:Profile] failed to create or override '"
++                  << user_data_dir.value()
++                  << "', absolute=" << user_data_dir_is_absolute;
++    }
++#endif
++  }
+   const bool specified_directory_was_invalid =
+-      !user_data_dir.empty() &&
+-      !base::PathService::OverrideAndCreateIfNeeded(chrome::DIR_USER_DATA,
+-                                                    user_data_dir,
+-                                                    user_data_dir_is_absolute,
+-                                                    true);
++      !user_data_dir.empty() && !user_data_dir_override_succeeded;
+   // Save inaccessible or invalid paths so the user may be prompted later.
+   if (specified_directory_was_invalid)
+     chrome::SetInvalidSpecifiedUserDataDir(user_data_dir);
+ 
+   // Warn and fail early if the process fails to get a user data directory.
+   if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:Profile] DIR_USER_DATA lookup failed; "
++               << "override_succeeded=" << user_data_dir_override_succeeded
++               << ", requested='" << user_data_dir.value() << "'";
++#endif
+     // If an invalid command-line or policy override was specified, the user
+     // will be given an error with that value. Otherwise, use the directory
+     // returned by PathService (or the fallback default directory) in the error.
+@@ -1651,6 +1666,10 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   InitLogging(process_type);
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Startup] PreSandbox logging ready";
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+   // TODO(zturner): Throbber icons and cursors are still stored in chrome.dll,
+   // this can be killed once those are merged into resources.pak. See
+@@ -1659,6 +1678,9 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   ui::SetResourcesDataDLL(_AtlBaseModule.GetResourceInstance());
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Startup] ResourceBundle begin";
++#endif
+   if (SubprocessNeedsResourceBundle(process_type)) {
+     // Initialize ResourceBundle which handles files loaded from external
+     // sources.  The language should have been passed in to us from the
+@@ -1763,6 +1785,9 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ #endif  // BUILDFLAG(IS_ANDROID)
+     CHECK(!loaded_locale.empty()) << "Locale could not be found for " << locale;
+   }
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Startup] ResourceBundle complete";
++#endif
+ 
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_AROS)
+   // Zygote needs to call InitCrashReporter() in RunZygote().
+@@ -1804,6 +1829,9 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ #if BUILDFLAG(ENABLE_PDF)
+   MaybePatchGdiGetFontData();
+ #endif
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Startup] PreSandbox complete";
++#endif
+ }
+ 
+ void ChromeMainDelegate::SandboxInitialized(const std::string& process_type) {
+@@ -1834,13 +1862,27 @@ void ChromeMainDelegate::SandboxInitialized(const std::string& process_type) {
+   immediate_histogram_init = !chromeos::IsLaunchedWithPostLoginParams();
+ #endif
+   if (immediate_histogram_init && process_type.empty()) {
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms browser init begin";
++    LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms path lookup begin";
++#endif
+     base::FilePath metrics_dir;
+     if (base::PathService::Get(chrome::DIR_USER_DATA, &metrics_dir)) {
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms path lookup complete";
++      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms mapped-file init begin";
++#endif
+       InstantiatePersistentHistograms(
+           metrics_dir,
+           /*persistent_histograms_enabled=*/true,
+           /*storage=*/kPersistentHistogramStorageMappedFile);
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms mapped-file init complete";
++#endif
+     } else {
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:Startup] PersistentHistograms path lookup failed";
++#endif
+       NOTREACHED();
+     }
+   }

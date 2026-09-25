@@ -1,0 +1,38 @@
+From 51c6ff31230ba0c2f17bf223ba26d93adfb960dc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:49:08 -0500
+Subject: [PATCH 324/638] cef: expose PrefWatcher shutdown
+
+Apply CEF's upstream chrome_pref_watcher patch as a discrete prerequisite for Alloy browser process cleanup.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-pref-watcher-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 17 reported PrefWatcher::Shutdown is private in ChromeBrowserProcessAlloy
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 52dac911; 00e21592ab
+---
+ chrome/browser/ui/prefs/pref_watcher.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/prefs/pref_watcher.h b/chrome/browser/ui/prefs/pref_watcher.h
+index c442c6f50e..e8a42a9d49 100644
+--- a/chrome/browser/ui/prefs/pref_watcher.h
++++ b/chrome/browser/ui/prefs/pref_watcher.h
+@@ -33,10 +33,10 @@ class PrefWatcher : public KeyedService,
+   void RegisterRendererPreferenceWatcher(
+       mojo::PendingRemote<blink::mojom::RendererPreferenceWatcher> watcher);
+ 
+- private:
+   // KeyedService overrides:
+   void Shutdown() override;
+ 
++ private:
+   void OnDoNotTrackEnabledChanged() override;
+ 
+   void UpdateRendererPreferences();

@@ -1,0 +1,144 @@
+From 29d31532915adfaeaf6969e209147e83b2a565ab Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 11:39:38 -0500
+Subject: [PATCH 110/638] [AROS] Avoid PIPE: for headless shutdown signals
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: in-progress
+ROOT_CAUSE: HeadlessBrowserMainParts routed SIGINT/SIGTERM/SIGHUP through a POSIX pipe; AROS posixc allocated PIPE: descriptors 3/4 while fd.library was absent, then FileDescriptorWatcher sent fd 3 to AROSTCP WaitSelect, which only accepts sockets.
+FIX_REASON: Keep signal handlers async-safe by storing a sig_atomic_t on AROS and consume it from the browser task through a timer-backed delayed main-loop callback; retain the upstream self-pipe path on other POSIX systems.
+SCOPE: headless/lib/browser/headless_browser_main_parts_posix.cc
+VALIDATION: headless_browser_main_parts_posix.o cross-compiled; hosted 0109 captured fd=3 mode=read immediately after pipe allocation and WaitSelect rejected it with errno=0.
+RISK: AROS graceful shutdown latency is bounded by the 100 ms poll interval until the message pump grows a general native external-signal registration API.
+AI_DECISION_CHAIN: hosted IO stall -> fd 3 registration -> missing fd.library -> headless signal PIPE: -> task-safe timer polling
+Continues: ab68390d4b
+---
+ .../headless_browser_main_parts_posix.cc      | 49 ++++++++++++++++++-
+ 1 file changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/headless/lib/browser/headless_browser_main_parts_posix.cc b/headless/lib/browser/headless_browser_main_parts_posix.cc
+index 48234689fd..89f1f46343 100644
+--- a/headless/lib/browser/headless_browser_main_parts_posix.cc
++++ b/headless/lib/browser/headless_browser_main_parts_posix.cc
+@@ -8,14 +8,21 @@
+ #include <signal.h>
+ #include <unistd.h>
+ 
++#include "build/build_config.h"
++
++#if !BUILDFLAG(IS_AROS)
+ #include "base/files/file_descriptor_watcher_posix.h"
++#endif
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/no_destructor.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "base/posix/eintr_wrapper.h"
+-#include "build/build_config.h"
++#endif
++#include "base/task/sequenced_task_runner.h"
++#include "base/time/time.h"
+ #include "build/chromeos_buildflags.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -37,6 +44,10 @@ namespace headless {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++volatile sig_atomic_t g_pending_signal = 0;
++constexpr base::TimeDelta kSignalPollInterval = base::Milliseconds(100);
++#else
+ int g_read_fd = 0;
+ int g_write_fd = 0;
+ 
+@@ -56,6 +67,7 @@ bool CreatePipe() {
+ 
+   return true;
+ }
++#endif
+ 
+ class BrowserShutdownHandler {
+  public:
+@@ -83,6 +95,10 @@ class BrowserShutdownHandler {
+     // distros send SIGHUP, SIGTERM, and then SIGKILL.
+     action.sa_handler = SIGHUPHandler;
+     PCHECK(sigaction(SIGHUP, &action, nullptr) == 0);
++
++#if BUILDFLAG(IS_AROS)
++    GetInstance().ScheduleSignalCheck();
++#endif
+   }
+ 
+  private:
+@@ -99,6 +115,10 @@ class BrowserShutdownHandler {
+   void Init(ShutdownCallback shutdown_callback) {
+     shutdown_callback_ = std::move(shutdown_callback);
+ 
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:headless] AROS shutdown signals use task-safe "
++                 "main-loop polling";
++#else
+     // We cannot just PostTask from a signal handler, so route the signal
+     // through a pipe.
+     CHECK(CreatePipe());
+@@ -109,8 +129,28 @@ class BrowserShutdownHandler {
+             base::BindRepeating(
+                 &BrowserShutdownHandler::OnFileCanReadWithoutBlocking,
+                 base::Unretained(this)));
++#endif
++  }
++
++#if BUILDFLAG(IS_AROS)
++  void ScheduleSignalCheck() {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserShutdownHandler::CheckForSignal,
++                       base::Unretained(this)),
++        kSignalPollInterval);
+   }
+ 
++  void CheckForSignal() {
++    const int signal = g_pending_signal;
++    if (signal != 0) {
++      g_pending_signal = 0;
++      Shutdown(signal);
++      return;
++    }
++    ScheduleSignalCheck();
++  }
++#else
+   // This is called whenever data is available in |g_read_fd|.
+   void OnFileCanReadWithoutBlocking() {
+     int pipe_data;
+@@ -118,6 +158,7 @@ class BrowserShutdownHandler {
+       Shutdown(pipe_data);
+     }
+   }
++#endif
+ 
+   void Shutdown(int signal) {
+     if (shutdown_callback_) {
+@@ -149,14 +190,20 @@ class BrowserShutdownHandler {
+     action.sa_handler = SIG_DFL;
+     RAW_CHECK(sigaction(signal, &action, nullptr) == 0);
+ 
++#if BUILDFLAG(IS_AROS)
++    g_pending_signal = signal;
++#else
+     // Send signal number through the pipe.
+     int pipe_data = signal;
+     std::ignore = write(g_write_fd, &pipe_data, sizeof(pipe_data));
++#endif
+   }
+ 
+   ShutdownCallback shutdown_callback_;
++#if !BUILDFLAG(IS_AROS)
+   std::unique_ptr<base::FileDescriptorWatcher::Controller>
+       file_descriptor_watcher_controller_;
++#endif
+ };
+ 
+ }  // namespace

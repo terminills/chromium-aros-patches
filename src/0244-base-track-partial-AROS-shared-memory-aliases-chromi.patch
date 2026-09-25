@@ -1,0 +1,109 @@
+From 0f5709292048629ae35dd4adf1c75e4cecfa075b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 19:38:40 -0500
+Subject: [PATCH 244/638] base: track partial AROS shared-memory aliases
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: build-validated
+
+ROOT_CAUSE: AROS currently exposes duplicated shared-memory mappings as aliases into one pointer-backed allocation. VisitedLinkReader mapped a 16-byte header at the same raw address as an existing 131064-byte mapping, but the AROS SharedMemoryTracker special case asserted that every repeated address had the same visible length.
+
+FIX_REASON: Key AROS tracker entries by the complete address, size, and region GUID identity. Exact duplicate mappings retain reference counts, while partial MapAt aliases at the same address receive independent lifetime records and can be removed without erasing their siblings.
+
+SCOPE: base/memory shared-memory usage accounting only; the AROS backing allocator, mapping permissions, and non-AROS duplicate-address invariant are unchanged.
+
+VALIDATION: ninja -C out/aros-chrome -j48 chrome completed all 744 steps. The preceding hosted replay opened the 1050x978 Intuition window, presented the first full software canvas, then failed exactly at SharedMemoryTracker with 131064 vs. 16.
+
+RISK: low-to-moderate; AROS memory-dump bookkeeping may contain multiple records for one raw address, but each record now has an exact mapping identity and balanced reference lifetime.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap; ACD-chromium-aros-native-crash-reporting;
+---
+ base/memory/shared_memory_tracker.cc | 40 ++++++++++++++++++++--------
+ base/memory/shared_memory_tracker.h  |  2 +-
+ 2 files changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/base/memory/shared_memory_tracker.cc b/base/memory/shared_memory_tracker.cc
+index e74e822a2a..0c08b890aa 100644
+--- a/base/memory/shared_memory_tracker.cc
++++ b/base/memory/shared_memory_tracker.cc
+@@ -54,17 +54,20 @@ SharedMemoryTracker::GetOrCreateSharedMemoryDump(
+ void SharedMemoryTracker::IncrementMemoryUsage(
+     const SharedMemoryMapping& mapping) {
+   AutoLock hold(usages_lock_);
+-  const auto existing = usages_.find(mapping.raw_memory_ptr());
+ #if BUILDFLAG(IS_AROS)
+-  if (existing != usages_.end()) {
+-    // Until OPAL supplies virtual aliases, duplicated AROS mappings expose the
+-    // same address. Track their lifetimes without double-counting that range.
+-    DCHECK_EQ(existing->second.mapped_size, mapping.mapped_size());
+-    DCHECK(existing->second.mapped_id == mapping.guid());
+-    ++existing->second.references;
+-    return;
++  const auto range = usages_.equal_range(mapping.raw_memory_ptr());
++  for (auto existing = range.first; existing != range.second; ++existing) {
++    if (existing->second.mapped_size == mapping.mapped_size() &&
++        existing->second.mapped_id == mapping.guid()) {
++      // Until OPAL supplies virtual aliases, equivalent AROS mappings expose
++      // the same address. Count only exact mapping identities as references;
++      // MapAt() may expose a different length at that same address.
++      ++existing->second.references;
++      return;
++    }
+   }
+ #else
++  const auto existing = usages_.find(mapping.raw_memory_ptr());
+   DCHECK(existing == usages_.end());
+ #endif
+   usages_.emplace(mapping.raw_memory_ptr(),
+@@ -74,18 +77,33 @@ void SharedMemoryTracker::IncrementMemoryUsage(
+ void SharedMemoryTracker::DecrementMemoryUsage(
+     const SharedMemoryMapping& mapping) {
+   AutoLock hold(usages_lock_);
++#if BUILDFLAG(IS_AROS)
++  const auto range = usages_.equal_range(mapping.raw_memory_ptr());
++  auto it = range.first;
++  while (it != range.second &&
++         (it->second.mapped_size != mapping.mapped_size() ||
++          it->second.mapped_id != mapping.guid())) {
++    ++it;
++  }
++#else
+   const auto it = usages_.find(mapping.raw_memory_ptr());
++#endif
+   // TODO(pbos): When removing this NotFatalUntil, use erase(it) below. We can't
+   // do that now because if this CHECK is actually failing there'd be a memory
+   // bug.
+-  CHECK(it != usages_.end(), base::NotFatalUntil::M125);
+ #if BUILDFLAG(IS_AROS)
+-  if (it != usages_.end() && it->second.references > 1) {
++  CHECK(it != range.second, base::NotFatalUntil::M125);
++  if (it == range.second)
++    return;
++  if (it->second.references > 1) {
+     --it->second.references;
+     return;
+   }
+-#endif
++  usages_.erase(it);
++#else
++  CHECK(it != usages_.end(), base::NotFatalUntil::M125);
+   usages_.erase(mapping.raw_memory_ptr());
++#endif
+ }
+ 
+ SharedMemoryTracker::SharedMemoryTracker() {
+diff --git a/base/memory/shared_memory_tracker.h b/base/memory/shared_memory_tracker.h
+index 28798f2b26..3daefafc9a 100644
+--- a/base/memory/shared_memory_tracker.h
++++ b/base/memory/shared_memory_tracker.h
+@@ -76,7 +76,7 @@ class BASE_EXPORT SharedMemoryTracker : public trace_event::MemoryDumpProvider {
+   };
+ 
+   Lock usages_lock_;
+-  std::map<void*, UsageInfo> usages_ GUARDED_BY(usages_lock_);
++  std::multimap<void*, UsageInfo> usages_ GUARDED_BY(usages_lock_);
+ };
+ 
+ }  // namespace base

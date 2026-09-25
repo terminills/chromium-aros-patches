@@ -1,0 +1,48 @@
+From c1f34904ccee1f14e8e7ec680c50be39cc911ae7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 03:44:45 -0500
+Subject: [PATCH 28/28] Guard AROS V8 page allocator startup
+
+---
+ src/utils/allocation.cc | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/utils/allocation.cc b/src/utils/allocation.cc
+index 4101c27..c7ea012 100644
+--- a/src/utils/allocation.cc
++++ b/src/utils/allocation.cc
+@@ -32,7 +32,15 @@ namespace {
+ class PageAllocatorInitializer {
+  public:
+   PageAllocatorInitializer() {
++#if V8_OS_AROS
++    if (v8::Platform* platform = V8::GetCurrentPlatform()) {
++      page_allocator_ = platform->GetPageAllocator();
++    } else {
++      page_allocator_ = nullptr;
++    }
++#else
+     page_allocator_ = V8::GetCurrentPlatform()->GetPageAllocator();
++#endif
+     if (page_allocator_ == nullptr) {
+       static base::LeakyObject<base::PageAllocator> default_page_allocator;
+       page_allocator_ = default_page_allocator.get();
+@@ -64,8 +72,18 @@ const int kAllocationTries = 2;
+ }  // namespace
+ 
+ v8::PageAllocator* GetPlatformPageAllocator() {
++#if V8_OS_AROS
++  if (v8::Platform* platform = V8::GetCurrentPlatform()) {
++    if (v8::PageAllocator* page_allocator = platform->GetPageAllocator()) {
++      return page_allocator;
++    }
++  }
++  static base::LeakyObject<base::PageAllocator> default_page_allocator;
++  return default_page_allocator.get();
++#else
+   DCHECK_NOT_NULL(GetPageAllocatorInitializer()->page_allocator());
+   return GetPageAllocatorInitializer()->page_allocator();
++#endif
+ }
+ 
+ v8::VirtualAddressSpace* GetPlatformVirtualAddressSpace() {

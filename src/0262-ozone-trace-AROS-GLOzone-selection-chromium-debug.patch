@@ -1,0 +1,68 @@
+From 125b31748cd1a51ec19a3e136bfb9407ff2dd5cf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 20 Jul 2026 15:52:06 -0500
+Subject: [PATCH 262/638] ozone: trace AROS GLOzone selection [chromium]
+ [debug]
+
+AI_PHASE: chromium-phase-5-gpu-bridge
+
+AI_STATUS: source-and-link-validated, hosted-replay-pending
+
+ROOT_CAUSE: The hosted YouTube replay reaches gl::init::InitializeGLOneOffPlatform after HasGLOzone() is false, but its fatal output does not state whether the AROS surface factory is absent or which GL implementation was selected.
+
+FIX_REASON: Emit the current GL implementation and surface-factory pointer at the platform boundary, and identify unsupported implementation requests in the AROS factory. This establishes the next repair boundary without changing renderer policy.
+
+SCOPE: ui/gl/init/gl_initializer_ozone.cc and ui/ozone/platform/aros/aros_surface_factory.cc only. No runtime, Mesa, Gallium, VirGL, Venus, or renderer-policy change.
+
+HOSTED_NATIVE: The diagnostic code is shared by hosted and native x86_64 builds. The first result will be hosted-only until an SMP native replay confirms the same path.
+
+VALIDATION: git diff --cached --check; ninja -C out/aros-chrome chrome completed with LINK ./chrome; evidence manifest test-artifacts/hosted-20260720-ozone-selection-diagnostic/README.md.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;;
+---
+ ui/gl/init/gl_initializer_ozone.cc             |  7 ++++++-
+ ui/ozone/platform/aros/aros_surface_factory.cc | 13 ++++++++++---
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/ui/gl/init/gl_initializer_ozone.cc b/ui/gl/init/gl_initializer_ozone.cc
+index 6a2df8fa89..c470a93eef 100644
+--- a/ui/gl/init/gl_initializer_ozone.cc
++++ b/ui/gl/init/gl_initializer_ozone.cc
+@@ -28,7 +28,12 @@ GLDisplay* InitializeGLOneOffPlatform(gl::GpuPreference gpu_preference) {
+         supports_angle, init_displays, gpu_preference);
+   }
+ 
+-  switch (GetGLImplementation()) {
++  const GLImplementationParts implementation = GetGLImplementationParts();
++  LOG(ERROR) << "[Chromium:Ozone:AROS] no GLOzone for implementation="
++             << implementation.ToString()
++             << " surface_factory=" << GetSurfaceFactoryOzone();
++
++  switch (implementation.gl) {
+     case kGLImplementationMockGL:
+     case kGLImplementationStubGL:
+       return GetDisplayEGL(gpu_preference);
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+index 621167a237..de1d9c2631 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.cc
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -96,9 +96,16 @@ ArosSurfaceFactory::GetAllowedGLImplementations() {
+ 
+ GLOzone* ArosSurfaceFactory::GetGLOzone(
+     const gl::GLImplementationParts& implementation) {
+-  return implementation.gl == gl::kGLImplementationEGLGLES2
+-             ? egl_implementation_.get()
+-             : nullptr;
++  if (implementation.gl == gl::kGLImplementationEGLGLES2) {
++    return egl_implementation_.get();
++  }
++
++  LOG(ERROR) << "[Chromium:Ozone:AROS] unsupported GLOzone implementation="
++             << implementation.ToString()
++             << " expected="
++             << gl::GLImplementationParts(gl::kGLImplementationEGLGLES2)
++                    .ToString();
++  return nullptr;
+ }
+ 
+ std::unique_ptr<SurfaceOzoneCanvas> ArosSurfaceFactory::CreateCanvasForWidget(

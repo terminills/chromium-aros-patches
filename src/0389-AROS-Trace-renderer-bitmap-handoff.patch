@@ -1,0 +1,199 @@
+From db1253aef40c9b437f6c2a647e59b92d632bf3f3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 00:37:00 -0500
+Subject: [PATCH 389/638] [AROS] Trace renderer bitmap handoff
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+OBSERVED: Runtime 30 committed and repeatedly presented a high-contrast renderer document, but Viz composed a uniformly white child surface while browser chrome remained correct.
+
+FIX_REASON: Record bounded frame topology and shared-bitmap fingerprints before renderer Mojo submission and after Viz import. This distinguishes resource transport loss from later surface aggregation without changing rendering policy.
+
+SCOPE: AROS-only renderer/Viz diagnostics in AsyncLayerTreeFrameSink and CompositorFrameSinkSupport; no loader, relocation, shared-memory, or compositor semantics changed.
+
+VALIDATION: Both translation units compiled in out/aros-v8-library; depot_tools clang-format and git diff --check pass; full relink and runtime 31 follow.
+
+AI_DECISION_CHAIN: runtime 30
+---
+ .../async_layer_tree_frame_sink.cc            | 49 +++++++++++++++++
+ .../compositor_frame_sink_support.cc          | 52 ++++++++++++++++++-
+ 2 files changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.cc b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+index 8c2d992187..391467d9a9 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.cc
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+@@ -4,9 +4,13 @@
+ 
+ #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
+ 
++#include <algorithm>
++#include <cstdint>
+ #include <utility>
+ 
++#include "base/containers/span.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -26,6 +30,17 @@ namespace cc {
+ namespace mojo_embedder {
+ 
+ namespace {
++#if BUILDFLAG(IS_AROS)
++uint32_t ArosByteFingerprint(base::span<const uint8_t> bytes) {
++  uint32_t fingerprint = 2166136261u;
++  for (uint8_t byte : bytes.first(std::min<size_t>(bytes.size(), 256u))) {
++    fingerprint ^= byte;
++    fingerprint *= 16777619u;
++  }
++  return fingerprint;
++}
++#endif
++
+ auto to_proto_enum(FrameSkippedReason reason) {
+   using ProtoReason =
+       ::perfetto::protos::pbzero::ChromeGraphicsPipeline::FrameSkippedReason;
+@@ -181,6 +196,26 @@ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+   DCHECK(frame.metadata.begin_frame_ack.has_damage);
+   DCHECK(frame.metadata.begin_frame_ack.frame_id.IsSequenceValid());
+ 
++#if BUILDFLAG(IS_AROS)
++  static size_t aros_submitted_frame_count = 0;
++  if (aros_submitted_frame_count < 16) {
++    size_t quad_count = 0;
++    size_t software_resource_count = 0;
++    for (const auto& pass : frame.render_pass_list)
++      quad_count += pass->quad_list.size();
++    for (const auto& resource : frame.resource_list)
++      software_resource_count += resource.is_software ? 1u : 0u;
++    ++aros_submitted_frame_count;
++    LOG(ERROR) << "[AROS renderer-frame] seq=" << aros_submitted_frame_count
++               << " surface=" << local_surface_id_.ToString()
++               << " size=" << frame.size_in_pixels().ToString()
++               << " passes=" << frame.render_pass_list.size()
++               << " quads=" << quad_count
++               << " resources=" << frame.resource_list.size()
++               << " software_resources=" << software_resource_count;
++  }
++#endif
++
+   if (auto_needs_begin_frame_ && !needs_begin_frames_) {
+     UpdateNeedsBeginFramesInternal(/*needs_begin_frames=*/true);
+   }
+@@ -282,6 +317,20 @@ void AsyncLayerTreeFrameSink::DidAllocateSharedBitmap(
+     base::ReadOnlySharedMemoryRegion region,
+     const viz::SharedBitmapId& id) {
+   DCHECK(compositor_frame_sink_ptr_);
++#if BUILDFLAG(IS_AROS)
++  static size_t aros_allocated_bitmap_count = 0;
++  if (aros_allocated_bitmap_count < 16) {
++    base::ReadOnlySharedMemoryMapping mapping = region.Map();
++    const base::span<const uint8_t> bytes =
++        mapping.GetMemoryAsSpan<uint8_t>();
++    ++aros_allocated_bitmap_count;
++    LOG(ERROR) << "[AROS renderer-bitmap] seq="
++               << aros_allocated_bitmap_count << " id=" << id.ToDebugString()
++               << " region_size=" << region.GetSize()
++               << " map_valid=" << mapping.IsValid()
++               << " fingerprint=" << ArosByteFingerprint(bytes);
++  }
++#endif
+   compositor_frame_sink_ptr_->DidAllocateSharedBitmap(std::move(region), id);
+ }
+ 
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+index 5794265a59..2c15e36014 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -5,13 +5,16 @@
+ #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <string>
+ #include <utility>
+ 
+ #include "base/check.h"
+ #include "base/containers/contains.h"
++#include "base/containers/span.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/ranges/algorithm.h"
+@@ -56,6 +59,17 @@ bool HasElapsedCadenceInterval(
+ namespace viz {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++uint32_t ArosByteFingerprint(base::span<const uint8_t> bytes) {
++  uint32_t fingerprint = 2166136261u;
++  for (uint8_t byte : bytes.first(std::min<size_t>(bytes.size(), 256u))) {
++    fingerprint ^= byte;
++    fingerprint *= 16777619u;
++  }
++  return fingerprint;
++}
++#endif
++
+ bool RecordShouldSendBeginFrame(const std::string& reason, bool should_send) {
+   TRACE_EVENT2("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
+                should_send);
+@@ -662,8 +676,23 @@ void CompositorFrameSinkSupport::SubmitCompositorFrame(
+ bool CompositorFrameSinkSupport::DidAllocateSharedBitmap(
+     base::ReadOnlySharedMemoryRegion region,
+     const SharedBitmapId& id) {
++  base::ReadOnlySharedMemoryMapping mapping = region.Map();
++#if BUILDFLAG(IS_AROS)
++  static size_t aros_imported_bitmap_count = 0;
++  if (aros_imported_bitmap_count < 16) {
++    const base::span<const uint8_t> bytes =
++        mapping.GetMemoryAsSpan<uint8_t>();
++    ++aros_imported_bitmap_count;
++    LOG(ERROR) << "[AROS viz-bitmap] seq=" << aros_imported_bitmap_count
++               << " sink=" << frame_sink_id_.ToString()
++               << " id=" << id.ToDebugString()
++               << " region_size=" << region.GetSize()
++               << " map_valid=" << mapping.IsValid()
++               << " fingerprint=" << ArosByteFingerprint(bytes);
++  }
++#endif
+   if (!frame_sink_manager_->shared_bitmap_manager()->ChildAllocatedSharedBitmap(
+-          region.Map(), id)) {
++          std::move(mapping), id)) {
+     return false;
+   }
+ 
+@@ -711,6 +740,27 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
+     std::optional<HitTestRegionList> hit_test_region_list,
+     uint64_t submit_time,
+     mojom::CompositorFrameSink::SubmitCompositorFrameSyncCallback callback) {
++#if BUILDFLAG(IS_AROS)
++  static size_t aros_received_frame_count = 0;
++  if (aros_received_frame_count < 16) {
++    size_t quad_count = 0;
++    size_t software_resource_count = 0;
++    for (const auto& pass : frame.render_pass_list)
++      quad_count += pass->quad_list.size();
++    for (const auto& resource : frame.resource_list)
++      software_resource_count += resource.is_software ? 1u : 0u;
++    ++aros_received_frame_count;
++    LOG(ERROR) << "[AROS viz-frame] seq=" << aros_received_frame_count
++               << " sink=" << frame_sink_id_.ToString()
++               << " surface=" << local_surface_id.ToString()
++               << " size=" << frame.size_in_pixels().ToString()
++               << " passes=" << frame.render_pass_list.size()
++               << " quads=" << quad_count
++               << " resources=" << frame.resource_list.size()
++               << " software_resources=" << software_resource_count;
++  }
++#endif
++
+   if (!client_needs_begin_frame_ && auto_needs_begin_frame_) {
+     // SetNeedsBeginFrame(true) below may cause `last_begin_frame_args_` to be
+     // updated.

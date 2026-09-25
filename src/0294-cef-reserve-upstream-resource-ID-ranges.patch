@@ -1,0 +1,42 @@
+From ca291cd898eb4d1dfee9de6b9b9d8486cbaabfa0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 13:09:46 -0500
+Subject: [PATCH 294/638] cef: reserve upstream resource ID ranges
+
+Apply the matching CEF checkout's gritsettings patch so cef_resources.grd and cef_strings.grd receive the prescribed 31500 and 32000 ranges. Without these entries the full CEF graph stops during GRIT generation before any framework link.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: cef-resource-generation-unblocked
+
+AI_ASSUMPTION: the exact-version CEF patch directory is authoritative for Chromium integration deltas
+
+AI_VALIDATION: root diff is byte-equivalent to cef/patch/patches/gritsettings.patch under -p0; full CEF rebuild resumes next
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/02-cef-resume-after-dos64.log
+
+AI_DECISION_CHAIN:; 52dac911; 265d3101e7
+---
+ tools/gritsettings/resource_ids.spec | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/tools/gritsettings/resource_ids.spec b/tools/gritsettings/resource_ids.spec
+index 3b6a1acc7d..198419b310 100644
+--- a/tools/gritsettings/resource_ids.spec
++++ b/tools/gritsettings/resource_ids.spec
+@@ -1286,6 +1286,15 @@
+   # END "everything else" section.
+   # Everything but chrome/, components/, content/, and ios/
+ 
++  "cef/libcef/resources/cef_resources.grd": {
++    "META": {"align": 31500},
++    "includes": [31500],
++  },
++  "cef/libcef/resources/cef_strings.grd": {
++    "META": {"align": 32000},
++    "messages": [32000],
++  },
++
+   # Thinking about appending to the end?
+   # Please read the header and find the right section above instead.
+ }

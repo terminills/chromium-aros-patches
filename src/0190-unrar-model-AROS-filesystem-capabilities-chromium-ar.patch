@@ -1,0 +1,82 @@
+From bbd78edd1861b7a15a5f7065c8129fa1d236714f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:12:48 -0500
+Subject: [PATCH 190/638] unrar: model AROS filesystem capabilities [chromium]
+ [aros]
+
+Statement:
+Chrome's RAR inspection graph reached UnRAR assumptions for lchown, POSIX wcsdup, and nanosecond utimensat that the AROS libc does not provide.
+
+Decision:
+Retain archive parsing and regular-file extraction, use UnRAR's portable utime path, replace wcsdup with an allocation-compatible local helper, and disable symlink materialization where no safe no-follow ownership API exists.
+
+Evidence:
+UnRAR extinfo.o, extract.o, and file.o all build in out/aros-chrome; git diff --check passes.
+
+Chain:
+Advances while preserving Chrome's archive-analysis capability.
+---
+ third_party/unrar/src/extract.cpp | 13 +++++++++++--
+ third_party/unrar/src/os.hpp      |  5 +++--
+ 2 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/unrar/src/extract.cpp b/third_party/unrar/src/extract.cpp
+index 271a8968d4..711a781553 100644
+--- a/third_party/unrar/src/extract.cpp
++++ b/third_party/unrar/src/extract.cpp
+@@ -1,5 +1,14 @@
+ #include "rar.hpp"
+ 
++static wchar* DuplicateWideString(const wchar* source)
++{
++  size_t size=(wcslen(source)+1)*sizeof(*source);
++  wchar* copy=(wchar*)malloc(size);
++  if (copy!=NULL)
++    memcpy(copy,source,size);
++  return copy;
++}
++
+ CmdExtract::CmdExtract(CommandData *Cmd)
+ {
+   CmdExtract::Cmd=Cmd;
+@@ -500,7 +509,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
+           wcsncatz(DestFileName, L"__tmp_reference_source_",
+                    ASIZE(DestFileName));
+           MkTemp(DestFileName, ASIZE(DestFileName));
+-          MatchedRef->TmpName = wcsdup(DestFileName);
++          MatchedRef->TmpName = DuplicateWideString(DestFileName);
+         }
+         RefTarget = true;  // Need it even for 't' to test the reference source.
+         break;
+@@ -1598,7 +1607,7 @@ void CmdExtract::AnalyzeArchive(const wchar* ArcName,
+ 
+               if (!AlreadyAdded && RefList.Size() < MaxListSize) {
+                 ExtractRef Ref = {0};
+-                Ref.RefName = wcsdup(Arc.FileHead.RedirName);
++                Ref.RefName = DuplicateWideString(Arc.FileHead.RedirName);
+                 Ref.RefCount = 1;
+                 RefList.Push(Ref);
+               }
+diff --git a/third_party/unrar/src/os.hpp b/third_party/unrar/src/os.hpp
+index f6b4345ec2..8be3b2bce7 100644
+--- a/third_party/unrar/src/os.hpp
++++ b/third_party/unrar/src/os.hpp
+@@ -180,7 +180,7 @@
+ #include <locale.h>
+ 
+ 
+-#ifdef  S_IFLNK
++#if defined(S_IFLNK) && !defined(__AROS__)
+ #define SAVE_LINKS
+ #endif
+ 
+@@ -227,7 +227,8 @@
+ #endif
+ 
+ // Unlike Apple x64, utimensat shall be available in all Apple M1 systems.
+-#if _POSIX_C_SOURCE >= 200809L || defined(__APPLE__) && defined(__arm64__)
++#if (_POSIX_C_SOURCE >= 200809L || defined(__APPLE__) && defined(__arm64__)) && \
++    !defined(__AROS__)
+   #define UNIX_TIME_NS // Nanosecond time precision in Unix.
+ #endif
+ 

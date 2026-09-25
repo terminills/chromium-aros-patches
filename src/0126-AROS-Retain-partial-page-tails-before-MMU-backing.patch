@@ -1,0 +1,173 @@
+From ed8fc5c0aef4b8ad41e6f2fa9e4e7d7fafe8f919 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 22:15:43 -0500
+Subject: [PATCH 126/638] [AROS] Retain partial page tails before MMU backing
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: transition-fix
+ROOT_CAUSE: Hosted run 0126 proved V8 ReadOnlyPageMetadata::ShrinkToHighWaterMark releases a valid suffix of a tracked reservation. The pre-MMU AROS backend can only free the original contiguous physical block, so treating that suffix as an exact allocation crossed allocator ownership and previously crashed kernel mm_Free.
+FIX_REASON: Classify exact final frees separately from suffix releases. Shorten the allocation's logical exposed range for a suffix while retaining its original physical backing, then release the complete backing when the remaining exact range is finally freed. Prefix, middle, and foreign releases remain fail-closed with debug.resource evidence.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+VALIDATION: AROS PartitionAlloc page_allocator.o cross-compiled; run 0126 captured the 241664-byte suffix request through gin::PageAllocator::ReleasePages -> V8 VirtualMemory::Release -> ReadOnlyPageMetadata::ShrinkToHighWaterMark.
+RISK: Released suffixes continue consuming physical memory until final allocation teardown. MMU-backed sparse unmap should replace this retention policy once AROS can remove physical pages while preserving the virtual reservation.
+AI_DECISION_CHAIN: run 0125 kernel allocator crash -> run 0126 fail-closed caller capture -> valid V8 suffix release -> retain physical tail with logical shrink
+---
+ .../page_allocator_internals_aros.h           | 88 +++++++++++++++++--
+ 1 file changed, 79 insertions(+), 9 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 38cbca58f1..aa28258e85 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -88,6 +88,19 @@ struct PageAllocationRecord {
+   bool exec_owned;
+ };
+ 
++enum class PageAllocationReleaseKind {
++  kInvalid,
++  kRetainedSuffix,
++  kWhole,
++};
++
++struct PageAllocationRelease {
++  PageAllocationReleaseKind kind = PageAllocationReleaseKind::kInvalid;
++  PageAllocationRecord* record = nullptr;
++  uintptr_t exposed_base = 0;
++  size_t exposed_length = 0;
++};
++
+ std::atomic_flag s_pageAllocationLock = ATOMIC_FLAG_INIT;
+ PageAllocationRecord* s_pageAllocations = nullptr;
+ 
+@@ -128,24 +141,49 @@ bool TrackPageAllocation(uintptr_t exposed_base,
+   return true;
+ }
+ 
+-PageAllocationRecord* TakePageAllocation(uintptr_t exposed_base) {
++PageAllocationRelease PreparePageAllocationRelease(uintptr_t address,
++                                                    size_t length) {
++  PageAllocationRelease release;
+   PageAllocationRecord* record;
+   PageAllocationRecord* previous = nullptr;
+ 
+   LockPageAllocations();
+   for (record = s_pageAllocations; record; record = record->next) {
+-    if (record->exposed_base == exposed_base) {
++    if (address == record->exposed_base &&
++        length == record->exposed_length) {
+       if (previous) {
+         previous->next = record->next;
+       } else {
+         s_pageAllocations = record->next;
+       }
++      release.kind = PageAllocationReleaseKind::kWhole;
++      release.record = record;
++      break;
++    }
++
++    if (address > record->exposed_base) {
++      const size_t offset = address - record->exposed_base;
++      if (offset < record->exposed_length &&
++          length == record->exposed_length - offset) {
++        record->exposed_length = offset;
++        release.kind = PageAllocationReleaseKind::kRetainedSuffix;
++        release.exposed_base = record->exposed_base;
++        release.exposed_length = record->exposed_length;
++        break;
++      }
++
++      if (offset < record->exposed_length) {
++        break;
++      }
++    }
++
++    if (address == record->exposed_base) {
+       break;
+     }
+     previous = record;
+   }
+   UnlockPageAllocations();
+-  return record;
++  return release;
+ }
+ 
+ bool RetainTrimmedPageAllocation(uintptr_t base_address,
+@@ -208,7 +246,7 @@ void LogLargePageAllocation(uintptr_t hint,
+   CloseLibrary(DebugBase);
+ }
+ 
+-void LogUntrackedPageFree(uintptr_t address, size_t length) {
++void LogInvalidPageFree(uintptr_t address, size_t length) {
+   char line[192];
+   struct Library* DebugBase = OpenLibrary("debug.library", 0);
+   if (!DebugBase) {
+@@ -217,13 +255,36 @@ void LogUntrackedPageFree(uintptr_t address, size_t length) {
+ 
+   std::snprintf(
+       line, sizeof(line),
+-      "[Chromium:PA] rejected untracked page free address=%p len=%llu\n",
++      "[Chromium:PA] rejected invalid or untracked page free address=%p "
++      "len=%llu\n",
+       reinterpret_cast<void*>(address),
+       static_cast<unsigned long long>(length));
+   ArosKPutStr(line);
+   CloseLibrary(DebugBase);
+ }
+ 
++void LogRetainedPageSuffix(uintptr_t address,
++                           size_t length,
++                           uintptr_t exposed_base,
++                           size_t exposed_length) {
++  char line[256];
++  struct Library* DebugBase = OpenLibrary("debug.library", 0);
++  if (!DebugBase) {
++    return;
++  }
++
++  std::snprintf(
++      line, sizeof(line),
++      "[Chromium:PA] retained physical page suffix address=%p len=%llu "
++      "logical=%p+%llu\n",
++      reinterpret_cast<void*>(address),
++      static_cast<unsigned long long>(length),
++      reinterpret_cast<void*>(exposed_base),
++      static_cast<unsigned long long>(exposed_length));
++  ArosKPutStr(line);
++  CloseLibrary(DebugBase);
++}
++
+ }  // namespace
+ 
+ uintptr_t SystemAllocPagesInternal(
+@@ -339,18 +400,27 @@ void SetSystemPagesAccessInternal(
+ void FreePagesInternal(uintptr_t address, size_t length) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
+-  PageAllocationRecord* record = TakePageAllocation(address);
+-  if (!record) {
++  PageAllocationRelease release = PreparePageAllocationRelease(address, length);
++  if (release.kind == PageAllocationReleaseKind::kRetainedSuffix) {
++    // AROS has no sparse virtual unmap yet. Preserve ownership of the original
++    // contiguous block while making the suffix unavailable to PartitionAlloc;
++    // the exact final free releases all retained physical backing.
++    LogRetainedPageSuffix(address, length, release.exposed_base,
++                          release.exposed_length);
++    return;
++  }
++
++  PageAllocationRecord* record = release.record;
++  if (release.kind != PageAllocationReleaseKind::kWhole || !record) {
+     // Every mapping created by this backend is tracked. Passing an unknown
+     // address to KrnFreePages can mistake an Exec-managed MemHeader for an
+     // mm_linear header, so preserve the caller context with a controlled
+     // PartitionAlloc failure instead of crossing that ownership boundary.
+-    LogUntrackedPageFree(address, length);
++    LogInvalidPageFree(address, length);
+     PA_CHECK(record);
+     return;
+   }
+ 
+-  PA_CHECK(record->exposed_length == length);
+   SetProtection(KernelBase, record->protected_base, record->protected_length,
+                 static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
+   if (record->exec_owned) {

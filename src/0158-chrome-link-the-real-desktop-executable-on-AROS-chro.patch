@@ -1,0 +1,48 @@
+From 5fcc2ff57ae4ca4e8404be546e55dddbd803da5c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:19:52 -0500
+Subject: [PATCH 158/638] chrome: link the real desktop executable on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+ROOT_CAUSE: AROS selected the Aura main shim but the ChromeMain implementation and complete browser/content dependency body were gated to Linux and ChromeOS, leaving a nominal target with no browser behind it.
+FIX_REASON: Admit AROS to the portable desktop executable body while retaining XDG scripts, Crashpad packaging, and Linux version scripts behind their existing platform capabilities.
+VALIDATION: gn gen out/aros-chrome --root-target=//chrome:chrome made 18095 targets; ninja query now includes chrome_main.o, chrome_main_delegate.o, content/public/app, browser dependencies, and ui/ozone.
+RISK: The first full link will expose remaining source-level platform assumptions in the newly reachable browser graph.
+---
+ chrome/BUILD.gn | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index a107e48cbe..d893cef1eb 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -268,7 +268,7 @@ if (!is_android && !is_mac) {
+         sources += [ "app/chrome_exe_main_aura.cc" ]
+       }
+ 
+-      if (is_linux || is_chromeos) {
++      if (is_linux || is_chromeos || is_aros) {
+         sources += [
+           "app/chrome_dll_resource.h",
+           "app/chrome_main.cc",
+@@ -293,12 +293,13 @@ if (!is_android && !is_mac) {
+           "//headless:headless_shell_lib",
+         ]
+ 
+-        public_deps = [
+-          ":xdg_mime",  # Needs to be public for installer to consume files.
+-          "//chrome/common:buildflags",
+-        ]
++        public_deps = [ "//chrome/common:buildflags" ]
+ 
+-        data_deps += [ "//components/crash/core/app:chrome_crashpad_handler" ]
++        if (is_linux || is_chromeos) {
++          # Needs to be public for installer to consume files.
++          public_deps += [ ":xdg_mime" ]
++          data_deps += [ "//components/crash/core/app:chrome_crashpad_handler" ]
++        }
+ 
+         ldflags = []
+ 

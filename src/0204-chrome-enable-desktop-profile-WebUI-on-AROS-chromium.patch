@@ -1,0 +1,171 @@
+From 824d5b1e568748032d11d9fe7f6a82e37f3e71f4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:50:16 -0500
+Subject: [PATCH 204/638] chrome: enable desktop profile WebUI on AROS
+ [chromium] [aros]
+
+Statement:
+AROS Chrome needs the portable desktop profile, App Home, and Web App settings controllers and resources used by the upstream browser UI.
+
+Decision:
+Admit AROS to the generic desktop controller and resource graph while explicitly excluding Browser Switch and the DICE/Lacros Intro flow that have no native account substrate.
+
+Evidence:
+Generated both App Home and App Settings resource packs; compiled WebAppSettingsUI, ManagedUserProfileNoticeUI, ProfileCustomizationUI, ProfilePickerUI, and ChromeWebUIControllerFactory in out/aros-chrome.
+
+Chain:
+
+ACD-chromium-native-port-roadmap
+---
+ chrome/browser/resources/BUILD.gn             |  2 +-
+ .../browser/resources/app_settings/BUILD.gn   |  2 +-
+ chrome/browser/ui/BUILD.gn                    | 24 ++++++++++++++++---
+ .../webui/chrome_web_ui_controller_factory.cc |  2 ++
+ chrome/chrome_paks.gni                        |  4 ++--
+ chrome/common/webui_url_constants.cc          |  1 +
+ chrome/common/webui_url_constants.h           |  1 +
+ 7 files changed, 29 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/resources/BUILD.gn b/chrome/browser/resources/BUILD.gn
+index f5f10119bc..9bd0542092 100644
+--- a/chrome/browser/resources/BUILD.gn
++++ b/chrome/browser/resources/BUILD.gn
+@@ -103,7 +103,7 @@ group("resources") {
+     public_deps += [ "discards:resources" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_fuchsia) {
++  if (is_win || is_mac || is_linux || is_fuchsia || is_aros) {
+     public_deps += [
+       "app_home:resources",
+       "app_settings:resources",
+diff --git a/chrome/browser/resources/app_settings/BUILD.gn b/chrome/browser/resources/app_settings/BUILD.gn
+index c678d731eb..9dd0f2f730 100644
+--- a/chrome/browser/resources/app_settings/BUILD.gn
++++ b/chrome/browser/resources/app_settings/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//chrome/common/features.gni")
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_fuchsia)
++assert(is_win || is_mac || is_linux || is_fuchsia || is_aros)
+ 
+ build_webui("build") {
+   grd_prefix = "app_settings"
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 6527710b6f..60e1e82d90 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4173,7 +4173,7 @@ static_library("ui") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_fuchsia || is_linux) {
++  if (is_win || is_mac || is_fuchsia || is_linux || is_aros) {
+     sources += [
+       "views/web_apps/deprecated_apps_dialog_view.cc",
+       "views/web_apps/deprecated_apps_dialog_view.h",
+@@ -4199,9 +4199,17 @@ static_library("ui") {
+       "//chrome/app:generated_resources",
+       "//chrome/browser/ui/webui/app_home:mojo_bindings",
+     ]
++
++    if (is_aros) {
++      sources -= [
++        "webui/browser_switch/browser_switch_ui.cc",
++        "webui/browser_switch/browser_switch_ui.h",
++      ]
++    }
+   }
+ 
+-  if (is_win || is_mac || is_fuchsia || is_linux || is_chromeos_ash) {
++  if (is_win || is_mac || is_fuchsia || is_linux || is_aros ||
++      is_chromeos_ash) {
+     sources += [
+       "webui/app_management/app_management_page_handler_base.cc",
+       "webui/app_management/app_management_page_handler_base.h",
+@@ -4210,7 +4218,8 @@ static_library("ui") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_fuchsia || is_linux || is_chromeos_lacros) {
++  if (is_win || is_mac || is_fuchsia || is_linux || is_aros ||
++      is_chromeos_lacros) {
+     sources += [
+       "passwords/account_storage_auth_helper.cc",
+       "passwords/account_storage_auth_helper.h",
+@@ -4312,6 +4321,15 @@ static_library("ui") {
+       "//components/country_codes",
+     ]
+ 
++    if (is_aros) {
++      sources -= [
++        "webui/intro/intro_handler.cc",
++        "webui/intro/intro_handler.h",
++        "webui/intro/intro_ui.cc",
++        "webui/intro/intro_ui.h",
++      ]
++    }
++
+     if (enable_dice_support) {
+       sources += [
+         "profiles/signin_intercept_first_run_experience_dialog.cc",
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc b/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc
+index e9529ba0d6..db4265df39 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc
+@@ -664,9 +664,11 @@ WebUIFactoryFunction GetWebUIFactoryFunction(WebUI* web_ui,
+   if (url.host_piece() == chrome::kChromeUIManagedUserProfileNoticeHost) {
+     return &NewWebUI<ManagedUserProfileNoticeUI>;
+   }
++#if !BUILDFLAG(IS_AROS)
+   if (url.host_piece() == chrome::kChromeUIIntroHost &&
+       base::FeatureList::IsEnabled(kForYouFre))
+     return &NewWebUI<IntroUI>;
++#endif
+   if (url.host_piece() == chrome::kChromeUIProfileCustomizationHost)
+     return &NewWebUI<ProfileCustomizationUI>;
+   if (url.host_piece() == chrome::kChromeUIProfilePickerHost)
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index 117fe40b5d..472d9a8340 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -396,12 +396,12 @@ template("chrome_extra_paks") {
+       }
+     }
+ 
+-    if (is_win || is_mac || is_linux || is_fuchsia) {
++    if (is_win || is_mac || is_linux || is_fuchsia || is_aros) {
+       sources += [ "$root_gen_dir/chrome/app_home_resources.pak" ]
+       deps += [ "//chrome/browser/resources/app_home:resources" ]
+     }
+ 
+-    if (is_win || is_mac || is_linux) {
++    if (is_win || is_mac || is_linux || is_aros) {
+       sources += [ "$root_gen_dir/chrome/app_settings_resources.pak" ]
+       deps += [ "//chrome/browser/resources/app_settings:resources" ]
+     }
+diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
+index 88586f1a6c..0c12b1c9a3 100644
+--- a/chrome/common/webui_url_constants.cc
++++ b/chrome/common/webui_url_constants.cc
+@@ -551,6 +551,7 @@ const char kChromeUISandboxHost[] = "sandbox";
+ // TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+ // of lacros-chrome is complete.
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA) || \
++    BUILDFLAG(IS_AROS) || \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+ const char kChromeUIBrowserSwitchHost[] = "browser-switch";
+ const char kChromeUIBrowserSwitchURL[] = "chrome://browser-switch/";
+diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
+index 1fb14e56b6..e7ecefab75 100644
+--- a/chrome/common/webui_url_constants.h
++++ b/chrome/common/webui_url_constants.h
+@@ -476,6 +476,7 @@ extern const char kChromeUISandboxHost[];
+ // TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+ // of lacros-chrome is complete.
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA) || \
++    BUILDFLAG(IS_AROS) || \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+ extern const char kChromeUIBrowserSwitchHost[];
+ extern const char kChromeUIBrowserSwitchURL[];

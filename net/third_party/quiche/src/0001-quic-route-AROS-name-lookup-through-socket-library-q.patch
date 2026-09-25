@@ -1,0 +1,68 @@
+From f9026320ebcc11d705e302c3ea10caece1f8ee63 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:13:09 -0500
+Subject: [PATCH] quic: route AROS name lookup through socket library [quiche]
+ [aros]
+
+Statement: AROS netdb.h defines addrinfo but resolver entry points are bsdsocket.library vectors, not process-global POSIX symbols.
+
+Decision: Use Chromium's per-task AROSTCP GetAddressInfo, AddressInfoErrorString, and FreeAddressInfo wrappers only on AROS; retain the upstream POSIX calls everywhere else.
+
+Evidence: The content_shell build failed with undeclared getaddrinfo/gai_strerror/freeaddrinfo in quic_name_lookup.cc.
+
+Validation: ninja -C out/aros-windowed -j48 obj/net/third_party/quiche/quiche_tool_support/quic_name_lookup.o
+
+Chain:; ACD-chromium-aros-network-substrate
+---
+ quiche/quic/tools/quic_name_lookup.cc | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/quiche/quic/tools/quic_name_lookup.cc b/quiche/quic/tools/quic_name_lookup.cc
+index dc1d918..d6ecf42 100644
+--- a/quiche/quic/tools/quic_name_lookup.cc
++++ b/quiche/quic/tools/quic_name_lookup.cc
+@@ -8,6 +8,9 @@
+ #include <string>
+ 
+ #include "absl/strings/str_cat.h"
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ #include "quiche/quic/core/quic_server_id.h"
+ #include "quiche/quic/platform/api/quic_logging.h"
+ #include "quiche/quic/platform/api/quic_socket_address.h"
+@@ -31,16 +34,32 @@ QuicSocketAddress LookupAddress(int address_family_for_lookup, std::string host,
+   hint.ai_protocol = IPPROTO_UDP;
+ 
+   addrinfo* info_list = nullptr;
+-  int result = getaddrinfo(host.c_str(), port.c_str(), &hint, &info_list);
++  int result =
++#if defined(__AROS__)
++      base::aros::GetAddressInfo(host.c_str(), port.c_str(), &hint,
++                                 &info_list);
++#else
++      getaddrinfo(host.c_str(), port.c_str(), &hint, &info_list);
++#endif
+   if (result != 0) {
+     QUIC_LOG(ERROR) << "Failed to look up " << host << ": "
++#if defined(__AROS__)
++                    << base::aros::AddressInfoErrorString(result);
++#else
+                     << gai_strerror(result);
++#endif
+     return QuicSocketAddress();
+   }
+ 
+   QUICHE_CHECK(info_list != nullptr);
+   std::unique_ptr<addrinfo, void (*)(addrinfo*)> info_list_owned(
+-      info_list, [](addrinfo* ai) { freeaddrinfo(ai); });
++      info_list, [](addrinfo* ai) {
++#if defined(__AROS__)
++        base::aros::FreeAddressInfo(ai);
++#else
++        freeaddrinfo(ai);
++#endif
++      });
+   return QuicSocketAddress(info_list->ai_addr, info_list->ai_addrlen);
+ }
+ 

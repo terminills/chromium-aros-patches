@@ -1,0 +1,77 @@
+From d096f65baa1eb48bd87e0f1f1ef314e6d5841cfc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:10 -0500
+Subject: [PATCH 281/638] base: bind AROS file stat calls to stat64
+
+Keep Chromium stat_wrapper_t on the large-file ABI explicitly and assert the AROS struct layout before reinterpretation. The focused Blink dependency build compiled this path successfully.
+
+AI_PHASE: chromium-aros-dos64
+
+AI_STATUS: stat64-wrapper-checkpoint
+
+AI_ASSUMPTION: AROS stat_wrapper_t is ABI-identical to struct stat64
+
+AI_VALIDATION: focused blink_platform build completed 15781/15781 with the layout assertions enabled
+
+AI_LIMITATIONS: runtime large-file behavior remains covered by the separate DOS64/native validation lane
+
+AI_DECISION_CHAIN:
+---
+ base/files/file_posix.cc | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index 54c651ecf7..c96abfd2c2 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -12,6 +12,7 @@
+ 
+ #include <errno.h>
+ #include <fcntl.h>
++#include <stddef.h>
+ #include <stdint.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+@@ -23,6 +24,14 @@
+ 
+ static_assert(sizeof(base::stat_wrapper_t::st_size) >= 8);
+ 
++#if BUILDFLAG(IS_AROS)
++static_assert(sizeof(base::stat_wrapper_t) == sizeof(struct stat64));
++static_assert(offsetof(base::stat_wrapper_t, st_mode) ==
++              offsetof(struct stat64, st_mode));
++static_assert(offsetof(base::stat_wrapper_t, st_size) ==
++              offsetof(struct stat64, st_size));
++#endif
++
+ #include <cstring>
+ #include <optional>
+ 
+@@ -787,15 +796,27 @@ File::Error File::GetLastFileError() {
+ 
+ int File::Stat(const char* path, stat_wrapper_t* sb) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
++#if BUILDFLAG(IS_AROS)
++  return stat64(path, reinterpret_cast<struct stat64*>(sb));
++#else
+   return stat(path, sb);
++#endif
+ }
+ int File::Fstat(int fd, stat_wrapper_t* sb) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
++#if BUILDFLAG(IS_AROS)
++  return fstat64(fd, reinterpret_cast<struct stat64*>(sb));
++#else
+   return fstat(fd, sb);
++#endif
+ }
+ int File::Lstat(const char* path, stat_wrapper_t* sb) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
++#if BUILDFLAG(IS_AROS)
++  return lstat64(path, reinterpret_cast<struct stat64*>(sb));
++#else
+   return lstat(path, sb);
++#endif
+ }
+ 
+ }  // namespace base

@@ -1,0 +1,61 @@
+From afd67a426649dc669a527fc3bc47ec5f1491987f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 22:54:56 -0500
+Subject: [PATCH 18/28] AROS: retain generated inspector headers for shared V8
+
+The first full shared-v8 Chromium build removed the transitive inspector implementation target and exposed that public v8-inspector-protocol.h still requires generated inspector headers. Keep only the protocol generation action and its include config on the consumer branch.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: build-failure-correction
+
+AI_VALIDATION: failure preserved at chrome shared build action 12320 with missing inspector/Debugger.h
+
+AI_LIMITATIONS: full shared-v8 Chrome rebuild must resume to expose the next boundary
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn               | 5 ++++-
+ src/inspector/BUILD.gn | 1 +
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index e280aad..ee46350 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -7438,11 +7438,15 @@ if (is_component_build) {
+   }
+ } else {
+   group("v8") {
++    public_configs = [ ":external_config" ]
++
+     if (is_aros && v8_use_aros_library) {
+       public_deps = [
+         ":v8_headers",
++        "src/inspector:protocol_generated_sources",
+         "//build/config/aros/v8_library:v8_library_imports",
+       ]
++      public_configs += [ "src/inspector:inspector_config" ]
+     } else {
+       public_deps = [
+         ":v8_base",
+@@ -7450,7 +7454,6 @@ if (is_component_build) {
+       ]
+     }
+ 
+-    public_configs = [ ":external_config" ]
+   }
+ 
+   group("v8_for_testing") {
+diff --git a/src/inspector/BUILD.gn b/src/inspector/BUILD.gn
+index 9a86323..2b4a665 100644
+--- a/src/inspector/BUILD.gn
++++ b/src/inspector/BUILD.gn
+@@ -60,6 +60,7 @@ config("inspector_config") {
+   # Only targets in this file and v8_internal_headers can depend on this.
+   visibility = [
+     ":*",
++    "../..:v8",
+     "../..:v8_internal_headers",
+   ]
+   include_dirs = [ "$target_gen_dir/../../include" ]

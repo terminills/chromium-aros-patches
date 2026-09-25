@@ -1,0 +1,41 @@
+From 77e5da89d8f0e455112198fd587a9d95c8825332 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 17 Sep 2026 04:03:38 -0500
+Subject: [PATCH 621/638] ozone/aros: do not ask Intuition to move a window to
+ the box it already has
+
+Views calls SetBounds with the bounds the window was opened with before the
+first Show. AROSWindow::SetBoundsInPixels turned that into ChangeWindowBox,
+which Intuition queues as a MoveSizeLayer on the still-hidden layer. Until
+rom/hyperlayers stops rebuilding the layers behind a hidden family from an
+empty visible region, that zero-delta move blanked every window behind the
+new one; with the layers fix in place the call is merely wasted work.
+
+Compare the requested outer box against the window's LeftEdge/TopEdge/
+Width/Height and only call ChangeWindowBox when something differs.
+---
+ ui/ozone/platform/aros/aros_window.cc | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index e0eaf9953d..7bd91262b2 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -533,8 +533,15 @@ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
+         bounds_.width() + window_->BorderLeft + window_->BorderRight;
+     const int outer_height =
+         bounds_.height() + window_->BorderTop + window_->BorderBottom;
+-    ChangeWindowBox(window_, bounds_.x(), bounds_.y(), outer_width,
+-                    outer_height);
++    // Views calls SetBounds with the bounds the window already has before
++    // the first Show. Intuition queues even a zero-delta ChangeWindowBox as a
++    // MoveSizeLayer on the still-hidden layer, so only ask for a box that
++    // differs from the one the window has.
++    if (window_->LeftEdge != bounds_.x() || window_->TopEdge != bounds_.y() ||
++        window_->Width != outer_width || window_->Height != outer_height) {
++      ChangeWindowBox(window_, bounds_.x(), bounds_.y(), outer_width,
++                      outer_height);
++    }
+     UpdateBoundsFromNative(/*notify_delegate=*/false);
+   }
+   if (bounds_ != old_bounds) {

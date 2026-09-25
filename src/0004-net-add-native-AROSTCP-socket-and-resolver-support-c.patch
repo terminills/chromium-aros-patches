@@ -1,0 +1,1557 @@
+From a97ef39773a436cb7d390ab402e569a9cf1de000 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:48:14 -0500
+Subject: [PATCH 004/638] net: add native AROSTCP socket and resolver support
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium net calls POSIX socket and resolver APIs directly, while AROS requires a valid per-task bsdsocket.library base and exposes several interfaces through library vectors rather than libc declarations.
+
+FIX_REASON: Centralize AROSTCP lifecycle and calls in the base socket adapter, then route DNS, interfaces, TCP/UDP options, and error translation through it. WebSocket's source-local List-style collision is removed without altering protocol behavior.
+
+SCOPE: net build selection, AROS network-interface and DNS-config services, resolver paths, socket descriptors/options, TCP/UDP operations, and WebSocket inflater naming.
+
+VALIDATION: focused net and WebSocket objects compile and the full headless graph progressed through generated Mojo/net consumers into Skia.
+
+RISK: medium; network-change notification and richer host configuration remain limited by the currently exposed AROSTCP APIs.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ net/BUILD.gn                         |  13 +-
+ net/base/net_errors_posix.cc         |   2 +
+ net/base/network_interfaces.cc       |   8 +
+ net/base/network_interfaces_aros.cc  |  64 ++++++
+ net/base/network_interfaces_posix.cc |   1 +
+ net/dns/BUILD.gn                     |   7 +-
+ net/dns/address_info.cc              |  17 +-
+ net/dns/dns_config_service_aros.cc   |  80 ++++++++
+ net/dns/dns_config_service_aros.h    |  31 +++
+ net/dns/dns_reloader.cc              |   4 +-
+ net/dns/dns_util.cc                  |   4 +-
+ net/dns/host_resolver_manager.cc     |   4 +-
+ net/dns/host_resolver_system_task.cc |  11 +-
+ net/dns/loopback_only.cc             |  20 +-
+ net/dns/public/BUILD.gn              |   4 +-
+ net/features.gni                     |   6 +-
+ net/socket/socket_descriptor.cc      |   6 +
+ net/socket/socket_options.cc         |  42 ++--
+ net/socket/socket_posix.cc           | 144 ++++++++++++--
+ net/socket/udp_socket_posix.cc       | 278 +++++++++++++++++++++------
+ net/websockets/websocket_inflater.cc |   4 +-
+ net/websockets/websocket_inflater.h  |   2 +-
+ 22 files changed, 635 insertions(+), 117 deletions(-)
+ create mode 100644 net/base/network_interfaces_aros.cc
+ create mode 100644 net/dns/dns_config_service_aros.cc
+ create mode 100644 net/dns/dns_config_service_aros.h
+
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index f35c35e21f..a0d856f901 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -35,7 +35,8 @@ if (is_android) {
+ # So enable it for x86 only for now.
+ # Fuchsia:
+ # Writable mmap isn't supported on Fuchsia, so it should be bypassed.
+-posix_bypass_mmap = (is_android && current_cpu != "x86") || is_fuchsia
++posix_bypass_mmap =
++    (is_android && current_cpu != "x86") || is_fuchsia || is_aros
+ 
+ enable_built_in_dns = use_blink
+ 
+@@ -54,7 +55,7 @@ enable_built_in_dns = use_blink
+ enable_client_certificates = !is_ios || (use_blink && !is_cronet_build)
+ 
+ # Unix sockets are not supported on iOS.
+-enable_unix_sockets = is_posix && !is_ios
++enable_unix_sockets = is_posix && !is_ios && !is_aros
+ 
+ # x86/x64 cast_shell builds run on regular trybots and can use python runtime
+ # and remote test server. ARM cast_shell builds don't have python runtime.
+@@ -1343,8 +1344,10 @@ component("net") {
+     ]
+   }
+ 
+-  # Use getifaddrs() on POSIX platforms, except Linux.
+-  if (is_posix && !is_linux && !is_chromeos) {
++  if (is_aros) {
++    sources += [ "base/network_interfaces_aros.cc" ]
++  } else if (is_posix && !is_linux && !is_chromeos) {
++    # Use getifaddrs() on other non-Linux POSIX platforms.
+     sources += [
+       "base/network_interfaces_getifaddrs.cc",
+       "base/network_interfaces_getifaddrs.h",
+@@ -3105,7 +3108,7 @@ test("net_unittests") {
+   }
+ 
+   # Use getifaddrs() on POSIX platforms, except Linux.
+-  if (is_posix && !is_linux && !is_chromeos) {
++  if (is_posix && !is_linux && !is_chromeos && !is_aros) {
+     sources += [ "base/network_interfaces_getifaddrs_unittest.cc" ]
+   }
+ 
+diff --git a/net/base/net_errors_posix.cc b/net/base/net_errors_posix.cc
+index df49829735..448a6b850b 100644
+--- a/net/base/net_errors_posix.cc
++++ b/net/base/net_errors_posix.cc
+@@ -43,7 +43,9 @@ Error MapSystemError(logging::SystemErrorCode os_error) {
+     case ECONNREFUSED:
+       return ERR_CONNECTION_REFUSED;
+     case EHOSTUNREACH:
++#if defined(EHOSTDOWN)
+     case EHOSTDOWN:
++#endif
+     case ENETUNREACH:
+     case EAFNOSUPPORT:
+       return ERR_ADDRESS_UNREACHABLE;
+diff --git a/net/base/network_interfaces.cc b/net/base/network_interfaces.cc
+index c8a663411b..8d8253d030 100644
+--- a/net/base/network_interfaces.cc
++++ b/net/base/network_interfaces.cc
+@@ -7,6 +7,10 @@
+ #include "base/logging.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_POSIX)
+ #include <unistd.h>
+ #endif
+@@ -52,7 +56,11 @@ std::string GetHostName() {
+ 
+   // Host names are limited to 255 bytes.
+   char buffer[256];
++#if BUILDFLAG(IS_AROS)
++  int result = base::aros::SocketGetHostName(buffer, sizeof(buffer));
++#else
+   int result = gethostname(buffer, sizeof(buffer));
++#endif
+   if (result != 0) {
+     DVLOG(1) << "gethostname() failed with " << result;
+     buffer[0] = '\0';
+diff --git a/net/base/network_interfaces_aros.cc b/net/base/network_interfaces_aros.cc
+new file mode 100644
+index 0000000000..89d8ab4e0b
+--- /dev/null
++++ b/net/base/network_interfaces_aros.cc
+@@ -0,0 +1,64 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/base/network_interfaces.h"
++
++#include <sys/socket.h>
++#include <net/if.h>
++
++#include <vector>
++
++#include "base/aros/socket_library.h"
++#include "base/containers/span.h"
++#include "base/threading/scoped_blocking_call.h"
++#include "net/base/network_interfaces_posix.h"
++
++namespace net {
++
++bool GetNetworkList(NetworkInterfaceList* networks, int policy) {
++  if (!networks) {
++    return false;
++  }
++  networks->clear();
++
++  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
++                                                base::BlockingType::MAY_BLOCK);
++  std::vector<base::aros::NetworkInterfaceInfo> native_interfaces;
++  if (!base::aros::GetNetworkInterfaces(&native_interfaces)) {
++    return false;
++  }
++
++  for (const auto& native : native_interfaces) {
++    if (!(native.flags & IFF_UP) || !(native.flags & IFF_DRV_RUNNING) ||
++        (native.flags & IFF_LOOPBACK) ||
++        internal::ShouldIgnoreInterface(native.name, policy)) {
++      continue;
++    }
++
++    const IPAddress address(base::span(native.address).first(
++        native.address_length));
++    if (!address.IsValid() || address.IsZero() || address.IsLoopback()) {
++      continue;
++    }
++
++    uint32_t prefix_length = 0;
++    if (native.has_netmask) {
++      const IPAddress netmask(base::span(native.netmask).first(
++          native.address_length));
++      prefix_length = static_cast<uint32_t>(MaskPrefixLength(netmask));
++    }
++
++    networks->emplace_back(
++        native.name, native.name, native.index,
++        NetworkChangeNotifier::CONNECTION_UNKNOWN, address, prefix_length,
++        IP_ADDRESS_ATTRIBUTE_NONE);
++  }
++  return true;
++}
++
++std::string GetWifiSSID() {
++  return std::string();
++}
++
++}  // namespace net
+diff --git a/net/base/network_interfaces_posix.cc b/net/base/network_interfaces_posix.cc
+index ef4b5bf693..10d99740ea 100644
+--- a/net/base/network_interfaces_posix.cc
++++ b/net/base/network_interfaces_posix.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "net/base/network_interfaces_posix.h"
+ 
++#include <sys/socket.h>
+ #include <netinet/in.h>
+ #include <sys/types.h>
+ 
+diff --git a/net/dns/BUILD.gn b/net/dns/BUILD.gn
+index 9c10bfed59..4a69126c8c 100644
+--- a/net/dns/BUILD.gn
++++ b/net/dns/BUILD.gn
+@@ -141,6 +141,11 @@ source_set("dns") {
+       "dns_config_service_linux.cc",
+       "dns_config_service_linux.h",
+     ]
++  } else if (is_aros) {
++    sources += [
++      "dns_config_service_aros.cc",
++      "dns_config_service_aros.h",
++    ]
+   } else if (is_posix) {
+     sources += [
+       "dns_config_service_posix.cc",
+@@ -446,7 +451,7 @@ source_set("tests") {
+     sources += [ "dns_config_service_android_unittest.cc" ]
+   } else if (is_linux) {
+     sources += [ "dns_config_service_linux_unittest.cc" ]
+-  } else if (is_posix) {
++  } else if (is_posix && !is_aros) {
+     sources += [ "dns_config_service_posix_unittest.cc" ]
+   }
+ 
+diff --git a/net/dns/address_info.cc b/net/dns/address_info.cc
+index 19963c8e73..067a5abd42 100644
+--- a/net/dns/address_info.cc
++++ b/net/dns/address_info.cc
+@@ -15,6 +15,10 @@
+ #include "net/base/net_errors.h"
+ #include "net/base/sys_addrinfo.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "net/android/network_library.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+@@ -183,7 +187,13 @@ std::unique_ptr<addrinfo, FreeAddrInfoFunc> AddrInfoGetter::getaddrinfo(
+   addrinfo* ai;
+   // We wrap freeaddrinfo() in a lambda just in case some operating systems use
+   // a different signature for it.
+-  FreeAddrInfoFunc deleter = [](addrinfo* ai) { ::freeaddrinfo(ai); };
++  FreeAddrInfoFunc deleter = [](addrinfo* ai) {
++#if BUILDFLAG(IS_AROS)
++    base::aros::FreeAddressInfo(ai);
++#else
++    ::freeaddrinfo(ai);
++#endif
++  };
+ 
+   std::unique_ptr<addrinfo, FreeAddrInfoFunc> rv = {nullptr, deleter};
+ 
+@@ -201,7 +211,12 @@ std::unique_ptr<addrinfo, FreeAddrInfoFunc> AddrInfoGetter::getaddrinfo(
+     return rv;
+ #endif  // BUILDFLAG(IS_ANDROID)
+   } else {
++#if BUILDFLAG(IS_AROS)
++    *out_os_error =
++        base::aros::GetAddressInfo(host.c_str(), nullptr, hints, &ai);
++#else
+     *out_os_error = ::getaddrinfo(host.c_str(), nullptr, hints, &ai);
++#endif
+   }
+ 
+   if (*out_os_error) {
+diff --git a/net/dns/dns_config_service_aros.cc b/net/dns/dns_config_service_aros.cc
+new file mode 100644
+index 0000000000..6932b67f90
+--- /dev/null
++++ b/net/dns/dns_config_service_aros.cc
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/dns/dns_config_service_aros.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/aros/socket_library.h"
++#include "base/files/file_path.h"
++#include "base/logging.h"
++#include "net/base/ip_address.h"
++#include "net/base/ip_endpoint.h"
++#include "net/dns/dns_config.h"
++#include "net/dns/dns_hosts.h"
++
++namespace net::internal {
++
++DnsConfigServiceAros::DnsConfigServiceAros()
++    : DnsConfigService(base::FilePath::StringPieceType()) {
++  DETACH_FROM_SEQUENCE(sequence_checker_);
++}
++
++DnsConfigServiceAros::~DnsConfigServiceAros() = default;
++
++void DnsConfigServiceAros::RefreshConfig() {
++  InvalidateConfig();
++  ReadConfigNow();
++}
++
++void DnsConfigServiceAros::ReadConfigNow() {
++  std::vector<std::string> configured_servers;
++  if (!base::aros::GetConfiguredNameServers(&configured_servers)) {
++    LOG(WARNING) << "Unable to read AROSTCP name servers";
++    return;
++  }
++
++  std::vector<IPEndPoint> name_servers;
++  name_servers.reserve(configured_servers.size());
++  for (const std::string& configured_server : configured_servers) {
++    IPAddress address;
++    if (!address.AssignFromIPLiteral(configured_server)) {
++      LOG(WARNING) << "Ignoring invalid AROSTCP name server: "
++                   << configured_server;
++      continue;
++    }
++    name_servers.emplace_back(address, 53);
++  }
++  if (name_servers.empty()) {
++    LOG(WARNING) << "AROSTCP reported no usable name servers";
++    return;
++  }
++
++  OnConfigRead(DnsConfig(std::move(name_servers)));
++}
++
++void DnsConfigServiceAros::ReadHostsNow() {
++  // AROSTCP owns its host database. Chromium's built-in DNS client starts
++  // with no file-backed overrides; the system resolver remains available for
++  // stack-managed host aliases.
++  OnHostsRead(DnsHosts());
++}
++
++bool DnsConfigServiceAros::StartWatching() {
++  // AROS has no resolv.conf-style file notification. NetworkChangeNotifier
++  // drives RefreshConfig() when interface configuration changes.
++  return true;
++}
++
++}  // namespace net::internal
++
++namespace net {
++
++std::unique_ptr<DnsConfigService> DnsConfigService::CreateSystemService() {
++  return std::make_unique<internal::DnsConfigServiceAros>();
++}
++
++}  // namespace net
+diff --git a/net/dns/dns_config_service_aros.h b/net/dns/dns_config_service_aros.h
+new file mode 100644
+index 0000000000..b779e130dc
+--- /dev/null
++++ b/net/dns/dns_config_service_aros.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef NET_DNS_DNS_CONFIG_SERVICE_AROS_H_
++#define NET_DNS_DNS_CONFIG_SERVICE_AROS_H_
++
++#include "net/base/net_export.h"
++#include "net/dns/dns_config_service.h"
++
++namespace net::internal {
++
++class NET_EXPORT_PRIVATE DnsConfigServiceAros : public DnsConfigService {
++ public:
++  DnsConfigServiceAros();
++  ~DnsConfigServiceAros() override;
++
++  DnsConfigServiceAros(const DnsConfigServiceAros&) = delete;
++  DnsConfigServiceAros& operator=(const DnsConfigServiceAros&) = delete;
++
++  void RefreshConfig() override;
++
++ protected:
++  void ReadConfigNow() override;
++  void ReadHostsNow() override;
++  bool StartWatching() override;
++};
++
++}  // namespace net::internal
++
++#endif  // NET_DNS_DNS_CONFIG_SERVICE_AROS_H_
+diff --git a/net/dns/dns_reloader.cc b/net/dns/dns_reloader.cc
+index 363eb14dc0..70fc826353 100644
+--- a/net/dns/dns_reloader.cc
++++ b/net/dns/dns_reloader.cc
+@@ -8,7 +8,7 @@
+ 
+ // If we're not on a POSIX system, it's not even safe to try to include resolv.h
+ // - there's not guarantee it exists at all. :(
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ 
+ #include <resolv.h>
+ 
+@@ -36,7 +36,7 @@
+ // below - it would be easy for the copies below to get out of sync.
+ #define USE_RES_NINIT
+ #endif  // defined(_RES) && ...
+-#endif  // BUILDFLAG(IS_POSIX)
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ 
+ #if defined(USE_RES_NINIT)
+ 
+diff --git a/net/dns/dns_util.cc b/net/dns/dns_util.cc
+index 7998d34fad..17c1dc5628 100644
+--- a/net/dns/dns_util.cc
++++ b/net/dns/dns_util.cc
+@@ -32,9 +32,9 @@
+ #if BUILDFLAG(IS_POSIX)
+ #include <net/if.h>
+ #include <netinet/in.h>
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #include <ifaddrs.h>
+-#endif  // !BUILDFLAG(IS_ANDROID)
++#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #endif  // BUILDFLAG(IS_POSIX)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+diff --git a/net/dns/host_resolver_manager.cc b/net/dns/host_resolver_manager.cc
+index 89d74a5e3d..c41bb8a9f5 100644
+--- a/net/dns/host_resolver_manager.cc
++++ b/net/dns/host_resolver_manager.cc
+@@ -133,9 +133,9 @@
+ #include "net/base/sys_addrinfo.h"
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/android/build_info.h"
+-#else  // !BUILDFLAG(IS_ANDROID)
++#elif !BUILDFLAG(IS_AROS)
+ #include <ifaddrs.h>
+-#endif  // BUILDFLAG(IS_ANDROID)
++#endif  // BUILDFLAG(IS_ANDROID) / !BUILDFLAG(IS_AROS)
+ #endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ 
+ namespace net {
+diff --git a/net/dns/host_resolver_system_task.cc b/net/dns/host_resolver_system_task.cc
+index a0820f0af0..e592d204bd 100644
+--- a/net/dns/host_resolver_system_task.cc
++++ b/net/dns/host_resolver_system_task.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "net/dns/host_resolver_system_task.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #include <memory>
+ #include <optional>
+ 
+@@ -129,7 +133,12 @@ base::Value::Dict NetLogHostResolverSystemTaskFailedParams(
+     dict.Set("os_error_string", base::WideToUTF8(error_string));
+     LocalFree(error_string);
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+-    dict.Set("os_error_string", gai_strerror(os_error));
++    dict.Set("os_error_string",
++#if BUILDFLAG(IS_AROS)
++             base::aros::AddressInfoErrorString(os_error));
++#else
++             gai_strerror(os_error));
++#endif
+ #endif
+   }
+ 
+diff --git a/net/dns/loopback_only.cc b/net/dns/loopback_only.cc
+index 30796f65a8..f23c174e97 100644
+--- a/net/dns/loopback_only.cc
++++ b/net/dns/loopback_only.cc
+@@ -16,13 +16,17 @@
+ #include "net/base/network_interfaces.h"
+ #include "net/base/sys_addrinfo.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ #include <net/if.h>
+ #if BUILDFLAG(IS_ANDROID)
+ #include "net/android/network_library.h"
+-#else  // BUILDFLAG(IS_ANDROID)
++#elif !BUILDFLAG(IS_AROS)
+ #include <ifaddrs.h>
+-#endif  // BUILDFLAG(IS_ANDROID)
++#endif  // BUILDFLAG(IS_ANDROID) / !BUILDFLAG(IS_AROS)
+ #endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ 
+ #if BUILDFLAG(IS_LINUX)
+@@ -36,7 +40,9 @@ namespace net {
+ 
+ namespace {
+ 
+-#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)) || BUILDFLAG(IS_FUCHSIA)
++#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && \
++     !BUILDFLAG(IS_AROS)) ||                              \
++    BUILDFLAG(IS_FUCHSIA)
+ bool HaveOnlyLoopbackAddressesUsingGetifaddrs() {
+   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                 base::BlockingType::MAY_BLOCK);
+@@ -79,8 +85,8 @@ bool HaveOnlyLoopbackAddressesUsingGetifaddrs() {
+   freeifaddrs(interface_addr);
+   return result;
+ }
+-#endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++#endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) &&
++        //  !BUILDFLAG(IS_AROS)) || BUILDFLAG(IS_FUCHSIA)
+ 
+ // This implementation will always be posted to a thread pool.
+ bool HaveOnlyLoopbackAddressesSlow() {
+@@ -90,6 +96,10 @@ bool HaveOnlyLoopbackAddressesSlow() {
+   return false;
+ #elif BUILDFLAG(IS_ANDROID)
+   return android::HaveOnlyLoopbackAddresses();
++#elif BUILDFLAG(IS_AROS)
++  bool only_loopback = false;
++  return base::aros::HaveOnlyLoopbackNetworkInterfaces(&only_loopback) &&
++         only_loopback;
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   return HaveOnlyLoopbackAddressesUsingGetifaddrs();
+ #endif  // defined(various platforms)
+diff --git a/net/dns/public/BUILD.gn b/net/dns/public/BUILD.gn
+index 4d03eb5080..75ee3793d1 100644
+--- a/net/dns/public/BUILD.gn
++++ b/net/dns/public/BUILD.gn
+@@ -42,7 +42,7 @@ source_set("public") {
+     "util.h",
+   ]
+ 
+-  if (is_posix && !is_android) {
++  if (is_posix && !is_android && !is_aros) {
+     sources += [
+       "resolv_reader.cc",
+       "resolv_reader.h",
+@@ -77,7 +77,7 @@ source_set("tests") {
+     "doh_provider_entry_unittest.cc",
+   ]
+ 
+-  if (is_posix && !is_android) {
++  if (is_posix && !is_android && !is_aros) {
+     sources += [ "resolv_reader_unittest.cc" ]
+   }
+ 
+diff --git a/net/features.gni b/net/features.gni
+index 026a38c0ba..3ca2c0e434 100644
+--- a/net/features.gni
++++ b/net/features.gni
+@@ -18,7 +18,8 @@ declare_args() {
+   # and Chromecast, at least for now. This feature needs configuration
+   # (krb5.conf and so on).
+   # TODO(fuchsia): Enable kerberos on Fuchsia when it's implemented there.
+-  use_kerberos = !is_ios && !is_fuchsia && !is_castos && !is_cast_android
++  use_kerberos =
++      !is_ios && !is_fuchsia && !is_castos && !is_cast_android && !is_aros
+ 
+   # Do not disable brotli filter by default.
+   disable_brotli_filter = false
+@@ -50,7 +51,8 @@ declare_args() {
+ 
+   # Platforms for which certificate verification can only be performed using
+   # the builtin cert verifier with the Chrome Root Store.
+-  chrome_root_store_only = is_win || is_mac || is_linux || is_chromeos
++  chrome_root_store_only =
++      is_win || is_mac || is_linux || is_chromeos || is_aros
+ 
+   # DBSC is only supported on windows for now
+   enable_device_bound_sessions = is_win
+diff --git a/net/socket/socket_descriptor.cc b/net/socket/socket_descriptor.cc
+index f6db3d82e8..a67a20d4c0 100644
+--- a/net/socket/socket_descriptor.cc
++++ b/net/socket/socket_descriptor.cc
+@@ -6,6 +6,10 @@
+ 
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <ws2tcpip.h>
+ #include "net/base/winsock_init.h"
+@@ -34,6 +38,8 @@ SocketDescriptor CreatePlatformSocket(int family, int type, int protocol) {
+     }
+   }
+   return result;
++#elif BUILDFLAG(IS_AROS)
++  return base::aros::Socket(family, type, protocol);
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   SocketDescriptor result = ::socket(family, type, protocol);
+ #if BUILDFLAG(IS_APPLE)
+diff --git a/net/socket/socket_options.cc b/net/socket/socket_options.cc
+index 64c1ddb8da..a27ea37344 100644
+--- a/net/socket/socket_options.cc
++++ b/net/socket/socket_options.cc
+@@ -9,6 +9,10 @@
+ #include "build/build_config.h"
+ #include "net/base/net_errors.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+@@ -19,6 +23,23 @@
+ #endif
+ 
+ namespace net {
++namespace {
++
++int SetPlatformSocketOption(SocketDescriptor fd,
++                            int level,
++                            int option,
++                            const void* value,
++                            int value_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SetSocketOption(
++      fd, level, option, value, static_cast<socklen_t>(value_length));
++#else
++  return setsockopt(fd, level, option,
++                    reinterpret_cast<const char*>(value), value_length);
++#endif
++}
++
++}  // namespace
+ 
+ int SetTCPNoDelay(SocketDescriptor fd, bool no_delay) {
+ #if BUILDFLAG(IS_WIN)
+@@ -26,8 +47,8 @@ int SetTCPNoDelay(SocketDescriptor fd, bool no_delay) {
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   int on = no_delay ? 1 : 0;
+ #endif
+-  int rv = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
+-                      reinterpret_cast<const char*>(&on), sizeof(on));
++  int rv = SetPlatformSocketOption(fd, IPPROTO_TCP, TCP_NODELAY, &on,
++                                   sizeof(on));
+   return rv == -1 ? MapSystemError(errno) : OK;
+ }
+ 
+@@ -50,15 +71,14 @@ int SetReuseAddr(SocketDescriptor fd, bool reuse) {
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   int boolean_value = reuse ? 1 : 0;
+ #endif
+-  int rv = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+-                      reinterpret_cast<const char*>(&boolean_value),
+-                      sizeof(boolean_value));
++  int rv = SetPlatformSocketOption(fd, SOL_SOCKET, SO_REUSEADDR,
++                                   &boolean_value, sizeof(boolean_value));
+   return rv == -1 ? MapSystemError(errno) : OK;
+ }
+ 
+ int SetSocketReceiveBufferSize(SocketDescriptor fd, int32_t size) {
+-  int rv = setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+-                      reinterpret_cast<const char*>(&size), sizeof(size));
++  int rv = SetPlatformSocketOption(fd, SOL_SOCKET, SO_RCVBUF, &size,
++                                   sizeof(size));
+ #if BUILDFLAG(IS_WIN)
+   int os_error = WSAGetLastError();
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+@@ -72,8 +92,8 @@ int SetSocketReceiveBufferSize(SocketDescriptor fd, int32_t size) {
+ }
+ 
+ int SetSocketSendBufferSize(SocketDescriptor fd, int32_t size) {
+-  int rv = setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+-                      reinterpret_cast<const char*>(&size), sizeof(size));
++  int rv = SetPlatformSocketOption(fd, SOL_SOCKET, SO_SNDBUF, &size,
++                                   sizeof(size));
+ #if BUILDFLAG(IS_WIN)
+   int os_error = WSAGetLastError();
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+@@ -92,8 +112,8 @@ int SetIPv6Only(SocketDescriptor fd, bool ipv6_only) {
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   int on = ipv6_only ? 1 : 0;
+ #endif
+-  int rv = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+-                      reinterpret_cast<const char*>(&on), sizeof(on));
++  int rv = SetPlatformSocketOption(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on,
++                                   sizeof(on));
+   return rv == -1 ? MapSystemError(errno) : OK;
+ }
+ 
+diff --git a/net/socket/socket_posix.cc b/net/socket/socket_posix.cc
+index 14f09938ce..7d2d7b65bd 100644
+--- a/net/socket/socket_posix.cc
++++ b/net/socket/socket_posix.cc
+@@ -26,6 +26,10 @@
+ #include "net/base/tracing.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_FUCHSIA)
+ #include <poll.h>
+ #include <sys/ioctl.h>
+@@ -35,6 +39,110 @@ namespace net {
+ 
+ namespace {
+ 
++bool SetSocketNonBlocking(SocketDescriptor socket) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SetSocketNonBlocking(socket, true);
++#else
++  return base::SetNonBlocking(socket);
++#endif
++}
++
++int BindSocket(SocketDescriptor socket,
++               const struct sockaddr* address,
++               socklen_t address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Bind(socket, address, address_length);
++#else
++  return bind(socket, address, address_length);
++#endif
++}
++
++int ListenSocket(SocketDescriptor socket, int backlog) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Listen(socket, backlog);
++#else
++  return listen(socket, backlog);
++#endif
++}
++
++int GetSocketOption(SocketDescriptor socket,
++                    int level,
++                    int option,
++                    void* value,
++                    socklen_t* value_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetSocketOption(socket, level, option, value,
++                                     value_length);
++#else
++  return getsockopt(socket, level, option, value, value_length);
++#endif
++}
++
++int ReceiveSocket(SocketDescriptor socket,
++                  void* buffer,
++                  int length,
++                  int flags) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Receive(socket, buffer, length, flags);
++#else
++  return recv(socket, buffer, length, flags);
++#endif
++}
++
++int GetSocketLocalAddress(SocketDescriptor socket,
++                          struct sockaddr* address,
++                          socklen_t* address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetSocketName(socket, address, address_length);
++#else
++  return getsockname(socket, address, address_length);
++#endif
++}
++
++int AcceptSocket(SocketDescriptor socket,
++                 struct sockaddr* address,
++                 socklen_t* address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Accept(socket, address, address_length);
++#else
++  return accept(socket, address, address_length);
++#endif
++}
++
++int ConnectSocket(SocketDescriptor socket,
++                  const struct sockaddr* address,
++                  socklen_t address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Connect(socket, address, address_length);
++#else
++  return connect(socket, address, address_length);
++#endif
++}
++
++int ReadSocket(SocketDescriptor socket, void* buffer, int length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Receive(socket, buffer, length, 0);
++#else
++  return read(socket, buffer, length);
++#endif
++}
++
++int WriteSocket(SocketDescriptor socket, const void* buffer, int length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Send(socket, buffer, length, 0);
++#else
++  return write(socket, buffer, length);
++#endif
++}
++
++int CloseSocket(SocketDescriptor socket) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SocketClose(socket);
++#else
++  return close(socket);
++#endif
++}
++
+ int MapAcceptError(int os_error) {
+   switch (os_error) {
+     // If the client aborts the connection before the server calls accept,
+@@ -94,7 +202,7 @@ int SocketPosix::Open(int address_family) {
+     return MapSystemError(errno);
+   }
+ 
+-  if (!base::SetNonBlocking(socket_fd_)) {
++  if (!SetSocketNonBlocking(socket_fd_)) {
+     int rv = MapSystemError(errno);
+     Close();
+     return rv;
+@@ -119,7 +227,7 @@ int SocketPosix::AdoptUnconnectedSocket(SocketDescriptor socket) {
+ 
+   socket_fd_ = socket;
+ 
+-  if (!base::SetNonBlocking(socket_fd_)) {
++  if (!SetSocketNonBlocking(socket_fd_)) {
+     int rv = MapSystemError(errno);
+     Close();
+     return rv;
+@@ -142,7 +250,7 @@ int SocketPosix::Bind(const SockaddrStorage& address) {
+   DCHECK(thread_checker_.CalledOnValidThread());
+   DCHECK_NE(kInvalidSocket, socket_fd_);
+ 
+-  int rv = bind(socket_fd_, address.addr, address.addr_len);
++  int rv = BindSocket(socket_fd_, address.addr, address.addr_len);
+   if (rv < 0) {
+     PLOG(ERROR) << "bind() failed";
+     return MapSystemError(errno);
+@@ -156,7 +264,7 @@ int SocketPosix::Listen(int backlog) {
+   DCHECK_NE(kInvalidSocket, socket_fd_);
+   DCHECK_LT(0, backlog);
+ 
+-  int rv = listen(socket_fd_, backlog);
++  int rv = ListenSocket(socket_fd_, backlog);
+   if (rv < 0) {
+     PLOG(ERROR) << "listen() failed";
+     return MapSystemError(errno);
+@@ -217,7 +325,8 @@ int SocketPosix::Connect(const SockaddrStorage& address,
+   // and if in error, consider the connection as failed.
+   int os_error = 0;
+   socklen_t len = sizeof(os_error);
+-  if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &os_error, &len) == 0) {
++  if (GetSocketOption(socket_fd_, SOL_SOCKET, SO_ERROR, &os_error, &len) ==
++      0) {
+     // TCPSocketPosix expects errno to be set.
+     errno = os_error;
+   }
+@@ -241,7 +350,7 @@ bool SocketPosix::IsConnected() const {
+ 
+   // Checks if connection is alive.
+   char c;
+-  int rv = HANDLE_EINTR(recv(socket_fd_, &c, 1, MSG_PEEK));
++  int rv = HANDLE_EINTR(ReceiveSocket(socket_fd_, &c, 1, MSG_PEEK));
+   if (rv == 0)
+     return false;
+   if (rv == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
+@@ -259,7 +368,7 @@ bool SocketPosix::IsConnectedAndIdle() const {
+   // Check if connection is alive and we haven't received any data
+   // unexpectedly.
+   char c;
+-  int rv = HANDLE_EINTR(recv(socket_fd_, &c, 1, MSG_PEEK));
++  int rv = HANDLE_EINTR(ReceiveSocket(socket_fd_, &c, 1, MSG_PEEK));
+   if (rv >= 0)
+     return false;
+   if (errno != EAGAIN && errno != EWOULDBLOCK)
+@@ -365,7 +474,7 @@ int SocketPosix::GetLocalAddress(SockaddrStorage* address) const {
+   DCHECK(thread_checker_.CalledOnValidThread());
+   DCHECK(address);
+ 
+-  if (getsockname(socket_fd_, address->addr, &address->addr_len) < 0)
++  if (GetSocketLocalAddress(socket_fd_, address->addr, &address->addr_len) < 0)
+     return MapSystemError(errno);
+   return OK;
+ }
+@@ -431,9 +540,8 @@ void SocketPosix::OnFileCanWriteWithoutBlocking(int fd) {
+ 
+ int SocketPosix::DoAccept(std::unique_ptr<SocketPosix>* socket) {
+   SockaddrStorage new_peer_address;
+-  int new_socket = HANDLE_EINTR(accept(socket_fd_,
+-                                       new_peer_address.addr,
+-                                       &new_peer_address.addr_len));
++  int new_socket = HANDLE_EINTR(AcceptSocket(
++      socket_fd_, new_peer_address.addr, &new_peer_address.addr_len));
+   if (new_socket < 0)
+     return MapAcceptError(errno);
+ 
+@@ -459,9 +567,8 @@ void SocketPosix::AcceptCompleted() {
+ }
+ 
+ int SocketPosix::DoConnect() {
+-  int rv = HANDLE_EINTR(connect(socket_fd_,
+-                                peer_address_->addr,
+-                                peer_address_->addr_len));
++  int rv = HANDLE_EINTR(ConnectSocket(
++      socket_fd_, peer_address_->addr, peer_address_->addr_len));
+   DCHECK_GE(0, rv);
+   return rv == 0 ? OK : MapConnectError(errno);
+ }
+@@ -470,7 +577,8 @@ void SocketPosix::ConnectCompleted() {
+   // Get the error that connect() completed with.
+   int os_error = 0;
+   socklen_t len = sizeof(os_error);
+-  if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &os_error, &len) == 0) {
++  if (GetSocketOption(socket_fd_, SOL_SOCKET, SO_ERROR, &os_error, &len) ==
++      0) {
+     // TCPSocketPosix expects errno to be set.
+     errno = os_error;
+   }
+@@ -486,7 +594,7 @@ void SocketPosix::ConnectCompleted() {
+ }
+ 
+ int SocketPosix::DoRead(IOBuffer* buf, int buf_len) {
+-  int rv = HANDLE_EINTR(read(socket_fd_, buf->data(), buf_len));
++  int rv = HANDLE_EINTR(ReadSocket(socket_fd_, buf->data(), buf_len));
+   return rv >= 0 ? rv : MapSystemError(errno);
+ }
+ 
+@@ -523,7 +631,7 @@ int SocketPosix::DoWrite(IOBuffer* buf, int buf_len) {
+   // socket creation.
+   int rv = HANDLE_EINTR(send(socket_fd_, buf->data(), buf_len, MSG_NOSIGNAL));
+ #else
+-  int rv = HANDLE_EINTR(write(socket_fd_, buf->data(), buf_len));
++  int rv = HANDLE_EINTR(WriteSocket(socket_fd_, buf->data(), buf_len));
+ #endif
+   if (rv >= 0) {
+     CHECK_LE(rv, buf_len);
+@@ -555,7 +663,7 @@ void SocketPosix::StopWatchingAndCleanUp(bool close_socket) {
+   // before deleting the write buffer.
+   if (close_socket) {
+     if (socket_fd_ != kInvalidSocket) {
+-      if (IGNORE_EINTR(close(socket_fd_)) < 0)
++      if (IGNORE_EINTR(CloseSocket(socket_fd_)) < 0)
+         DPLOG(ERROR) << "close() failed";
+       socket_fd_ = kInvalidSocket;
+     }
+diff --git a/net/socket/udp_socket_posix.cc b/net/socket/udp_socket_posix.cc
+index 828c0fbf62..1dabadfba0 100644
+--- a/net/socket/udp_socket_posix.cc
++++ b/net/socket/udp_socket_posix.cc
+@@ -15,10 +15,10 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <net/if.h>
+-#include <netdb.h>
+ #include <netinet/in.h>
+ #include <sys/ioctl.h>
+ #include <sys/socket.h>
++#include <sys/uio.h>
+ 
+ #include <memory>
+ 
+@@ -54,6 +54,10 @@
+ #include "net/socket/udp_net_log_parameters.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/native_library.h"
+ #include "net/android/network_library.h"
+@@ -108,6 +112,120 @@ int GetSocketFDHash(int fd) {
+   return fd ^ 1595649551;
+ }
+ 
++bool SetSocketNonBlocking(SocketDescriptor socket) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SetSocketNonBlocking(socket, true);
++#else
++  return base::SetNonBlocking(socket);
++#endif
++}
++
++int CloseSocket(SocketDescriptor socket) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SocketClose(socket);
++#else
++  return close(socket);
++#endif
++}
++
++int PlatformGetPeerAddress(SocketDescriptor socket,
++                           struct sockaddr* address,
++                           socklen_t* address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetPeerName(socket, address, address_length);
++#else
++  return getpeername(socket, address, address_length);
++#endif
++}
++
++int PlatformGetLocalAddress(SocketDescriptor socket,
++                            struct sockaddr* address,
++                            socklen_t* address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetSocketName(socket, address, address_length);
++#else
++  return getsockname(socket, address, address_length);
++#endif
++}
++
++int ConnectSocket(SocketDescriptor socket,
++                  const struct sockaddr* address,
++                  socklen_t address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Connect(socket, address, address_length);
++#else
++  return connect(socket, address, address_length);
++#endif
++}
++
++int GetSocketOption(SocketDescriptor socket,
++                    int level,
++                    int option,
++                    void* value,
++                    socklen_t* value_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetSocketOption(socket, level, option, value,
++                                     value_length);
++#else
++  return getsockopt(socket, level, option, value, value_length);
++#endif
++}
++
++int SetSocketOption(SocketDescriptor socket,
++                    int level,
++                    int option,
++                    const void* value,
++                    socklen_t value_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SetSocketOption(socket, level, option, value,
++                                     value_length);
++#else
++  return setsockopt(socket, level, option, value, value_length);
++#endif
++}
++
++int ReceiveSocket(SocketDescriptor socket, void* buffer, int length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Receive(socket, buffer, length, 0);
++#else
++  return read(socket, buffer, length);
++#endif
++}
++
++int ReceiveSocketMessage(SocketDescriptor socket,
++                         struct msghdr* message,
++                         int flags) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::ReceiveMessage(socket, message, flags);
++#else
++  return recvmsg(socket, message, flags);
++#endif
++}
++
++int SendSocketTo(SocketDescriptor socket,
++                 const void* buffer,
++                 int length,
++                 int flags,
++                 const struct sockaddr* address,
++                 socklen_t address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::SendTo(socket, buffer, length, flags, address,
++                            address_length);
++#else
++  return sendto(socket, buffer, length, flags, address, address_length);
++#endif
++}
++
++int BindSocket(SocketDescriptor socket,
++               const struct sockaddr* address,
++               socklen_t address_length) {
++#if BUILDFLAG(IS_AROS)
++  return base::aros::Bind(socket, address, address_length);
++#else
++  return bind(socket, address, address_length);
++#endif
++}
++
+ }  // namespace
+ 
+ UDPSocketPosix::UDPSocketPosix(DatagramSocket::BindType bind_type,
+@@ -188,7 +306,7 @@ int UDPSocketPosix::ConfigureOpenedSocket() {
+                            GUARD_CLOSE | GUARD_DUP, nullptr) == 0);
+ #endif  // BUILDFLAG(IS_APPLE) && !BUILDFLAG(CRONET_BUILD)
+   socket_hash_ = GetSocketFDHash(socket_);
+-  if (!base::SetNonBlocking(socket_)) {
++  if (!SetSocketNonBlocking(socket_)) {
+     const int err = MapSystemError(errno);
+     Close();
+     return err;
+@@ -278,7 +396,8 @@ void UDPSocketPosix::Close() {
+   // EPROTOTYPE errors. See https://crbug.com/1151048.
+   int value = 0;
+   socklen_t value_len = sizeof(value);
+-  HANDLE_EINTR(getsockopt(socket_, SOL_SOCKET, SO_ERROR, &value, &value_len));
++  HANDLE_EINTR(
++      GetSocketOption(socket_, SOL_SOCKET, SO_ERROR, &value, &value_len));
+ 
+   if (IGNORE_EINTR(guarded_close_np(socket_, &kSocketFdGuard)) != 0) {
+     // There is a bug in the Mac OS kernel that it can return an ENOTCONN or
+@@ -290,7 +409,7 @@ void UDPSocketPosix::Close() {
+     PCHECK(errno == ENOTCONN || errno == EPROTOTYPE);
+   }
+ #else
+-  PCHECK(IGNORE_EINTR(close(socket_)) == 0);
++  PCHECK(IGNORE_EINTR(CloseSocket(socket_)) == 0);
+ #endif  // BUILDFLAG(IS_APPLE) && !BUILDFLAG(CRONET_BUILD)
+ 
+   socket_ = kInvalidSocket;
+@@ -309,7 +428,7 @@ int UDPSocketPosix::GetPeerAddress(IPEndPoint* address) const {
+ 
+   if (!remote_address_.get()) {
+     SockaddrStorage storage;
+-    if (getpeername(socket_, storage.addr, &storage.addr_len))
++    if (PlatformGetPeerAddress(socket_, storage.addr, &storage.addr_len))
+       return MapSystemError(errno);
+     auto endpoint = std::make_unique<IPEndPoint>();
+     if (!endpoint->FromSockAddr(storage.addr, storage.addr_len))
+@@ -329,7 +448,7 @@ int UDPSocketPosix::GetLocalAddress(IPEndPoint* address) const {
+ 
+   if (!local_address_.get()) {
+     SockaddrStorage storage;
+-    if (getsockname(socket_, storage.addr, &storage.addr_len))
++    if (PlatformGetLocalAddress(socket_, storage.addr, &storage.addr_len))
+       return MapSystemError(errno);
+     auto endpoint = std::make_unique<IPEndPoint>();
+     if (!endpoint->FromSockAddr(storage.addr, storage.addr_len))
+@@ -470,7 +589,7 @@ int UDPSocketPosix::InternalConnect(const IPEndPoint& address) {
+   if (!address.ToSockAddr(storage.addr, &storage.addr_len))
+     return ERR_ADDRESS_INVALID;
+ 
+-  rv = HANDLE_EINTR(connect(socket_, storage.addr, storage.addr_len));
++  rv = HANDLE_EINTR(ConnectSocket(socket_, storage.addr, storage.addr_len));
+   if (rv < 0)
+     return MapSystemError(errno);
+ 
+@@ -538,25 +657,27 @@ int UDPSocketPosix::SetDoNotFragment() {
+   int val = 1;
+   if (addr_family_ == AF_INET6) {
+     int rv =
+-        setsockopt(socket_, IPPROTO_IPV6, IPV6_DONTFRAG, &val, sizeof(val));
++        SetSocketOption(socket_, IPPROTO_IPV6, IPV6_DONTFRAG, &val,
++                        sizeof(val));
+     // IP_DONTFRAG is not supported on v4mapped addresses.
+     return rv == 0 ? OK : MapSystemError(errno);
+   }
+-  int rv = setsockopt(socket_, IPPROTO_IP, IP_DONTFRAG, &val, sizeof(val));
++  int rv =
++      SetSocketOption(socket_, IPPROTO_IP, IP_DONTFRAG, &val, sizeof(val));
+   return rv == 0 ? OK : MapSystemError(errno);
+ 
+ #else
+   if (addr_family_ == AF_INET6) {
+     int val = IPV6_PMTUDISC_DO;
+-    if (setsockopt(socket_, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &val,
+-                   sizeof(val)) != 0) {
++    if (SetSocketOption(socket_, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &val,
++                        sizeof(val)) != 0) {
+       return MapSystemError(errno);
+     }
+ 
+     int v6_only = false;
+     socklen_t v6_only_len = sizeof(v6_only);
+-    if (getsockopt(socket_, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only,
+-                   &v6_only_len) != 0) {
++    if (GetSocketOption(socket_, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only,
++                        &v6_only_len) != 0) {
+       return MapSystemError(errno);
+     }
+ 
+@@ -565,7 +686,8 @@ int UDPSocketPosix::SetDoNotFragment() {
+   }
+ 
+   int val = IP_PMTUDISC_DO;
+-  int rv = setsockopt(socket_, IPPROTO_IP, IP_MTU_DISCOVER, &val, sizeof(val));
++  int rv = SetSocketOption(socket_, IPPROTO_IP, IP_MTU_DISCOVER, &val,
++                           sizeof(val));
+   return rv == 0 ? OK : MapSystemError(errno);
+ #endif
+ }
+@@ -574,17 +696,20 @@ int UDPSocketPosix::SetRecvTos() {
+   DCHECK_NE(socket_, kInvalidSocket);
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+ 
++#if BUILDFLAG(IS_AROS)
++  return ERR_NOT_IMPLEMENTED;
++#else
+   unsigned int ecn = 1;
+   if (addr_family_ == AF_INET6) {
+-    if (setsockopt(socket_, IPPROTO_IPV6, IPV6_RECVTCLASS, &ecn, sizeof(ecn)) !=
+-        0) {
++    if (SetSocketOption(socket_, IPPROTO_IPV6, IPV6_RECVTCLASS, &ecn,
++                        sizeof(ecn)) != 0) {
+       return MapSystemError(errno);
+     }
+ 
+     int v6_only = false;
+     socklen_t v6_only_len = sizeof(v6_only);
+-    if (getsockopt(socket_, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only,
+-                   &v6_only_len) != 0) {
++    if (GetSocketOption(socket_, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only,
++                        &v6_only_len) != 0) {
+       return MapSystemError(errno);
+     }
+     if (v6_only) {
+@@ -592,18 +717,20 @@ int UDPSocketPosix::SetRecvTos() {
+     }
+   }
+ 
+-  int rv = setsockopt(socket_, IPPROTO_IP, IP_RECVTOS, &ecn, sizeof(ecn));
++  int rv =
++      SetSocketOption(socket_, IPPROTO_IP, IP_RECVTOS, &ecn, sizeof(ecn));
+   return rv == 0 ? OK : MapSystemError(errno);
++#endif
+ }
+ 
+ void UDPSocketPosix::SetMsgConfirm(bool confirm) {
+-#if !BUILDFLAG(IS_APPLE)
++#if defined(MSG_CONFIRM)
+   if (confirm) {
+     sendto_flags_ |= MSG_CONFIRM;
+   } else {
+     sendto_flags_ &= ~MSG_CONFIRM;
+   }
+-#endif  // !BUILDFLAG(IS_APPLE)
++#endif  // defined(MSG_CONFIRM)
+ }
+ 
+ int UDPSocketPosix::AllowAddressReuse() {
+@@ -625,11 +752,13 @@ int UDPSocketPosix::SetBroadcast(bool broadcast) {
+   // This is only being set on OSX because its behavior is platform dependent
+   // and we are playing it safe by only setting it on platforms where things
+   // break.
+-  rv = setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
++  rv = SetSocketOption(socket_, SOL_SOCKET, SO_REUSEPORT, &value,
++                       sizeof(value));
+   if (rv != 0)
+     return MapSystemError(errno);
+ #endif  // BUILDFLAG(IS_APPLE)
+-  rv = setsockopt(socket_, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
++  rv = SetSocketOption(socket_, SOL_SOCKET, SO_BROADCAST, &value,
++                       sizeof(value));
+ 
+   return rv == 0 ? OK : MapSystemError(errno);
+ }
+@@ -649,7 +778,8 @@ int UDPSocketPosix::AllowAddressSharingForMulticast() {
+   // On platforms where the option does not exist, SO_REUSEADDR should be
+   // sufficient to share multicast packets if such sharing is at all possible.
+   int value = 1;
+-  rv = setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
++  rv = SetSocketOption(socket_, SOL_SOCKET, SO_REUSEPORT, &value,
++                       sizeof(value));
+   // Ignore errors that the option does not exist.
+   if (rv != 0 && errno != ENOPROTOOPT)
+     return MapSystemError(errno);
+@@ -777,7 +907,8 @@ int UDPSocketPosix::InternalRecvFromConnectedSocket(IOBuffer* buf,
+   DCHECK(is_connected_);
+   DCHECK(remote_address_);
+   int result;
+-  int bytes_transferred = HANDLE_EINTR(read(socket_, buf->data(), buf_len));
++  int bytes_transferred =
++      HANDLE_EINTR(ReceiveSocket(socket_, buf->data(), buf_len));
+   if (bytes_transferred < 0) {
+     result = MapSystemError(errno);
+     if (result == ERR_IO_PENDING) {
+@@ -823,7 +954,8 @@ int UDPSocketPosix::InternalRecvFromNonConnectedSocket(IOBuffer* buf,
+       .msg_controllen = ABSL_ARRAYSIZE(control_buffer),
+   };
+   int result;
+-  int bytes_transferred = HANDLE_EINTR(recvmsg(socket_, &msg, 0));
++  int bytes_transferred =
++      HANDLE_EINTR(ReceiveSocketMessage(socket_, &msg, 0));
+   if (bytes_transferred < 0) {
+     result = MapSystemError(errno);
+     if (result == ERR_IO_PENDING) {
+@@ -880,8 +1012,9 @@ int UDPSocketPosix::InternalSendTo(IOBuffer* buf,
+     }
+   }
+ 
+-  int result = HANDLE_EINTR(sendto(socket_, buf->data(), buf_len, sendto_flags_,
+-                                   addr, storage.addr_len));
++  int result = HANDLE_EINTR(SendSocketTo(socket_, buf->data(), buf_len,
++                                         sendto_flags_, addr,
++                                         storage.addr_len));
+   if (result < 0)
+     result = MapSystemError(errno);
+   if (result != ERR_IO_PENDING)
+@@ -894,27 +1027,27 @@ int UDPSocketPosix::SetMulticastOptions() {
+     int rv;
+     if (addr_family_ == AF_INET) {
+       u_char loop = 0;
+-      rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_LOOP,
+-                      &loop, sizeof(loop));
++      rv = SetSocketOption(socket_, IPPROTO_IP, IP_MULTICAST_LOOP, &loop,
++                           sizeof(loop));
+     } else {
+       u_int loop = 0;
+-      rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_MULTICAST_LOOP,
+-                      &loop, sizeof(loop));
++      rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &loop,
++                           sizeof(loop));
+     }
+     if (rv < 0)
+       return MapSystemError(errno);
+   }
+-  if (multicast_time_to_live_ != IP_DEFAULT_MULTICAST_TTL) {
++  if (multicast_time_to_live_ != 1) {
+     int rv;
+     if (addr_family_ == AF_INET) {
+       u_char ttl = multicast_time_to_live_;
+-      rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL,
+-                      &ttl, sizeof(ttl));
++      rv = SetSocketOption(socket_, IPPROTO_IP, IP_MULTICAST_TTL, &ttl,
++                           sizeof(ttl));
+     } else {
+       // Signed integer. -1 to use route default.
+       int ttl = multicast_time_to_live_;
+-      rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+-                      &ttl, sizeof(ttl));
++      rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &ttl,
++                           sizeof(ttl));
+     }
+     if (rv < 0)
+       return MapSystemError(errno);
+@@ -922,20 +1055,25 @@ int UDPSocketPosix::SetMulticastOptions() {
+   if (multicast_interface_ != 0) {
+     switch (addr_family_) {
+       case AF_INET: {
++#if BUILDFLAG(IS_AROS)
++        // AROSTCP selects an IPv4 multicast interface by address, while this
++        // API stores an interface index. Do not silently choose the wrong one.
++        return ERR_NOT_IMPLEMENTED;
++#else
+         ip_mreqn mreq = {};
+         mreq.imr_ifindex = multicast_interface_;
+         mreq.imr_address.s_addr = htonl(INADDR_ANY);
+-        int rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_IF,
+-                            reinterpret_cast<const char*>(&mreq), sizeof(mreq));
++        int rv = SetSocketOption(socket_, IPPROTO_IP, IP_MULTICAST_IF, &mreq,
++                                 sizeof(mreq));
+         if (rv)
+           return MapSystemError(errno);
+         break;
++#endif
+       }
+       case AF_INET6: {
+         uint32_t interface_index = multicast_interface_;
+-        int rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_MULTICAST_IF,
+-                            reinterpret_cast<const char*>(&interface_index),
+-                            sizeof(interface_index));
++        int rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_MULTICAST_IF,
++                                 &interface_index, sizeof(interface_index));
+         if (rv)
+           return MapSystemError(errno);
+         break;
+@@ -952,7 +1090,7 @@ int UDPSocketPosix::DoBind(const IPEndPoint& address) {
+   SockaddrStorage storage;
+   if (!address.ToSockAddr(storage.addr, &storage.addr_len))
+     return ERR_ADDRESS_INVALID;
+-  int rv = bind(socket_, storage.addr, storage.addr_len);
++  int rv = BindSocket(socket_, storage.addr, storage.addr_len);
+   if (rv == 0)
+     return OK;
+   int last_error = errno;
+@@ -987,13 +1125,20 @@ int UDPSocketPosix::JoinGroup(const IPAddress& group_address) const {
+     case IPAddress::kIPv4AddressSize: {
+       if (addr_family_ != AF_INET)
+         return ERR_ADDRESS_INVALID;
++#if BUILDFLAG(IS_AROS)
++      if (multicast_interface_ != 0)
++        return ERR_NOT_IMPLEMENTED;
++      ip_mreq mreq = {};
++      mreq.imr_interface.s_addr = htonl(INADDR_ANY);
++#else
+       ip_mreqn mreq = {};
+       mreq.imr_ifindex = multicast_interface_;
+       mreq.imr_address.s_addr = htonl(INADDR_ANY);
++#endif
+       memcpy(&mreq.imr_multiaddr, group_address.bytes().data(),
+              IPAddress::kIPv4AddressSize);
+-      int rv = setsockopt(socket_, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+-                          &mreq, sizeof(mreq));
++      int rv = SetSocketOption(socket_, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq,
++                               sizeof(mreq));
+       if (rv < 0)
+         return MapSystemError(errno);
+       return OK;
+@@ -1005,8 +1150,8 @@ int UDPSocketPosix::JoinGroup(const IPAddress& group_address) const {
+       mreq.ipv6mr_interface = multicast_interface_;
+       memcpy(&mreq.ipv6mr_multiaddr, group_address.bytes().data(),
+              IPAddress::kIPv6AddressSize);
+-      int rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_JOIN_GROUP,
+-                          &mreq, sizeof(mreq));
++      int rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq,
++                               sizeof(mreq));
+       if (rv < 0)
+         return MapSystemError(errno);
+       return OK;
+@@ -1027,13 +1172,20 @@ int UDPSocketPosix::LeaveGroup(const IPAddress& group_address) const {
+     case IPAddress::kIPv4AddressSize: {
+       if (addr_family_ != AF_INET)
+         return ERR_ADDRESS_INVALID;
++#if BUILDFLAG(IS_AROS)
++      if (multicast_interface_ != 0)
++        return ERR_NOT_IMPLEMENTED;
++      ip_mreq mreq = {};
++      mreq.imr_interface.s_addr = INADDR_ANY;
++#else
+       ip_mreqn mreq = {};
+       mreq.imr_ifindex = multicast_interface_;
+       mreq.imr_address.s_addr = INADDR_ANY;
++#endif
+       memcpy(&mreq.imr_multiaddr, group_address.bytes().data(),
+              IPAddress::kIPv4AddressSize);
+-      int rv = setsockopt(socket_, IPPROTO_IP, IP_DROP_MEMBERSHIP,
+-                          &mreq, sizeof(mreq));
++      int rv = SetSocketOption(socket_, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq,
++                               sizeof(mreq));
+       if (rv < 0)
+         return MapSystemError(errno);
+       return OK;
+@@ -1042,15 +1194,15 @@ int UDPSocketPosix::LeaveGroup(const IPAddress& group_address) const {
+       if (addr_family_ != AF_INET6)
+         return ERR_ADDRESS_INVALID;
+       ipv6_mreq mreq;
+-#if BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+       mreq.ipv6mr_interface = multicast_interface_;
+-#else   // BUILDFLAG(IS_FUCHSIA)
++#else
+       mreq.ipv6mr_interface = 0;  // 0 indicates default multicast interface.
+-#endif  // !BUILDFLAG(IS_FUCHSIA)
++#endif
+       memcpy(&mreq.ipv6mr_multiaddr, group_address.bytes().data(),
+              IPAddress::kIPv6AddressSize);
+-      int rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
+-                          &mreq, sizeof(mreq));
++      int rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq,
++                               sizeof(mreq));
+       if (rv < 0)
+         return MapSystemError(errno);
+       return OK;
+@@ -1105,9 +1257,10 @@ int UDPSocketPosix::SetTos(DiffServCodePoint dscp, EcnCodePoint ecn) {
+   if (dscp == DSCP_NO_CHANGE || ecn == ECN_NO_CHANGE) {
+     int rv;
+     if (addr_family_ == AF_INET) {
+-      rv = getsockopt(socket_, IPPROTO_IP, IP_TOS, &dscp_and_ecn, &size);
++      rv = GetSocketOption(socket_, IPPROTO_IP, IP_TOS, &dscp_and_ecn, &size);
+     } else {
+-      rv = getsockopt(socket_, IPPROTO_IPV6, IPV6_TCLASS, &dscp_and_ecn, &size);
++      rv = GetSocketOption(socket_, IPPROTO_IPV6, IPV6_TCLASS, &dscp_and_ecn,
++                           &size);
+     }
+     if (rv < 0) {
+       return MapSystemError(errno);
+@@ -1121,13 +1274,13 @@ int UDPSocketPosix::SetTos(DiffServCodePoint dscp, EcnCodePoint ecn) {
+     }
+   }
+   // Set the IPv4 option in all cases to support dual-stack sockets.
+-  int rv = setsockopt(socket_, IPPROTO_IP, IP_TOS, &dscp_and_ecn,
+-                      sizeof(dscp_and_ecn));
++  int rv = SetSocketOption(socket_, IPPROTO_IP, IP_TOS, &dscp_and_ecn,
++                           sizeof(dscp_and_ecn));
+   if (addr_family_ == AF_INET6) {
+     // In the IPv6 case, the previous socksetopt may fail because of a lack of
+     // dual-stack support. Therefore ignore the previous return value.
+-    rv = setsockopt(socket_, IPPROTO_IPV6, IPV6_TCLASS,
+-                    &dscp_and_ecn, sizeof(dscp_and_ecn));
++    rv = SetSocketOption(socket_, IPPROTO_IPV6, IPV6_TCLASS, &dscp_and_ecn,
++                         sizeof(dscp_and_ecn));
+   }
+   if (rv < 0)
+     return MapSystemError(errno);
+@@ -1159,8 +1312,9 @@ int UDPSocketPosix::SetIOSNetworkServiceType(int ios_network_service_type) {
+     return OK;
+   }
+ #if BUILDFLAG(IS_IOS)
+-  if (setsockopt(socket_, SOL_SOCKET, SO_NET_SERVICE_TYPE,
+-                 &ios_network_service_type, sizeof(ios_network_service_type))) {
++  if (SetSocketOption(socket_, SOL_SOCKET, SO_NET_SERVICE_TYPE,
++                      &ios_network_service_type,
++                      sizeof(ios_network_service_type))) {
+     return MapSystemError(errno);
+   }
+ #endif  // BUILDFLAG(IS_IOS)
+diff --git a/net/websockets/websocket_inflater.cc b/net/websockets/websocket_inflater.cc
+index bc33277e1b..299b1e6c66 100644
+--- a/net/websockets/websocket_inflater.cc
++++ b/net/websockets/websocket_inflater.cc
+@@ -127,7 +127,7 @@ int WebSocketInflater::Inflate(const char* next_in,
+ 
+   int result = Z_BUF_ERROR;
+   do {
+-    std::pair<char*, size_t> tail = output_buffer_.GetTail();
++    std::pair<char*, size_t> tail = output_buffer_.GetWritableTail();
+     if (!tail.second)
+       break;
+ 
+@@ -178,7 +178,7 @@ size_t WebSocketInflater::OutputBuffer::Size() const {
+   return (tail_ + buffer_.size() - head_) % buffer_.size();
+ }
+ 
+-std::pair<char*, size_t> WebSocketInflater::OutputBuffer::GetTail() {
++std::pair<char*, size_t> WebSocketInflater::OutputBuffer::GetWritableTail() {
+   DCHECK_LT(tail_, buffer_.size());
+   return std::pair(&buffer_[tail_],
+                    std::min(capacity_ - Size(), buffer_.size() - tail_));
+diff --git a/net/websockets/websocket_inflater.h b/net/websockets/websocket_inflater.h
+index c89d7b5c10..fd174aa1e4 100644
+--- a/net/websockets/websocket_inflater.h
++++ b/net/websockets/websocket_inflater.h
+@@ -80,7 +80,7 @@ class NET_EXPORT_PRIVATE WebSocketInflater {
+     // Returns (tail pointer, availabe size).
+     // A user can push data to the queue by writing the data to
+     // the area returned by this function and calling AdvanceTail.
+-    std::pair<char*, size_t> GetTail();
++    std::pair<char*, size_t> GetWritableTail();
+     void Read(char* dest, size_t size);
+     void AdvanceTail(size_t advance);
+ 

@@ -1,0 +1,100 @@
+From 364d5ca933840eded15b2fbe65f5eeddf04a76e0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 31 Jul 2026 01:58:31 -0500
+Subject: [PATCH 450/638] aros: trace persistent storage boundary failures
+
+Preserve bounded diagnostics for directory creation, storage lock acquisition, and TransferableDirectory handle state while bringing up VS Code under hosted Electron.
+
+
+
+---
+ base/files/file_util_posix.cc                 |  5 +++++
+ .../public/cpp/filesystem/filesystem_impl.cc  | 22 ++++++++++++++++---
+ .../public/cpp/transferable_directory.cc      | 11 ++++++++++
+ 3 files changed, 35 insertions(+), 3 deletions(-)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index d4ecbe78f1..6707306b87 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -879,6 +879,11 @@ bool CreateDirectoryAndGetError(const FilePath& full_path,
+     // time. Check to see if it exists and make sure it is a directory.
+     int saved_errno = errno;
+     if (!DirectoryExists(subpath)) {
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:Files] mkdir failed for '"
++                 << subpath.value() << "': " << strerror(saved_errno) << " ("
++                 << saved_errno << ")";
++#endif
+       if (error)
+         *error = File::OSErrorToFileError(saved_errno);
+       errno = saved_errno;
+diff --git a/components/services/storage/public/cpp/filesystem/filesystem_impl.cc b/components/services/storage/public/cpp/filesystem/filesystem_impl.cc
+index c312b1e995..dda3c24593 100644
+--- a/components/services/storage/public/cpp/filesystem/filesystem_impl.cc
++++ b/components/services/storage/public/cpp/filesystem/filesystem_impl.cc
+@@ -13,6 +13,7 @@
+ #include "base/files/file_enumerator.h"
+ #include "base/files/file_util.h"
+ #include "base/files/important_file_writer.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/synchronization/lock.h"
+@@ -264,16 +265,31 @@ base::FileErrorOr<base::File> FilesystemImpl::LockFileLocal(
+   DCHECK(path.IsAbsolute());
+   base::File file(path, base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
+                             base::File::FLAG_WRITE);
+-  if (!file.IsValid())
++  if (!file.IsValid()) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:Storage] lock file open failed path='"
++               << path.value() << "' error=" << file.error_details();
++#endif
+     return base::unexpected(file.error_details());
++  }
+ 
+-  if (!GetLockTable().AddLock(path))
++  if (!GetLockTable().AddLock(path)) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:Storage] lock table collision path='"
++               << path.value() << "'";
++#endif
+     return base::unexpected(base::File::FILE_ERROR_IN_USE);
++  }
+ 
+ #if !BUILDFLAG(IS_FUCHSIA)
+   base::File::Error error = file.Lock(base::File::LockMode::kExclusive);
+-  if (error != base::File::FILE_OK)
++  if (error != base::File::FILE_OK) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:Storage] fcntl lock failed path='"
++               << path.value() << "' error=" << error;
++#endif
+     return base::unexpected(error);
++  }
+ #endif
+ 
+   return file;
+diff --git a/services/network/public/cpp/transferable_directory.cc b/services/network/public/cpp/transferable_directory.cc
+index bd818051ed..476f4a1e53 100644
+--- a/services/network/public/cpp/transferable_directory.cc
++++ b/services/network/public/cpp/transferable_directory.cc
+@@ -35,6 +35,17 @@ void TransferableDirectory::operator=(TransferableDirectory&& other) {
+ 
+ void TransferableDirectory::operator=(const base::FilePath& path) {
+   // Path cannot be mutated if OpenForTransfer() was called.
++#if BUILDFLAG(IS_AROS)
++  if (HasValidHandle()) {
++    LOG(ERROR) << "[Chromium:AROS:TransferableDirectory] path assignment has "
++                  "pre-existing handle type="
++               << static_cast<int>(handle_.type())
++               << " fd=" << handle_.is_valid_fd()
++               << " shared_memory=" << handle_.is_valid_aros_shared_memory()
++               << " channel=" << handle_.is_valid_aros_channel()
++               << " path='" << path.value() << "'";
++  }
++#endif
+   DCHECK(!HasValidHandle());
+ 
+   path_ = path;

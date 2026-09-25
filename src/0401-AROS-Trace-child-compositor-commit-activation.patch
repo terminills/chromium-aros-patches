@@ -1,0 +1,255 @@
+From 8ce92ec990de6cc69cd6788855cda76b3bb58b29 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 05:52:17 -0500
+Subject: [PATCH 401/638] [AROS] Trace child compositor commit activation
+
+Runtime43 proves the child surface ID reaches LayerTreeHost pending state but never reaches AsyncLayerTreeFrameSink. Replace root-exhausted process-global probes with per-instance counters and record WillCommit, impl BeginCommit, FinishCommit state transfer, ActivateSyncTree, and child allocator update.
+
+Also bound the previously unbounded SetLocalSurfaceId sink diagnostic to 16 entries per sink so the root compositor cannot flood the runtime log.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+AI_OBSERVED: Child LayerTreeHost accepts LocalSurfaceId(2,1), while its connected sink receives 16 begins and zero surface assignments.
+
+AI_FIX_REASON: Distinguish main-thread commit scheduling, cross-thread CommitState transfer, pending-tree activation, and allocator update in one replay.
+
+AI_SCOPE: LayerTreeHost/Impl and AsyncLayerTreeFrameSink cc/h only.
+
+AI_VALIDATION: git diff --check; build and hosted runtime pending by design.
+
+AI_DECISION_CHAIN: runtime43 Blink delivery pass -> child WillCommit -> impl FinishCommit -> activation -> sink surface assignment.
+---
+ .../async_layer_tree_frame_sink.cc            |  9 ++-
+ .../async_layer_tree_frame_sink.h             |  1 +
+ cc/trees/layer_tree_host.cc                   | 19 +++++-
+ cc/trees/layer_tree_host.h                    |  6 ++
+ cc/trees/layer_tree_host_impl.cc              | 66 +++++++++++++++++--
+ cc/trees/layer_tree_host_impl.h               |  5 ++
+ 6 files changed, 96 insertions(+), 10 deletions(-)
+
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.cc b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+index 6b82179c23..49478c1950 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.cc
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+@@ -223,9 +223,12 @@ void AsyncLayerTreeFrameSink::SetLocalSurfaceId(
+   DCHECK(local_surface_id.is_valid());
+   local_surface_id_ = local_surface_id;
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS async-sink-surface] instance=" << this
+-             << " thread=" << base::PlatformThread::CurrentId()
+-             << " surface=" << local_surface_id_.ToString();
++  if (aros_surface_count_++ < 16) {
++    LOG(ERROR) << "[AROS async-sink-surface] instance=" << this
++               << " seq=" << aros_surface_count_
++               << " thread=" << base::PlatformThread::CurrentId()
++               << " surface=" << local_surface_id_.ToString();
++  }
+ #endif
+ }
+ 
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.h b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+index 4e8d12b1be..5e41819622 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.h
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+@@ -214,6 +214,7 @@ class CC_MOJO_EMBEDDER_EXPORT AsyncLayerTreeFrameSink
+ 
+ #if BUILDFLAG(IS_AROS)
+   size_t aros_submit_count_ = 0;
++  size_t aros_surface_count_ = 0;
+   size_t aros_begin_frame_count_ = 0;
+   size_t aros_no_frame_count_ = 0;
+   size_t aros_needs_begin_frame_count_ = 0;
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index ad99c56fa5..d4269e7a60 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -402,6 +402,21 @@ std::unique_ptr<CommitState> LayerTreeHost::WillCommit(
+     bool has_updates) {
+   DCHECK(IsMainThread());
+   DCHECK(!commit_completion_event_);
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_++ < 16) {
++    LOG(ERROR) << "[AROS_COMMIT] host will-commit host=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " has_updates=" << has_updates
++               << " source_frame="
++               << pending_commit_state()->source_frame_number
++               << " local_surface_id="
++               << pending_commit_state()
++                      ->local_surface_id_from_parent.ToString()
++               << " local_surface_valid="
++               << pending_commit_state()
++                      ->local_surface_id_from_parent.is_valid();
++  }
++#endif
+   std::unique_ptr<CommitState> result;
+   if (has_updates)
+     result = ActivateCommitState();
+@@ -1569,9 +1584,9 @@ void LayerTreeHost::SetExternalPageScaleFactor(
+ void LayerTreeHost::SetLocalSurfaceIdFromParent(
+     const viz::LocalSurfaceId& local_surface_id_from_parent) {
+ #if BUILDFLAG(IS_AROS)
+-  static int aros_parent_surface_count = 0;
+-  if (aros_parent_surface_count++ < 32) {
++  if (aros_surface_probe_count_++ < 16) {
+     LOG(ERROR) << "[AROS_VISUAL] layer host=" << this
++               << " seq=" << aros_surface_probe_count_
+                << " old_local_surface_id="
+                << pending_commit_state()
+                       ->local_surface_id_from_parent.ToString()
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 3ba3f912b9..946f7a3f44 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -28,6 +28,7 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "cc/base/completion_event.h"
+ #include "cc/benchmarks/micro_benchmark.h"
+ #include "cc/benchmarks/micro_benchmark_controller.h"
+@@ -1087,6 +1088,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostClient {
+ 
+   bool syncing_deltas_for_test_ = false;
+ 
++#if BUILDFLAG(IS_AROS)
++  size_t aros_surface_probe_count_ = 0;
++  size_t aros_commit_probe_count_ = 0;
++#endif
++
+   base::WeakPtrFactory<LayerTreeHost> weak_ptr_factory_{this};
+ };
+ 
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index efe2b831d2..4bc65a1a14 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -645,6 +645,18 @@ void LayerTreeHostImpl::BeginCommit(int source_frame_number,
+     CreatePendingTree();
+   sync_tree()->set_source_frame_number(source_frame_number);
+   sync_tree()->set_trace_id(trace_id);
++#if BUILDFLAG(IS_AROS)
++  ++aros_commit_probe_count_;
++  if (aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl begin host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " source_frame=" << source_frame_number
++               << " commit_to_active=" << CommitToActiveTree()
++               << " sync_tree=" << sync_tree()
++               << " sync_local_surface_id="
++               << sync_tree()->local_surface_id_from_parent().ToString();
++  }
++#endif
+ }
+ 
+ // This function commits the LayerTreeHost, as represented by CommitState, to an
+@@ -659,7 +671,29 @@ void LayerTreeHostImpl::FinishCommit(
+     const ThreadUnsafeCommitState& unsafe_state) {
+   TRACE_EVENT0("cc,benchmark", "LayerTreeHostImpl::FinishCommit");
+   LayerTreeImpl* tree = sync_tree();
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl finish-before host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " tree=" << tree
++               << " state_local_surface_id="
++               << state.local_surface_id_from_parent.ToString()
++               << " tree_local_surface_id="
++               << tree->local_surface_id_from_parent().ToString();
++  }
++#endif
+   tree->PullPropertiesFrom(state, unsafe_state);
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl finish-after host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " tree=" << tree
++               << " tree_local_surface_id="
++               << tree->local_surface_id_from_parent().ToString()
++               << " tree_local_surface_valid="
++               << tree->local_surface_id_from_parent().is_valid();
++  }
++#endif
+ 
+   // Check whether the impl scroll animating node was removed by the commit.
+   if (ElementId impl_only_scrolling_element =
+@@ -3383,6 +3417,19 @@ void LayerTreeHostImpl::PushScrollbarOpacitiesFromActiveToPending() {
+ 
+ void LayerTreeHostImpl::ActivateSyncTree() {
+   TRACE_EVENT0("cc,benchmark", "LayerTreeHostImpl::ActivateSyncTree()");
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl activate-entry host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " pending_tree=" << pending_tree_.get()
++               << " pending_local_surface_id="
++               << (pending_tree_
++                       ? pending_tree_->local_surface_id_from_parent().ToString()
++                       : std::string("<none>"))
++               << " active_local_surface_id="
++               << active_tree()->local_surface_id_from_parent().ToString();
++  }
++#endif
+   if (pending_tree_) {
+     TRACE_EVENT_NESTABLE_ASYNC_END1(
+         "cc", "PendingTree:waiting", TRACE_ID_LOCAL(pending_tree_.get()),
+@@ -3467,12 +3514,12 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+ 
+   // Update the child's LocalSurfaceId.
+ #if BUILDFLAG(IS_AROS)
+-  static int aros_activate_surface_count = 0;
+-  if (aros_activate_surface_count++ < 32) {
+-    LOG(ERROR) << "[AROS_VISUAL] layer activate host_impl=" << this
+-               << " parent_local_surface_id="
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl activate-before-allocator host_impl="
++               << this << " seq=" << aros_commit_probe_count_
++               << " active_local_surface_id="
+                << active_tree()->local_surface_id_from_parent().ToString()
+-               << " parent_local_surface_valid="
++               << " active_local_surface_valid="
+                << active_tree()->local_surface_id_from_parent().is_valid()
+                << " child_local_surface_id="
+                << child_local_surface_id_allocator_.GetCurrentLocalSurfaceId()
+@@ -3495,6 +3542,15 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+       resource_provider_->SetEvicted(false);
+     }
+   }
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_COMMIT] impl activate-after-allocator host_impl="
++               << this << " seq=" << aros_commit_probe_count_
++               << " child_local_surface_id="
++               << child_local_surface_id_allocator_.GetCurrentLocalSurfaceId()
++                      .ToString();
++  }
++#endif
+ 
+   client_->OnCanDrawStateChanged(CanDraw());
+   client_->DidActivateSyncTree();
+diff --git a/cc/trees/layer_tree_host_impl.h b/cc/trees/layer_tree_host_impl.h
+index edc02784cc..3f4695c554 100644
+--- a/cc/trees/layer_tree_host_impl.h
++++ b/cc/trees/layer_tree_host_impl.h
+@@ -27,6 +27,7 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "cc/benchmarks/micro_benchmark_controller_impl.h"
+ #include "cc/cc_export.h"
+ #include "cc/input/actively_scrolling_type.h"
+@@ -1324,6 +1325,10 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
+   bool downsample_metrics_ = true;
+   base::MetricsSubSampler metrics_subsampler_;
+ 
++#if BUILDFLAG(IS_AROS)
++  size_t aros_commit_probe_count_ = 0;
++#endif
++
+   // Must be the last member to ensure this is destroyed first in the
+   // destruction order and invalidates all weak pointers.
+   base::WeakPtrFactory<LayerTreeHostImpl> weak_factory_{this};

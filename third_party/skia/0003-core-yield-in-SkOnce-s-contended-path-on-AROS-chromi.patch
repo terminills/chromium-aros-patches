@@ -1,0 +1,52 @@
+From ed5e1db3cdfeeedb8fcb314eace56ee1a0025d1a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 22 Sep 2026 02:13:27 -0500
+Subject: [PATCH 3/3] core: yield in SkOnce's contended path on AROS [chromium]
+ [aros]
+
+AROS schedules strictly by priority and (with --aros-pin-workers) pins
+tasks to a core. The thread that Claimed the once can be READY on the
+same core as a waiter spinning on fState; a bare spin never hands the
+core back. Observed on an 8-core guest: a raster worker in
+SkSemaphore's lazy OSSemaphore init preempted inside sem_init, a second
+worker on the same CPU spinning in SkOnce for minutes ipi8p).
+The kernel side (preempt user-mode spinners on APIC-exception exit) is
+fixed in aros-adt-src 924d645a; this is the same rule userland already
+follows in base's PlatformThread::YieldCurrentThread: never a bare spin.
+
+---
+ include/private/base/SkOnce.h | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/include/private/base/SkOnce.h b/include/private/base/SkOnce.h
+index 97ce6b6..0e91d85 100644
+--- a/include/private/base/SkOnce.h
++++ b/include/private/base/SkOnce.h
+@@ -14,6 +14,10 @@
+ #include <cstdint>
+ #include <utility>
+ 
++#if defined(__AROS__)
++#include <sched.h>
++#endif
++
+ // SkOnce provides call-once guarantees for Skia, much like std::once_flag/std::call_once().
+ //
+ // There should be no particularly error-prone gotcha use cases when using SkOnce.
+@@ -43,7 +47,16 @@ public:
+         // Some other thread is calling fn().
+         // We'll just spin here acquiring until it releases Done into fState.
+         SK_POTENTIALLY_BLOCKING_REGION_BEGIN;
++#if defined(__AROS__)
++        // AROS schedules strictly by priority with tasks pinned to a core.
++        // The thread that Claimed may be READY on this very core (seen:
++        // SkSemaphore's lazy OSSemaphore init from a pinned raster worker,
++        // holder preempted inside sem_init); a bare spin here never gives
++        // it the core back. Same rule as base's PlatformThread::Yield.
++        while (fState.load(std::memory_order_acquire) != Done) { sched_yield(); }
++#else
+         while (fState.load(std::memory_order_acquire) != Done) { /*spin*/ }
++#endif
+         SK_POTENTIALLY_BLOCKING_REGION_END;
+     }
+ 

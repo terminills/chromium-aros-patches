@@ -1,0 +1,43 @@
+From 8f629366111775a38001a2d03a07ff1e71ed601d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 19:59:01 -0500
+Subject: [PATCH 122/638] [AROS] Preserve zero-on-first-commit page semantics
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: Run 0122 reached cppgc GCInfoTable initialization and failed DCHECK(!base[i]); the pre-MMU Exec fallback removed MEMF_CLEAR for inaccessible reservations, while cppgc makes slices accessible with SetPermissions rather than Recommit, exposing stale physical bytes.
+FIX_REASON: Keep MEMF_CLEAR on Exec-backed reservations so every future first-access slice begins zeroed, while permission-only transitions do not erase already committed data.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+VALIDATION: PartitionAlloc page_allocator.o cross-compiled; debug.resource artifact 25 identifies gc-info-table.cc:122 after both large pools allocate through the Exec fallback.
+RISK: The pre-MMU bridge eagerly clears full physical backing, including the two bounded 1 GiB address pools; this trades startup bandwidth for the anonymous-page zero guarantee until sparse MMU-backed reservation exists.
+AI_DECISION_CHAIN: tracked Exec reservations -> cppgc first commit through SetPermissions -> stale bytes -> preserve clear backing
+Continues: 3e42c47a8e; 19a864b7c2
+---
+ .../page_allocator_internals_aros.h                | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 443b244f78..fa1abc8cc4 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -259,16 +259,10 @@ uintptr_t SystemAllocPagesInternal(
+       return 0;
+     }
+ 
+-    ULONG exec_flags = flags;
+-    if (accessibility.permissions ==
+-            PageAccessibilityConfiguration::kInaccessible ||
+-        accessibility.permissions ==
+-            PageAccessibilityConfiguration::kInaccessibleWillJitLater) {
+-      exec_flags &= ~MEMF_CLEAR;
+-    }
+-
+-    allocation_base =
+-        AllocateExecPages(length, exec_flags, &allocation_length);
++    // This bridge has physical backing even for inaccessible reservations.
++    // Keep it zeroed so the first accessible slice has anonymous-page commit
++    // semantics without destroying data on later permission-only changes.
++    allocation_base = AllocateExecPages(length, flags, &allocation_length);
+     if (!allocation_base) {
+       s_allocPageErrorCode = ENOMEM;
+       if (log_request) {

@@ -1,0 +1,115 @@
+From 690746d65f60c699395d7b1d6cc5fcee990cb7e2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 15:46:54 -0500
+Subject: [PATCH 578/638] aros: trace Intuition activation at --v=1; leak
+ render-thread objects at AtExit
+
+ozone/aros: VLOG(1) the ACTIVEWINDOW/INACTIVEWINDOW handling, the
+ActivateWindow calls and the key dispatch target so a misrouted
+accelerator can be read off chrome.log.
+
+chrome/renderer: in the single-process model the in-process render
+thread is gone by the time AtExit destroys ChromeContentRendererClient
+on the main thread; UnverifiedRulesetDealer's mojo receiver then failed
+InterfaceEndpointClient's sequence CHECK.  Release every object
+RenderThreadStarted() created, as was already done for the
+ChromeRenderThreadObserver.
+---
+ .../renderer/chrome_content_renderer_client.cc | 17 +++++++++++++++--
+ ui/ozone/platform/aros/aros_window.cc          | 18 +++++++++++++++++-
+ 2 files changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index 5429087dae..8f7aa3424a 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -405,10 +405,23 @@ ChromeContentRendererClient::ChromeContentRendererClient()
+ 
+ ChromeContentRendererClient::~ChromeContentRendererClient() {
+ #if BUILDFLAG(IS_AROS)
++  // In the single-process model the in-process render thread has already
++  // gone by the time AtExit destroys this LazyInstance on the main thread.
++  // Everything RenderThreadStarted() created is bound to that thread (mojo
++  // receivers, sequence checkers), so destroying it here trips
++  // InterfaceEndpointClient's sequence CHECK.  Leak the render-thread
++  // objects instead; the process is exiting.
+   if (chrome_observer_) {
+-    LOG(ERROR) << "[Chromium:AROS:RendererClient] retaining "
+-                  "ChromeRenderThreadObserver during AtExit";
++    LOG(ERROR) << "[Chromium:AROS:RendererClient] retaining render-thread "
++                  "objects during AtExit";
+     std::ignore = chrome_observer_.release();
++    std::ignore = web_cache_impl_.release();
++    std::ignore = webrtc_logging_agent_impl_.release();
++#if BUILDFLAG(ENABLE_SPELLCHECK)
++    std::ignore = spellcheck_.release();
++#endif
++    std::ignore = subresource_filter_ruleset_dealer_.release();
++    std::ignore = phishing_model_setter_.release();
+   }
+ #endif
+ }
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index ed835bcaf8..372245ad2b 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -474,6 +474,7 @@ void ArosWindow::Show(bool inactive) {
+   if (window_) {
+     ShowWindow(window_, nullptr);
+     if (!inactive && activatable_) {
++      VLOG(1) << "[Chromium:Ozone:AROS] show activates widget=" << widget_;
+       ActivateWindow(window_);
+     }
+   }
+@@ -608,6 +609,7 @@ void ArosWindow::Activate() {
+     return;
+   }
+   if (window_) {
++    VLOG(1) << "[Chromium:Ozone:AROS] Activate() widget=" << widget_;
+     ActivateWindow(window_);
+   }
+   SetActive(true);
+@@ -646,6 +648,8 @@ bool ArosWindow::OwnsIntuitionActivation() {
+ }
+ 
+ void ArosWindow::HandleActiveWindow() {
++  VLOG(1) << "[Chromium:Ozone:AROS] IDCMP_ACTIVEWINDOW widget=" << widget_
++          << " owner=" << FocusOwner()->widget_;
+   if (activatable_) {
+     SetActive(true);
+     return;
+@@ -665,6 +669,11 @@ void ArosWindow::HandleInactiveWindow() {
+   // cancels the menu on any activation change, which is exactly what a
+   // click on a menu item must not do.
+   ArosWindow* const owner = activatable_ ? this : FocusOwner();
++  ArosWindow* const active = manager_->GetIntuitionActiveWindow();
++  VLOG(1) << "[Chromium:Ozone:AROS] IDCMP_INACTIVEWINDOW widget=" << widget_
++          << " owner=" << owner->widget_ << " owner_active=" << owner->active_
++          << " intuition_active="
++          << (active ? static_cast<int>(active->widget_) : 0);
+   if (owner->active_ && !owner->OwnsIntuitionActivation()) {
+     owner->SetActive(false);
+   }
+@@ -680,6 +689,8 @@ void ArosWindow::ReturnIntuitionActivationToOwner() {
+   ArosWindow* const owner = FocusOwner();
+   if (owner != this && owner->window_ &&
+       manager_->GetIntuitionActiveWindow() == this) {
++    VLOG(1) << "[Chromium:Ozone:AROS] popup widget=" << widget_
++            << " returns activation to widget=" << owner->widget_;
+     ActivateWindow(owner->window_);
+   }
+ }
+@@ -991,7 +1002,12 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   event.InitializeNative();
+   // Keys arrive at Intuition's active window; a menu or popup that was
+   // activated by a click delivers them where its keyboard focus lives.
+-  FocusOwner()->delegate_->DispatchEvent(&event);
++  ArosWindow* const owner = FocusOwner();
++  if (!released) {
++    VLOG(1) << "[Chromium:Ozone:AROS] key raw=0x" << std::hex << raw_code
++            << std::dec << " widget=" << widget_ << " owner=" << owner->widget_;
++  }
++  owner->delegate_->DispatchEvent(&event);
+ }
+ 
+ bool ArosWindow::PresentPixels(const void* pixels,

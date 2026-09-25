@@ -1,0 +1,97 @@
+From 38906124a688bccc33d139537e5dbfd406420abd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 12 Sep 2026 12:50:17 -0500
+Subject: [PATCH 608/638] Honour PageAccessibilityDisposition in the AROS
+ decommit path
+
+DecommitSystemPagesInternal() ignored its PageAccessibilityDisposition
+parameter - it was not even named - and always stripped access to zero. That
+is stricter than the platform it emulates. page_allocator_internals_posix.h
+computes
+
+    change_permissions = (disposition == kRequireUpdate)
+
+and then makes pages inaccessible "unless the caller requested to keep
+permissions", and the enum documents kAllowKeepForPerf as "will not update
+permissions, if the platform supports that (POSIX & Fuchsia only)". So a
+caller that decommits kAllowKeepForPerf and subsequently reads the range is
+fine on Linux, where the pages stay mapped, and faults here.
+
+This is not a rare path. Instrumenting the two dispositions separately shows
+one page load of a real site doing 122 kAllowKeepForPerf decommits against 6
+kRequireUpdate ones, so the old code was performing 122 protection strips per
+load that the caller had explicitly said were unnecessary - and leaving 122
+ranges unreadable that POSIX would have left readable.
+
+The zeroing stays on both paths: DiscardSystemPagesInternal() is a no-op on
+AROS, so that memset is what emulates the discard, and a reader of a
+kAllowKeepForPerf range now sees zeroes - which is what a POSIX caller gets
+back after MADV_DONTNEED.
+
+The trace now distinguishes "decommit" from "decommit-keep" so a faulting
+address can be attributed to the disposition that covered it.
+
+THIS DOES NOT FIX THE CRASH IT WAS FOUND WHILE CHASING, and the new trace is
+what proves it. Loading https://aros.sourceforge.io/ still page-faults
+(TRAPNO 0x0e, ERR 0x4, a read) and the faulting address is covered by
+kRequireUpdate decommits:
+
+    CR2  0x00007f83c18bfff0
+    #149 decommit [0x7f83c1800000, 0x7f83c1a00000)
+    #151 decommit [0x7f83c1800000, 0x7f83c1a00000)
+    #152 decommit [0x7f83c1800000, 0x7f83c1c00000)
+
+i.e. memory PartitionAlloc deliberately made inaccessible is still being read,
+which is a genuine use-after-decommit somewhere above the page allocator, not
+a permissions-semantics difference. Committing this separately so that bug is
+chased against correct platform semantics rather than through an extra layer
+of divergence.
+
+I had also suspected the repeated identical decommits of one 2 MB range were
+evidence of lost bookkeeping. They are not: this implementation makes decommit
+idempotent, so repeats are harmless.
+---
+ .../page_allocator_internals_aros.h           | 25 ++++++++++++++++---
+ 1 file changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 50eb6ceafb..c43aea1aa4 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -553,14 +553,33 @@ uintptr_t TrimMappingInternal(uintptr_t base_address,
+ void DecommitSystemPagesInternal(
+     uintptr_t address,
+     size_t length,
+-    PageAccessibilityDisposition) {
++    PageAccessibilityDisposition accessibility_disposition) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
+-  TracePageEvent("decommit", address, length, 0);
++  // Honour the disposition, as POSIX does. page_allocator_internals_posix.h
++  // computes the same flag and then makes pages inaccessible "unless the
++  // caller requested to keep permissions", and the enum itself documents
++  // kAllowKeepForPerf as "will not update permissions, if the platform
++  // supports that (POSIX & Fuchsia only)".
++  //
++  // This function previously ignored the parameter and always stripped access
++  // to zero, which is STRICTER than the platform it emulates: a caller that
++  // decommits kAllowKeepForPerf and then reads the range is fine on Linux,
++  // where the pages stay mapped, and takes a page fault here.
++  const bool change_permissions =
++      accessibility_disposition == PageAccessibilityDisposition::kRequireUpdate;
++  TracePageEvent(change_permissions ? "decommit" : "decommit-keep", address,
++                 length, 0);
+   SetProtection(KernelBase, address, length,
+                 static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  // DiscardSystemPagesInternal() is a no-op on AROS, so this zeroing is what
++  // emulates the discard. Keeping it on both paths means a reader of a
++  // kAllowKeepForPerf range sees zeroes, which is what a POSIX caller gets
++  // back from MADV_DONTNEED.
+   std::memset(reinterpret_cast<void*>(address), 0, length);
+-  SetProtection(KernelBase, address, length, static_cast<KRN_MapAttr>(0));
++  if (change_permissions) {
++    SetProtection(KernelBase, address, length, static_cast<KRN_MapAttr>(0));
++  }
+ }
+ 
+ bool DecommitAndZeroSystemPagesInternal(uintptr_t address,

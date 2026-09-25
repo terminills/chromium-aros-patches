@@ -1,0 +1,126 @@
+From f134a94ce659f3913080999324178be8f38d8d0e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:55:49 -0500
+Subject: [PATCH 078/638] [AROS] Bound headless crash reporting explicitly
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: AROS headless targets no longer select Crashpad's unsupported POSIX backend.
+ROOT_CAUSE: Broad non-Fuchsia and generic POSIX GN conditions pulled full Crashpad mmap, spawn, fd-walking, and privilege code into AROS.
+FIX_REASON: Exclude Crashpad dependencies and client sources on AROS, while making an explicit crash-reporter request report NOTIMPLEMENTED.
+SCOPE: Headless GN crash dependencies and HeadlessContentMainDelegate crash initialization only.
+VALIDATION: Ninja regeneration passed; headless_content_main_delegate.o compiled; Crashpad util no longer has headless targets as reverse dependencies.
+RISK: AROS headless relies on OPAL/unattended alerts rather than Crashpad dumps until a native backend exists.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ headless/BUILD.gn                              |  8 ++++----
+ headless/lib/headless_content_main_delegate.cc | 16 ++++++++++------
+ 2 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/headless/BUILD.gn b/headless/BUILD.gn
+index 96cbe2fa57..ebac7d7121 100644
+--- a/headless/BUILD.gn
++++ b/headless/BUILD.gn
+@@ -524,7 +524,7 @@ component("headless_non_renderer") {
+     }
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [
+       "//components/crash/content/browser",
+       "//components/crash/core/app",
+@@ -779,7 +779,7 @@ test("headless_browsertests") {
+     deps += [ "//services/device/public/cpp:test_support" ]
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [ "//third_party/crashpad/crashpad/client" ]
+   }
+ 
+@@ -896,7 +896,7 @@ static_library("headless_shell_lib") {
+     public_deps += [ ":headless_non_renderer" ]
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [ "//components/crash/content/browser" ]
+   }
+ 
+@@ -935,7 +935,7 @@ static_library("headless_shell_lib") {
+     deps += [ "//components/os_crypt/sync" ]
+   }
+ 
+-  if (is_win || (is_posix && !is_mac)) {
++  if (is_win || (is_posix && !is_mac && !is_aros)) {
+     deps += [ "//components/crash/core/app" ]
+   }
+ 
+diff --git a/headless/lib/headless_content_main_delegate.cc b/headless/lib/headless_content_main_delegate.cc
+index f36b434cc0..5ee7df1dfb 100644
+--- a/headless/lib/headless_content_main_delegate.cc
++++ b/headless/lib/headless_content_main_delegate.cc
+@@ -22,8 +22,10 @@
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
+ #include "cc/base/switches.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/common/crash_key.h"
+ #include "components/crash/core/common/crash_keys.h"
++#endif
+ #include "components/devtools/devtools_pipe/devtools_pipe.h"
+ #include "components/viz/common/switches.h"
+ #include "content/public/browser/browser_main_runner.h"
+@@ -34,7 +36,9 @@
+ #include "headless/lib/browser/command_line_handler.h"
+ #include "headless/lib/browser/headless_browser_impl.h"
+ #include "headless/lib/browser/headless_content_browser_client.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "headless/lib/headless_crash_reporter_client.h"
++#endif
+ #include "headless/lib/renderer/headless_content_renderer_client.h"
+ #include "headless/lib/utility/headless_content_utility_client.h"
+ #include "headless/public/switches.h"
+@@ -86,13 +90,15 @@ const int kTraceEventBrowserProcessSortIndex = -6;
+ 
+ HeadlessContentMainDelegate* g_current_headless_content_main_delegate = nullptr;
+ 
+-#if !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+ base::LazyInstance<HeadlessCrashReporterClient>::Leaky g_headless_crash_client =
+     LAZY_INSTANCE_INITIALIZER;
+ #endif
+ 
+ const char kLogFileName[] = "CHROME_LOG_FILE";
++#if !BUILDFLAG(IS_AROS)
+ const char kHeadlessCrashKey[] = "headless";
++#endif
+ 
+ #if BUILDFLAG(IS_WIN)
+ void OnResourceExhausted() {
+@@ -351,9 +357,8 @@ void HeadlessContentMainDelegate::InitCrashReporter(
+     return;
+   }
+ 
+-#if BUILDFLAG(IS_FUCHSIA)
+-  // TODO(crbug.com/1226159): Implement this when crash reporting is available
+-  // for Fuchsia.
++#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
++  // Native crash reporting is not available on this platform.
+   NOTIMPLEMENTED();
+ #else
+   crash_reporter::SetCrashReporterClient(g_headless_crash_client.Pointer());
+@@ -367,11 +372,10 @@ void HeadlessContentMainDelegate::InitCrashReporter(
+ #endif  // !BUILDFLAG(IS_WIN)
+     crash_keys::SetSwitchesFromCommandLine(command_line, nullptr);
+   }
+-#endif  // BUILDFLAG(IS_FUCHSIA)
+-
+   // Mark any bug reports from headless mode as such.
+   static crash_reporter::CrashKeyString<32> headless_key(kHeadlessCrashKey);
+   headless_key.Set("true");
++#endif  // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ }
+ 
+ void HeadlessContentMainDelegate::PreSandboxStartup() {

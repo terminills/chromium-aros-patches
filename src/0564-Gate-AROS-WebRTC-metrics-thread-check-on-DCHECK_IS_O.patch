@@ -1,0 +1,27 @@
+From d2a8bee9e87d25488339b1588a283ccfb4e5f94a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 07:59:17 -0500
+Subject: [PATCH 564/638] Gate AROS WebRTC metrics thread check on DCHECK_IS_ON
+
+THREAD_CHECKER declares no member when DCHECKs are off, so the AROS
+shutdown-ordering branch in ~PerSessionWebRTCAPIMetrics failed to compile
+with dcheck_always_on=false.
+---
+ .../renderer/platform/mediastream/webrtc_uma_histograms.cc    | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc b/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
+index 137e2daa91..d4653c86e5 100644
+--- a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
++++ b/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
+@@ -26,7 +26,9 @@ void UpdateWebRTCMethodCount(RTCAPIName api_name) {
+ }
+ 
+ PerSessionWebRTCAPIMetrics::~PerSessionWebRTCAPIMetrics() {
+-#if BUILDFLAG(IS_AROS)
++#if BUILDFLAG(IS_AROS) && DCHECK_IS_ON()
++  // thread_checker_ only exists when DCHECKs are on (THREAD_CHECKER expands
++  // to nothing otherwise).
+   if (!thread_checker_.CalledOnValidThread()) {
+     LOG(ERROR) << "[Chromium:AROS:WebRTCMetrics] AtExit destroyed on "
+                   "non-origin thread";

@@ -1,0 +1,101 @@
+From 6d97a1518ff4351a86e5774fb60d9b07474b1d2c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 12:49:10 -0500
+Subject: [PATCH 440/638] aros: observe child lifetime across tasks
+
+Chromium launches and watches children from different Exec tasks. Use global Task-ID liveness for AROS process waits and termination status, and avoid creating per-launch-task death records that the watcher cannot reap. This prevents live children from being reported dead through ECHILD and repeatedly respawned.
+
+
+
+---
+ base/process/kill_posix.cc    | 16 ++++++++++++++++
+ base/process/launch_aros.cc   |  5 ++++-
+ base/process/process_posix.cc | 18 ++++++++++++++++++
+ 3 files changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/base/process/kill_posix.cc b/base/process/kill_posix.cc
+index 88bb190287..622e02bd76 100644
+--- a/base/process/kill_posix.cc
++++ b/base/process/kill_posix.cc
+@@ -17,6 +17,10 @@
+ #include "base/threading/platform_thread.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <proto/exec.h>
++#endif
++
+ namespace base {
+ 
+ namespace {
+@@ -26,6 +30,17 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
+                                            int* exit_code) {
+   DCHECK(exit_code);
+ 
++#if BUILDFLAG(IS_AROS)
++  while (FindTaskByPID(static_cast<ULONG>(handle)) != nullptr) {
++    if (!can_block) {
++      *exit_code = 0;
++      return TERMINATION_STATUS_STILL_RUNNING;
++    }
++    PlatformThread::Sleep(Milliseconds(10));
++  }
++  *exit_code = 0;
++  return TERMINATION_STATUS_NORMAL_TERMINATION;
++#else
+   int status = 0;
+   const pid_t result = HANDLE_EINTR(waitpid(handle, &status,
+                                             can_block ? 0 : WNOHANG));
+@@ -70,6 +85,7 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
+     return TERMINATION_STATUS_ABNORMAL_TERMINATION;
+ 
+   return TERMINATION_STATUS_NORMAL_TERMINATION;
++#endif
+ }
+ 
+ }  // namespace
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index a7e4dcf9a4..8c9ca341c8 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -238,7 +238,10 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+       {NP_Arguments, reinterpret_cast<IPTR>(arguments.data())},
+       {NP_Cli, TRUE},
+       {TAG_IGNORE, 0},
+-      {NP_NotifyOnDeath, TRUE},
++      // Chromium observes children from tasks other than the launcher.
++      // Avoid a per-Exec-task death record that those observers cannot reap;
++      // the AROS Process implementation tracks global Task-ID liveness.
++      {NP_NotifyOnDeath, FALSE},
+       {TAG_DONE, 0},
+   };
+ 
+diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
+index c9374aec30..e846a4bf27 100644
+--- a/base/process/process_posix.cc
++++ b/base/process/process_posix.cc
+@@ -199,6 +199,24 @@ bool WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
+ 
+   TRACE_EVENT0("base", "Process::WaitForExitWithTimeout");
+ 
++#if BUILDFLAG(IS_AROS)
++  const bool wait_forever = timeout == base::TimeDelta::Max();
++  const base::TimeTicks deadline =
++      wait_forever ? base::TimeTicks() : base::TimeTicks::Now() + timeout;
++  for (;;) {
++    if (FindTaskByPID(static_cast<ULONG>(handle)) == nullptr) {
++      if (exit_code)
++        *exit_code = 0;
++      return true;
++    }
++    if (timeout.is_zero() ||
++        (!wait_forever && base::TimeTicks::Now() >= deadline)) {
++      return false;
++    }
++    usleep(10 * 1000);
++  }
++#endif
++
+   const base::ProcessHandle parent_pid = base::GetParentProcessId(handle);
+   const bool exited = (parent_pid < 0);
+ 

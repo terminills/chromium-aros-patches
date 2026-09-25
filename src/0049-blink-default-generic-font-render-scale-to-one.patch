@@ -1,0 +1,47 @@
+From 102d87dc630810bee9fce7362e53e6ddf008ed62 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:33:12 -0500
+Subject: [PATCH 049/638] blink: default generic font render scale to one
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Blink generic font render-style queries now use a defined scale on AROS and other non-Linux desktop backends.
+
+ROOT_CAUSE: QuerySystemRenderStyle compiled for every non-Mac/non-Windows desktop target but unconditionally called FontCache::DeviceScaleFactor, an API declared only for Linux and ChromeOS.
+
+FIX_REASON: Reuse Blink's existing 1.0f non-Linux/ChromeOS font-cache default while preserving dynamic device scale on the two native backends that expose it.
+
+SCOPE: Blink FontPlatformData render-style query
+
+VALIDATION: font_platform_data.o compiled in out/aros-headless at -j32; git diff --check passed.
+
+RISK: A future AROS sandbox font service receives scale 1.0 until the native display/font integration exposes a device-scale contract.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../blink/renderer/platform/fonts/font_platform_data.cc  | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/third_party/blink/renderer/platform/fonts/font_platform_data.cc b/third_party/blink/renderer/platform/fonts/font_platform_data.cc
+index 66324207b8..238c6abb14 100644
+--- a/third_party/blink/renderer/platform/fonts/font_platform_data.cc
++++ b/third_party/blink/renderer/platform/fonts/font_platform_data.cc
+@@ -264,11 +264,16 @@ WebFontRenderStyle FontPlatformData::QuerySystemRenderStyle(
+   // If the font name is missing (i.e. probably a web font) or the sandbox is
+   // disabled, use the system defaults.
+   if (family.length() && Platform::Current()->GetSandboxSupport()) {
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++    const float device_scale_factor = FontCache::DeviceScaleFactor();
++#else
++    constexpr float device_scale_factor = 1.0f;
++#endif
+     bool is_bold = font_style.weight() >= SkFontStyle::kSemiBold_Weight;
+     bool is_italic = font_style.slant() != SkFontStyle::kUpright_Slant;
+     Platform::Current()->GetSandboxSupport()->GetWebFontRenderStyleForStrike(
+-        family.data(), text_size, is_bold, is_italic,
+-        FontCache::DeviceScaleFactor(), &result);
++        family.data(), text_size, is_bold, is_italic, device_scale_factor,
++        &result);
+   }
+ 
+   // If `text-rendering: geometric-precision`, use subpixel positioning.

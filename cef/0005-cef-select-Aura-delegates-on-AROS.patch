@@ -1,0 +1,77 @@
+From 4847a2dad8994a781b70c8696d4b8fd5896cac47 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:46:23 -0500
+Subject: [PATCH 05/43] cef: select Aura delegates on AROS
+
+Use CEF's portable non-X11 Aura native and OSR delegates for AROS. Chrome runtime and CEF Views continue to own window creation through the existing Ozone AROS backend; this only supplies CEF's required native event and OSR adapter layer.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-platform-delegate-selected
+
+AI_ASSUMPTION: Electron bootstrap uses Chrome runtime or CEF Views; Alloy-owned native AROS windows remain a future dedicated delegate
+
+AI_VALIDATION: libcef_static build 17 stopped at the explicit unsupported-platform error in browser_platform_delegate_create.cc
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 9565275d; Chromium 00e21592ab
+---
+ BUILD.gn                                           | 12 ++++++++++++
+ libcef/browser/browser_platform_delegate_create.cc |  6 +++---
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 397a45c6..609ea86d 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1145,6 +1145,18 @@ source_set("libcef_static") {
+     }
+   }
+ 
++  if (is_aros) {
++    # The non-X11 path in these Aura delegates is platform-neutral. Reuse it
++    # until CEF needs an Alloy-owned native host window on AROS; Chrome runtime
++    # and CEF Views already create their windows through Ozone.
++    sources += [
++      "libcef/browser/native/browser_platform_delegate_native_linux.cc",
++      "libcef/browser/native/browser_platform_delegate_native_linux.h",
++      "libcef/browser/osr/browser_platform_delegate_osr_linux.cc",
++      "libcef/browser/osr/browser_platform_delegate_osr_linux.h",
++    ]
++  }
++
+   if (is_mac) {
+     sources += includes_mac + [
+       "libcef/browser/native/browser_platform_delegate_native_mac.h",
+diff --git a/libcef/browser/browser_platform_delegate_create.cc b/libcef/browser/browser_platform_delegate_create.cc
+index 5e09068b..9e0aa89f 100644
+--- a/libcef/browser/browser_platform_delegate_create.cc
++++ b/libcef/browser/browser_platform_delegate_create.cc
+@@ -26,7 +26,7 @@
+ #elif BUILDFLAG(IS_MAC)
+ #include "libcef/browser/native/browser_platform_delegate_native_mac.h"
+ #include "libcef/browser/osr/browser_platform_delegate_osr_mac.h"
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ #include "libcef/browser/native/browser_platform_delegate_native_linux.h"
+ #include "libcef/browser/osr/browser_platform_delegate_osr_linux.h"
+ #else
+@@ -44,7 +44,7 @@ std::unique_ptr<CefBrowserPlatformDelegateNative> CreateNativeDelegate(
+ #elif BUILDFLAG(IS_MAC)
+   return std::make_unique<CefBrowserPlatformDelegateNativeMac>(
+       window_info, background_color);
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   return std::make_unique<CefBrowserPlatformDelegateNativeLinux>(
+       window_info, background_color);
+ #endif
+@@ -60,7 +60,7 @@ std::unique_ptr<CefBrowserPlatformDelegateOsr> CreateOSRDelegate(
+ #elif BUILDFLAG(IS_MAC)
+   return std::make_unique<CefBrowserPlatformDelegateOsrMac>(
+       std::move(native_delegate));
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   return std::make_unique<CefBrowserPlatformDelegateOsrLinux>(
+       std::move(native_delegate), use_external_begin_frame);
+ #endif

@@ -1,0 +1,51 @@
+From 56db9fc80eae2c4913fb194d02002ea4a76449c2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:30:07 -0500
+Subject: [PATCH 067/638] [AROS] Wait for debugger through an Exec break
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: content's wait-for-debugger switch has a resumable native AROS implementation.
+ROOT_CAUSE: The generic POSIX path calls pause(), which posixc does not implement; AROS sigsuspend is specifically backed by the task CTRL-C break rather than arbitrary SIGUSR1 delivery.
+FIX_REASON: Use Exec Wait(SIGBREAKF_CTRL_C) directly and tell the operator the real resume mechanism while retaining existing SIGUSR1 behavior elsewhere.
+SCOPE: content/common/content_switches_internal.cc only.
+VALIDATION: ninja -C out/aros-headless -j32 obj/content/common/common/content_switches_internal.o
+RISK: Low; affects only the explicit wait-for-debugger command-line path on AROS.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/common/content_switches_internal.cc | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/content/common/content_switches_internal.cc b/content/common/content_switches_internal.cc
+index 4f6a4731e1..567ef9dd26 100644
+--- a/content/common/content_switches_internal.cc
++++ b/content/common/content_switches_internal.cc
+@@ -21,12 +21,17 @@
+ #include "content/public/common/content_switches.h"
+ #include "third_party/blink/public/mojom/v8_cache_options.mojom.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <dos/dos.h>
++#include <proto/exec.h>
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/debug/debugger.h"
+ #include "base/feature_list.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #include <signal.h>
+ static void SigUSR1Handler(int signal) {}
+ #endif
+@@ -103,6 +108,10 @@ void WaitForDebugger(const std::string& label) {
+   message += base::NumberToString(base::GetCurrentProcId());
+   ::MessageBox(NULL, base::UTF8ToWide(message).c_str(),
+                base::UTF8ToWide(title).c_str(), MB_OK | MB_SETFOREGROUND);
++#elif BUILDFLAG(IS_AROS)
++  LOG(ERROR) << label << " paused waiting for debugger to attach. "
++             << "Send the task a CTRL-C break to unpause.";
++  Wait(SIGBREAKF_CTRL_C);
+ #elif BUILDFLAG(IS_POSIX)
+ #if BUILDFLAG(IS_ANDROID)
+   LOG(ERROR) << label << " waiting for GDB.";

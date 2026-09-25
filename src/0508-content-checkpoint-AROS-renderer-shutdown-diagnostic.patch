@@ -1,0 +1,3353 @@
+From f65d5f737a24eda34587a7f537d9dacbfc9487ff Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 6 Aug 2026 12:33:10 -0500
+Subject: [PATCH 508/638] content: checkpoint AROS renderer shutdown
+ diagnostics
+
+---
+ base/files/memory_mapped_file_aros.cc         |  38 ++-
+ chrome/app/chrome_exe_main_aura.cc            |  16 +-
+ chrome/app/chrome_main.cc                     |   6 +
+ .../startup/startup_browser_creator_impl.cc   |  98 +++++-
+ components/metrics/persistent_histograms.cc   |  95 ++++--
+ content/app/content_main.cc                   |  15 +-
+ content/app/content_main_runner_impl.cc       |  17 +-
+ .../browser_child_process_host_impl.cc        |  81 ++++-
+ .../browser/browser_child_process_host_impl.h |  16 +
+ .../renderer_host/navigation_request.cc       | 123 ++++++++
+ content/browser/renderer_host/navigator.cc    |  41 +++
+ .../renderer_host/render_frame_host_impl.cc   |  10 +
+ .../renderer_host/render_process_host_impl.cc |  50 +++-
+ .../renderer_host/render_process_host_impl.h  |   1 +
+ .../renderer_host/render_widget_host_impl.cc  |  76 +++++
+ content/browser/service_process_host_impl.cc  | 103 ++++++-
+ content/browser/utility_process_host.cc       |   5 +
+ content/browser/utility_process_host.h        |   2 +
+ content/child/child_process.cc                |  44 ++-
+ content/child/child_thread_impl.cc            |  59 +++-
+ .../browser_child_process_host_delegate.h     |   5 +
+ content/renderer/render_frame_impl.cc         |  82 ++++-
+ content/renderer/render_thread_impl.cc        |  54 +++-
+ content/utility/utility_main.cc               |   7 +
+ content/utility/utility_thread_impl.cc        |  17 ++
+ mojo/core/core.cc                             |  21 +-
+ mojo/core/message_pipe_dispatcher.cc          |  65 ++++
+ mojo/core/node_controller.cc                  | 283 +++++++++++++++++-
+ mojo/core/ports/node.cc                       |  62 ++++
+ mojo/public/cpp/bindings/lib/connector.cc     |  90 +++++-
+ .../bindings/lib/interface_endpoint_client.cc |  66 +++-
+ .../cpp/bindings/lib/message_dispatcher.cc    |  46 ++-
+ .../cpp/bindings/lib/multiplex_router.cc      | 135 ++++++++-
+ mojo/public/cpp/platform/aros_channel.cc      |  18 +-
+ mojo/public/cpp/platform/aros_channel.h       |   3 +-
+ .../absl/base/internal/raw_logging.cc         |  24 ++
+ 36 files changed, 1789 insertions(+), 85 deletions(-)
+
+diff --git a/base/files/memory_mapped_file_aros.cc b/base/files/memory_mapped_file_aros.cc
+index 7e166ec090..0162b0cc03 100644
+--- a/base/files/memory_mapped_file_aros.cc
++++ b/base/files/memory_mapped_file_aros.cc
+@@ -24,6 +24,7 @@
+ #include "base/numerics/checked_math.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/threading/scoped_blocking_call.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ 
+@@ -35,10 +36,19 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     Access access) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:MMAP] map enter access="
++               << static_cast<int>(access) << " region_offset="
++               << region.offset << " region_size=" << region.size;
++#endif
++
+   int64_t file_offset = 0;
+   size_t data_size = 0;
+   if (region == MemoryMappedFile::Region::kWholeFile) {
+     const int64_t file_length = file_.GetLength();
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:MMAP] whole-file length=" << file_length;
++#endif
+     if (file_length <= 0 ||
+         !IsValueInRangeForNumericType<size_t>(file_length)) {
+       return false;
+@@ -56,7 +66,15 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+       return false;
+ 
+     if (access == READ_WRITE_EXTEND) {
+-      if (!AllocateFileRegion(&file_, file_offset, data_size))
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:MMAP] extend begin offset="
++                   << file_offset << " bytes=" << data_size;
++#endif
++      const bool extended = AllocateFileRegion(&file_, file_offset, data_size);
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:MMAP] extend complete=" << extended;
++#endif
++      if (!extended)
+         return false;
+     } else if (file_.GetLength() < region_end.ValueOrDie()) {
+       return false;
+@@ -73,6 +91,10 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     return false;
+ 
+   const size_t rounded_size = allocation_size.ValueOrDie();
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:MMAP] backing allocation begin bytes="
++               << rounded_size;
++#endif
+   bug("[AROS:MMAP] plan offset=%lld bytes=%llu page=%llu rounded=%llu\n",
+       static_cast<long long>(file_offset),
+       static_cast<unsigned long long>(data_size),
+@@ -115,8 +137,19 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+         static_cast<unsigned long long>(backing_size));
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:MMAP] backing allocation complete kernel_pages="
++               << uses_kernel_pages << " bytes=" << backing_size;
++  LOG(WARNING) << "[Chromium:AROS:MMAP] read begin offset=" << file_offset
++               << " bytes=" << data_size;
++#endif
++
+   span<uint8_t> contents(static_cast<uint8_t*>(allocation), data_size);
+   const std::optional<size_t> bytes_read = file_.Read(file_offset, contents);
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:MMAP] read complete bytes="
++               << (bytes_read ? static_cast<int64_t>(*bytes_read) : -1);
++#endif
+   if (!bytes_read || *bytes_read != data_size) {
+     bug("[AROS:MMAP] read failed requested=%llu actual=%lld errno=%d\n",
+         static_cast<unsigned long long>(data_size),
+@@ -135,6 +168,9 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+   length_ = data_size;
+   file_offset_ = file_offset;
+   access_ = access;
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:MMAP] map complete bytes=" << data_size;
++#endif
+   return true;
+ }
+ #endif
+diff --git a/chrome/app/chrome_exe_main_aura.cc b/chrome/app/chrome_exe_main_aura.cc
+index 34b11ab76c..f9419482a0 100644
+--- a/chrome/app/chrome_exe_main_aura.cc
++++ b/chrome/app/chrome_exe_main_aura.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "build/build_config.h"
+ 
++#include "base/logging.h"
++
+ #if BUILDFLAG(IS_AROS)
+ #include <cstring>
+ #include <string>
+@@ -47,9 +49,17 @@ int main(int argc, const char** argv) {
+       arguments.push_back(argument.c_str());
+     }
+     arguments.push_back(nullptr);
+-    return ChromeMain(static_cast<int>(argument_storage.size()),
+-                      arguments.data());
++    int exit_code = ChromeMain(static_cast<int>(argument_storage.size()),
++                               arguments.data());
++    LOG(ERROR) << "[Chromium:AROS:ChildReturn] ChromeMain returned to WB main"
++               << " exit_code=" << exit_code;
++    return exit_code;
+   }
+ #endif
+-  return ChromeMain(argc, argv);
++  int exit_code = ChromeMain(argc, argv);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ChromeMain returned to CLI main"
++             << " exit_code=" << exit_code;
++#endif
++  return exit_code;
+ }
+diff --git a/chrome/app/chrome_main.cc b/chrome/app/chrome_main.cc
+index 79369cfd24..73956861b8 100644
+--- a/chrome/app/chrome_main.cc
++++ b/chrome/app/chrome_main.cc
+@@ -10,6 +10,7 @@
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/sampling_heap_profiler/poisson_allocation_sampler.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+@@ -191,6 +192,11 @@ int ChromeMain(int argc, const char** argv) {
+ 
+   int rv = content::ContentMain(std::move(params));
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] content::ContentMain returned"
++             << " exit_code=" << rv;
++#endif
++
+   if (chrome::IsNormalResultCode(static_cast<chrome::ResultCode>(rv)))
+     return content::RESULT_CODE_NORMAL_EXIT;
+   return rv;
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index 07dc31daf2..045142ae27 100644
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -16,7 +16,10 @@
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
+ #include "base/values.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+@@ -76,6 +79,14 @@
+ #include "rlz/buildflags/buildflags.h"
+ #include "ui/base/buildflags.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/result_codes.h"
++#endif
++
+ #if BUILDFLAG(IS_MAC)
+ #include "base/mac/mac_util.h"
+ #include "chrome/browser/app_controller_mac.h"
+@@ -84,6 +95,81 @@
+ #endif
+ #endif  // BUILDFLAG(IS_MAC)
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++content::WebContents* GetFirstArosLifecycleTestTab() {
++  Browser* browser = BrowserList::GetInstance()->GetLastActive();
++  if (!browser || browser->tab_strip_model()->empty()) {
++    return nullptr;
++  }
++  return browser->tab_strip_model()->GetWebContentsAt(0);
++}
++
++void LogArosLifecycleTestCheckpoint(int original_process_id,
++                                    int seconds_after_shutdown) {
++  content::WebContents* contents = GetFirstArosLifecycleTestTab();
++  if (!contents) {
++    LOG(ERROR) << "[Chromium:AROS:LifecycleTest] checkpoint missing tab at="
++               << seconds_after_shutdown << "s";
++    return;
++  }
++
++  content::RenderProcessHost* process =
++      contents->GetPrimaryMainFrame()->GetProcess();
++  LOG(ERROR) << "[Chromium:AROS:LifecycleTest] checkpoint at="
++             << seconds_after_shutdown
++             << "s original_renderer_host=" << original_process_id
++             << " current_renderer_host=" << process->GetID()
++             << " current_live=" << process->IsInitializedAndNotDead();
++}
++
++void RequestArosLifecycleTestRecovery(int original_process_id) {
++  content::WebContents* contents = GetFirstArosLifecycleTestTab();
++  if (!contents) {
++    LOG(ERROR) << "[Chromium:AROS:LifecycleTest] recovery missing tab";
++    return;
++  }
++
++  LOG(ERROR) << "[Chromium:AROS:LifecycleTest] recovery requested"
++             << " original_renderer_host=" << original_process_id;
++  contents->GetController().Reload(content::ReloadType::NORMAL, false);
++}
++
++void CloseFirstTabForArosLifecycleTest() {
++  content::WebContents* contents = GetFirstArosLifecycleTestTab();
++  if (!contents) {
++    LOG(ERROR) << "[Chromium:AROS:LifecycleTest] no active tab";
++    return;
++  }
++
++  content::RenderProcessHost* original_process =
++      contents->GetPrimaryMainFrame()->GetProcess();
++  const int original_process_id = original_process->GetID();
++  LOG(ERROR) << "[Chromium:AROS:LifecycleTest] retiring active renderer_host="
++             << original_process_id;
++  const bool shutdown_dispatched =
++      original_process->Shutdown(content::RESULT_CODE_KILLED);
++  LOG(ERROR) << "[Chromium:AROS:LifecycleTest] renderer shutdown dispatched="
++             << shutdown_dispatched << " renderer_host=" << original_process_id;
++
++  auto task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
++  task_runner->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&RequestArosLifecycleTestRecovery, original_process_id),
++      base::Seconds(1));
++  for (int checkpoint_seconds : {5, 20, 40}) {
++    task_runner->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&LogArosLifecycleTestCheckpoint, original_process_id,
++                       checkpoint_seconds),
++        base::Seconds(checkpoint_seconds));
++  }
++}
++
++}  // namespace
++#endif  // BUILDFLAG(IS_AROS)
++
+ #if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+ #include "chrome/browser/win/conflicts/incompatible_applications_updater.h"
+ #endif
+@@ -219,8 +305,18 @@ void StartupBrowserCreatorImpl::Launch(
+   // specified a non-sensical combination of options
+   // ("--kiosk --no_startup_window"); do nothing in that case.
+   Browser* browser = BrowserList::GetInstance()->GetLastActive();
+-  if (browser)
++  if (browser) {
+     MaybeToggleFullscreen(browser);
++
++#if BUILDFLAG(IS_AROS)
++    if (command_line_->HasSwitch("aros-test-close-first-tab")) {
++      LOG(ERROR) << "[Chromium:AROS:LifecycleTest] close scheduled";
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++          FROM_HERE, base::BindOnce(&CloseFirstTabForArosLifecycleTest),
++          base::Seconds(20));
++    }
++#endif  // BUILDFLAG(IS_AROS)
++  }
+ }
+ 
+ Browser* StartupBrowserCreatorImpl::OpenURLsInBrowser(
+diff --git a/components/metrics/persistent_histograms.cc b/components/metrics/persistent_histograms.cc
+index 68eac7075b..20584ff393 100644
+--- a/components/metrics/persistent_histograms.cc
++++ b/components/metrics/persistent_histograms.cc
+@@ -8,6 +8,7 @@
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/metrics/field_trial.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+@@ -104,6 +105,9 @@ base::FilePath GetSpareFilePath(const base::FilePath& metrics_dir) {
+ // Initializes persistent histograms with a memory-mapped file.
+ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+                               const base::FilePath& upload_dir) {
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file setup enter";
++#endif
+   // The spare file in the user data dir ("BrowserMetrics-spare.pma") would
+   // have been created in the previous session. We will move it to |upload_dir|
+   // and rename it with the current time and process id for use as |active_file|
+@@ -116,30 +120,55 @@ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+           base::GetCurrentProcId());
+ 
+   InitResult result;
+-  if (!base::PathExists(upload_dir)) {
++  const bool upload_dir_exists = base::PathExists(upload_dir);
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory exists="
++               << upload_dir_exists;
++#endif
++  if (!upload_dir_exists) {
+     // Handle failure to create the directory.
+     result = kNoUploadDir;
+-  } else if (base::PathExists(active_file)) {
+-    // "active" filename is supposed to be unique so this shouldn't happen.
+-    result = kMappedFileExists;
+   } else {
+-    // Disallow multiple writers (Windows only). Needed to ensure multiple
+-    // instances of Chrome aren't writing to the same file, which could happen
+-    // in some rare circumstances observed in the wild (e.g. on FAT FS where the
+-    // file name ends up not being unique due to truncation and two processes
+-    // racing on base::PathExists(active_file) above).
+-    const bool exclusive_write = true;
+-    // Move any spare file into the active position.
+-    base::ReplaceFile(spare_file, active_file, nullptr);
+-    // Create global allocator using the |active_file|.
+-    if (kSpareFileRequired && !base::PathExists(active_file)) {
+-      result = kNoSpareFile;
+-    } else if (base::GlobalHistogramAllocator::CreateWithFile(
+-                   active_file, kAllocSize, kAllocId, kBrowserMetricsName,
+-                   exclusive_write)) {
+-      result = kMappedFileSuccess;
++    const bool active_file_exists = base::PathExists(active_file);
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:Histograms] active file exists="
++                 << active_file_exists;
++#endif
++    if (active_file_exists) {
++      // "active" filename is supposed to be unique so this shouldn't happen.
++      result = kMappedFileExists;
+     } else {
+-      result = kMappedFileFailed;
++      // Disallow multiple writers (Windows only). Needed to ensure multiple
++      // instances of Chrome aren't writing to the same file, which could happen
++      // in some rare circumstances observed in the wild (e.g. on FAT FS where
++      // the file name ends up not being unique due to truncation and two
++      // processes racing on base::PathExists(active_file) above).
++      const bool exclusive_write = true;
++      // Move any spare file into the active position.
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Histograms] spare replacement begin";
++#endif
++      base::ReplaceFile(spare_file, active_file, nullptr);
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Histograms] spare replacement complete";
++#endif
++      // Create global allocator using the |active_file|.
++      if (kSpareFileRequired && !base::PathExists(active_file)) {
++        result = kNoSpareFile;
++      } else {
++#if BUILDFLAG(IS_AROS)
++        LOG(WARNING) << "[Chromium:AROS:Histograms] CreateWithFile begin";
++#endif
++        const bool allocator_created =
++            base::GlobalHistogramAllocator::CreateWithFile(
++                active_file, kAllocSize, kAllocId, kBrowserMetricsName,
++                exclusive_write);
++#if BUILDFLAG(IS_AROS)
++        LOG(WARNING) << "[Chromium:AROS:Histograms] CreateWithFile complete="
++                     << allocator_created;
++#endif
++        result = allocator_created ? kMappedFileSuccess : kMappedFileFailed;
++      }
+     }
+   }
+ 
+@@ -161,14 +190,28 @@ void InstantiatePersistentHistogramsImpl(const base::FilePath& metrics_dir,
+   // created, the file will just be deleted below.
+   base::FilePath upload_dir = metrics_dir.AppendASCII(kBrowserMetricsName);
+   // TODO(crbug.com/1183166): Only create the dir in kMappedFile mode.
+-  base::CreateDirectory(upload_dir);
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory create begin";
++#endif
++  const bool upload_dir_created = base::CreateDirectory(upload_dir);
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory create complete="
++               << upload_dir_created;
++#endif
+ 
+   InitResult result;
+ 
+   // Create a global histogram allocator using the desired storage type.
+   switch (mode) {
+     case kMappedFile:
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file dispatch begin";
++#endif
+       result = InitWithMappedFile(metrics_dir, upload_dir);
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file dispatch complete result="
++                   << static_cast<int>(result);
++#endif
+       break;
+     case kLocalMemory:
+       // Use local memory for storage even though it will not persist across
+@@ -201,11 +244,21 @@ void InstantiatePersistentHistogramsImpl(const base::FilePath& metrics_dir,
+   }
+ 
+   // Store a copy of the system profile in this allocator.
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] register system profile begin";
++#endif
+   metrics::GlobalPersistentSystemProfile::GetInstance()
+       ->RegisterPersistentAllocator(allocator->memory_allocator());
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] register system profile complete";
++  LOG(WARNING) << "[Chromium:AROS:Histograms] tracking histograms begin";
++#endif
+ 
+   // Create tracking histograms for the allocator and record storage file.
+   allocator->CreateTrackingHistograms(kBrowserMetricsName);
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:Histograms] tracking histograms complete";
++#endif
+ }
+ 
+ }  // namespace
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 919f72f4ef..64e53b1ddf 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -415,7 +415,15 @@ RunContentProcess(ContentMainParams params,
+     return exit_code;
+   exit_code = ContentMainRun(content_main_runner);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainRun returned"
++             << " exit_code=" << exit_code;
++#endif
+   ContentMainShutdown(content_main_runner);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainShutdown returned"
++             << " exit_code=" << exit_code;
++#endif
+   return exit_code;
+ }
+ 
+@@ -423,7 +431,12 @@ RunContentProcess(ContentMainParams params,
+ // return, see the --change-stack-guard-on-fork command line flag.
+ int NO_STACK_PROTECTOR ContentMain(ContentMainParams params) {
+   auto runner = ContentMainRunner::Create();
+-  return RunContentProcess(std::move(params), runner.get());
++  int exit_code = RunContentProcess(std::move(params), runner.get());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] RunContentProcess returned"
++             << " exit_code=" << exit_code;
++#endif
++  return exit_code;
+ }
+ 
+ }  // namespace content
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index fb1fec1f25..ad0959a1a8 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -769,8 +769,14 @@ RunOtherNamedProcessTypeMain(const std::string& process_type,
+         DCHECK_GE(absl::get<int>(exit_code), 0);
+         return absl::get<int>(exit_code);
+       }
+-      return kMainFunctions[i].function(
++      int main_exit_code = kMainFunctions[i].function(
+           std::move(absl::get<MainFunctionParams>(exit_code)));
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:ChildReturn] named process main returned"
++                 << " type=" << process_type
++                 << " exit_code=" << main_exit_code;
++#endif
++      return main_exit_code;
+     }
+   }
+ 
+@@ -1153,8 +1159,13 @@ int NO_STACK_PROTECTOR ContentMainRunnerImpl::Run() {
+   if (process_type.empty())
+     return RunBrowser(std::move(main_params), start_minimal_browser);
+ 
+-  return RunOtherNamedProcessTypeMain(process_type, std::move(main_params),
+-                                      delegate_);
++  int exit_code = RunOtherNamedProcessTypeMain(
++      process_type, std::move(main_params), delegate_);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainRunner::Run returned"
++             << " type=" << process_type << " exit_code=" << exit_code;
++#endif
++  return exit_code;
+ }
+ 
+ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+diff --git a/content/browser/browser_child_process_host_impl.cc b/content/browser/browser_child_process_host_impl.cc
+index e5670992f2..745deb6154 100644
+--- a/content/browser/browser_child_process_host_impl.cc
++++ b/content/browser/browser_child_process_host_impl.cc
+@@ -82,6 +82,14 @@
+ namespace content {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++constexpr base::TimeDelta kArosChildRetirementPollInterval =
++    base::Milliseconds(100);
++constexpr base::TimeDelta kArosChildRetirementGracePeriod =
++    base::Seconds(15);
++constexpr base::TimeDelta kArosChildQuarantinePollInterval = base::Seconds(1);
++#endif
++
+ static base::LazyInstance<
+     BrowserChildProcessHostImpl::BrowserChildProcessList>::DestructorAtExit
+     g_child_process_list = LAZY_INSTANCE_INITIALIZER;
+@@ -469,6 +477,11 @@ void BrowserChildProcessHostImpl::OnChannelInitialized(IPC::Channel* channel) {
+ void BrowserChildProcessHostImpl::OnChildDisconnected() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return;
++#endif
++
+   tracing_registration_.reset();
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -478,8 +491,34 @@ void BrowserChildProcessHostImpl::OnChildDisconnected() {
+ #endif
+ 
+   if (child_process_launcher_.get() || IsProcessLaunched()) {
++#if BUILDFLAG(IS_AROS)
+     ChildProcessTerminationInfo info =
+-        GetTerminationInfo(true /* known_dead */);
++        GetTerminationInfo(false /* known_dead */);
++    if (info.status == base::TERMINATION_STATUS_STILL_RUNNING) {
++      aros_retirement_started_ = true;
++      delegate_->OnProcessRetiring();
++      aros_retirement_deadline_ =
++          base::TimeTicks::Now() + kArosChildRetirementGracePeriod;
++      LOG(WARNING) << "[Chromium:AROS:ChildRetirement] IPC disconnected; "
++                      "waiting for task retirement child_id="
++                   << data_.id << " process_type=" << data_.process_type;
++      ScheduleArosChildRetirementPoll(kArosChildRetirementPollInterval);
++      return;
++    }
++    FinalizeChildDisconnected(false /* known_dead */);
++#else
++    FinalizeChildDisconnected(true /* known_dead */);
++#endif
++    return;
++  }
++  delete delegate_;  // Will delete us
++}
++
++void BrowserChildProcessHostImpl::FinalizeChildDisconnected(bool known_dead) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++
++  if (child_process_launcher_.get() || IsProcessLaunched()) {
++    ChildProcessTerminationInfo info = GetTerminationInfo(known_dead);
+ #if BUILDFLAG(IS_ANDROID)
+     exited_abnormally_ = true;
+     // Do not treat clean_exit, ie when child process exited due to quitting
+@@ -549,6 +588,46 @@ void BrowserChildProcessHostImpl::OnChildDisconnected() {
+   delete delegate_;  // Will delete us
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++void BrowserChildProcessHostImpl::ScheduleArosChildRetirementPoll(
++    base::TimeDelta delay) {
++  GetUIThreadTaskRunner({})->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(
++          &BrowserChildProcessHostImpl::PollForArosChildRetirement,
++          weak_factory_.GetWeakPtr()),
++      delay);
++}
++
++void BrowserChildProcessHostImpl::PollForArosChildRetirement() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  DCHECK(aros_retirement_started_);
++
++  const ChildProcessTerminationInfo info =
++      GetTerminationInfo(false /* known_dead */);
++  if (info.status != base::TERMINATION_STATUS_STILL_RUNNING) {
++    LOG(WARNING) << "[Chromium:AROS:ChildRetirement] task retired child_id="
++                 << data_.id << " process_type=" << data_.process_type
++                 << " quarantined=" << aros_retirement_quarantined_;
++    FinalizeChildDisconnected(false /* known_dead */);
++    return;
++  }
++
++  if (!aros_retirement_quarantined_ &&
++      base::TimeTicks::Now() >= aros_retirement_deadline_) {
++    aros_retirement_quarantined_ = true;
++    LOG(ERROR) << "[Chromium:AROS:ChildRetirement] retirement exceeded "
++                  "grace period; replacement suppressed until confirmed exit "
++                  "child_id="
++               << data_.id << " process_type=" << data_.process_type;
++  }
++
++  ScheduleArosChildRetirementPoll(aros_retirement_quarantined_
++                                      ? kArosChildQuarantinePollInterval
++                                      : kArosChildRetirementPollInterval);
++}
++#endif
++
+ bool BrowserChildProcessHostImpl::Send(IPC::Message* message) {
+   DCHECK(has_legacy_ipc_channel_);
+   return child_process_host_->Send(message);
+diff --git a/content/browser/browser_child_process_host_impl.h b/content/browser/browser_child_process_host_impl.h
+index 1880caaa23..f26f8818b0 100644
+--- a/content/browser/browser_child_process_host_impl.h
++++ b/content/browser/browser_child_process_host_impl.h
+@@ -17,6 +17,7 @@
+ #include "base/process/process.h"
+ #include "base/synchronization/waitable_event_watcher.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "content/browser/child_process_host_impl.h"
+ #include "content/browser/child_process_launcher.h"
+@@ -162,6 +163,12 @@ class BrowserChildProcessHostImpl
+   friend class BrowserChildProcessObserver;
+ 
+   void OnProcessConnected();
++  void FinalizeChildDisconnected(bool known_dead);
++
++#if BUILDFLAG(IS_AROS)
++  void PollForArosChildRetirement();
++  void ScheduleArosChildRetirementPoll(base::TimeDelta delay);
++#endif
+ 
+   static BrowserChildProcessList* GetIterator();
+ 
+@@ -251,6 +258,15 @@ class BrowserChildProcessHostImpl
+   // Whether the child process exited abnormally (killed or crashed).
+   bool exited_abnormally_ = false;
+ 
++#if BUILDFLAG(IS_AROS)
++  // A Mojo disconnect can precede complete AROS task retirement. Keep the
++  // process host alive until Exec no longer reports the child, preventing a
++  // replacement child from overlapping its predecessor's teardown.
++  bool aros_retirement_started_ = false;
++  bool aros_retirement_quarantined_ = false;
++  base::TimeTicks aros_retirement_deadline_;
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+   // whether the child process can use pre-warmed up connection for better
+   // performance.
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 52cdd61751..54c21c381a 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/renderer_host/navigation_request.h"
+ 
++#include <cstdio>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -2263,6 +2264,14 @@ NavigationRequest::GetCommitDeferringConditionForTesting() {
+ }
+ 
+ void NavigationRequest::BeginNavigation() {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-begin request=%p url='%s' state=%d\n", this,
++                 common_params_->url.spec().c_str(), static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   begin_navigation_time_ = base::TimeTicks::Now();
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::BeginNavigation",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+@@ -2278,6 +2287,13 @@ void NavigationRequest::BeginNavigation() {
+   }
+ 
+   if (MaybeStartPrerenderingActivationChecks()) {
++#if BUILDFLAG(IS_AROS)
++    if (FILE* file = std::fopen(
++            "Developer:Debug/browser-navigation-pipeline.log", "a")) {
++      std::fprintf(file, "request-prerender-deferred request=%p\n", this);
++      std::fclose(file);
++    }
++#endif
+     // BeginNavigationImpl() will be called after the checks.
+     return;
+   }
+@@ -2568,6 +2584,14 @@ void NavigationRequest::OnFencedFrameURLMappingComplete(
+ }
+ 
+ void NavigationRequest::BeginNavigationImpl() {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-impl request=%p url='%s' state=%d\n", this,
++                 common_params_->url.spec().c_str(), static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::BeginNavigationImpl",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+                                              TRACE_ID_LOCAL(navigation_id_)),
+@@ -3219,6 +3243,15 @@ void NavigationRequest::OnRequestRedirected(
+     const net::RedirectInfo& redirect_info,
+     const net::NetworkAnonymizationKey& network_anonymization_key,
+     network::mojom::URLResponseHeadPtr response_head) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-redirect request=%p from='%s' to='%s'\n", this,
++                 common_params_->url.spec().c_str(),
++                 redirect_info.new_url.spec().c_str());
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::OnRequestRedirected",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+                                              TRACE_ID_LOCAL(navigation_id_)),
+@@ -4160,6 +4193,16 @@ void NavigationRequest::OnResponseStarted(
+     net::NetworkAnonymizationKey network_anonymization_key,
+     SubresourceLoaderParams subresource_loader_params,
+     EarlyHints early_hints) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file,
++                 "request-response request=%p url='%s' download=%d state=%d\n",
++                 this, common_params_->url.spec().c_str(), is_download,
++                 static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   receive_response_time_ = base::TimeTicks::Now();
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::OnResponseStarted",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+@@ -4716,6 +4759,15 @@ void NavigationRequest::SelectFrameHostForOnResponseStarted(
+ 
+ void NavigationRequest::OnRequestFailed(
+     const network::URLLoaderCompletionStatus& status) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-failed request=%p url='%s' error=%d state=%d\n",
++                 this, common_params_->url.spec().c_str(), status.error_code,
++                 static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   DCHECK_NE(status.error_code, net::OK);
+ 
+   OnRequestFailedInternal(
+@@ -5032,6 +5084,16 @@ NavigationRequest::ComputeErrorPageProcess() {
+ 
+ void NavigationRequest::OnStartChecksComplete(
+     NavigationThrottle::ThrottleCheckResult result) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file,
++                 "request-start-checks request=%p url='%s' action=%d state=%d\n",
++                 this, common_params_->url.spec().c_str(),
++                 static_cast<int>(result.action()), static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation",
+                          "NavigationRequest::OnStartChecksComplete",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+@@ -5187,6 +5249,14 @@ void NavigationRequest::OnStartChecksComplete(
+             ->GetWeakPtr();
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-loader-create-enter request=%p url='%s'\n", this,
++                 common_params_->url.spec().c_str());
++    std::fclose(file);
++  }
++#endif
+   loader_ = NavigationURLLoader::Create(
+       browser_context, partition,
+       std::make_unique<NavigationRequestInfo>(
+@@ -5217,6 +5287,14 @@ void NavigationRequest::OnStartChecksComplete(
+           ->CreateURLLoaderNetworkObserverForNavigationRequest(*this),
+       NetworkServiceDevToolsObserver::MakeSelfOwned(frame_tree_node_),
+       std::move(cached_response_head), std::move(interceptor));
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-loader-create-return request=%p loader=%p\n",
++                 this, loader_.get());
++    std::fclose(file);
++  }
++#endif
+   DCHECK(!HasRenderFrameHost());
+ 
+   // If needed, perform an early RenderFrameHost swap after notifying observers
+@@ -5544,6 +5622,16 @@ void NavigationRequest::OnFailureChecksComplete(
+ 
+ void NavigationRequest::OnWillProcessResponseChecksComplete(
+     NavigationThrottle::ThrottleCheckResult result) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file,
++                 "request-response-checks request=%p url='%s' action=%d state=%d\n",
++                 this, common_params_->url.spec().c_str(),
++                 static_cast<int>(result.action()), static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   DCHECK(result.action() != NavigationThrottle::DEFER);
+ 
+   // If the NavigationThrottles allowed the navigation to continue, have the
+@@ -5848,6 +5936,15 @@ bool NavigationRequest::ShouldDispatchPageSwapEvent() const {
+ }
+ 
+ void NavigationRequest::CommitNavigation() {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-commit-enter request=%p url='%s' state=%d\n",
++                 this, common_params_->url.spec().c_str(),
++                 static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::CommitNavigation",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+                                              TRACE_ID_LOCAL(navigation_id_)),
+@@ -6119,6 +6216,14 @@ void NavigationRequest::CommitNavigation() {
+         std::move(subresource_loader_params_.prefetched_signed_exchanges);
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-commit-send request=%p host=%p url='%s'\n", this,
++                 GetRenderFrameHost(), common_params_->url.spec().c_str());
++    std::fclose(file);
++  }
++#endif
+   GetRenderFrameHost()->CommitNavigation(
+       this, std::move(common_params), std::move(commit_params),
+       std::move(response_head), std::move(response_body_),
+@@ -7419,6 +7524,14 @@ void NavigationRequest::DidCommitNavigation(
+     bool navigation_entry_committed,
+     bool did_replace_entry,
+     const GURL& previous_main_frame_url) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "request-did-commit request=%p url='%s' state=%d\n", this,
++                 params.url.spec().c_str(), static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation", "NavigationRequest::DidCommitNavigation",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+                                              TRACE_ID_LOCAL(navigation_id_)),
+@@ -7723,6 +7836,16 @@ NavigationRequest::TakeWebFeaturesToLog() {
+ }
+ 
+ void NavigationRequest::ReadyToCommitNavigation(bool is_error) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file,
++                 "request-ready-to-commit request=%p host=%p url='%s' error=%d state=%d\n",
++                 this, GetRenderFrameHost(), common_params_->url.spec().c_str(),
++                 is_error, static_cast<int>(state_));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT_WITH_FLOW0("navigation",
+                          "NavigationRequest::ReadyToCommitNavigation",
+                          TRACE_ID_WITH_SCOPE(kNavigationRequestScope,
+diff --git a/content/browser/renderer_host/navigator.cc b/content/browser/renderer_host/navigator.cc
+index 60b1e21acf..ae7ca4cfcf 100644
+--- a/content/browser/renderer_host/navigator.cc
++++ b/content/browser/renderer_host/navigator.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/renderer_host/navigator.h"
+ 
++#include <cstdio>
+ #include <utility>
+ 
+ #include "base/check_op.h"
+@@ -1053,6 +1054,14 @@ void Navigator::OnBeginNavigation(
+     int initiator_process_id,
+     mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>
+         renderer_cancellation_listener) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "navigator-enter node=%p url='%s'\n", frame_tree_node,
++                 common_params->url.spec().c_str());
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT0("navigation", "Navigator::OnBeginNavigation");
+ 
+   if (common_params->is_history_navigation_in_new_child_frame) {
+@@ -1092,6 +1101,14 @@ void Navigator::OnBeginNavigation(
+   // Verify this navigation has precedence.
+   if (ShouldIgnoreIncomingRendererRequest(ongoing_navigation_request,
+                                           common_params->has_user_gesture)) {
++#if BUILDFLAG(IS_AROS)
++    if (FILE* file = std::fopen(
++            "Developer:Debug/browser-navigation-pipeline.log", "a")) {
++      std::fprintf(file, "navigator-ignored node=%p url='%s'\n",
++                   frame_tree_node, common_params->url.spec().c_str());
++      std::fclose(file);
++    }
++#endif
+     return;
+   }
+ 
+@@ -1113,6 +1130,15 @@ void Navigator::OnBeginNavigation(
+           std::move(prefetched_signed_exchange_cache),
+           std::move(renderer_cancellation_listener)));
+   NavigationRequest* navigation_request = frame_tree_node->navigation_request();
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "navigator-created request=%p url='%s'\n",
++                 navigation_request,
++                 navigation_request->common_params().url.spec().c_str());
++    std::fclose(file);
++  }
++#endif
+ 
+   metrics_data_ = std::make_unique<NavigationMetricsData>(
+       navigation_request->common_params().navigation_start,
+@@ -1134,6 +1160,14 @@ void Navigator::OnBeginNavigation(
+       frame_tree_node->current_frame_host()->ShouldDispatchBeforeUnload(
+           true /* check_subframes_only */);
+   if (should_dispatch_beforeunload) {
++#if BUILDFLAG(IS_AROS)
++    if (FILE* file = std::fopen(
++            "Developer:Debug/browser-navigation-pipeline.log", "a")) {
++      std::fprintf(file, "navigator-beforeunload request=%p\n",
++                   navigation_request);
++      std::fclose(file);
++    }
++#endif
+     frame_tree_node->navigation_request()->SetWaitingForRendererResponse();
+     frame_tree_node->current_frame_host()->DispatchBeforeUnload(
+         RenderFrameHostImpl::BeforeUnloadType::RENDERER_INITIATED_NAVIGATION,
+@@ -1145,6 +1179,13 @@ void Navigator::OnBeginNavigation(
+   // For main frames, NavigationHandle will be created after the call to
+   // |DidStartMainFrameNavigation|, so it receives the most up to date pending
+   // entry from the NavigationController.
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-navigation-pipeline.log", "a")) {
++    std::fprintf(file, "navigator-begin request=%p\n", navigation_request);
++    std::fclose(file);
++  }
++#endif
+   navigation_request->BeginNavigation();
+   // DO NOT USE |navigation_request| BEYOND THIS POINT. It might have been
+   // destroyed in BeginNavigation().
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index 6066f87e7d..c54b940060 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+ 
++#include <cstdio>
+ #include <cstdint>
+ #include <deque>
+ #include <limits>
+@@ -9342,6 +9343,15 @@ void RenderFrameHostImpl::BeginNavigation(
+         initiator_navigation_state_keep_alive_handle,
+     mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>
+         renderer_cancellation_listener) {
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/browser-begin-navigation.log", "a")) {
++    std::fprintf(file, "browser-received host=%p url='%s' lifecycle=%d\n", this,
++                 unvalidated_common_params->url.spec().c_str(),
++                 static_cast<int>(lifecycle_state()));
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT("navigation", "RenderFrameHostImpl::BeginNavigation",
+               ChromeTrackEvent::kRenderFrameHost, this, "url",
+               unvalidated_common_params->url.possibly_invalid_spec());
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 639cda09ea..e5ec571894 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3672,7 +3672,21 @@ bool RenderProcessHostImpl::Shutdown(int exit_code) {
+ 
+   shutdown_exit_code_ = exit_code;
+   shutdown_requested_ = true;
++#if BUILDFLAG(IS_AROS)
++  // The child task may disappear before Terminate() observes it. A failed
++  // termination request therefore does not prove that the browser-side Mojo
++  // reader and shared endpoints have retired. Put explicit shutdown behind
++  // the same lifecycle barrier as channel error and fast shutdown.
++  const bool termination_requested =
++      child_process_launcher_->Terminate(exit_code);
++  LOG(ERROR) << "[Chromium:AROS:RendererRetirement] explicit shutdown; "
++                "termination requested="
++             << termination_requested << " host=" << id_;
++  BeginArosRendererRetirement();
++  return true;
++#else
+   return child_process_launcher_->Terminate(exit_code);
++#endif
+ }
+ 
+ bool RenderProcessHostImpl::ShutdownRequested() {
+@@ -4968,8 +4982,9 @@ void RenderProcessHostImpl::PollForArosRendererRetirement() {
+ 
+   ChildProcessTerminationInfo info =
+       GetChildTerminationInfo(false /* already_dead */);
++  const bool mojo_retired = child_process_launcher_->IsArosMojoRetired();
+   if (info.status != base::TERMINATION_STATUS_STILL_RUNNING) {
+-    if (!child_process_launcher_->IsArosMojoRetired()) {
++    if (!mojo_retired) {
+       LOG(ERROR) << "[Chromium:AROS:RendererRetirement] renderer task gone; "
+                     "waiting for Mojo readers and endpoints host="
+                  << id_;
+@@ -4991,16 +5006,44 @@ void RenderProcessHostImpl::PollForArosRendererRetirement() {
+ 
+   const bool grace_expired =
+       base::TimeTicks::Now() >= aros_retirement_deadline_;
+-  if (grace_expired && !aros_termination_requested_) {
+-    aros_termination_requested_ = true;
++  if (grace_expired && !aros_termination_attempted_) {
++    aros_termination_attempted_ = true;
+     const bool requested =
+         child_process_launcher_->Terminate(RESULT_CODE_HUNG);
++    aros_termination_requested_ = requested;
++    // FindTaskByPID() can transiently miss a live hosted task while Exec moves
++    // it between scheduler lists. Give task observation one bounded settle
++    // interval after the first request instead of treating a failed request
++    // as either immediate death or permission to retry forever.
++    aros_retirement_deadline_ =
++        base::TimeTicks::Now() + kArosRendererQuarantinePollInterval;
+     LOG(ERROR) << "[Chromium:AROS:RendererRetirement] grace expired; "
+                   "termination requested="
+                << requested << " host=" << id_
+                << "; replacement remains suppressed";
+   }
+ 
++  // Hosted task.resource can retain a PID after the child main has returned,
++  // while kill() correctly reports that there is no signalable target. Once
++  // both Mojo endpoint sides and their reader tasks have retired, one bounded
++  // post-request interval is sufficient to distinguish that stale registry
++  // observation from a scheduler-list transition. Do not strand the host in
++  // quarantine or repeatedly signal an already-returned renderer.
++  if (mojo_retired && aros_termination_attempted_ &&
++      base::TimeTicks::Now() >= aros_retirement_deadline_) {
++    info.status = (fast_shutdown_started_ || shutdown_requested_)
++                      ? base::TERMINATION_STATUS_NORMAL_TERMINATION
++                      : base::TERMINATION_STATUS_PROCESS_WAS_KILLED;
++    info.exit_code = shutdown_exit_code_ != -1 ? shutdown_exit_code_
++                                               : RESULT_CODE_HUNG;
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] transport retired after "
++                  "bounded termination settle; replacement may proceed host="
++               << id_ << " termination_requested="
++               << aros_termination_requested_;
++    ProcessDied(info);
++    return;
++  }
++
+   if (grace_expired && !aros_retirement_quarantined_) {
+     aros_retirement_quarantined_ = true;
+     LOG(ERROR) << "[Chromium:AROS:RendererRetirement] renderer quarantined "
+@@ -5039,6 +5082,7 @@ void RenderProcessHostImpl::ProcessDied(
+ #if BUILDFLAG(IS_AROS)
+   aros_retirement_started_ = false;
+   aros_retirement_quarantined_ = false;
++  aros_termination_attempted_ = false;
+   aros_termination_requested_ = false;
+   aros_retirement_deadline_ = base::TimeTicks();
+ #endif
+diff --git a/content/browser/renderer_host/render_process_host_impl.h b/content/browser/renderer_host/render_process_host_impl.h
+index 762d3bfe21..0f53d453fe 100644
+--- a/content/browser/renderer_host/render_process_host_impl.h
++++ b/content/browser/renderer_host/render_process_host_impl.h
+@@ -1206,6 +1206,7 @@ class CONTENT_EXPORT RenderProcessHostImpl
+   // observes that its task is gone.
+   bool aros_retirement_started_ = false;
+   bool aros_retirement_quarantined_ = false;
++  bool aros_termination_attempted_ = false;
+   bool aros_termination_requested_ = false;
+   base::TimeTicks aros_retirement_deadline_;
+ #endif
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index c916d68d3f..0541828bfc 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -7,6 +7,7 @@
+ #include <math.h>
+ 
+ #include <algorithm>
++#include <cstdio>
+ #include <optional>
+ #include <set>
+ #include <tuple>
+@@ -161,6 +162,26 @@ using blink::WebMouseEvent;
+ using blink::WebMouseWheelEvent;
+ 
+ namespace content {
++
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++void LogArosFrameSinkDispatch(const char* stage,
++                              const RenderWidgetHostImpl* host,
++                              const void* view,
++                              bool is_owner,
++                              bool has_callback) {
++  if (FILE* file =
++          std::fopen("Developer:Debug/rwh-frame-sink.log", "a")) {
++    std::fprintf(file,
++                 "%s host=%p view=%p owner=%d callback=%d\n", stage, host,
++                 view, is_owner, has_callback);
++    std::fclose(file);
++  }
++}
++
++}  // namespace
++#endif
+ namespace {
+ 
+ // How long to wait for newly loaded content to send a compositor frame
+@@ -510,6 +531,12 @@ viz::FrameSinkId RenderWidgetHostImpl::DefaultFrameSinkId(
+ void RenderWidgetHostImpl::SetView(RenderWidgetHostViewBase* view) {
+   synthetic_gesture_controller_.reset();
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("set-view-enter", this, view,
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
++
+   if (view) {
+     view_ = view->GetWeakPtr();
+     view_->SetIsFrameSinkIdOwner(view_is_frame_sink_id_owner_);
+@@ -3606,6 +3633,11 @@ void RenderWidgetHostImpl::CreateFrameSink(
+         compositor_frame_sink_receiver,
+     mojo::PendingRemote<viz::mojom::CompositorFrameSinkClient>
+         compositor_frame_sink_client) {
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("create-enter", this, view_.get(),
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
+   // Connects the viz process end of CompositorFrameSink message pipes. The
+   // renderer compositor may request a new CompositorFrameSink on context
+   // loss, which will destroy the existing CompositorFrameSink.
+@@ -3619,15 +3651,41 @@ void RenderWidgetHostImpl::CreateFrameSink(
+       std::move(compositor_frame_sink_receiver),
+       std::move(compositor_frame_sink_client));
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("create-buffered", this, view_.get(),
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
++
+   MaybeDispatchBufferedFrameSinkRequest();
++
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("create-leave", this, view_.get(),
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
+ }
+ 
+ void RenderWidgetHostImpl::MaybeDispatchBufferedFrameSinkRequest() {
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("maybe-enter", this, view_.get(),
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
+   if (!view_ || !view_is_frame_sink_id_owner_) {
++#if BUILDFLAG(IS_AROS)
++    LogArosFrameSinkDispatch("maybe-blocked-view-owner", this, view_.get(),
++                             view_is_frame_sink_id_owner_,
++                             static_cast<bool>(create_frame_sink_callback_));
++#endif
+     return;
+   }
+ 
+   if (!create_frame_sink_callback_) {
++#if BUILDFLAG(IS_AROS)
++    LogArosFrameSinkDispatch("maybe-no-callback", this, view_.get(),
++                             view_is_frame_sink_id_owner_, false);
++#endif
+     return;
+   }
+ 
+@@ -3635,7 +3693,16 @@ void RenderWidgetHostImpl::MaybeDispatchBufferedFrameSinkRequest() {
+     compositor_metric_recorder_->DidRequestFrameSink();
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("maybe-dispatch", this, view_.get(),
++                           view_is_frame_sink_id_owner_, true);
++#endif
+   std::move(create_frame_sink_callback_).Run(view_->GetFrameSinkId());
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("maybe-dispatched", this, view_.get(),
++                           view_is_frame_sink_id_owner_,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
+ }
+ 
+ void RenderWidgetHostImpl::RegisterRenderFrameMetadataObserver(
+@@ -3949,7 +4016,16 @@ gfx::PointF RenderWidgetHostImpl::ConvertWindowPointToViewport(
+ }
+ 
+ void RenderWidgetHostImpl::SetViewIsFrameSinkIdOwner(bool is_owner) {
++#if BUILDFLAG(IS_AROS)
++  LogArosFrameSinkDispatch("set-owner-enter", this, view_.get(), is_owner,
++                           static_cast<bool>(create_frame_sink_callback_));
++#endif
+   if (view_is_frame_sink_id_owner_ == is_owner) {
++#if BUILDFLAG(IS_AROS)
++    LogArosFrameSinkDispatch("set-owner-unchanged", this, view_.get(),
++                             is_owner,
++                             static_cast<bool>(create_frame_sink_callback_));
++#endif
+     return;
+   }
+ 
+diff --git a/content/browser/service_process_host_impl.cc b/content/browser/service_process_host_impl.cc
+index 1987b9539e..9a5d167c48 100644
+--- a/content/browser/service_process_host_impl.cc
++++ b/content/browser/service_process_host_impl.cc
+@@ -3,10 +3,13 @@
+ // found in the LICENSE file.
+ 
+ #include <memory>
++#include <set>
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/observer_list.h"
+@@ -69,7 +72,10 @@ class ServiceProcessTracker {
+ 
+     for (auto& observer : observers_)
+       observer.OnServiceProcessTerminatedNormally(iter->second.Duplicate());
++    const std::string retirement_key = MakeRetirementKey(iter->second);
++    retiring_processes_.erase(id);
+     processes_.erase(iter);
++    RunPendingLaunches(retirement_key);
+   }
+ 
+   void NotifyCrashed(ServiceProcessId id) {
+@@ -78,7 +84,32 @@ class ServiceProcessTracker {
+     DCHECK(iter != processes_.end());
+     for (auto& observer : observers_)
+       observer.OnServiceProcessCrashed(iter->second.Duplicate());
++    const std::string retirement_key = MakeRetirementKey(iter->second);
++    retiring_processes_.erase(id);
+     processes_.erase(iter);
++    RunPendingLaunches(retirement_key);
++  }
++
++  void MarkRetiring(ServiceProcessId id) {
++    DCHECK_CURRENTLY_ON(BrowserThread::UI);
++    if (processes_.find(id) != processes_.end())
++      retiring_processes_.insert(id);
++  }
++
++  bool QueueLaunchIfRetiring(const std::string& service_interface_name,
++                             const std::optional<GURL>& site,
++                             base::OnceClosure* launch) {
++    DCHECK_CURRENTLY_ON(BrowserThread::UI);
++    const std::string key =
++        MakeRetirementKey(service_interface_name, site);
++    if (!HasRetiringProcess(key))
++      return false;
++
++    pending_launches_[key].push_back(std::move(*launch));
++    LOG(WARNING) << "[Chromium:AROS:ChildRetirement] queued replacement "
++                 << "service=" << service_interface_name
++                 << " pending=" << pending_launches_[key].size();
++    return true;
+   }
+ 
+   void AddObserver(ServiceProcessHost::Observer* observer) {
+@@ -102,6 +133,43 @@ class ServiceProcessTracker {
+   }
+ 
+  private:
++  static std::string MakeRetirementKey(
++      const std::string& service_interface_name,
++      const std::optional<GURL>& site) {
++    std::string key = service_interface_name;
++    key.push_back('\0');
++    if (site)
++      key.append(site->spec());
++    return key;
++  }
++
++  static std::string MakeRetirementKey(const ServiceProcessInfo& info) {
++    return MakeRetirementKey(info.service_interface_name(), info.site());
++  }
++
++  bool HasRetiringProcess(const std::string& key) const {
++    for (const ServiceProcessId id : retiring_processes_) {
++      auto iter = processes_.find(id);
++      if (iter != processes_.end() && MakeRetirementKey(iter->second) == key)
++        return true;
++    }
++    return false;
++  }
++
++  void RunPendingLaunches(const std::string& key) {
++    if (HasRetiringProcess(key))
++      return;
++
++    auto iter = pending_launches_.find(key);
++    if (iter == pending_launches_.end())
++      return;
++
++    std::vector<base::OnceClosure> launches = std::move(iter->second);
++    pending_launches_.erase(iter);
++    for (auto& launch : launches)
++      std::move(launch).Run();
++  }
++
+   ServiceProcessId GenerateNextId() {
+     DCHECK_CURRENTLY_ON(BrowserThread::UI);
+     return service_process_id_generator_.GenerateNextId();
+@@ -110,6 +178,8 @@ class ServiceProcessTracker {
+   ServiceProcessId::Generator service_process_id_generator_;
+ 
+   std::map<ServiceProcessId, ServiceProcessInfo> processes_;
++  std::set<ServiceProcessId> retiring_processes_;
++  std::map<std::string, std::vector<base::OnceClosure>> pending_launches_;
+ 
+   // Observers are owned and used exclusively on the UI thread.
+   base::ObserverList<ServiceProcessHost::Observer> observers_;
+@@ -148,6 +218,14 @@ class UtilityProcessClient : public UtilityProcessHost::Client {
+     }
+   }
+ 
++  void OnProcessRetiring() override {
++    DCHECK_CURRENTLY_ON(BrowserThread::UI);
++    if (process_info_) {
++      GetServiceProcessTracker().MarkRetiring(
++          process_info_->service_process_id());
++    }
++  }
++
+   void OnProcessTerminatedNormally() override {
+     GetServiceProcessTracker().NotifyTerminated(
+         process_info_->service_process_id());
+@@ -176,9 +254,9 @@ class UtilityProcessClient : public UtilityProcessHost::Client {
+ 
+ // TODO(crbug.com/977637): Once UtilityProcessHost is used only by service
+ // processes, its logic can be inlined here.
+-void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
+-                          ServiceProcessHost::Options options,
+-                          sandbox::mojom::Sandbox sandbox) {
++void LaunchServiceProcessNow(mojo::GenericPendingReceiver receiver,
++                             ServiceProcessHost::Options options,
++                             sandbox::mojom::Sandbox sandbox) {
+   UtilityProcessHost* host =
+       new UtilityProcessHost(std::make_unique<UtilityProcessClient>(
+           *receiver.interface_name(), options.site,
+@@ -211,6 +289,25 @@ void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
+   host->GetChildProcess()->BindServiceInterface(std::move(receiver));
+ }
+ 
++void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
++                          ServiceProcessHost::Options options,
++                          sandbox::mojom::Sandbox sandbox) {
++#if BUILDFLAG(IS_AROS)
++  const std::string service_interface_name = *receiver.interface_name();
++  const std::optional<GURL> site = options.site;
++  base::OnceClosure launch = base::BindOnce(
++      &LaunchServiceProcessNow, std::move(receiver), std::move(options),
++      sandbox);
++  if (GetServiceProcessTracker().QueueLaunchIfRetiring(
++          service_interface_name, site, &launch)) {
++    return;
++  }
++  std::move(launch).Run();
++#else
++  LaunchServiceProcessNow(std::move(receiver), std::move(options), sandbox);
++#endif
++}
++
+ }  // namespace
+ 
+ // static
+diff --git a/content/browser/utility_process_host.cc b/content/browser/utility_process_host.cc
+index 3cca937cc1..48e960b374 100644
+--- a/content/browser/utility_process_host.cc
++++ b/content/browser/utility_process_host.cc
+@@ -511,6 +511,11 @@ void UtilityProcessHost::OnProcessLaunchFailed(int error_code) {
+ #endif
+ }
+ 
++void UtilityProcessHost::OnProcessRetiring() {
++  if (client_)
++    client_->OnProcessRetiring();
++}
++
+ void UtilityProcessHost::OnProcessCrashed(int exit_code) {
+   if (!client_)
+     return;
+diff --git a/content/browser/utility_process_host.h b/content/browser/utility_process_host.h
+index cba1933af7..672ed34d65 100644
+--- a/content/browser/utility_process_host.h
++++ b/content/browser/utility_process_host.h
+@@ -79,6 +79,7 @@ class CONTENT_EXPORT UtilityProcessHost
+     virtual ~Client() {}
+ 
+     virtual void OnProcessLaunched(const base::Process& process) {}
++    virtual void OnProcessRetiring() {}
+     virtual void OnProcessTerminatedNormally() {}
+     virtual void OnProcessCrashed() {}
+   };
+@@ -167,6 +168,7 @@ class CONTENT_EXPORT UtilityProcessHost
+   // BrowserChildProcessHostDelegate:
+   void OnProcessLaunched() override;
+   void OnProcessLaunchFailed(int error_code) override;
++  void OnProcessRetiring() override;
+   void OnProcessCrashed(int exit_code) override;
+   std::optional<std::string> GetServiceName() override;
+   void BindHostReceiver(mojo::GenericPendingReceiver receiver) override;
+diff --git a/content/child/child_process.cc b/content/child/child_process.cc
+index 2e4788b3c6..cadb9a5c72 100644
+--- a/content/child/child_process.cc
++++ b/content/child/child_process.cc
+@@ -9,6 +9,7 @@
+ #include "base/clang_profiling_buildflags.h"
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/process/process_handle.h"
+ #include "base/synchronization/waitable_event.h"
+@@ -146,6 +147,10 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
+ ChildProcess::~ChildProcess() {
+   DCHECK_EQ(child_process, this);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor begin";
++#endif
++
+   // Signal this event before destroying the child process.  That way all
+   // background threads can cleanup.
+   // For example, in the renderer the RenderThread instances will be able to
+@@ -153,9 +158,21 @@ ChildProcess::~ChildProcess() {
+   shutdown_event_.Signal();
+ 
+   if (main_thread_) {  // null in unittests.
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main Shutdown begin";
++#endif
+     main_thread_->Shutdown();
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main Shutdown end";
++#endif
+     if (main_thread_->ShouldBeDestroyed()) {
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main destroy begin";
++#endif
+       main_thread_.reset();
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main destroy end";
++#endif
+     } else {
+       // Leak the main_thread_. See a comment in
+       // RenderThreadImpl::ShouldBeDestroyed.
+@@ -163,14 +180,30 @@ ChildProcess::~ChildProcess() {
+     }
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] IO Stop begin";
++#endif
+   io_thread_->Stop();
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] IO Stop end";
++#endif
+   io_thread_.reset();
+ 
+   if (initialized_thread_pool_) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown begin";
++#endif
+     DCHECK(base::ThreadPoolInstance::Get());
+     base::ThreadPoolInstance::Get()->Shutdown();
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown end";
++#endif
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor end";
++#endif
++
+ #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
+   // Flush the profiling data to disk. Doing this manually (vs relying on this
+   // being done automatically when the process exits) will ensure that this data
+@@ -191,13 +224,22 @@ void ChildProcess::AddRefProcess() {
+   DCHECK(!main_thread_.get() ||  // null in unittests.
+          main_thread_->main_thread_runner()->BelongsToCurrentThread());
+   ref_count_++;
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] process ref added count="
++             << ref_count_;
++#endif
+ }
+ 
+ void ChildProcess::ReleaseProcess() {
+   DCHECK(!main_thread_.get() ||  // null in unittests.
+          main_thread_->main_thread_runner()->BelongsToCurrentThread());
+   DCHECK(ref_count_);
+-  if (--ref_count_)
++  --ref_count_;
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] process ref released count="
++             << ref_count_;
++#endif
++  if (ref_count_)
+     return;
+ 
+   if (main_thread_)  // null in unittests.
+diff --git a/content/child/child_thread_impl.cc b/content/child/child_thread_impl.cc
+index 91dbdf83cb..9373756d8b 100644
+--- a/content/child/child_thread_impl.cc
++++ b/content/child/child_thread_impl.cc
+@@ -160,7 +160,12 @@ bool CreateWaitAndExitThread(base::TimeDelta duration) {
+ }
+ #endif
+ 
+-void TerminateSelfOnDisconnect() {
++void TerminateSelfOnDisconnect(
++#if BUILDFLAG(IS_AROS)
++    scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner,
++    base::RepeatingClosure quit_closure
++#endif
++) {
+   // For renderer/worker processes:
+   // On POSIX, at least, one can install an unload handler which loops
+   // forever and leave behind a renderer process which eats 100% CPU forever.
+@@ -177,6 +182,17 @@ void TerminateSelfOnDisconnect() {
+   // So, we install a filter on the sender so that we can process this event
+   // here and kill the process.
+   base::debug::StopProfiling();
++#if BUILDFLAG(IS_AROS)
++  // AROS processes are Exec tasks in one address space. Calling _exit() from
++  // Chrome_ChildIOThread would longjmp through the process owner's startup
++  // frame while leaving the I/O task as Exec's current task. Ask the owner
++  // thread to leave its run loop instead, so ChildProcess can stop its I/O and
++  // worker threads before the executable is unloaded.
++  LOG(INFO) << "[Chromium:AROS:Shutdown] parent disconnected; posting child "
++               "main-loop quit";
++  main_thread_runner->PostTask(FROM_HERE, base::BindOnce(quit_closure));
++  return;
++#endif
+ #if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER) ||  \
+     defined(MEMORY_SANITIZER) || defined(THREAD_SANITIZER) || \
+     defined(UNDEFINED_SANITIZER)
+@@ -196,11 +212,31 @@ void TerminateSelfOnDisconnect() {
+ 
+ class SuicideOnChannelErrorFilter : public IPC::MessageFilter {
+  public:
++#if BUILDFLAG(IS_AROS)
++  SuicideOnChannelErrorFilter(
++      scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner,
++      base::RepeatingClosure quit_closure)
++      : main_thread_runner_(std::move(main_thread_runner)),
++        quit_closure_(std::move(quit_closure)) {}
++#endif
++
+   // IPC::MessageFilter
+-  void OnChannelError() override { TerminateSelfOnDisconnect(); }
++  void OnChannelError() override {
++    TerminateSelfOnDisconnect(
++#if BUILDFLAG(IS_AROS)
++        main_thread_runner_, quit_closure_
++#endif
++    );
++  }
+ 
+  protected:
+   ~SuicideOnChannelErrorFilter() override = default;
++
++#if BUILDFLAG(IS_AROS)
++ private:
++  const scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner_;
++  const base::RepeatingClosure quit_closure_;
++#endif
+ };
+ 
+ #endif  // OS(POSIX)
+@@ -712,10 +748,19 @@ void ChildThreadImpl::Init(const Options& options) {
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kProcessType)) {
+     if (options.with_legacy_ipc_channel) {
+-      channel_->AddFilter(new SuicideOnChannelErrorFilter());
++      channel_->AddFilter(new SuicideOnChannelErrorFilter(
++#if BUILDFLAG(IS_AROS)
++          main_thread_runner_, quit_closure_
++#endif
++          ));
+     } else {
+       child_process_host_.set_disconnect_handler(
+-          base::BindOnce(&TerminateSelfOnDisconnect), GetIOTaskRunner());
++          base::BindOnce(&TerminateSelfOnDisconnect
++#if BUILDFLAG(IS_AROS)
++                         , main_thread_runner_, quit_closure_
++#endif
++                         ),
++          GetIOTaskRunner());
+     }
+   }
+ #endif
+@@ -776,6 +821,9 @@ void ChildThreadImpl::Init(const Options& options) {
+ }
+ 
+ ChildThreadImpl::~ChildThreadImpl() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body begin";
++#endif
+ #if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED) && BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
+   IPC::Logging::GetInstance()->SetIPCSender(NULL);
+ #endif
+@@ -804,6 +852,9 @@ ChildThreadImpl::~ChildThreadImpl() {
+     [[maybe_unused]] auto* leaked_remote_ptr = leaked_remote.release();
+     ANNOTATE_LEAKING_OBJECT_PTR(leaked_remote_ptr);
+   }
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body end";
++#endif
+ }
+ 
+ void ChildThreadImpl::Shutdown() {
+diff --git a/content/public/browser/browser_child_process_host_delegate.h b/content/public/browser/browser_child_process_host_delegate.h
+index 3e4c833917..8b0bcca9ae 100644
+--- a/content/public/browser/browser_child_process_host_delegate.h
++++ b/content/public/browser/browser_child_process_host_delegate.h
+@@ -31,6 +31,11 @@ class CONTENT_EXPORT BrowserChildProcessHostDelegate : public IPC::Listener {
+   // returned from GetExitCodeProcess()).
+   virtual void OnProcessCrashed(int exit_code) {}
+ 
++  // Called when the child communication channel has disconnected but the
++  // native process has not exited yet. Platforms with asynchronous process
++  // retirement can use this to suppress replacement until final teardown.
++  virtual void OnProcessRetiring() {}
++
+   // Returns a string identifying the primary service running in the child
+   // process, if any.
+   virtual std::optional<std::string> GetServiceName();
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+index 26d7155027..621a6cf761 100644
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/renderer/render_frame_impl.h"
+ 
++#include <cstdio>
+ #include <map>
+ #include <memory>
+ #include <optional>
+@@ -1291,6 +1292,19 @@ void InitializeFrameWidgetForFrame(
+       previous_widget ? previous_widget->GetFrameSinkId()
+                       : viz::FrameSinkId(RenderThread::Get()->GetClientId(),
+                                          widget_params->routing_id);
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-widget-reuse.log", "a")) {
++    std::fprintf(file,
++                 "initialize pid=%lld frame=%p previous_widget=%p "
++                 "routing_id=%d current_client=%d frame_sink=%u:%u hidden=1\n",
++                 static_cast<long long>(base::Process::Current().Pid()),
++                 &frame, previous_widget, widget_params->routing_id,
++                 RenderThread::Get()->GetClientId(),
++                 frame_sink_id.client_id(), frame_sink_id.sink_id());
++    std::fclose(file);
++  }
++#endif
+   auto* web_frame_widget = frame.InitializeFrameWidget(
+       std::move(widget_params->frame_widget_host),
+       std::move(widget_params->frame_widget),
+@@ -3734,8 +3748,22 @@ blink::WebFrame* RenderFrameImpl::FindFrame(const blink::WebString& name) {
+ 
+ void RenderFrameImpl::MaybeInitializeWidget(
+     mojom::CreateFrameWidgetParamsPtr widget_params) {
+-  if (!PreviousWidgetForLazyCompositorInitialization(
+-          widget_params->previous_frame_token_for_compositor_reuse)) {
++  auto* const previous_widget = PreviousWidgetForLazyCompositorInitialization(
++      widget_params->previous_frame_token_for_compositor_reuse);
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-widget-reuse.log", "a")) {
++    std::fprintf(file,
++                 "maybe pid=%lld frame=%p token=%d previous_widget=%p "
++                 "routing_id=%d\n",
++                 static_cast<long long>(base::Process::Current().Pid()), this,
++                 widget_params->previous_frame_token_for_compositor_reuse
++                         .has_value(),
++                 previous_widget, widget_params->routing_id);
++    std::fclose(file);
++  }
++#endif
++  if (!previous_widget) {
+     InitializeFrameWidgetForFrame(*frame_, /*previous_widget=*/nullptr,
+                                   std::move(widget_params),
+                                   is_for_nested_main_frame_);
+@@ -3765,6 +3793,18 @@ void RenderFrameImpl::EnsureWidgetInitialized() {
+   auto* previous_widget = PreviousWidgetForLazyCompositorInitialization(
+       widget_params_for_lazy_widget_creation_
+           ->previous_frame_token_for_compositor_reuse);
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-widget-reuse.log", "a")) {
++    std::fprintf(file,
++                 "ensure pid=%lld frame=%p previous_widget=%p "
++                 "routing_id=%d\n",
++                 static_cast<long long>(base::Process::Current().Pid()), this,
++                 previous_widget,
++                 widget_params_for_lazy_widget_creation_->routing_id);
++    std::fclose(file);
++  }
++#endif
+   CHECK(previous_widget);
+ 
+   InitializeFrameWidgetForFrame(
+@@ -5386,6 +5426,15 @@ void RenderFrameImpl::BeginNavigation(
+   // removed, since they already account for an empty url.
+ 
+   const GURL& url = info->url_request.Url();
++#if BUILDFLAG(IS_AROS)
++  const std::string aros_navigation_url = url.spec();
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-begin-navigation.log", "a")) {
++    std::fprintf(file, "renderer-enter frame=%p url='%s'\n", this,
++                 aros_navigation_url.c_str());
++    std::fclose(file);
++  }
++#endif
+   TRACE_EVENT2("navigation", "RenderFrameImpl::BeginNavigation", "url",
+                url.possibly_invalid_spec(), "navigation_type",
+                static_cast<int>(info->navigation_type));
+@@ -6020,8 +6069,27 @@ void RenderFrameImpl::BeginNavigationInternal(
+     bool is_history_navigation_in_new_child_frame,
+     base::TimeTicks renderer_before_unload_start,
+     base::TimeTicks renderer_before_unload_end) {
+-  if (!frame_->WillStartNavigation(*info))
++#if BUILDFLAG(IS_AROS)
++  const GURL aros_navigation_gurl = info->url_request.Url();
++  const std::string aros_navigation_url = aros_navigation_gurl.spec();
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-begin-navigation.log", "a")) {
++    std::fprintf(file, "renderer-internal-enter frame=%p url='%s'\n", this,
++                 aros_navigation_url.c_str());
++    std::fclose(file);
++  }
++#endif
++  if (!frame_->WillStartNavigation(*info)) {
++#if BUILDFLAG(IS_AROS)
++    if (FILE* file =
++            std::fopen("Developer:Debug/renderer-begin-navigation.log", "a")) {
++      std::fprintf(file, "renderer-will-start-rejected frame=%p url='%s'\n",
++                   this, aros_navigation_url.c_str());
++      std::fclose(file);
++    }
++#endif
+     return;
++  }
+ 
+   for (auto& observer : observers_)
+     observer.DidStartNavigation(info->url_request.Url(), info->navigation_type);
+@@ -6164,6 +6232,14 @@ void RenderFrameImpl::BeginNavigationInternal(
+       std::move(navigation_client_remote),
+       std::move(initiator_navigation_state_keep_alive_handle),
+       std::move(renderer_cancellation_listener_receiver));
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/renderer-begin-navigation.log", "a")) {
++    std::fprintf(file, "renderer-sent frame=%p url='%s'\n", this,
++                 aros_navigation_url.c_str());
++    std::fclose(file);
++  }
++#endif
+ }
+ 
+ void RenderFrameImpl::DecodeDataURL(
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 3d00694ea1..1ee8186bd0 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -657,6 +657,9 @@ void RenderThreadImpl::Init() {
+ }
+ 
+ RenderThreadImpl::~RenderThreadImpl() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body begin";
++#endif
+   g_main_task_runner.Get() = nullptr;
+ 
+   // Need to make sure this reference is removed on the correct task runner;
+@@ -665,6 +668,9 @@ RenderThreadImpl::~RenderThreadImpl() {
+     video_frame_compositor_thread_->task_runner()->ReleaseSoon(
+         FROM_HERE, std::move(video_frame_compositor_context_provider_));
+   }
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body end";
++#endif
+ }
+ 
+ void RenderThreadImpl::Shutdown() {
+@@ -678,34 +684,50 @@ void RenderThreadImpl::Shutdown() {
+   blink::LogStatsDuringShutdown();
+ 
+ #if BUILDFLAG(IS_AROS)
+-  if (IsSingleProcess()) {
+-    if (blink_platform_impl_) {
+-      LOG(INFO) << "[Chromium:shutdown] stopping AROS compositor thread";
+-      blink::ShutdownCompositorThread();
+-      LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
+-    }
+-    if (main_thread_scheduler_) {
+-      LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
+-      main_thread_scheduler_->Shutdown();
+-    }
++  // AROS child processes return through renderer_main instead of terminating
++  // the current task from the I/O thread.  Run the same explicit Blink cleanup
++  // used by the in-process renderer before RenderThreadImpl is destroyed.
++  if (blink_platform_impl_) {
++    LOG(INFO) << "[Chromium:shutdown] stopping AROS compositor thread";
++    blink::ShutdownCompositorThread();
++    LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
++  }
++  // viz::Gpu destruction reports channel loss through the current renderer
++  // task runner.  Release it before shutting that runner down.
++  if (gpu_) {
++    LOG(INFO) << "[Chromium:shutdown] releasing AROS renderer GPU channel";
++    gpu_.reset();
++  }
++  if (main_thread_scheduler_) {
++    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
++    main_thread_scheduler_->Shutdown();
+   }
+ #endif
+ 
+   // In a single-process mode, we cannot call _exit(0) in Shutdown() because
+   // it will exit the process before the browser side is ready to exit.
+-  if (!IsSingleProcess())
++  if (!IsSingleProcess()) {
++#if BUILDFLAG(IS_AROS)
++    // The child main loop has already been told to quit. Return through
++    // renderer_main so ChildProcess stops the I/O thread and ThreadPool before
++    // the owner task exits and DOS unloads this executable.
++    LOG(INFO) << "[Chromium:shutdown] unwinding AROS renderer owner task";
++    return;
++#else
+     base::Process::TerminateCurrentProcessImmediately(0);
++#endif
++  }
+ }
+ 
+ bool RenderThreadImpl::ShouldBeDestroyed() {
+-  DCHECK(IsSingleProcess());
+ #if BUILDFLAG(IS_AROS)
+-  // AROS does not terminate every task atomically when the main task returns.
+-  // Destroy the in-process renderer so its compositor and GPU helper threads
+-  // stop before pthread's process-exit hook permits executable code to unload.
+-  LOG(INFO) << "[Chromium:shutdown] destroying AROS in-process renderer";
++  // AROS does not terminate every task atomically when the owner task returns.
++  // Destroy both in-process and child-process renderers so their compositor
++  // and GPU helper threads stop before executable code can be unloaded.
++  LOG(INFO) << "[Chromium:shutdown] destroying AROS renderer";
+   return true;
+ #else
++  DCHECK(IsSingleProcess());
+   // In a single-process mode, it is unsafe to destruct this renderer thread
+   // because we haven't run the shutdown sequence. Hence we leak the render
+   // thread.
+diff --git a/content/utility/utility_main.cc b/content/utility/utility_main.cc
+index e709892105..b73b404327 100644
+--- a/content/utility/utility_main.cc
++++ b/content/utility/utility_main.cc
+@@ -8,6 +8,7 @@
+ #include "base/command_line.h"
+ #include "base/debug/leak_annotations.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/power_monitor/power_monitor.h"
+@@ -436,7 +437,13 @@ int UtilityMain(MainFunctionParams parameters) {
+   base::allocator::PartitionAllocSupport::Get()->ReconfigureAfterTaskRunnerInit(
+       switches::kUtilityProcess);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility main entering run loop";
++#endif
+   run_loop.Run();
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility main left run loop";
++#endif
+ 
+ #if defined(LEAK_SANITIZER)
+   // Invoke LeakSanitizer before shutting down the utility thread, to avoid
+diff --git a/content/utility/utility_thread_impl.cc b/content/utility/utility_thread_impl.cc
+index a287bbb41c..8350700c8f 100644
+--- a/content/utility/utility_thread_impl.cc
++++ b/content/utility/utility_thread_impl.cc
+@@ -14,6 +14,7 @@
+ #include "base/debug/crash_logging.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+@@ -112,6 +113,10 @@ class ServiceBinderImpl {
+   }
+ 
+   void OnServiceTerminated() {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] service terminated count="
++               << num_service_instances_;
++#endif
+     if (--num_service_instances_ > 0)
+       return;
+ 
+@@ -128,6 +133,9 @@ class ServiceBinderImpl {
+   }
+ 
+   static void ShutDownProcess() {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] releasing process";
++#endif
+     UtilityThread::Get()->ReleaseProcess();
+   }
+ 
+@@ -180,10 +188,16 @@ UtilityThreadImpl::UtilityThreadImpl(const InProcessChildThreadParams& params)
+ UtilityThreadImpl::~UtilityThreadImpl() = default;
+ 
+ void UtilityThreadImpl::Shutdown() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility thread shutdown";
++#endif
+   ChildThreadImpl::Shutdown();
+ }
+ 
+ void UtilityThreadImpl::ReleaseProcess() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] release entered";
++#endif
+   // Ensure all main-thread services are destroyed before releasing the process.
+   // This limits the risk of services incorrectly attempting to post
+   // shutdown-blocking tasks once shutdown has already begun.
+@@ -191,6 +205,9 @@ void UtilityThreadImpl::ReleaseProcess() {
+ 
+   if (!IsInBrowserProcess()) {
+     ChildProcess::current()->ReleaseProcess();
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] child process ref released";
++#endif
+     return;
+   }
+ 
+diff --git a/mojo/core/core.cc b/mojo/core/core.cc
+index 90bb8fd57e..cea18416de 100644
+--- a/mojo/core/core.cc
++++ b/mojo/core/core.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "mojo/core/core.h"
+ 
++#include <cstdio>
+ #include <string.h>
+ 
+ #include <algorithm>
+@@ -560,13 +561,31 @@ MojoResult Core::WriteMessage(MojoHandle message_pipe_handle,
+     return MOJO_RESULT_INVALID_ARGUMENT;
+   auto message_event = base::WrapUnique(
+       reinterpret_cast<ports::UserMessageEvent*>(message_handle));
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/mojo-core-write-route.log", "a")) {
++    std::fprintf(file, "core-enter pipe=%lu message=%p event=%p\n",
++                 message_pipe_handle, reinterpret_cast<void*>(message_handle),
++                 message_event.get());
++    std::fclose(file);
++  }
++#endif
+   auto* message = message_event->GetMessage<UserMessageImpl>();
+   if (!message || !message->IsTransmittable())
+     return MOJO_RESULT_INVALID_ARGUMENT;
+   auto dispatcher = GetDispatcher(message_pipe_handle);
+   if (!dispatcher)
+     return MOJO_RESULT_INVALID_ARGUMENT;
+-  return dispatcher->WriteMessage(std::move(message_event));
++  const MojoResult result = dispatcher->WriteMessage(std::move(message_event));
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/mojo-core-write-route.log", "a")) {
++    std::fprintf(file, "core-leave message=%p result=%d\n",
++                 reinterpret_cast<void*>(message_handle), result);
++    std::fclose(file);
++  }
++#endif
++  return result;
+ }
+ 
+ MojoResult Core::ReadMessage(MojoHandle message_pipe_handle,
+diff --git a/mojo/core/message_pipe_dispatcher.cc b/mojo/core/message_pipe_dispatcher.cc
+index c74d8b089e..4417db3904 100644
+--- a/mojo/core/message_pipe_dispatcher.cc
++++ b/mojo/core/message_pipe_dispatcher.cc
+@@ -5,6 +5,7 @@
+ #include "mojo/core/message_pipe_dispatcher.h"
+ 
+ #include <limits>
++#include <cstdio>
+ #include <memory>
+ 
+ #include "base/logging.h"
+@@ -16,7 +17,9 @@
+ #include "mojo/core/ports/message_filter.h"
+ #include "mojo/core/request_context.h"
+ #include "mojo/core/user_message_impl.h"
++#include "mojo/public/cpp/bindings/lib/message_internal.h"
+ #include "mojo/public/cpp/bindings/mojo_buildflags.h"
++#include "build/build_config.h"
+ 
+ namespace mojo {
+ namespace core {
+@@ -36,6 +39,51 @@ static_assert(sizeof(SerializedState) % 8 == 0,
+ 
+ #pragma pack(pop)
+ 
++#if BUILDFLAG(IS_AROS)
++bool IsTargetWidgetHostMessage(const ports::UserMessageEvent& event) {
++  if (!event.HasMessage())
++    return false;
++  const auto* message = event.GetMessage<UserMessageImpl>();
++  if (!message->IsSerialized() ||
++      message->user_payload_size() < sizeof(::mojo::internal::MessageHeader)) {
++    return false;
++  }
++  const auto* header = static_cast<const ::mojo::internal::MessageHeader*>(
++      message->user_payload());
++  return header->interface_id == 2147483662u && header->name == 6u;
++}
++
++void LogTargetMessagePipe(const char* stage,
++                          const ports::PortRef& port,
++                          uint64_t pipe_id,
++                          int endpoint,
++                          int result) {
++  if (FILE* file =
++          std::fopen("Developer:Debug/mojo-target-receive.log", "a")) {
++    std::fprintf(file,
++                 "%s pipe=%llu endpoint=%d port=%016llx:%016llx result=%d\n",
++                 stage, static_cast<unsigned long long>(pipe_id), endpoint,
++                 static_cast<unsigned long long>(port.name().v1),
++                 static_cast<unsigned long long>(port.name().v2), result);
++    std::fclose(file);
++  }
++}
++
++class TargetWidgetHostMessageFilter : public ports::MessageFilter {
++ public:
++  bool Match(const ports::UserMessageEvent& event) override {
++    if (IsTargetWidgetHostMessage(event))
++      matched_ = true;
++    return false;
++  }
++
++  bool matched() const { return matched_; }
++
++ private:
++  bool matched_ = false;
++};
++#endif
++
+ }  // namespace
+ 
+ // A PortObserver which forwards to a MessagePipeDispatcher. This owns a
+@@ -176,6 +224,10 @@ MojoResult MessagePipeDispatcher::ReadMessage(
+     return MOJO_RESULT_INVALID_ARGUMENT;
+ 
+   int rv = node_controller_->node()->GetMessage(port_, message, nullptr);
++#if BUILDFLAG(IS_AROS)
++  if (*message && IsTargetWidgetHostMessage(**message))
++    LogTargetMessagePipe("dispatcher-read", port_, pipe_id_, endpoint_, rv);
++#endif
+   if (rv != ports::OK && rv != ports::ERROR_PORT_PEER_CLOSED) {
+     if (rv == ports::ERROR_PORT_UNKNOWN ||
+         rv == ports::ERROR_PORT_STATE_UNEXPECTED)
+@@ -473,6 +525,19 @@ void MessagePipeDispatcher::OnPortStatusChanged() {
+   if (port_transferred_)
+     return;
+ 
++#if BUILDFLAG(IS_AROS)
++  {
++    std::unique_ptr<ports::UserMessageEvent> unused;
++    TargetWidgetHostMessageFilter filter;
++    const int probe_result =
++        node_controller_->node()->GetMessage(port_, &unused, &filter);
++    if (filter.matched()) {
++      LogTargetMessagePipe("dispatcher-observer", port_, pipe_id_, endpoint_,
++                           probe_result);
++    }
++  }
++#endif
++
+ #if DCHECK_IS_ON()
+   ports::PortStatus port_status;
+   if (node_controller_->node()->GetStatus(port_, &port_status) == ports::OK) {
+diff --git a/mojo/core/node_controller.cc b/mojo/core/node_controller.cc
+index 560e8900c0..71b80efcf8 100644
+--- a/mojo/core/node_controller.cc
++++ b/mojo/core/node_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "mojo/core/node_controller.h"
+ 
++#include <cstdio>
++#include <cstring>
+ #include <limits>
+ 
+ #include "base/containers/contains.h"
+@@ -24,6 +26,7 @@
+ #include "mojo/core/ports/port_locker.h"
+ #include "mojo/core/request_context.h"
+ #include "mojo/core/user_message_impl.h"
++#include "mojo/public/cpp/bindings/lib/message_internal.h"
+ #include "mojo/public/cpp/platform/named_platform_channel.h"
+ #include "mojo/public/cpp/platform/platform_channel.h"
+ #include "mojo/public/cpp/platform/platform_channel_server.h"
+@@ -41,6 +44,184 @@ namespace core {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct AssociatedName6Probe {
++  bool matched = false;
++  uint32_t interface_id = 0;
++  ports::PortName port;
++  ports::PortName from_port;
++  uint64_t control_sequence_num = 0;
++  size_t serialized_offset = std::numeric_limits<size_t>::max();
++};
++
++#pragma pack(push, 1)
++struct SerializedUserMessageHeaderProbe {
++  uint32_t num_dispatchers;
++  uint32_t header_size;
++};
++#pragma pack(pop)
++
++AssociatedName6Probe ProbeAssociatedName6(const ports::Event& event) {
++  AssociatedName6Probe probe;
++  if (event.type() != ports::Event::Type::kUserMessage)
++    return probe;
++
++  const auto& user_event =
++      static_cast<const ports::UserMessageEvent&>(event);
++  if (!user_event.HasMessage())
++    return probe;
++
++  const UserMessageImpl* message = user_event.GetMessage<UserMessageImpl>();
++  if (!message->IsSerialized() ||
++      message->user_payload_size() < sizeof(::mojo::internal::MessageHeader)) {
++    return probe;
++  }
++
++  const auto* header = static_cast<const ::mojo::internal::MessageHeader*>(
++      message->user_payload());
++  if (header->name != 6 || header->interface_id == 2147483649u)
++    return probe;
++
++  probe.matched = true;
++  probe.interface_id = header->interface_id;
++  probe.port = event.port_name();
++  probe.from_port = event.from_port();
++  probe.control_sequence_num = event.control_sequence_num();
++  return probe;
++}
++
++AssociatedName6Probe ProbeSerializedName6(Channel::Message& message) {
++  AssociatedName6Probe probe;
++  void* data = nullptr;
++  size_t size = 0;
++  if (!NodeChannel::GetEventMessageData(message, &data, &size))
++    return probe;
++
++  ports::ScopedEvent event = ports::Event::Deserialize(data, size);
++  if (!event || event->type() != ports::Event::Type::kUserMessage)
++    return probe;
++
++  constexpr uint32_t kTargetInterface = 2147483662u;
++  constexpr uint32_t kTargetName = 6u;
++  for (size_t offset = 0; offset + 2 * sizeof(uint32_t) <= size; ++offset) {
++    uint32_t interface_id = 0;
++    uint32_t name = 0;
++    std::memcpy(&interface_id, static_cast<const uint8_t*>(data) + offset,
++                sizeof(interface_id));
++    std::memcpy(&name,
++                static_cast<const uint8_t*>(data) + offset +
++                    sizeof(interface_id),
++                sizeof(name));
++    if (interface_id != kTargetInterface || name != kTargetName)
++      continue;
++
++    probe.matched = true;
++    probe.interface_id = interface_id;
++    probe.port = event->port_name();
++    probe.from_port = event->from_port();
++    probe.control_sequence_num = event->control_sequence_num();
++    probe.serialized_offset = offset;
++    return probe;
++  }
++
++  const size_t event_size = event->GetSerializedSize();
++  if (event_size > size ||
++      size - event_size < sizeof(SerializedUserMessageHeaderProbe)) {
++    return probe;
++  }
++
++  const auto* user_header =
++      reinterpret_cast<const SerializedUserMessageHeaderProbe*>(
++          static_cast<const uint8_t*>(data) + event_size);
++  if (user_header->header_size < sizeof(*user_header) ||
++      user_header->header_size > size - event_size ||
++      size - event_size - user_header->header_size <
++          sizeof(::mojo::internal::MessageHeader)) {
++    return probe;
++  }
++
++  const auto* message_header =
++      reinterpret_cast<const ::mojo::internal::MessageHeader*>(
++          static_cast<const uint8_t*>(data) + event_size +
++          user_header->header_size);
++  if (message_header->name != 6 ||
++      message_header->interface_id == 2147483649u) {
++    return probe;
++  }
++
++  probe.matched = true;
++  probe.interface_id = message_header->interface_id;
++  probe.port = event->port_name();
++  probe.from_port = event->from_port();
++  probe.control_sequence_num = event->control_sequence_num();
++  probe.serialized_offset = event_size + user_header->header_size;
++  return probe;
++}
++
++void LogSerializedName6(const char* stage,
++                        const AssociatedName6Probe& probe,
++                        const ports::NodeName* node,
++                        const char* detail) {
++  if (!probe.matched)
++    return;
++
++  FILE* file = fopen("Developer:Debug/mojo-core-name6-route.log", "a");
++  if (!file)
++    return;
++  fprintf(file,
++          "%s interface=%u port=%016llx:%016llx from=%016llx:%016llx "
++          "seq=%llu offset=%zu",
++          stage, probe.interface_id,
++          static_cast<unsigned long long>(probe.port.v1),
++          static_cast<unsigned long long>(probe.port.v2),
++          static_cast<unsigned long long>(probe.from_port.v1),
++          static_cast<unsigned long long>(probe.from_port.v2),
++          static_cast<unsigned long long>(probe.control_sequence_num),
++          probe.serialized_offset);
++  if (node) {
++    fprintf(file, " node=%016llx:%016llx",
++            static_cast<unsigned long long>(node->v1),
++            static_cast<unsigned long long>(node->v2));
++  }
++  if (detail)
++    fprintf(file, " %s", detail);
++  fputc('\n', file);
++  fclose(file);
++}
++
++void LogAssociatedName6(const char* stage,
++                        const ports::Event& event,
++                        const ports::NodeName* node,
++                        const char* detail) {
++  const AssociatedName6Probe probe = ProbeAssociatedName6(event);
++  if (!probe.matched)
++    return;
++
++  FILE* file = fopen("Developer:Debug/mojo-core-name6-route.log", "a");
++  if (!file)
++    return;
++
++  fprintf(file,
++          "%s event=%p interface=%u port=%016llx:%016llx "
++          "from=%016llx:%016llx seq=%llu",
++          stage, &event, probe.interface_id,
++          static_cast<unsigned long long>(event.port_name().v1),
++          static_cast<unsigned long long>(event.port_name().v2),
++          static_cast<unsigned long long>(event.from_port().v1),
++          static_cast<unsigned long long>(event.from_port().v2),
++          static_cast<unsigned long long>(event.control_sequence_num()));
++  if (node) {
++    fprintf(file, " node=%016llx:%016llx",
++            static_cast<unsigned long long>(node->v1),
++            static_cast<unsigned long long>(node->v2));
++  }
++  if (detail)
++    fprintf(file, " %s", detail);
++  fputc('\n', file);
++  fclose(file);
++}
++#endif
++
+ #if BUILDFLAG(IS_NACL)
+ template <typename T>
+ void GenerateRandomName(T* out) {
+@@ -296,7 +477,29 @@ void NodeController::ClosePort(const ports::PortRef& port) {
+ int NodeController::SendUserMessage(
+     const ports::PortRef& port,
+     std::unique_ptr<ports::UserMessageEvent> message) {
+-  return node_->SendUserMessage(port, std::move(message));
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          fopen("Developer:Debug/mojo-core-write-route.log", "a")) {
++    fprintf(file,
++            "controller-enter event=%p port=%016llx:%016llx node=%016llx:%016llx\n",
++            message.get(), static_cast<unsigned long long>(port.name().v1),
++            static_cast<unsigned long long>(port.name().v2),
++            static_cast<unsigned long long>(name_.v1),
++            static_cast<unsigned long long>(name_.v2));
++    fclose(file);
++  }
++  LogAssociatedName6("send-user-enter", *message, nullptr, nullptr);
++#endif
++  const int result = node_->SendUserMessage(port, std::move(message));
++#if BUILDFLAG(IS_AROS)
++  if (result != ports::OK) {
++    if (FILE* file = fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++      fprintf(file, "send-user-failed result=%d\n", result);
++      fclose(file);
++    }
++  }
++#endif
++  return result;
+ }
+ 
+ void NodeController::MergePortIntoInviter(const std::string& name,
+@@ -751,8 +954,24 @@ void NodeController::DropPeer(const ports::NodeName& node_name,
+ void NodeController::SendPeerEvent(const ports::NodeName& name,
+                                    ports::ScopedEvent event) {
+   Channel::MessagePtr event_message = SerializeEventMessage(std::move(event));
+-  if (!event_message)
++#if BUILDFLAG(IS_AROS)
++  const AssociatedName6Probe probe_name6 =
++      event_message ? ProbeSerializedName6(*event_message)
++                    : AssociatedName6Probe();
++  LogSerializedName6("send-peer-serialized", probe_name6, &name, nullptr);
++#endif
++  if (!event_message) {
++#if BUILDFLAG(IS_AROS)
++    if (probe_name6.matched) {
++      if (FILE* file =
++              fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++        fputs("send-peer-serialize-failed\n", file);
++        fclose(file);
++      }
++    }
++#endif
+     return;
++  }
+   scoped_refptr<NodeChannel> peer = GetPeerChannel(name);
+ #if BUILDFLAG(IS_WIN)
+   if (event_message->has_handles()) {
+@@ -773,7 +992,25 @@ void NodeController::SendPeerEvent(const ports::NodeName& name,
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+   if (peer) {
++#if BUILDFLAG(IS_AROS)
++    if (probe_name6.matched) {
++      if (FILE* file =
++              fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++        fprintf(file, "send-peer-channel peer=%p\n", peer.get());
++        fclose(file);
++      }
++    }
++#endif
+     peer->SendChannelMessage(std::move(event_message));
++#if BUILDFLAG(IS_AROS)
++    if (probe_name6.matched) {
++      if (FILE* file =
++              fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++        fprintf(file, "send-peer-channel-return peer=%p\n", peer.get());
++        fclose(file);
++      }
++    }
++#endif
+     return;
+   }
+ 
+@@ -782,6 +1019,15 @@ void NodeController::SendPeerEvent(const ports::NodeName& name,
+   // disconnected.
+   scoped_refptr<NodeChannel> broker = GetBrokerChannel();
+   if (!broker) {
++#if BUILDFLAG(IS_AROS)
++    if (probe_name6.matched) {
++      if (FILE* file =
++              fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++        fputs("send-peer-drop-no-broker\n", file);
++        fclose(file);
++      }
++    }
++#endif
+     DVLOG(1) << "Dropping message for unknown peer: " << name;
+     return;
+   }
+@@ -798,6 +1044,16 @@ void NodeController::SendPeerEvent(const ports::NodeName& name,
+       auto& queue = pending_peer_messages_[name];
+       needs_introduction = queue.empty();
+       queue.emplace(std::move(event_message));
++#if BUILDFLAG(IS_AROS)
++      if (probe_name6.matched) {
++        if (FILE* file =
++                fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++          fprintf(file, "send-peer-queued introduction=%d depth=%zu\n",
++                  needs_introduction, queue.size());
++          fclose(file);
++        }
++      }
++#endif
+     } else {
+       peer = it->second;
+     }
+@@ -848,6 +1104,10 @@ void NodeController::DropAllPeers() {
+ void NodeController::ForwardEvent(const ports::NodeName& node,
+                                   ports::ScopedEvent event) {
+   DCHECK(event);
++#if BUILDFLAG(IS_AROS)
++  LogAssociatedName6("forward-event", *event, &node,
++                     node == name_ ? "local" : "remote");
++#endif
+   if (node == name_)
+     node_->AcceptEvent(name_, std::move(event));
+   else
+@@ -1153,6 +1413,11 @@ void NodeController::OnEventMessage(const ports::NodeName& from_node,
+                                     Channel::MessagePtr channel_message) {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+ 
++#if BUILDFLAG(IS_AROS)
++  const AssociatedName6Probe serialized_probe =
++      ProbeSerializedName6(*channel_message);
++  LogSerializedName6("channel-received", serialized_probe, &from_node, nullptr);
++#endif
+   auto event = DeserializeEventMessage(from_node, std::move(channel_message));
+   if (!event) {
+     // We silently ignore unparseable events, as they may come from a process
+@@ -1161,7 +1426,19 @@ void NodeController::OnEventMessage(const ports::NodeName& from_node,
+     return;
+   }
+ 
+-  node_->AcceptEvent(from_node, std::move(event));
++#if BUILDFLAG(IS_AROS)
++  const bool probe_name6 = ProbeAssociatedName6(*event).matched;
++  LogAssociatedName6("event-received", *event, &from_node, nullptr);
++#endif
++  const int accept_result = node_->AcceptEvent(from_node, std::move(event));
++#if BUILDFLAG(IS_AROS)
++  if (probe_name6) {
++    if (FILE* file = fopen("Developer:Debug/mojo-core-name6-route.log", "a")) {
++      fprintf(file, "event-accepted result=%d\n", accept_result);
++      fclose(file);
++    }
++  }
++#endif
+ 
+   AttemptShutdownIfRequested();
+ }
+diff --git a/mojo/core/ports/node.cc b/mojo/core/ports/node.cc
+index 9d9f41cdaf..58e13f93a2 100644
+--- a/mojo/core/ports/node.cc
++++ b/mojo/core/ports/node.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "mojo/core/ports/node.h"
+ 
++#include <cstdio>
+ #include <string.h>
+ 
+ #include <algorithm>
+@@ -23,6 +24,8 @@
+ #include "mojo/core/ports/event.h"
+ #include "mojo/core/ports/node_delegate.h"
+ #include "mojo/core/ports/port_locker.h"
++#include "mojo/core/user_message_impl.h"
++#include "mojo/public/cpp/bindings/lib/message_internal.h"
+ #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
+ 
+ #if !BUILDFLAG(IS_NACL)
+@@ -99,6 +102,21 @@ bool CanAcceptMoreMessages(const Port* port) {
+   return true;
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++bool IsTargetWidgetHostMessage(const UserMessageEvent& event) {
++  if (!event.HasMessage())
++    return false;
++  const auto* message = event.GetMessage<UserMessageImpl>();
++  if (!message->IsSerialized() ||
++      message->user_payload_size() < sizeof(::mojo::internal::MessageHeader)) {
++    return false;
++  }
++  const auto* header = static_cast<const ::mojo::internal::MessageHeader*>(
++      message->user_payload());
++  return header->interface_id == 2147483662u && header->name == 6u;
++}
++#endif
++
+ void GenerateRandomPortName(PortName* name) {
+   *name = g_name_generator.Get().GenerateRandomPortName();
+ }
+@@ -663,6 +681,12 @@ int Node::LostConnectionToNode(const NodeName& node_name) {
+ int Node::OnUserMessage(const PortRef& port_ref,
+                         const NodeName& from_node,
+                         std::unique_ptr<UserMessageEvent> message) {
++#if BUILDFLAG(IS_AROS)
++  const bool trace_target = IsTargetWidgetHostMessage(*message);
++  const uint64_t incoming_sequence = message->sequence_num();
++  int observed_port_state = -1;
++  uint64_t observed_next_sequence = 0;
++#endif
+ #if DCHECK_IS_ON()
+   std::ostringstream ports_buf;
+   for (size_t i = 0; i < message->num_ports(); ++i) {
+@@ -703,6 +727,13 @@ int Node::OnUserMessage(const PortRef& port_ref,
+       message_accepted = true;
+       port->message_queue.AcceptMessage(std::move(message), &has_next_message);
+ 
++#if BUILDFLAG(IS_AROS)
++      if (trace_target) {
++        observed_port_state = static_cast<int>(port->state);
++        observed_next_sequence = port->message_queue.next_sequence_num();
++      }
++#endif
++
+       if (port->state == Port::kBuffering) {
+         has_next_message = false;
+       } else if (port->state == Port::kProxying) {
+@@ -712,6 +743,24 @@ int Node::OnUserMessage(const PortRef& port_ref,
+     }
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  if (trace_target) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-target-receive.log", "a")) {
++      std::fprintf(file,
++                   "node-queue accepted=%d has_next=%d state=%d incoming_seq=%llu next_seq=%llu port=%016llx:%016llx node=%016llx:%016llx\n",
++                   message_accepted, has_next_message, observed_port_state,
++                   static_cast<unsigned long long>(incoming_sequence),
++                   static_cast<unsigned long long>(observed_next_sequence),
++                   static_cast<unsigned long long>(port_ref.name().v1),
++                   static_cast<unsigned long long>(port_ref.name().v2),
++                   static_cast<unsigned long long>(name_.v1),
++                   static_cast<unsigned long long>(name_.v2));
++      std::fclose(file);
++    }
++  }
++#endif
++
+   if (should_forward_messages) {
+     int rv = ForwardUserMessagesFromProxy(port_ref);
+     if (rv != OK)
+@@ -1256,6 +1305,19 @@ int Node::SendUserMessageInternal(const PortRef& port_ref,
+   int rv = PrepareToForwardUserMessage(port_ref, Port::kReceiving,
+                                        false /* ignore_closed_peer */, m.get(),
+                                        &target_node);
++#if BUILDFLAG(IS_AROS)
++  if (FILE* file =
++          std::fopen("Developer:Debug/mojo-core-write-route.log", "a")) {
++    std::fprintf(file,
++                 "ports-prepared event=%p result=%d local=%d node=%016llx:%016llx target=%016llx:%016llx\n",
++                 m.get(), rv, target_node == name_,
++                 static_cast<unsigned long long>(name_.v1),
++                 static_cast<unsigned long long>(name_.v2),
++                 static_cast<unsigned long long>(target_node.v1),
++                 static_cast<unsigned long long>(target_node.v2));
++    std::fclose(file);
++  }
++#endif
+   if (rv != OK)
+     return rv;
+ 
+diff --git a/mojo/public/cpp/bindings/lib/connector.cc b/mojo/public/cpp/bindings/lib/connector.cc
+index 26e503bf18..0c764d19c6 100644
+--- a/mojo/public/cpp/bindings/lib/connector.cc
++++ b/mojo/public/cpp/bindings/lib/connector.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <stdint.h>
+ 
++#include <cstdio>
+ #include <memory>
+ 
+ #include "base/check_op.h"
+@@ -27,6 +28,7 @@
+ #include "base/threading/sequence_local_storage_slot.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/typed_macros.h"
++#include "build/build_config.h"
+ #include "mojo/public/c/system/quota.h"
+ #include "mojo/public/cpp/bindings/features.h"
+ #include "mojo/public/cpp/bindings/lib/may_auto_lock.h"
+@@ -62,6 +64,29 @@ bool EnableTaskPerMessage() {
+   return enable;
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++void LogArosConnectorReceive(uint64_t pipe,
++                             const char* stage,
++                             uint32_t interface_id,
++                             uint32_t name,
++                             const void* message,
++                             const void* receiver,
++                             int result) {
++  if (message && name != 6u)
++    return;
++
++  if (FILE* file =
++          std::fopen("Developer:Debug/mojo-target-connector.log", "a")) {
++    std::fprintf(file,
++                 "%s pipe=%llu message=%p interface=%u name=%u receiver=%p "
++                 "result=%d\n",
++                 stage, static_cast<unsigned long long>(pipe),
++                 message, interface_id, name, receiver, result);
++    std::fclose(file);
++  }
++}
++#endif
++
+ }  // namespace
+ 
+ // Used to efficiently maintain a doubly-linked list of all Connectors
+@@ -345,9 +370,38 @@ bool Connector::Accept(Message* message) {
+     }
+   }
+ 
+-  MojoResult rv =
+-      WriteMessageNew(message_pipe_.get(), message->TakeMojoMessage(),
+-                      MOJO_WRITE_MESSAGE_FLAG_NONE);
++  const bool trace_aros_widget_host =
++#if BUILDFLAG(IS_AROS)
++      message->interface_id() == 2147483662u && message->name() == 6u;
++#else
++      false;
++#endif
++  const bool was_serialized = message->is_serialized();
++  ScopedMessageHandle outgoing_message = message->TakeMojoMessage();
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-target-write.log", "a")) {
++      std::fprintf(file, "connector-enter pipe=%lu message=%p serialized=%d\n",
++                   message_pipe_.get().value(),
++                   reinterpret_cast<void*>(outgoing_message.get().value()),
++                   was_serialized);
++      std::fclose(file);
++    }
++  }
++#endif
++  MojoResult rv = WriteMessageNew(message_pipe_.get(),
++                                  std::move(outgoing_message),
++                                  MOJO_WRITE_MESSAGE_FLAG_NONE);
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-target-write.log", "a")) {
++      std::fprintf(file, "connector-leave result=%d\n", rv);
++      std::fclose(file);
++    }
++  }
++#endif
+ 
+   switch (rv) {
+     case MOJO_RESULT_OK:
+@@ -499,6 +553,10 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+ 
+   Message message = Message::CreateFromMessageHandle(&handle);
+   if (message.IsNull()) {
++#if BUILDFLAG(IS_AROS)
++    LogArosConnectorReceive(message_pipe_.get().value(), "create-null",
++                            0u, 0u, nullptr, incoming_receiver_, -1);
++#endif
+     // If the Message is null, there was a problem extracting handles from it.
+     NotifyBadMessage(
+         handle.get(),
+@@ -508,7 +566,18 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+     return false;
+   }
+ 
+-  if (!header_validator_.Accept(&message)) {
++#if BUILDFLAG(IS_AROS)
++  LogArosConnectorReceive(message_pipe_.get().value(), "create-ok",
++                          message.interface_id(), message.name(), &message,
++                          incoming_receiver_, 0);
++#endif
++  const bool header_valid = header_validator_.Accept(&message);
++#if BUILDFLAG(IS_AROS)
++  LogArosConnectorReceive(message_pipe_.get().value(), "header-validated",
++                          message.interface_id(), message.name(), &message,
++                          incoming_receiver_, header_valid);
++#endif
++  if (!header_valid) {
+     HandleError(/*force_pipe_reset=*/true, /*force_async_handler=*/false);
+     return false;
+   }
+@@ -550,8 +619,21 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+ 
+   if (connection_group_)
+     message.set_receiver_connection_group(&connection_group_);
++#if BUILDFLAG(IS_AROS)
++  const uint32_t aros_interface_id = message.interface_id();
++  const uint32_t aros_message_name = message.name();
++  LogArosConnectorReceive(message_pipe_.get().value(), "receiver-enter",
++                          aros_interface_id, aros_message_name, &message,
++                          incoming_receiver_,
++                          incoming_receiver_ != nullptr);
++#endif
+   bool receiver_result =
+       incoming_receiver_ && incoming_receiver_->Accept(&message);
++#if BUILDFLAG(IS_AROS)
++  LogArosConnectorReceive(message_pipe_.get().value(), "receiver-leave",
++                          aros_interface_id, aros_message_name, &message,
++                          incoming_receiver_, receiver_result);
++#endif
+   if (!weak_self)
+     return receiver_result;
+ 
+diff --git a/mojo/public/cpp/bindings/lib/interface_endpoint_client.cc b/mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
+index 75f98ab1a8..e9342cbafb 100644
+--- a/mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
++++ b/mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
+@@ -6,6 +6,8 @@
+ 
+ #include <stdint.h>
+ 
++#include <cstdio>
++#include <cstring>
+ #include <optional>
+ #include <string_view>
+ #include <tuple>
+@@ -20,12 +22,14 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/process/process_handle.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/bind_post_task.h"
+ #include "base/task/common/task_annotator.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
+ #include "base/threading/thread_local.h"
++#include "base/threading/platform_thread.h"
+ #include "base/trace_event/interned_args_helper.h"
+ #include "base/trace_event/typed_macros.h"
+ #include "build/build_config.h"
+@@ -584,6 +588,25 @@ bool InterfaceEndpointClient::SendMessage(Message* message,
+   DCHECK(!message->has_flag(Message::kFlagExpectsResponse));
+   DCHECK(!handle_.pending_association());
+ 
++#if BUILDFLAG(IS_AROS)
++  const bool trace_widget_host =
++      message->name() == 6 &&
++      std::strcmp(interface_name_, "blink.mojom.WidgetHost") == 0;
++  if (trace_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-widgethost-send.log", "a")) {
++      std::fprintf(file,
++                   "send-enter pid=%d thread=%lld interface=%u name=%u "
++                   "client=%p message=%p controller=%p\n",
++                   static_cast<int>(base::GetCurrentProcId()),
++                   static_cast<long long>(base::PlatformThread::CurrentId()),
++                   handle_.id(), message->name(), this, message,
++                   controller_);
++      std::fclose(file);
++    }
++  }
++#endif
++
+   // This has to been done even if connection error has occurred. For example,
+   // the message contains a pending associated request. The user may try to use
+   // the corresponding associated interface pointer after sending this message.
+@@ -591,18 +614,59 @@ bool InterfaceEndpointClient::SendMessage(Message* message,
+   // to work properly.
+   message->SerializeHandles(handle_.group_controller());
+ 
++#if BUILDFLAG(IS_AROS)
++  if (trace_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-widgethost-send.log", "a")) {
++      std::fprintf(file,
++                   "send-serialized pid=%d client=%p message=%p error=%d\n",
++                   static_cast<int>(base::GetCurrentProcId()), this, message,
++                   encountered_error_);
++      std::fclose(file);
++    }
++  }
++#endif
++
+   if (encountered_error_)
+     return false;
+ 
+   InitControllerIfNecessary();
+ 
++#if BUILDFLAG(IS_AROS)
++  if (trace_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-widgethost-send.log", "a")) {
++      std::fprintf(file,
++                   "send-controller pid=%d client=%p message=%p "
++                   "controller=%p\n",
++                   static_cast<int>(base::GetCurrentProcId()), this, message,
++                   controller_);
++      std::fclose(file);
++    }
++  }
++#endif
++
+ #if DCHECK_IS_ON()
+   // TODO(https://crbug.com/695289): Send |next_call_location_| in a control
+   // message before calling |SendMessage()| below.
+ #endif
+ 
+   message->set_heap_profiler_tag(interface_name_);
+-  if (!controller_->SendMessage(message))
++  const bool sent = controller_->SendMessage(message);
++#if BUILDFLAG(IS_AROS)
++  if (trace_widget_host) {
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-widgethost-send.log", "a")) {
++      std::fprintf(file,
++                   "send-leave pid=%d sent=%d client=%p message=%p "
++                   "controller=%p\n",
++                   static_cast<int>(base::GetCurrentProcId()), sent, this,
++                   message, controller_);
++      std::fclose(file);
++    }
++  }
++#endif
++  if (!sent)
+     return false;
+ 
+   if (!is_control_message && idle_handler_)
+diff --git a/mojo/public/cpp/bindings/lib/message_dispatcher.cc b/mojo/public/cpp/bindings/lib/message_dispatcher.cc
+index 0c942a84b1..a1f36b60ac 100644
+--- a/mojo/public/cpp/bindings/lib/message_dispatcher.cc
++++ b/mojo/public/cpp/bindings/lib/message_dispatcher.cc
+@@ -5,8 +5,10 @@
+ #include "mojo/public/cpp/bindings/message_dispatcher.h"
+ 
+ #include <algorithm>
++#include <cstdio>
+ 
+ #include "base/check.h"
++#include "build/build_config.h"
+ 
+ namespace mojo {
+ 
+@@ -31,21 +33,57 @@ void MessageDispatcher::SetSink(MessageReceiver* sink) {
+ }
+ 
+ bool MessageDispatcher::Accept(Message* message) {
++#if BUILDFLAG(IS_AROS)
++  const uint32_t aros_interface_id = message->interface_id();
++  const uint32_t aros_message_name = message->name();
++  const bool trace_aros_target =
++      aros_interface_id == 2147483662u && aros_message_name == 6u;
++  const auto log_aros_target = [&](const char* stage, int result) {
++    if (!trace_aros_target)
++      return;
++    if (FILE* file =
++            std::fopen("Developer:Debug/mojo-target-dispatcher.log", "a")) {
++      std::fprintf(file,
++                   "%s dispatcher=%p message=%p interface=%u name=%u "
++                   "validator=%p filter=%p sink=%p result=%d\n",
++                   stage, this, message, aros_interface_id, aros_message_name,
++                   validator_.get(), filter_.get(), sink_.get(), result);
++      std::fclose(file);
++    }
++  };
++  log_aros_target("dispatcher-enter", 0);
++#endif
+   internal::MessageDispatchContext dispatch_context(message);
+ 
+   DCHECK(sink_);
+   if (validator_) {
+-    if (!validator_->Accept(message))
++    const bool valid = validator_->Accept(message);
++#if BUILDFLAG(IS_AROS)
++    log_aros_target("dispatcher-validator", valid);
++#endif
++    if (!valid)
+       return false;
+   }
+ 
+-  if (!filter_)
+-    return sink_->Accept(message);
++  if (!filter_) {
++    const bool result = sink_->Accept(message);
++#if BUILDFLAG(IS_AROS)
++    log_aros_target("dispatcher-sink", result);
++#endif
++    return result;
++  }
+ 
+   base::WeakPtr<MessageDispatcher> weak_self = weak_factory_.GetWeakPtr();
+-  if (!filter_->WillDispatch(message))
++  const bool will_dispatch = filter_->WillDispatch(message);
++#if BUILDFLAG(IS_AROS)
++  log_aros_target("dispatcher-filter", will_dispatch);
++#endif
++  if (!will_dispatch)
+     return false;
+   bool result = sink_->Accept(message);
++#if BUILDFLAG(IS_AROS)
++  log_aros_target("dispatcher-filter-sink", result);
++#endif
+   if (!weak_self)
+     return result;
+   filter_->DidDispatchOrReject(message, result);
+diff --git a/mojo/public/cpp/bindings/lib/multiplex_router.cc b/mojo/public/cpp/bindings/lib/multiplex_router.cc
+index 90913f4b57..9004ce14c2 100644
+--- a/mojo/public/cpp/bindings/lib/multiplex_router.cc
++++ b/mojo/public/cpp/bindings/lib/multiplex_router.cc
+@@ -6,6 +6,8 @@
+ 
+ #include <stdint.h>
+ 
++#include <atomic>
++#include <cstdio>
+ #include <utility>
+ 
+ #include "base/containers/contains.h"
+@@ -15,10 +17,13 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
++#include "base/process/process_handle.h"
+ #include "base/strings/string_util.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/sequenced_task_runner.h"
++#include "base/threading/platform_thread.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
+ #include "mojo/public/cpp/bindings/interface_endpoint_controller.h"
+ #include "mojo/public/cpp/bindings/lib/may_auto_lock.h"
+@@ -27,6 +32,24 @@
+ namespace mojo {
+ namespace internal {
+ 
++#if BUILDFLAG(IS_AROS)
++void LogArosTargetRouter(const char* stage,
++                         InterfaceId id,
++                         const void* router,
++                         const void* endpoint,
++                         const void* client,
++                         long value1,
++                         long value2) {
++  if (FILE* file = std::fopen("Developer:Debug/mojo-target-router.log", "a")) {
++    std::fprintf(file,
++                 "%s interface=%u router=%p endpoint=%p client=%p "
++                 "value1=%ld value2=%ld\n",
++                 stage, id, router, endpoint, client, value1, value2);
++    std::fclose(file);
++  }
++}
++#endif
++
+ // InterfaceEndpoint stores the information of an interface endpoint registered
+ // with the router.
+ // No one other than the router's |endpoints_| and |tasks_| should hold refs to
+@@ -145,8 +168,40 @@ class MultiplexRouter::InterfaceEndpoint
+ 
+   bool SendMessage(Message* message) override {
+     DCHECK(task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++    const uint32_t message_name = message->name();
++    const bool trace_frame_sink = message_name == 6;
++    const void* const message_identity = message;
++    if (trace_frame_sink) {
++      if (FILE* file =
++              std::fopen("Developer:Debug/mojo-target-router.log", "a")) {
++        std::fprintf(file,
++                     "send-enter pid=%d thread=%lld interface=%u name=%u "
++                     "router=%p endpoint=%p message=%p\n",
++                     static_cast<int>(base::GetCurrentProcId()),
++                     static_cast<long long>(base::PlatformThread::CurrentId()),
++                     id_, message_name, router_.get(), this, message);
++        std::fclose(file);
++      }
++    }
++#endif
+     message->set_interface_id(id_);
+-    return router_->connector_.Accept(message);
++    const bool accepted = router_->connector_.Accept(message);
++#if BUILDFLAG(IS_AROS)
++    if (trace_frame_sink) {
++      if (FILE* file =
++              std::fopen("Developer:Debug/mojo-target-router.log", "a")) {
++        std::fprintf(file,
++                     "send-leave pid=%d interface=%u name=%u router=%p "
++                     "endpoint=%p message=%p accepted=%d\n",
++                     static_cast<int>(base::GetCurrentProcId()), id_,
++                     message_name, router_.get(), this, message_identity,
++                     accepted);
++        std::fclose(file);
++      }
++    }
++#endif
++    return accepted;
+   }
+ 
+   void AllowWokenUpBySyncWatchOnSameThread() override {
+@@ -675,6 +730,29 @@ bool MultiplexRouter::CanUnblockExclusiveSameThreadSyncWait(
+ bool MultiplexRouter::Accept(Message* message) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
++#if BUILDFLAG(IS_AROS)
++  const bool trace_aros_target =
++      message->interface_id() == 2147483662u && message->name() == 6u;
++  if (trace_aros_target) {
++    LogArosTargetRouter("accept-enter", message->interface_id(), this, nullptr,
++                        nullptr, message->payload_num_interface_ids(), 0);
++  }
++#endif
++
++#if BUILDFLAG(IS_AROS)
++  if (message->name() == 6 && message->interface_id() != kPrimaryInterfaceId) {
++    static std::atomic_uint trace_count{0};
++    if (trace_count.fetch_add(1, std::memory_order_relaxed) < 128) {
++      if (FILE* file =
++              std::fopen("Developer:Debug/mojo-name6-receive.log", "a")) {
++        std::fprintf(file, "accept interface=%u name=%u router=%p\n",
++                     message->interface_id(), message->name(), this);
++        std::fclose(file);
++      }
++    }
++  }
++#endif
++
+   // Insert endpoints for the payload interface IDs as soon as the message
+   // arrives, instead of waiting till the message is dispatched. Consider the
+   // following sequence:
+@@ -685,7 +763,15 @@ bool MultiplexRouter::Accept(Message* message) {
+   // If we don't insert endpoint for interface ID x, when trying to dispatch
+   // msg2 we don't know whether it is an unexpected message or it is just
+   // because the message containing x hasn't been dispatched.
+-  if (!InsertEndpointsForMessage(*message))
++  const bool endpoints_inserted = InsertEndpointsForMessage(*message);
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_target) {
++    LogArosTargetRouter("payload-endpoints", message->interface_id(), this,
++                        nullptr, nullptr, endpoints_inserted,
++                        message->payload_num_interface_ids());
++  }
++#endif
++  if (!endpoints_inserted)
+     return false;
+ 
+   scoped_refptr<MultiplexRouter> protector(this);
+@@ -704,11 +790,25 @@ bool MultiplexRouter::Accept(Message* message) {
+   } else {
+     can_process = tasks_.empty() || CanUnblockExternalSyncWait(*message);
+   }
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_target) {
++    LogArosTargetRouter("accept-routing", message->interface_id(), this,
++                        FindEndpoint(message->interface_id()), nullptr,
++                        can_process, tasks_.size());
++  }
++#endif
+   MessageWrapper message_wrapper(this, std::move(*message));
+   const bool processed =
+       can_process &&
+       ProcessIncomingMessage(&message_wrapper, client_call_behavior,
+                              connector_.task_runner());
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_target) {
++    LogArosTargetRouter("accept-processed", 2147483662u, this,
++                        FindEndpoint(2147483662u), nullptr, processed,
++                        tasks_.size());
++  }
++#endif
+ 
+   if (exclusive_sync_wait_ && can_process) {
+     DCHECK(processed);
+@@ -1049,11 +1149,29 @@ bool MultiplexRouter::ProcessIncomingMessage(
+   InterfaceId id = message->interface_id();
+   DCHECK(IsValidInterfaceId(id));
+ 
++#if BUILDFLAG(IS_AROS)
++  const bool trace_aros_target = id == 2147483662u && message->name() == 6u;
++#endif
++
+   InterfaceEndpoint* endpoint = FindEndpoint(id);
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_target) {
++    LogArosTargetRouter("endpoint-lookup", id, this, endpoint,
++                        endpoint ? endpoint->client() : nullptr,
++                        endpoint != nullptr,
++                        endpoint ? endpoint->closed() : -1);
++  }
++#endif
+   if (!endpoint || endpoint->closed())
+     return true;
+ 
+   if (!endpoint->client()) {
++#if BUILDFLAG(IS_AROS)
++    if (trace_aros_target) {
++      LogArosTargetRouter("endpoint-no-client", id, this, endpoint, nullptr, 0,
++                          0);
++    }
++#endif
+     // We need to wait until a client is attached in order to dispatch further
+     // messages.
+     return false;
+@@ -1075,6 +1193,13 @@ bool MultiplexRouter::ProcessIncomingMessage(
+   }
+ 
+   if (!can_direct_call) {
++#if BUILDFLAG(IS_AROS)
++    if (trace_aros_target) {
++      LogArosTargetRouter("endpoint-post-task", id, this, endpoint,
++                          endpoint->client(), client_call_behavior,
++                          endpoint->task_runner() == current_task_runner);
++    }
++#endif
+     MaybePostToProcessTasks(endpoint->task_runner());
+     return false;
+   }
+@@ -1095,6 +1220,12 @@ bool MultiplexRouter::ProcessIncomingMessage(
+     result =
+         !tmp_message.IsNull() && client->HandleIncomingMessage(&tmp_message);
+   }
++#if BUILDFLAG(IS_AROS)
++  if (trace_aros_target) {
++    LogArosTargetRouter("endpoint-client-result", id, this, endpoint, client,
++                        result, 0);
++  }
++#endif
+   if (!result)
+     RaiseErrorInNonTestingMode();
+ 
+diff --git a/mojo/public/cpp/platform/aros_channel.cc b/mojo/public/cpp/platform/aros_channel.cc
+index 52ff48b094..bd9e813f4c 100644
+--- a/mojo/public/cpp/platform/aros_channel.cc
++++ b/mojo/public/cpp/platform/aros_channel.cc
+@@ -244,12 +244,14 @@ void ReleaseArosChannelHandle(ArosChannelHandle handle) {
+ 
+ ArosChannelRetirementObserver::ArosChannelRetirementObserver() = default;
+ 
+-ArosChannelRetirementObserver::ArosChannelRetirementObserver(void* state)
+-    : state_(state) {}
++ArosChannelRetirementObserver::ArosChannelRetirementObserver(void* state,
++                                                             uint8_t side)
++    : state_(state), side_(side) {}
+ 
+ ArosChannelRetirementObserver::ArosChannelRetirementObserver(
+     ArosChannelRetirementObserver&& other)
+-    : state_(std::exchange(other.state_, nullptr)) {}
++    : state_(std::exchange(other.state_, nullptr)),
++      side_(std::exchange(other.side_, 0)) {}
+ 
+ ArosChannelRetirementObserver& ArosChannelRetirementObserver::operator=(
+     ArosChannelRetirementObserver&& other) {
+@@ -258,6 +260,7 @@ ArosChannelRetirementObserver& ArosChannelRetirementObserver::operator=(
+   if (state_)
+     ReleaseStateReference(static_cast<ArosChannelState*>(state_));
+   state_ = std::exchange(other.state_, nullptr);
++  side_ = std::exchange(other.side_, 0);
+   return *this;
+ }
+ 
+@@ -272,10 +275,8 @@ bool ArosChannelRetirementObserver::IsRetired() const {
+   auto* state = static_cast<ArosChannelState*>(state_);
+   Lock(state);
+   const bool retired =
+-      state->side_references[0].load(std::memory_order_relaxed) == 0 &&
+-      state->side_references[1].load(std::memory_order_relaxed) == 0 &&
+-      !state->reader_active[0] && !state->reader_active[1] &&
+-      !state->ports[0] && !state->ports[1];
++      state->side_references[side_].load(std::memory_order_relaxed) == 0 &&
++      !state->reader_active[side_] && !state->ports[side_];
+   Unlock(state);
+   return retired;
+ }
+@@ -286,7 +287,7 @@ ArosChannelRetirementObserver CreateArosChannelRetirementObserver(
+     return {};
+   ArosChannelState* state = StateFor(handle);
+   state->references.fetch_add(1, std::memory_order_relaxed);
+-  return ArosChannelRetirementObserver(state);
++  return ArosChannelRetirementObserver(state, handle.side ^ 1);
+ }
+ 
+ MsgPort* StartReceivingArosChannel(ArosChannelHandle handle) {
+@@ -322,6 +323,7 @@ void StopReceivingArosChannel(ArosChannelHandle handle, MsgPort* port) {
+   Lock(state);
+   CHECK_EQ(state->ports[handle.side], port);
+   state->ports[handle.side] = nullptr;
++  state->reader_active[handle.side] = false;
+   Unlock(state);
+ 
+   while (auto* message = GetMsg(port))
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+index 02e3b72fe6..795a0fc4f4 100644
+--- a/mojo/public/cpp/platform/aros_channel.h
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -59,9 +59,10 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) ArosChannelRetirementObserver {
+   bool IsRetired() const;
+ 
+  private:
+-  explicit ArosChannelRetirementObserver(void* state);
++  explicit ArosChannelRetirementObserver(void* state, uint8_t side);
+ 
+   void* state_ = nullptr;
++  uint8_t side_ = 0;
+ 
+   friend ArosChannelRetirementObserver
+   CreateArosChannelRetirementObserver(ArosChannelHandle handle);
+diff --git a/third_party/abseil-cpp/absl/base/internal/raw_logging.cc b/third_party/abseil-cpp/absl/base/internal/raw_logging.cc
+index d32b40a8bb..63dfbe5d91 100644
+--- a/third_party/abseil-cpp/absl/base/internal/raw_logging.cc
++++ b/third_party/abseil-cpp/absl/base/internal/raw_logging.cc
+@@ -21,6 +21,10 @@
+ #include <cstring>
+ #include <string>
+ 
++#if defined(__AROS__)
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/console.h>
+ #endif
+@@ -74,6 +78,14 @@
+ #undef ABSL_HAVE_RAW_IO
+ #endif
+ 
++#if defined(__AROS__)
++// AROS exposes a direct raw-console writer through debug.resource.  It does
++// not depend on a task-local stderr FILE, which is essential when RawLog is
++// reporting an allocator or thread-bootstrap failure.
++#define ABSL_HAVE_AROS_DEBUG_OUTPUT 1
++#define ABSL_LOW_LEVEL_WRITE_SUPPORTED 1
++#endif
++
+ namespace absl {
+ ABSL_NAMESPACE_BEGIN
+ namespace raw_log_internal {
+@@ -238,6 +250,18 @@ void AsyncSignalSafeWriteError(const char* s, size_t len) {
+   write(STDERR_FILENO, s, len);
+ #elif defined(ABSL_HAVE_RAW_IO)
+   _write(/* stderr */ 2, s, static_cast<unsigned>(len));
++#elif defined(ABSL_HAVE_AROS_DEBUG_OUTPUT)
++  // KPutStr accepts a NUL-terminated string.  Keep this public raw-write API
++  // span-safe without allocating or opening a library in a fatal path.
++  char line[128];
++  while (len) {
++    const size_t chunk = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
++    memcpy(line, s, chunk);
++    line[chunk] = '\0';
++    ArosKPutStr(line);
++    s += chunk;
++    len -= chunk;
++  }
+ #else
+   // stderr logging unsupported on this platform
+   (void)s;

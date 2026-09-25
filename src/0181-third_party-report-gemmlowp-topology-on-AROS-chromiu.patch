@@ -1,0 +1,101 @@
+From 1a3be6666a70848f8a26832df34bda2857555a19 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:42:27 -0500
+Subject: [PATCH 181/638] third_party: report gemmlowp topology on AROS
+ [chromium] [aros]
+
+Statement:
+The Chrome TFLite graph needs gemmlowp hardware concurrency, while AROS exposes configured SMP topology through kernel.resource rather than Unix sysconf constants.
+
+Decision:
+Add an AROS-only private translation unit for KrnGetCPUCount and advance gemmlowp to call it. Keep Exec inline macros out of public machine-learning headers.
+
+Evidence:
+obj/third_party/gemmlowp/gemmlowp/aros_cpu_count.o and the previously failing TFLite add.o both compile. The bridge falls back to one CPU when kernel.resource is unavailable.
+
+Chain:
+
+ACD-openmp-as-system-library
+---
+ third_party/gemmlowp/BUILD.gn          |  4 ++++
+ third_party/gemmlowp/aros_cpu_count.cc | 26 ++++++++++++++++++++++++++
+ third_party/gemmlowp/aros_cpu_count.h  | 14 ++++++++++++++
+ third_party/gemmlowp/src               |  2 +-
+ 4 files changed, 45 insertions(+), 1 deletion(-)
+ create mode 100644 third_party/gemmlowp/aros_cpu_count.cc
+ create mode 100644 third_party/gemmlowp/aros_cpu_count.h
+
+diff --git a/third_party/gemmlowp/BUILD.gn b/third_party/gemmlowp/BUILD.gn
+index 99470974ae..e1ded74049 100644
+--- a/third_party/gemmlowp/BUILD.gn
++++ b/third_party/gemmlowp/BUILD.gn
+@@ -11,6 +11,10 @@ config("gemmlowp_include") {
+   }
+ }
+ source_set("gemmlowp") {
++  if (is_aros) {
++    sources = [ "aros_cpu_count.cc" ]
++  }
++
+   public = [
+     "src/fixedpoint/fixedpoint.h",
+     "src/public/bit_depth.h",
+diff --git a/third_party/gemmlowp/aros_cpu_count.cc b/third_party/gemmlowp/aros_cpu_count.cc
+new file mode 100644
+index 0000000000..d7f1624bd3
+--- /dev/null
++++ b/third_party/gemmlowp/aros_cpu_count.cc
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/gemmlowp/aros_cpu_count.h"
++
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <exec/types.h>
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#pragma pop_macro("SCHED_RR")
++
++namespace gemmlowp {
++
++int GetArosCpuCount() {
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase) {
++    return 1;
++  }
++
++  const int count = static_cast<int>(KrnGetCPUCount());
++  return count > 0 ? count : 1;
++}
++
++}  // namespace gemmlowp
+diff --git a/third_party/gemmlowp/aros_cpu_count.h b/third_party/gemmlowp/aros_cpu_count.h
+new file mode 100644
+index 0000000000..f65dab6734
+--- /dev/null
++++ b/third_party/gemmlowp/aros_cpu_count.h
+@@ -0,0 +1,14 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_GEMMLOWP_AROS_CPU_COUNT_H_
++#define THIRD_PARTY_GEMMLOWP_AROS_CPU_COUNT_H_
++
++namespace gemmlowp {
++
++int GetArosCpuCount();
++
++}  // namespace gemmlowp
++
++#endif  // THIRD_PARTY_GEMMLOWP_AROS_CPU_COUNT_H_
+diff --git a/third_party/gemmlowp/src b/third_party/gemmlowp/src
+index 13d57703ab..4d7315d147 160000
+--- a/third_party/gemmlowp/src
++++ b/third_party/gemmlowp/src
+@@ -1 +1 @@
+-Subproject commit 13d57703abca3005d97b19df1f2db731607a7dc2
++Subproject commit 4d7315d147ed264695a2af3f87d91cd382476d11

@@ -1,0 +1,74 @@
+From 2aa4c06a0787385840f655632d8ee5af91c49d09 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:49:25 -0500
+Subject: [PATCH 177/638] base: allocate dispatcher TLS through Exec on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: validated
+
+ROOT_CAUSE: Chromium's allocator-dispatch TLS chunks used KrnAllocPages even though they need only zeroed raw storage. Hosted AROS has kernel.resource but no page-backed anonymous allocator yet, so the first native window run aborted at tls.h:378 before Ozone initialization.
+
+FIX_REASON: Use Exec AllocMem/FreeMem for this recursion-independent raw TLS store. This preserves the allocator-hook boundary without coupling TLS startup to mmap-style reservation or future MMU backing.
+
+SCOPE: base allocator dispatcher TLS AROS backend only.
+
+VALIDATION: out/aros-windowed obj/base/base/tls.o compiles; hosted failure captured in content-shell-post-load.png and /tmp/aros-hosted-chromium-debug.log after successful AROSTCP startup and 651039-section load.
+
+RISK: low; normal TLS chunks are process-lifetime storage and the testing free path now matches the allocation owner.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ base/allocator/dispatcher/tls.cc | 20 +++++++-------------
+ 1 file changed, 7 insertions(+), 13 deletions(-)
+
+diff --git a/base/allocator/dispatcher/tls.cc b/base/allocator/dispatcher/tls.cc
+index cd7800f639..bd1ba3ed34 100644
+--- a/base/allocator/dispatcher/tls.cc
++++ b/base/allocator/dispatcher/tls.cc
+@@ -13,13 +13,8 @@
+ #include "build/build_config.h"
+ 
+ #if BUILDFLAG(IS_AROS)
+-#pragma push_macro("SCHED_RR")
+-#undef SCHED_RR
+-#include <aros/kernel.h>
+-#pragma pop_macro("SCHED_RR")
+ #include <exec/memory.h>
+ #include <proto/exec.h>
+-#include <proto/kernel.h>
+ #else
+ #include <sys/mman.h>
+ #endif
+@@ -58,11 +53,11 @@ void Swap(std::atomic_bool& lh_op, std::atomic_bool& rh_op) {
+ 
+ void* MMapAllocator::AllocateMemory(size_t size_in_bytes) {
+ #if BUILDFLAG(IS_AROS)
+-  APTR KernelBase = OpenResource("kernel.resource");
+-  if (!KernelBase) {
+-    return nullptr;
+-  }
+-  return KrnAllocPages(nullptr, size_in_bytes, MEMF_PUBLIC | MEMF_CLEAR);
++  // This allocator must not recurse through Chromium's allocation hooks, but
++  // its TLS chunks do not need mmap-style address reservation or protection.
++  // Exec's raw allocator provides the required zeroed storage even before the
++  // kernel page allocator has MMU-backed anonymous pages available.
++  return AllocMem(size_in_bytes, MEMF_PUBLIC | MEMF_CLEAR);
+ #else
+   void* const mmap_res = mmap(nullptr, size_in_bytes, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+@@ -85,11 +80,10 @@ void* MMapAllocator::AllocateMemory(size_t size_in_bytes) {
+ bool MMapAllocator::FreeMemoryForTesting(void* pointer_to_allocated,
+                                          size_t size_in_bytes) {
+ #if BUILDFLAG(IS_AROS)
+-  APTR KernelBase = OpenResource("kernel.resource");
+-  if (!KernelBase) {
++  if (!pointer_to_allocated) {
+     return false;
+   }
+-  KrnFreePages(pointer_to_allocated, size_in_bytes);
++  FreeMem(pointer_to_allocated, size_in_bytes);
+   return true;
+ #else
+   auto const munmap_res = munmap(pointer_to_allocated, size_in_bytes);

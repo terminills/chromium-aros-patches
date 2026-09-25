@@ -1,0 +1,270 @@
+From aac07ba8b5c5f7cb08c6954f8b849dc6bab16033 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 06:06:55 -0500
+Subject: [PATCH 402/638] [AROS] Trace child raster activation readiness
+
+Runtime44 proves the renderer child has a valid pending impl tree but never activates it. Add bounded per-instance telemetry for post-commit painting, tile assignment and task graph scheduling, task-completion callbacks, and ready-to-activate forwarding.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+AI_OBSERVED: Child FinishCommit succeeds with commit_to_active=0, but ActivateSyncTree, sink surface assignment, and submission remain absent.
+
+AI_FIX_REASON: Distinguish missing CommitComplete, tile graph scheduling, raster worker completion, and scheduler readiness without forcing activation.
+
+AI_SCOPE: LayerTreeHostImpl and TileManager cc only.
+
+AI_VALIDATION: git diff --check; hosted build/runtime pending by design.
+
+AI_DECISION_CHAIN: runtime44 pending tree valid -> paint/PrepareTiles -> raster callbacks -> NotifyReadyToActivate -> scheduler activation.
+---
+ cc/tiles/tile_manager.cc         | 58 ++++++++++++++++++++++++
+ cc/trees/layer_tree_host_impl.cc | 75 +++++++++++++++++++++++++++++++-
+ 2 files changed, 131 insertions(+), 2 deletions(-)
+
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index af19f6cf71..a35b4771ba 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -30,6 +30,7 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/memory_dump_manager.h"
+ #include "base/trace_event/traced_value.h"
++#include "build/build_config.h"
+ #include "cc/base/devtools_instrumentation.h"
+ #include "cc/base/features.h"
+ #include "cc/base/histograms.h"
+@@ -645,6 +646,13 @@ void TileManager::DidFinishRunningTileTasksRequiredForActivation() {
+   // TODO(vmpstr): Temporary check to debug crbug.com/642927.
+   CHECK(tile_task_manager_);
+   signals_.activate_tile_tasks_completed = true;
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] activation-tasks-complete manager=" << this
++               << " prepare_seq=" << prepare_tiles_count_
++               << " has_pending_tree=" << client_->HasPendingTree();
++  }
++#endif
+   signals_check_notifier_.Schedule();
+ }
+ 
+@@ -656,6 +664,12 @@ void TileManager::DidFinishRunningTileTasksRequiredForDraw() {
+   // TODO(vmpstr): Temporary check to debug crbug.com/642927.
+   CHECK(tile_task_manager_);
+   signals_.draw_tile_tasks_completed = true;
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] draw-tasks-complete manager=" << this
++               << " prepare_seq=" << prepare_tiles_count_;
++  }
++#endif
+   signals_check_notifier_.Schedule();
+ }
+ 
+@@ -667,6 +681,17 @@ void TileManager::DidFinishRunningAllTileTasks(bool has_pending_queries) {
+ 
+   has_scheduled_tile_tasks_ = false;
+   has_pending_queries_ = has_pending_queries;
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] all-tasks-complete manager=" << this
++               << " prepare_seq=" << prepare_tiles_count_
++               << " pending_queries=" << has_pending_queries
++               << " all_raster_scheduled="
++               << all_tiles_that_need_to_be_rasterized_are_scheduled_
++               << " resource_usage_high="
++               << resource_pool_->ResourceUsageTooHigh();
++  }
++#endif
+ 
+   if (all_tiles_that_need_to_be_rasterized_are_scheduled_ &&
+       !resource_pool_->ResourceUsageTooHigh()) {
+@@ -698,6 +723,15 @@ bool TileManager::PrepareTiles(
+                          TRACE_EVENT_SCOPE_THREAD);
+     return false;
+   }
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] prepare-begin manager=" << this
++               << " seq=" << prepare_tiles_count_
++               << " renderer_process=" << running_on_renderer_process_
++               << " has_pending_tree=" << client_->HasPendingTree()
++               << " tracked_tiles=" << tiles_.size();
++  }
++#endif
+ 
+   signals_ = Signals();
+   global_state_ = state;
+@@ -719,6 +753,17 @@ bool TileManager::PrepareTiles(
+     FreeResourcesForOccludedTiles();
+ 
+   PrioritizedWorkToSchedule prioritized_work = AssignGpuMemoryToTiles();
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] prepare-assigned manager=" << this
++               << " seq=" << prepare_tiles_count_
++               << " raster_tiles=" << prioritized_work.tiles_to_raster.size()
++               << " image_tiles="
++               << prioritized_work.tiles_to_process_for_images.size()
++               << " extra_images="
++               << prioritized_work.extra_prepaint_images.size();
++  }
++#endif
+ 
+   // Inform the client that will likely require a draw if the highest priority
+   // tile that will be rasterized is required for draw.
+@@ -1346,6 +1391,19 @@ void TileManager::ScheduleTasks(PrioritizedWorkToSchedule work_to_schedule) {
+   InsertNodeForTask(&graph_, all_done_task.get(),
+                     TASK_CATEGORY_NONCONCURRENT_FOREGROUND,
+                     kAllDoneTaskPriority, all_count);
++#if BUILDFLAG(IS_AROS)
++  if (prepare_tiles_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] schedule manager=" << this
++               << " prepare_seq=" << prepare_tiles_count_
++               << " raster_tiles="
++               << tiles_that_need_to_be_rasterized.size()
++               << " required_activate=" << required_for_activate_count
++               << " required_draw=" << required_for_draw_count
++               << " all=" << all_count << " graph_nodes="
++               << graph_.nodes.size() << " graph_edges="
++               << graph_.edges.size();
++  }
++#endif
+ 
+   // Schedule running of |raster_queue_|. This replaces any previously
+   // scheduled tasks and effectively cancels all tasks not present
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index 4bc65a1a14..b96f70fc67 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -744,6 +744,15 @@ void LayerTreeHostImpl::RecordGpuRasterizationHistogram() {
+ 
+ void LayerTreeHostImpl::CommitComplete() {
+   TRACE_EVENT0("cc", "LayerTreeHostImpl::CommitComplete");
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] commit-complete-begin host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " commit_to_active=" << CommitToActiveTree()
++               << " pending_tree=" << pending_tree_.get()
++               << " pending_fully_painted=" << pending_tree_fully_painted_;
++  }
++#endif
+ 
+   if (input_delegate_)
+     input_delegate_->DidCommit();
+@@ -776,6 +785,15 @@ void LayerTreeHostImpl::CommitComplete() {
+     AnimatePendingTreeAfterCommit();
+ 
+   UpdateSyncTreeAfterCommitOrImplSideInvalidation();
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] commit-complete-after-update host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " pending_tree=" << pending_tree_.get()
++               << " pending_fully_painted=" << pending_tree_fully_painted_
++               << " ready_to_activate=" << IsReadyToActivate();
++  }
++#endif
+   micro_benchmark_controller_.DidCompleteCommit();
+ 
+   if (mutator_host_->CurrentFrameHadRAF())
+@@ -969,11 +987,26 @@ void LayerTreeHostImpl::NotifyPendingTreeFullyPainted() {
+   // ongoing dispatch.
+   DCHECK(!paint_worklet_painter_ ||
+          !paint_worklet_painter_->HasOngoingDispatch());
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] pending-painted host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " pending_tree=" << pending_tree_.get()
++               << " tile_priorities_dirty=" << tile_priorities_dirty_;
++  }
++#endif
+ 
+   // Start working on newly created tiles immediately if needed.
+   // TODO(vmpstr): Investigate always having PrepareTiles issue
+   // NotifyReadyToActivate, instead of handling it here.
+   bool did_prepare_tiles = PrepareTiles();
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] pending-painted-prepare host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " did_prepare_tiles=" << did_prepare_tiles;
++  }
++#endif
+   if (!did_prepare_tiles) {
+     NotifyReadyToActivate();
+ 
+@@ -1083,14 +1116,30 @@ void LayerTreeHostImpl::AnimateInternal() {
+ }
+ 
+ bool LayerTreeHostImpl::PrepareTiles() {
+-  if (!tile_priorities_dirty_)
++  if (!tile_priorities_dirty_) {
++#if BUILDFLAG(IS_AROS)
++    if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++      LOG(ERROR) << "[AROS_TILE] host-prepare-skip host_impl=" << this
++                 << " seq=" << aros_commit_probe_count_
++                 << " tile_priorities_dirty=0";
++    }
++#endif
+     return false;
++  }
+ 
+   client_->WillPrepareTiles();
+   bool did_prepare_tiles = tile_manager_.PrepareTiles(global_tile_state_);
+   if (did_prepare_tiles)
+     tile_priorities_dirty_ = false;
+   client_->DidPrepareTiles();
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] host-prepare-result host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " did_prepare_tiles=" << did_prepare_tiles
++               << " tile_priorities_dirty=" << tile_priorities_dirty_;
++  }
++#endif
+   return did_prepare_tiles;
+ }
+ 
+@@ -2038,8 +2087,23 @@ void LayerTreeHostImpl::NotifyReadyToActivate() {
+   // scheduler we are ready to activate in that case, as if we do it will
+   // immediately activate once we call NotifyPaintWorkletStateChange, rather
+   // than wait for the TileManager to actually raster the content!
+-  if (!pending_tree_fully_painted_)
++  if (!pending_tree_fully_painted_) {
++#if BUILDFLAG(IS_AROS)
++    if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++      LOG(ERROR) << "[AROS_TILE] ready-to-activate-blocked host_impl=" << this
++                 << " seq=" << aros_commit_probe_count_
++                 << " pending_fully_painted=0";
++    }
++#endif
+     return;
++  }
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] ready-to-activate-forward host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " pending_tree=" << pending_tree_.get();
++  }
++#endif
+   client_->NotifyReadyToActivate();
+ }
+ 
+@@ -2053,6 +2117,13 @@ void LayerTreeHostImpl::NotifyReadyToDraw() {
+ }
+ 
+ void LayerTreeHostImpl::NotifyAllTileTasksCompleted() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_TILE] host-all-tasks-complete host_impl=" << this
++               << " seq=" << aros_commit_probe_count_
++               << " pending_tree=" << pending_tree_.get();
++  }
++#endif
+   // The tile tasks started by the most recent call to PrepareTiles have
+   // completed. Now is a good time to free resources if necessary.
+   if (global_tile_state_.hard_memory_limit_in_bytes == 0) {

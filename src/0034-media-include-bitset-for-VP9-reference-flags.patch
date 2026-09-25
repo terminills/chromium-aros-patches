@@ -1,0 +1,37 @@
+From 675ff0993475897e9a46d557b6672a67a96a438a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:21:43 -0500
+Subject: [PATCH 034/638] media: include bitset for VP9 reference flags
+
+AI_PHASE: chromium-aros-phase3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: The temporal scalability parser used std::bitset while relying on a transitive libc++ declaration absent from the AROS GCC C++20 graph.
+
+FIX_REASON: Include the owning C++ standard header in the translation unit.
+
+SCOPE: media/filters/temporal_scalability_id_extractor.cc
+
+VALIDATION: Ninja rebuilt temporal_scalability_id_extractor.o successfully for //build/toolchain/aros:x64.
+
+RISK: minimal; declaration-only include.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ media/filters/temporal_scalability_id_extractor.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/media/filters/temporal_scalability_id_extractor.cc b/media/filters/temporal_scalability_id_extractor.cc
+index 8d27b8b3b7..67dc762b6d 100644
+--- a/media/filters/temporal_scalability_id_extractor.cc
++++ b/media/filters/temporal_scalability_id_extractor.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "media/filters/temporal_scalability_id_extractor.h"
+ 
++#include <bitset>
++
+ namespace media {
+ 
+ TemporalScalabilityIdExtractor::TemporalScalabilityIdExtractor(VideoCodec codec,

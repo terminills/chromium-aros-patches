@@ -1,0 +1,206 @@
+From 6bfd640e7c8ac959f5c92c70e110c72cd0e7f21e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 05:37:33 -0500
+Subject: [PATCH 400/638] [AROS] Trace child surface identity propagation
+
+Runtime 42 proves the regular child CompositorFrameSink route is bound, connected, and bidirectional, but the renderer receives begin frames without ever assigning or submitting a LocalSurfaceId.
+
+Add bounded AROS-only telemetry at browser VisualProperties generation and send, renderer WidgetBase receive and apply, LayerTreeHost parent-ID acceptance, and LayerTreeHostImpl activation. This separates an absent browser allocation from a lost Mojo update or a compositor commit/activation failure.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+AI_OBSERVED: The child sink receives 16 begin frames and returns 16 no-frame acknowledgements, with zero SetLocalSurfaceId calls or submissions.
+
+AI_FIX_REASON: Observe the complete LocalSurfaceId handoff before changing visual-property or compositor semantics.
+
+AI_SCOPE: render_widget_host_impl.cc, widget_base.cc, layer_tree_host.cc, and layer_tree_host_impl.cc only.
+
+AI_VALIDATION: git diff --check; build and hosted runtime pending by design.
+
+AI_DECISION_CHAIN: runtime42 working sink route -> browser visual properties -> renderer widget application -> compositor tree activation.
+---
+ cc/trees/layer_tree_host.cc                   | 13 +++++
+ cc/trees/layer_tree_host_impl.cc              | 13 +++++
+ .../renderer_host/render_widget_host_impl.cc  | 47 +++++++++++++++++++
+ .../renderer/platform/widget/widget_base.cc   | 32 +++++++++++++
+ 4 files changed, 105 insertions(+)
+
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index ecd8ee4fcf..ad99c56fa5 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1568,6 +1568,19 @@ void LayerTreeHost::SetExternalPageScaleFactor(
+ 
+ void LayerTreeHost::SetLocalSurfaceIdFromParent(
+     const viz::LocalSurfaceId& local_surface_id_from_parent) {
++#if BUILDFLAG(IS_AROS)
++  static int aros_parent_surface_count = 0;
++  if (aros_parent_surface_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] layer host=" << this
++               << " old_local_surface_id="
++               << pending_commit_state()
++                      ->local_surface_id_from_parent.ToString()
++               << " new_local_surface_id="
++               << local_surface_id_from_parent.ToString()
++               << " new_local_surface_valid="
++               << local_surface_id_from_parent.is_valid();
++  }
++#endif
+   // If the viz::LocalSurfaceId is invalid we will be hitting the early exit.
+   // However creating a hash for tracing of an invalid id throw an error. So
+   // exit here. This is either from unit testing where no ids are being setup,
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index 32c7422453..efe2b831d2 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -3466,6 +3466,19 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+     DidModifyTilePriorities();
+ 
+   // Update the child's LocalSurfaceId.
++#if BUILDFLAG(IS_AROS)
++  static int aros_activate_surface_count = 0;
++  if (aros_activate_surface_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] layer activate host_impl=" << this
++               << " parent_local_surface_id="
++               << active_tree()->local_surface_id_from_parent().ToString()
++               << " parent_local_surface_valid="
++               << active_tree()->local_surface_id_from_parent().is_valid()
++               << " child_local_surface_id="
++               << child_local_surface_id_allocator_.GetCurrentLocalSurfaceId()
++                      .ToString();
++  }
++#endif
+   if (active_tree()->local_surface_id_from_parent().is_valid()) {
+     child_local_surface_id_allocator_.UpdateFromParent(
+         active_tree()->local_surface_id_from_parent());
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index c916d68d3f..6b9236508d 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -28,6 +28,7 @@
+ #include "base/i18n/rtl.h"
+ #include "base/lazy_instance.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/metrics/field_trial.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -921,6 +922,19 @@ blink::VisualProperties RenderWidgetHostImpl::GetInitialVisualProperties() {
+   // will be incorrect with a fresh RenderWidget.
+   ResetStateForCreatedRenderWidget(initial_props);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[AROS_VISUAL] browser initial host=" << this
++             << " routing_id=" << GetRoutingID()
++             << " local_surface_valid="
++             << initial_props.local_surface_id.has_value()
++             << " local_surface_id="
++             << (initial_props.local_surface_id.has_value()
++                     ? initial_props.local_surface_id->ToString()
++                     : std::string("<none>"))
++             << " new_size=" << initial_props.new_size.ToString()
++             << " compositor_viewport="
++             << initial_props.compositor_viewport_pixel_rect.ToString();
++#endif
+   return initial_props;
+ }
+ 
+@@ -1106,6 +1120,21 @@ blink::VisualProperties RenderWidgetHostImpl::GetVisualProperties() {
+     visual_properties.local_surface_id = local_surface_id;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  static int aros_visual_properties_count = 0;
++  if (aros_visual_properties_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] browser generated host=" << this
++               << " routing_id=" << GetRoutingID()
++               << " top_most=" << is_top_most_widget
++               << " child_frame=" << is_child_frame_widget
++               << " view_local_surface_id=" << local_surface_id.ToString()
++               << " local_surface_valid=" << local_surface_id.is_valid()
++               << " new_size=" << visual_properties.new_size.ToString()
++               << " compositor_viewport="
++               << visual_properties.compositor_viewport_pixel_rect.ToString();
++  }
++#endif
++
+   if (screen_orientation_type_for_testing_) {
+     current_screen_info.orientation_type =
+         *screen_orientation_type_for_testing_;
+@@ -1192,6 +1221,24 @@ bool RenderWidgetHostImpl::SynchronizeVisualProperties(
+   visual_properties->scroll_focused_node_into_view =
+       scroll_focused_node_into_view;
+ 
++#if BUILDFLAG(IS_AROS)
++  static int aros_visual_send_count = 0;
++  if (aros_visual_send_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] browser send host=" << this
++               << " routing_id=" << GetRoutingID()
++               << " propagate=" << propagate
++               << " local_surface_valid="
++               << visual_properties->local_surface_id.has_value()
++               << " local_surface_id="
++               << (visual_properties->local_surface_id.has_value()
++                       ? visual_properties->local_surface_id->ToString()
++                       : std::string("<none>"))
++               << " new_size=" << visual_properties->new_size.ToString()
++               << " compositor_viewport="
++               << visual_properties->compositor_viewport_pixel_rect.ToString();
++  }
++#endif
++
+   if (propagate) {
+     blink_widget_->UpdateVisualProperties(*visual_properties);
+   }
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
+index a928cad454..444916f12c 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.cc
++++ b/third_party/blink/renderer/platform/widget/widget_base.cc
+@@ -392,6 +392,25 @@ void WidgetBase::UpdateVisualProperties(
+     const VisualProperties& visual_properties_from_browser) {
+   TRACE_EVENT0("renderer", "WidgetBase::UpdateVisualProperties");
+ 
++#if BUILDFLAG(IS_AROS)
++  static int aros_visual_receive_count = 0;
++  if (aros_visual_receive_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] renderer receive widget=" << this
++               << " local_surface_valid="
++               << visual_properties_from_browser.local_surface_id.has_value()
++               << " local_surface_id="
++               << (visual_properties_from_browser.local_surface_id.has_value()
++                       ? visual_properties_from_browser.local_surface_id
++                             ->ToString()
++                       : std::string("<none>"))
++               << " new_size="
++               << visual_properties_from_browser.new_size.ToString()
++               << " compositor_viewport="
++               << visual_properties_from_browser.compositor_viewport_pixel_rect
++                      .ToString();
++  }
++#endif
++
+   // UpdateVisualProperties is used to receive properties from the browser
+   // process for this WidgetBase. There are roughly 4 types of
+   // VisualProperties.
+@@ -1655,6 +1674,19 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
+     const viz::LocalSurfaceId& new_local_surface_id,
+     const gfx::Rect& compositor_viewport_pixel_rect,
+     const display::ScreenInfos& screen_infos) {
++#if BUILDFLAG(IS_AROS)
++  static int aros_surface_apply_count = 0;
++  if (aros_surface_apply_count++ < 32) {
++    LOG(ERROR) << "[AROS_VISUAL] renderer apply widget=" << this
++               << " old_local_surface_id="
++               << local_surface_id_from_parent_.ToString()
++               << " new_local_surface_id=" << new_local_surface_id.ToString()
++               << " new_local_surface_valid="
++               << new_local_surface_id.is_valid()
++               << " compositor_viewport="
++               << compositor_viewport_pixel_rect.ToString();
++  }
++#endif
+   display::ScreenInfos new_screen_infos = screen_infos;
+   display::ScreenInfo& new_screen_info = new_screen_infos.mutable_current();
+ 

@@ -1,0 +1,29 @@
+From d287798889f60f4c67305f8683abfe19315ce0f2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 19:55:35 -0500
+Subject: [PATCH 585/638] ozone/aros: map the keypad parenthesis raw keys
+
+Raw keys 0x5a/0x5b (Amiga keypad '(' and ')') had no DomCode and were
+dropped; typing either character through input.device did nothing.
+---
+ ui/ozone/platform/aros/aros_window.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 2be072de9c..2e3ffc76dc 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -365,6 +365,13 @@ DomCode DomCodeFromRawKey(uint16_t code) {
+       return DomCode::NUMPAD_DIVIDE;
+     case RAWKEY_KP_MULTIPLY:
+       return DomCode::NUMPAD_MULTIPLY;
++    // The Amiga keypad's ( and ) keys (no rawkeycodes.h names); the default
++    // keymap maps '(' and ')' to these first, so keymap.library's MapANSI()
++    // produces them for the characters.
++    case 0x5a:
++      return DomCode::NUMPAD_PAREN_LEFT;
++    case 0x5b:
++      return DomCode::NUMPAD_PAREN_RIGHT;
+     case RAWKEY_SCRLOCK:
+       return DomCode::SCROLL_LOCK;
+     case RAWKEY_PRTSCREEN:

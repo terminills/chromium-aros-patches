@@ -1,0 +1,90 @@
+From b3d8aa512086a5bf6e6ada17c419412cdacb00e5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 10:01:51 -0500
+Subject: [PATCH 485/638] AROS: scope discardable allocator per process
+
+Keep the singleton invariant within each native AROS process while allowing browser, renderer, and GPU children to initialize independently in the shared address space.\n\nACD-Agent: codex\nACD-Job:\nACD-Scope: Chromium AROS process-scoped DiscardableMemoryAllocator
+---
+ base/memory/discardable_memory_allocator.cc | 50 +++++++++++++++++++--
+ 1 file changed, 46 insertions(+), 4 deletions(-)
+
+diff --git a/base/memory/discardable_memory_allocator.cc b/base/memory/discardable_memory_allocator.cc
+index 9105ad03f7..1669bc1141 100644
+--- a/base/memory/discardable_memory_allocator.cc
++++ b/base/memory/discardable_memory_allocator.cc
+@@ -4,29 +4,71 @@
+ 
+ #include "base/memory/discardable_memory_allocator.h"
+ 
++#include <map>
+ #include <utility>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
++#include "base/no_destructor.h"
+ #include "base/process/memory.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct DiscardableMemoryAllocatorRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, DiscardableMemoryAllocator*> instances;
++};
++
++DiscardableMemoryAllocator*& GetAllocatorForCurrentProcess() {
++  const base::CommandLine* const process_identity =
++      base::CommandLine::InitializedForCurrentProcess()
++          ? base::CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local DiscardableMemoryAllocator** cached_instance = nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return *cached_instance;
++
++  static base::NoDestructor<DiscardableMemoryAllocatorRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  cached_instance = &registry->instances[process_identity];
++  return *cached_instance;
++}
++#else
+ DiscardableMemoryAllocator* g_discardable_allocator = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+ // static
+ void DiscardableMemoryAllocator::SetInstance(
+     DiscardableMemoryAllocator* allocator) {
+-  DCHECK(!allocator || !g_discardable_allocator);
+-  g_discardable_allocator = allocator;
++#if BUILDFLAG(IS_AROS)
++  DiscardableMemoryAllocator*& current_allocator =
++      GetAllocatorForCurrentProcess();
++#else
++  DiscardableMemoryAllocator*& current_allocator = g_discardable_allocator;
++#endif
++  DCHECK(!allocator || !current_allocator);
++  current_allocator = allocator;
+ }
+ 
+ // static
+ DiscardableMemoryAllocator* DiscardableMemoryAllocator::GetInstance() {
+-  DCHECK(g_discardable_allocator);
+-  return g_discardable_allocator;
++#if BUILDFLAG(IS_AROS)
++  DiscardableMemoryAllocator* const current_allocator =
++      GetAllocatorForCurrentProcess();
++#else
++  DiscardableMemoryAllocator* const current_allocator =
++      g_discardable_allocator;
++#endif
++  DCHECK(current_allocator);
++  return current_allocator;
+ }
+ 
+ std::unique_ptr<base::DiscardableMemory>

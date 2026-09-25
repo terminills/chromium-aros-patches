@@ -1,0 +1,104 @@
+From f5b629b6640d7e7519ac2d41e6d6b8161c31d147 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:33:05 -0500
+Subject: [PATCH 203/638] web_applications: enable settings navigation on AROS
+ [chromium] [aros]
+
+Statement:
+Chrome's generic desktop command controller offers Web App settings on AROS, but the navigation implementation and chrome://app-settings URL contract were hidden behind a fixed desktop OS list.
+
+Decision:
+Admit AROS to the existing Web App settings declarations, implementation, URL constants, and internal-host registry. The path remains native Chrome navigation with its existing UMA entry-point accounting.
+
+Evidence:
+chrome_pages.o, webui_url_constants.o, and browser_command_controller.o compile successfully in out/aros-chrome.
+
+Chain:
+ first native Chromium window; compile blocker from full Chrome resume 19.
+---
+ chrome/browser/ui/chrome_pages.cc    | 4 ++--
+ chrome/browser/ui/chrome_pages.h     | 4 ++--
+ chrome/common/webui_url_constants.cc | 5 +++--
+ chrome/common/webui_url_constants.h  | 2 +-
+ 4 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/ui/chrome_pages.cc b/chrome/browser/ui/chrome_pages.cc
+index 580ecdf01a..3a644088e6 100644
+--- a/chrome/browser/ui/chrome_pages.cc
++++ b/chrome/browser/ui/chrome_pages.cc
+@@ -82,7 +82,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/web_applications/web_app_utils.h"
+ #endif
+ 
+@@ -716,7 +716,7 @@ void ShowShortcutCustomizationApp(Profile* profile,
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ void ShowWebAppSettingsImpl(Browser* browser,
+                             Profile* profile,
+                             const std::string& app_id,
+diff --git a/chrome/browser/ui/chrome_pages.h b/chrome/browser/ui/chrome_pages.h
+index 8d1a4152c3..5af53603fa 100644
+--- a/chrome/browser/ui/chrome_pages.h
++++ b/chrome/browser/ui/chrome_pages.h
+@@ -38,7 +38,7 @@ enum class ConsentLevel;
+ }  // namespace signin
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ namespace web_app {
+ enum class AppSettingsPageEntryPoint;
+ }  // namespace web_app
+@@ -262,7 +262,7 @@ void ShowShortcutCustomizationApp(Profile* profile,
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ // Show chrome://app-settings/<app-id> page.
+ void ShowWebAppSettings(Browser* browser,
+                         const std::string& app_id,
+diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
+index 90862dd3dd..88586f1a6c 100644
+--- a/chrome/common/webui_url_constants.cc
++++ b/chrome/common/webui_url_constants.cc
+@@ -650,7 +650,7 @@ const char kCookiesSubPagePath[] = "/cookies";
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ const char kChromeUIWebAppSettingsURL[] = "chrome://app-settings/";
+ const char kChromeUIWebAppSettingsHost[] = "app-settings";
+ #endif
+@@ -805,7 +805,8 @@ const char* const kChromeHostURLs[] = {
+     BUILDFLAG(IS_CHROMEOS)
+     kChromeUIDiscardsHost,
+ #endif
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+     kChromeUIWebAppSettingsHost,
+ #endif
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
+index 42fce59e47..1fb14e56b6 100644
+--- a/chrome/common/webui_url_constants.h
++++ b/chrome/common/webui_url_constants.h
+@@ -454,7 +454,7 @@ extern const char kChromeUIDiscardsURL[];
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ extern const char kChromeUIWebAppSettingsURL[];
+ extern const char kChromeUIWebAppSettingsHost[];
+ #endif

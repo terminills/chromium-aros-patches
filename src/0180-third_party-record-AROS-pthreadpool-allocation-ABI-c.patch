@@ -1,0 +1,28 @@
+From efa7dcb4184c0b1a26127cd33d392930f1c4f0f8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:35:56 -0500
+Subject: [PATCH 180/638] third_party: record AROS pthreadpool allocation ABI
+ [chromium] [aros]
+
+Statement:
+The Chrome graph reaches pthreadpool through its image and machine-learning dependencies, and the pinned vendor revision lacked an AROS-visible posix_memalign declaration under strict C compilation.
+
+Decision:
+Advance only the pthreadpool gitlink to the granular AROS vendor commit.
+
+Evidence:
+Nested commit 75a0f3c compiles the previously failing memory.o target.
+
+Chain:
+
+---
+ third_party/pthreadpool/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/pthreadpool/src b/third_party/pthreadpool/src
+index 4fe0e1e183..75a0f3c4d1 160000
+--- a/third_party/pthreadpool/src
++++ b/third_party/pthreadpool/src
+@@ -1 +1 @@
+-Subproject commit 4fe0e1e183925bf8cfa6aae24237e724a96479b8
++Subproject commit 75a0f3c4d16e5caaa03032e94faf4082f4533bfc

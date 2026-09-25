@@ -1,0 +1,52 @@
+From 4369407e5fb2be3cf994770219d56dd2cd6208e8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:35:13 -0500
+Subject: [PATCH 321/638] cef: expose sad-tab error strings
+
+Apply CEF's upstream chrome_sad_tab_error patch as a discrete prerequisite for CEF crash UI reporting.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-sad-tab-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 16 reported missing SadTabView::ErrorToString
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/16-libcef-static-after-blink-devtools.log
+
+AI_DECISION_CHAIN:; 52dac911; 97be106cfc
+---
+ chrome/browser/ui/views/sad_tab_view.cc | 5 +++++
+ chrome/browser/ui/views/sad_tab_view.h  | 2 ++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/chrome/browser/ui/views/sad_tab_view.cc b/chrome/browser/ui/views/sad_tab_view.cc
+index 5a3aa5c059..3630c7496f 100644
+--- a/chrome/browser/ui/views/sad_tab_view.cc
++++ b/chrome/browser/ui/views/sad_tab_view.cc
+@@ -680,6 +680,11 @@ void SadTabView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+   title_->SizeToFit(max_width);
+ }
+ 
++// static
++std::u16string SadTabView::ErrorToString(int error_code) {
++  return ::ErrorToString(error_code);
++}
++
+ SadTab* SadTab::Create(content::WebContents* web_contents, SadTabKind kind) {
+   return new SadTabView(web_contents, kind);
+ }
+diff --git a/chrome/browser/ui/views/sad_tab_view.h b/chrome/browser/ui/views/sad_tab_view.h
+index d6cb0e1a28..59aca7bbb1 100644
+--- a/chrome/browser/ui/views/sad_tab_view.h
++++ b/chrome/browser/ui/views/sad_tab_view.h
+@@ -56,6 +56,8 @@ class SadTabView : public SadTab, public views::View {
+   // Overridden from views::View:
+   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+ 
++  static std::u16string ErrorToString(int error_code);
++
+  protected:
+   // Overridden from views::View:
+   void OnPaint(gfx::Canvas* canvas) override;

@@ -1,0 +1,92 @@
+From f6a23f379f33a45f68647b580d2c27fb0cd58410 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 16:32:02 -0500
+Subject: [PATCH 10/43] cef: disable unsupported AROS Crashpad path
+
+Follow Chromium's existing AROS behavior: skip Linux Crashpad socket propagation, leave child descriptor mapping empty, and return no client certificate store without NSS.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-alloy-platform-guards-applied
+
+AI_ASSUMPTION: AROS has no Crashpad handler socket or native client certificate store in this build
+
+AI_VALIDATION: build 19 failed only where POSIX selected Linux Crashpad APIs and the client certificate platform switch rejected AROS
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/19-libcef-static-after-version-header.log
+
+AI_DECISION_CHAIN:; Chromium AROS chrome_content_browser_client.cc precedent; 012c1568
+---
+ .../browser/alloy/alloy_content_browser_client.cc   | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/libcef/browser/alloy/alloy_content_browser_client.cc b/libcef/browser/alloy/alloy_content_browser_client.cc
+index 48bd6952..8701d621 100644
+--- a/libcef/browser/alloy/alloy_content_browser_client.cc
++++ b/libcef/browser/alloy/alloy_content_browser_client.cc
+@@ -159,7 +159,7 @@
+ #if BUILDFLAG(IS_MAC)
+ #include "net/ssl/client_cert_store_mac.h"
+ #include "services/video_capture/public/mojom/constants.mojom.h"
+-#elif BUILDFLAG(IS_POSIX)
++#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crash_switches.h"
+ #include "components/crash/core/app/crashpad.h"
+ #include "content/public/common/content_descriptors.h"
+@@ -260,7 +260,7 @@ class CefSelectClientCertificateCallbackImpl
+   IMPLEMENT_REFCOUNTING(CefSelectClientCertificateCallbackImpl);
+ };
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_AROS)
+ int GetCrashSignalFD() {
+   if (!crash_reporting::Enabled()) {
+     return -1;
+@@ -270,7 +270,8 @@ int GetCrashSignalFD() {
+   pid_t pid;
+   return crash_reporter::GetHandlerSocket(&fd, &pid) ? fd : -1;
+ }
+-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) &&
++        // !BUILDFLAG(IS_AROS)
+ 
+ // From chrome/browser/plugins/chrome_content_browser_client_plugins_part.cc.
+ void BindPluginInfoHost(
+@@ -672,6 +673,7 @@ void AlloyContentBrowserClient::AppendExtraCommandLineSwitches(
+     command_line->CopySwitchesFrom(*browser_cmd, kSwitchNames);
+   }
+ 
++#if !BUILDFLAG(IS_AROS)
+   if (crash_reporting::Enabled()) {
+     int fd;
+     pid_t pid;
+@@ -681,6 +683,7 @@ void AlloyContentBrowserClient::AppendExtraCommandLineSwitches(
+           base::NumberToString(pid));
+     }
+   }
++#endif  // !BUILDFLAG(IS_AROS)
+ #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ 
+   CefRefPtr<CefApp> app = CefAppManager::Get()->GetApplication();
+@@ -1057,10 +1060,12 @@ void AlloyContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
+     const base::CommandLine& command_line,
+     int child_process_id,
+     content::PosixFileDescriptorInfo* mappings) {
++#if !BUILDFLAG(IS_AROS)
+   int crash_signal_fd = GetCrashSignalFD();
+   if (crash_signal_fd >= 0) {
+     mappings->Share(kCrashDumpSignal, crash_signal_fd);
+   }
++#endif  // !BUILDFLAG(IS_AROS)
+ }
+ #endif  //  BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ 
+@@ -1076,6 +1081,8 @@ AlloyContentBrowserClient::CreateClientCertStore(
+   return std::unique_ptr<net::ClientCertStore>(new net::ClientCertStoreWin());
+ #elif BUILDFLAG(IS_MAC)
+   return std::unique_ptr<net::ClientCertStore>(new net::ClientCertStoreMac());
++#elif BUILDFLAG(IS_AROS)
++  return nullptr;
+ #else
+ #error Unknown platform.
+ #endif

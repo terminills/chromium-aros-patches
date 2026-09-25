@@ -1,0 +1,656 @@
+From 531ff64e1854896397c429d8c8a360c69870951a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 01:30:55 -0500
+Subject: [PATCH 524/638] Fix AROS Chromium shutdown cleanup races
+
+Clean up AROS message pump and singleton native ports at process exit, suppress worker resource scheduler wakes during shutdown cancellation, guard cache and media teardown paths, and release Ozone native ports before the AROS shell checks command signal ownership.\n\nEvidence:\n- ninja -C out/aros-chrome chrome -j32 (build115) linked cleanly.\n- Hosted YouTube replay run29 drew the YouTube player, closed Chromium, and returned chrome status 0 with no unfreed-signal lines visible in the post-close shell screenshot.\n- Earlier run28 verified the message pump fix removed 0x10000/0x20000; build115 removed the remaining 0x200000/0x400000 shell leak lines.
+---
+ base/message_loop/message_pump_aros.cc        | 69 +++++++++++++++++++
+ base/message_loop/message_pump_aros.h         |  4 ++
+ chrome/browser/process_singleton.h            |  7 ++
+ chrome/browser/process_singleton_aros.cc      | 68 +++++++++++++++++-
+ content/renderer/media/batching_media_log.cc  | 28 ++++++++
+ content/renderer/media/batching_media_log.h   | 14 +++-
+ .../renderer/modules/cache_storage/cache.cc   | 12 ++++
+ .../platform/loader/fetch/resource_fetcher.cc |  2 +
+ .../platform/loader/fetch/resource_fetcher.h  |  5 ++
+ .../platform/loader/fetch/resource_loader.cc  | 10 +++
+ ui/ozone/platform/aros/aros_window_manager.cc | 27 +++++++-
+ ui/ozone/platform/aros/aros_window_manager.h  |  2 +
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 37 +++++++++-
+ 13 files changed, 281 insertions(+), 4 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 5933d3805b..487971980a 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -15,6 +15,7 @@
+ #include "base/message_loop/message_pump_aros.h"
+ 
+ #include <errno.h>
++#include <cstdlib>
+ #include <sys/select.h>
+ 
+ #if defined(__AROS__)
+@@ -24,11 +25,14 @@ static_assert(sizeof(fd_set) * NBBY >= FD_SETSIZE,
+ 
+ #include <algorithm>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/aros/socket_library.h"
+ #include "base/auto_reset.h"
+ #include "base/check.h"
+ #include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/trace_event/trace_event.h"
+ 
+ #include <devices/timer.h>
+@@ -47,6 +51,36 @@ namespace {
+ 
+ constexpr TimeDelta kDosDescriptorPollInterval = Milliseconds(10);
+ 
++struct LivePumpRegistry {
++  Lock lock;
++  std::vector<MessagePumpAROS*> pumps;
++  bool registered_atexit = false;
++};
++
++LivePumpRegistry& GetLivePumpRegistry() {
++  static NoDestructor<LivePumpRegistry> registry;
++  return *registry;
++}
++
++void RegisterLivePump(MessagePumpAROS* pump) {
++  LivePumpRegistry& registry = GetLivePumpRegistry();
++  AutoLock auto_lock(registry.lock);
++  registry.pumps.push_back(pump);
++  if (!registry.registered_atexit) {
++    std::atexit(&MessagePumpAROS::CleanupLivePumpsAtExit);
++    registry.registered_atexit = true;
++  }
++}
++
++void UnregisterLivePump(MessagePumpAROS* pump) {
++  LivePumpRegistry& registry = GetLivePumpRegistry();
++  AutoLock auto_lock(registry.lock);
++  auto it = std::find(registry.pumps.begin(), registry.pumps.end(), pump);
++  if (it != registry.pumps.end()) {
++    registry.pumps.erase(it);
++  }
++}
++
+ fd_owner_t DescriptorOwner(Library* fd_library, int fd) {
+   return fd_library ? __FD_GetOwner_WB(fd_library, fd) : FD_OWNER_NONE;
+ }
+@@ -112,9 +146,20 @@ MessagePumpAROS::MessagePumpAROS() {
+   LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec/timer.device pump task="
+             << pump_task_ << " wake-signal=" << wakeup_signal_
+             << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit);
++  RegisterLivePump(this);
+ }
+ 
+ MessagePumpAROS::~MessagePumpAROS() {
++  UnregisterLivePump(this);
++  ReleaseNativeResources();
++}
++
++void MessagePumpAROS::ReleaseNativeResources() {
++  if (native_resources_released_) {
++    return;
++  }
++  native_resources_released_ = true;
++
+   while (!controllers_.empty()) {
+     controllers_.back()->StopWatchingFileDescriptor();
+   }
+@@ -128,15 +173,39 @@ MessagePumpAROS::~MessagePumpAROS() {
+     }
+     CloseDevice(request);
+     DeleteIORequest(request);
++    timer_request_ = nullptr;
++    timer_pending_ = false;
+   }
+   if (timer_port_) {
+     DeleteMsgPort(timer_port_);
++    timer_port_ = nullptr;
+   }
+   if (wakeup_signal_ >= 0) {
+     FreeSignal(wakeup_signal_);
++    wakeup_signal_ = -1;
++    wakeup_mask_ = 0;
+   }
+   if (fd_library_) {
+     CloseLibrary(fd_library_);
++    fd_library_ = nullptr;
++  }
++}
++
++void MessagePumpAROS::CleanupLivePumpsAtExit() {
++  std::vector<MessagePumpAROS*> pumps;
++  {
++    LivePumpRegistry& registry = GetLivePumpRegistry();
++    AutoLock auto_lock(registry.lock);
++    pumps = registry.pumps;
++    registry.pumps.clear();
++  }
++
++  for (MessagePumpAROS* pump : pumps) {
++    if (pump) {
++      LOG(ERROR) << "[Chromium:AROS:MessagePump] releasing live pump native "
++                    "resources at process exit";
++      pump->ReleaseNativeResources();
++    }
+   }
+ }
+ 
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 6aa2534227..038e96080b 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -59,6 +59,8 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+ 
+   ~MessagePumpAROS() override;
+ 
++  static void CleanupLivePumpsAtExit();
++
+   bool WatchFileDescriptor(int fd,
+                            bool persistent,
+                            int mode,
+@@ -89,6 +91,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   void WaitForIdleEvents(TimeDelta timeout, bool wait_indefinitely);
+   void DispatchController(const ReadyRegistration& ready);
+   void UnregisterController(FdWatchController* controller);
++  void ReleaseNativeResources();
+ 
+   raw_ptr<RunState> run_state_ = nullptr;
+   RAW_PTR_EXCLUSION Task* pump_task_ = nullptr;
+@@ -101,6 +104,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   std::vector<raw_ptr<FdWatchController>> controllers_;
+   uint64_t next_generation_ = 1;
+   bool wait_select_error_reported_ = false;
++  bool native_resources_released_ = false;
+   ThreadChecker watch_file_descriptor_caller_checker_;
+ };
+ 
+diff --git a/chrome/browser/process_singleton.h b/chrome/browser/process_singleton.h
+index 27b52fa31d..c25f0f8190 100644
+--- a/chrome/browser/process_singleton.h
++++ b/chrome/browser/process_singleton.h
+@@ -139,6 +139,10 @@ class ProcessSingleton {
+   // Clear any lock state during shutdown.
+   void Cleanup();
+ 
++#if BUILDFLAG(IS_AROS)
++  static void CleanupLiveArosSingletonsAtExit();
++#endif
++
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   static void DisablePromptForTesting();
+   static void SkipIsChromeProcessCheckForTesting(bool skip);
+@@ -189,8 +193,11 @@ class ProcessSingleton {
+   base::FilePath user_data_dir_;
+   ShouldKillRemoteProcessCallback should_kill_remote_process_callback_;
+ #elif BUILDFLAG(IS_AROS)
++  void ReleaseArosNativeResources();
++
+   std::string port_name_;
+   MsgPort* singleton_port_ = nullptr;
++  bool aros_native_resources_released_ = false;
+ #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+   // Return true if the given pid is one of our child processes.
+   // Assumes that the current pid is the root of all pids of the current
+diff --git a/chrome/browser/process_singleton_aros.cc b/chrome/browser/process_singleton_aros.cc
+index 911a59440e..2a81485d16 100644
+--- a/chrome/browser/process_singleton_aros.cc
++++ b/chrome/browser/process_singleton_aros.cc
+@@ -4,17 +4,54 @@
+ 
+ #include "chrome/browser/process_singleton.h"
+ 
++#include <algorithm>
+ #include <cstdint>
++#include <cstdlib>
++#include <vector>
+ 
+ #include "base/check.h"
+ #include "base/logging.h"
++#include "base/no_destructor.h"
+ #include "base/strings/stringprintf.h"
++#include "base/synchronization/lock.h"
+ 
+ #include <exec/ports.h>
+ #include <proto/exec.h>
+ 
+ namespace {
+ 
++struct LiveSingletonRegistry {
++  base::Lock lock;
++  std::vector<ProcessSingleton*> singletons;
++  bool registered_atexit = false;
++};
++
++LiveSingletonRegistry& GetLiveSingletonRegistry() {
++  static base::NoDestructor<LiveSingletonRegistry> registry;
++  return *registry;
++}
++
++void RegisterLiveSingleton(ProcessSingleton* singleton) {
++  LiveSingletonRegistry& registry = GetLiveSingletonRegistry();
++  base::AutoLock auto_lock(registry.lock);
++  registry.singletons.push_back(singleton);
++  if (!registry.registered_atexit) {
++    std::atexit(&ProcessSingleton::CleanupLiveArosSingletonsAtExit);
++    registry.registered_atexit = true;
++  }
++}
++
++void UnregisterLiveSingleton(ProcessSingleton* singleton) {
++  LiveSingletonRegistry& registry = GetLiveSingletonRegistry();
++  base::AutoLock auto_lock(registry.lock);
++  auto it =
++      std::find(registry.singletons.begin(), registry.singletons.end(),
++                singleton);
++  if (it != registry.singletons.end()) {
++    registry.singletons.erase(it);
++  }
++}
++
+ uint64_t HashProfilePath(const base::FilePath& path) {
+   uint64_t hash = UINT64_C(14695981039346656037);
+   for (unsigned char byte : path.value()) {
+@@ -32,10 +69,13 @@ ProcessSingleton::ProcessSingleton(
+     : notification_callback_(notification_callback),
+       port_name_(base::StringPrintf(
+           "CHROMIUM.SINGLETON.%016llx",
+-          static_cast<unsigned long long>(HashProfilePath(user_data_dir)))) {}
++          static_cast<unsigned long long>(HashProfilePath(user_data_dir)))) {
++  RegisterLiveSingleton(this);
++}
+ 
+ ProcessSingleton::~ProcessSingleton() {
+   Cleanup();
++  UnregisterLiveSingleton(this);
+ }
+ 
+ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate() {
+@@ -84,6 +124,14 @@ void ProcessSingleton::StartWatching() {
+ 
+ void ProcessSingleton::Cleanup() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  ReleaseArosNativeResources();
++}
++
++void ProcessSingleton::ReleaseArosNativeResources() {
++  if (aros_native_resources_released_) {
++    return;
++  }
++  aros_native_resources_released_ = true;
+   if (!singleton_port_) {
+     return;
+   }
+@@ -94,6 +142,24 @@ void ProcessSingleton::Cleanup() {
+   singleton_port_ = nullptr;
+ }
+ 
++void ProcessSingleton::CleanupLiveArosSingletonsAtExit() {
++  std::vector<ProcessSingleton*> singletons;
++  {
++    LiveSingletonRegistry& registry = GetLiveSingletonRegistry();
++    base::AutoLock auto_lock(registry.lock);
++    singletons = registry.singletons;
++    registry.singletons.clear();
++  }
++
++  for (ProcessSingleton* singleton : singletons) {
++    if (singleton) {
++      LOG(ERROR) << "[Chromium:AROS:ProcessSingleton] releasing singleton "
++                    "port at process exit";
++      singleton->ReleaseArosNativeResources();
++    }
++  }
++}
++
+ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcess() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
+diff --git a/content/renderer/media/batching_media_log.cc b/content/renderer/media/batching_media_log.cc
+index aaea3db813..cd644212b3 100644
+--- a/content/renderer/media/batching_media_log.cc
++++ b/content/renderer/media/batching_media_log.cc
+@@ -13,6 +13,7 @@
+ #include "base/strings/string_util.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/default_tick_clock.h"
++#include "build/build_config.h"
+ #include "media/base/logging_override_if_enabled.h"
+ 
+ namespace {
+@@ -64,11 +65,38 @@ BatchingMediaLog::BatchingMediaLog(
+ }
+ 
+ BatchingMediaLog::~BatchingMediaLog() {
++#if BUILDFLAG(IS_AROS)
++  const bool on_task_runner = task_runner_->BelongsToCurrentThread();
++  if (!on_task_runner) {
++    LOG(ERROR) << "[Chromium:AROS:MediaShutdown] BatchingMediaLog destroyed "
++                  "off its task runner during late shutdown; dropping queued "
++                  "events instead of aborting";
++  } else
++#endif
+   DCHECK(task_runner_->BelongsToCurrentThread());
+   // AddEvent() could be in-flight on some other thread.  Wait for it, and make
+   // sure that nobody else calls it.
+   InvalidateLog();
+ 
++#if BUILDFLAG(IS_AROS)
++  if (!on_task_runner) {
++    base::AutoLock auto_lock(lock_);
++    ipc_send_pending_ = false;
++    queued_media_events_.clear();
++    // These handlers own Mojo endpoints that are already past their valid
++    // teardown thread on AROS shutdown.
++    for (auto& handler : event_handlers_) {
++      (void)handler.release();
++    }
++    event_handlers_.clear();
++    last_duration_changed_event_.reset();
++    last_buffering_state_event_.reset();
++    weak_this_.reset();
++    weak_factory_.DetachAndInvalidateOnCurrentSequence();
++    return;
++  }
++#endif
++
+   // There's no further chance to handle this, so send them now. This should not
+   // be racy since nothing should have a pointer to the media log on another
+   // thread by this point.
+diff --git a/content/renderer/media/batching_media_log.h b/content/renderer/media/batching_media_log.h
+index ff19a0e28a..13f59ad859 100644
+--- a/content/renderer/media/batching_media_log.h
++++ b/content/renderer/media/batching_media_log.h
+@@ -59,6 +59,18 @@ class CONTENT_EXPORT BatchingMediaLog : public media::MediaLog {
+   std::string GetErrorMessageLocked() override;
+ 
+  private:
++  class ArosShutdownWeakPtrFactory
++      : public base::WeakPtrFactory<BatchingMediaLog> {
++   public:
++    explicit ArosShutdownWeakPtrFactory(BatchingMediaLog* log)
++        : base::WeakPtrFactory<BatchingMediaLog>(log) {}
++
++    void DetachAndInvalidateOnCurrentSequence() {
++      weak_reference_owner_.BindToCurrentSequence();
++      weak_reference_owner_.Invalidate();
++    }
++  };
++
+   // Posted as a delayed task on |task_runner_| to throttle ipc message
+   // frequency.
+   void SendQueuedMediaEvents();
+@@ -106,7 +118,7 @@ class CONTENT_EXPORT BatchingMediaLog : public media::MediaLog {
+   std::optional<media::MediaLogRecord> last_pipeline_error_;
+ 
+   base::WeakPtr<BatchingMediaLog> weak_this_;
+-  base::WeakPtrFactory<BatchingMediaLog> weak_factory_{this};
++  ArosShutdownWeakPtrFactory weak_factory_{this};
+ };
+ 
+ }  // namespace content
+diff --git a/third_party/blink/renderer/modules/cache_storage/cache.cc b/third_party/blink/renderer/modules/cache_storage/cache.cc
+index 17312029ac..6f82c9c749 100644
+--- a/third_party/blink/renderer/modules/cache_storage/cache.cc
++++ b/third_party/blink/renderer/modules/cache_storage/cache.cc
+@@ -10,6 +10,7 @@
+ #include "base/containers/contains.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
+ #include "services/network/public/mojom/fetch_api.mojom-blink.h"
+ #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -335,6 +336,17 @@ class Cache::ResponseBodyLoader final
+     response_ = response;
+ 
+     ExecutionContext* context = ExecutionContext::From(script_state_);
++#if BUILDFLAG(IS_AROS)
++    if (!context || context->IsContextDestroyed()) {
++      LOG(ERROR) << "[Chromium:AROS:CacheShutdown] dropping CacheStorage "
++                    "response body load after execution context teardown";
++      exception_state.ThrowDOMException(
++          DOMExceptionCode::kAbortError,
++          "Cache response body load aborted during shutdown.");
++      barrier_callback_->OnError(exception_state);
++      return;
++    }
++#endif
+     fetch_loader_ = FetchDataLoader::CreateLoaderAsBlobHandle(
+         response_->InternalMIMEType(),
+         context->GetTaskRunner(TaskType::kNetworking));
+diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
+index 93a1f0b39f..a24283b923 100644
+--- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
++++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
+@@ -2596,6 +2596,8 @@ void ResourceFetcher::PrepareForLeakDetection() {
+ void ResourceFetcher::StopFetchingInternal(StopFetchingTarget target) {
+   // TODO(toyoshim): May want to suspend scheduler while canceling loaders so
+   // that the cancellations below do not awake unnecessary scheduling.
++  base::AutoReset<bool> stopping_loaders_for_shutdown(
++      &is_stopping_loaders_for_shutdown_, true);
+ 
+   HeapVector<Member<ResourceLoader>> loaders_to_cancel;
+   for (const auto& loader : non_blocking_loaders_) {
+diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
+index 9229cc07ec..1a93a14dc5 100644
+--- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
++++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
+@@ -149,6 +149,10 @@ class PLATFORM_EXPORT ResourceFetcher
+   // called.
+   bool IsInRequestResource() const { return is_in_request_resource_; }
+ 
++  bool IsStoppingLoadersForShutdown() const {
++    return is_stopping_loaders_for_shutdown_;
++  }
++
+   // Returns the observer object associated with this fetcher.
+   ResourceLoadObserver* GetResourceLoadObserver() {
+     // When detached, we must have a null observer.
+@@ -634,6 +638,7 @@ class PLATFORM_EXPORT ResourceFetcher
+ 
+   // This is not in the bit field below because we want to use AutoReset.
+   bool is_in_request_resource_ = false;
++  bool is_stopping_loaders_for_shutdown_ = false;
+ 
+   // 28 bits left
+   bool auto_load_images_ : 1;
+diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_loader.cc b/third_party/blink/renderer/platform/loader/fetch/resource_loader.cc
+index a91e6e53c8..04128c8005 100644
+--- a/third_party/blink/renderer/platform/loader/fetch/resource_loader.cc
++++ b/third_party/blink/renderer/platform/loader/fetch/resource_loader.cc
+@@ -35,6 +35,7 @@
+ 
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -42,6 +43,7 @@
+ #include "base/rand_util.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/unguessable_token.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "net/base/load_flags.h"
+ #include "services/metrics/public/cpp/metrics_utils.h"
+@@ -454,6 +456,14 @@ void ResourceLoader::Release(
+     ResourceLoadScheduler::ReleaseOption option,
+     const ResourceLoadScheduler::TrafficReportHints& hints) {
+   DCHECK_NE(ResourceLoadScheduler::kInvalidClientId, scheduler_client_id_);
++#if BUILDFLAG(IS_AROS)
++  if (option == ResourceLoadScheduler::ReleaseOption::kReleaseAndSchedule &&
++      fetcher_->IsStoppingLoadersForShutdown()) {
++    LOG(ERROR) << "[Chromium:AROS:WorkerShutdown] suppressing resource "
++                  "scheduler wake during bulk loader cancellation";
++    option = ResourceLoadScheduler::ReleaseOption::kReleaseOnly;
++  }
++#endif
+   bool released = scheduler_->Release(scheduler_client_id_, option, hints);
+   DCHECK(released);
+   scheduler_client_id_ = ResourceLoadScheduler::kInvalidClientId;
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 5d83c93eca..f4a194c2d2 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -51,7 +51,25 @@ ArosWindowManager::~ArosWindowManager() {
+     DCHECK(native_windows_.empty());
+     DCHECK(windows_.empty());
+   }
+-  if (owns_presentation_port_) {
++  ReleaseNativeResources();
++}
++
++void ArosWindowManager::ReleaseNativeResources() {
++  if (native_resources_released_) {
++    return;
++  }
++  native_resources_released_ = true;
++
++  {
++    base::AutoLock lock(lock_);
++    if (!native_windows_.empty() || !windows_.empty()) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS] releasing native ports while "
++                    "windows remain native="
++                 << native_windows_.size() << " logical=" << windows_.size();
++    }
++  }
++
++  if (owns_presentation_port_ && presentation_port_) {
+     Forbid();
+     RemPort(presentation_port_);
+     Permit();
+@@ -61,12 +79,19 @@ ArosWindowManager::~ArosWindowManager() {
+       ReplyMsg(&message->message);
+     }
+     DeleteMsgPort(presentation_port_);
++    presentation_port_ = nullptr;
++    owns_presentation_port_ = false;
+   }
+   if (presentation_reply_port_) {
+     DeleteMsgPort(presentation_reply_port_);
++    presentation_reply_port_ = nullptr;
+   }
+   if (event_port_) {
++    while (auto* message = reinterpret_cast<Message*>(GetMsg(event_port_))) {
++      ReplyMsg(message);
++    }
+     DeleteMsgPort(event_port_);
++    event_port_ = nullptr;
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index c6d41b5bac..5f02d49402 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -46,6 +46,7 @@ class ArosWindowManager {
+   struct MsgPort* event_port() const { return event_port_; }
+   uint32_t event_signal_mask() const;
+   void ProcessNativeEvents();
++  void ReleaseNativeResources();
+ 
+   struct Window* GetNativeWindow(gfx::AcceleratedWidget widget);
+ 
+@@ -66,6 +67,7 @@ class ArosWindowManager {
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
+   bool owns_presentation_port_ = false;
++  bool native_resources_released_ = false;
+   bool logged_received_present_ GUARDED_BY(lock_) = false;
+   bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 28868138fc..53e0d90adc 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -11,6 +11,7 @@
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/logging.h"
++#include "base/task/current_thread.h"
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "ui/base/cursor/cursor_factory.h"
+@@ -86,7 +87,8 @@ class ArosPlatformEventSource : public PlatformEventSource {
+   base::RepeatingTimer timer_;
+ };
+ 
+-class OzonePlatformAros : public OzonePlatform {
++class OzonePlatformAros : public OzonePlatform,
++                          public base::CurrentThread::DestructionObserver {
+  public:
+   OzonePlatformAros() = default;
+ 
+@@ -147,6 +149,7 @@ class OzonePlatformAros : public OzonePlatform {
+   bool InitializeUI(const InitParams& params) override {
+     LOG(INFO) << "[Chromium:Ozone:AROS] initializing native Intuition backend";
+     window_manager_ = std::make_unique<ArosWindowManager>();
++    RegisterDestructionObserver();
+     surface_factory_ =
+         std::make_unique<ArosSurfaceFactory>(window_manager_.get());
+     if (!PlatformEventSource::GetInstance()) {
+@@ -167,6 +170,7 @@ class OzonePlatformAros : public OzonePlatform {
+   void InitializeGPU(const InitParams& params) override {
+     if (!window_manager_) {
+       window_manager_ = std::make_unique<ArosWindowManager>();
++      RegisterDestructionObserver();
+     }
+     if (!surface_factory_) {
+       surface_factory_ =
+@@ -174,7 +178,36 @@ class OzonePlatformAros : public OzonePlatform {
+     }
+   }
+ 
++  void WillDestroyCurrentMessageLoop() override { ShutdownNativeResources(); }
++
+  private:
++  void RegisterDestructionObserver() {
++    if (registered_destruction_observer_) {
++      return;
++    }
++    base::CurrentThread::Get()->AddDestructionObserver(this);
++    registered_destruction_observer_ = true;
++  }
++
++  void ShutdownNativeResources() {
++    if (native_shutdown_started_) {
++      return;
++    }
++    native_shutdown_started_ = true;
++
++    if (registered_destruction_observer_) {
++      base::CurrentThread::Get()->RemoveDestructionObserver(this);
++      registered_destruction_observer_ = false;
++    }
++
++    LOG(ERROR) << "[Chromium:Ozone:AROS] releasing native platform resources";
++    platform_event_source_.reset();
++    surface_factory_.reset();
++    if (window_manager_) {
++      window_manager_->ReleaseNativeResources();
++    }
++  }
++
+   std::unique_ptr<ArosWindowManager> window_manager_;
+   std::unique_ptr<ArosSurfaceFactory> surface_factory_;
+   std::unique_ptr<PlatformEventSource> platform_event_source_;
+@@ -183,6 +216,8 @@ class OzonePlatformAros : public OzonePlatform {
+   std::unique_ptr<InputController> input_controller_;
+   std::unique_ptr<GpuPlatformSupportHost> gpu_platform_support_host_;
+   std::unique_ptr<OverlayManagerOzone> overlay_manager_;
++  bool registered_destruction_observer_ = false;
++  bool native_shutdown_started_ = false;
+ };
+ 
+ }  // namespace

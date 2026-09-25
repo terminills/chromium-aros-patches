@@ -1,0 +1,121 @@
+From ae321f6cd633ab87f219ac7cd31b7265a4893471 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:02:15 -0500
+Subject: [PATCH 4/7] [AROS] Report Perfetto CPU topology from kernel.resource
+
+AI_PHASE: Chromium Phase 3 tracing substrate
+AI_STATUS: Perfetto system metadata reports the configured AROS processor count.
+ROOT_CAUSE: AROS does not expose _SC_NPROCESSORS_CONF through the Unix sysconf contract used by Perfetto.
+FIX_REASON: Query KrnGetCPUCount through kernel.resource and retain a one-CPU fallback when the resource is unavailable.
+SCOPE: Perfetto AROS base utility and tracing-service system metadata.
+VALIDATION: aros_utils.o and tracing_service_impl.o build in out/aros-headless.
+RISK: The count is configured topology, not a live online/offline CPU inventory.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-openmp-as-system-library
+---
+ src/base/BUILD.gn                           |  4 +++
+ src/base/aros_utils.cc                      | 27 +++++++++++++++++++++
+ src/base/aros_utils.h                       | 18 ++++++++++++++
+ src/tracing/service/tracing_service_impl.cc |  7 ++++++
+ 4 files changed, 56 insertions(+)
+ create mode 100644 src/base/aros_utils.cc
+ create mode 100644 src/base/aros_utils.h
+
+diff --git a/src/base/BUILD.gn b/src/base/BUILD.gn
+index d8d00a7..8b785bb 100644
+--- a/src/base/BUILD.gn
++++ b/src/base/BUILD.gn
+@@ -62,6 +62,10 @@ perfetto_component("base") {
+     "watchdog_posix.cc",
+   ]
+ 
++  if (is_aros) {
++    sources += [ "aros_utils.cc" ]
++  }
++
+   if (!is_nacl) {
+     sources += [
+       "thread_task_runner.cc",
+diff --git a/src/base/aros_utils.cc b/src/base/aros_utils.cc
+new file mode 100644
+index 0000000..c597381
+--- /dev/null
++++ b/src/base/aros_utils.cc
+@@ -0,0 +1,27 @@
++/*
++ * Copyright (C) 2026 The AROS Development Team. All rights reserved.
++ */
++
++#include "src/base/aros_utils.h"
++
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <proto/exec.h>
++#include <proto/kernel.h>
++
++namespace perfetto {
++namespace base {
++
++uint32_t GetConfiguredCpuCount() {
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return 1;
++
++  const uint32_t count = KrnGetCPUCount();
++  return count > 0 ? count : 1;
++}
++
++}  // namespace base
++}  // namespace perfetto
+diff --git a/src/base/aros_utils.h b/src/base/aros_utils.h
+new file mode 100644
+index 0000000..5d2e3e3
+--- /dev/null
++++ b/src/base/aros_utils.h
+@@ -0,0 +1,18 @@
++/*
++ * Copyright (C) 2026 The AROS Development Team. All rights reserved.
++ */
++
++#ifndef SRC_BASE_AROS_UTILS_H_
++#define SRC_BASE_AROS_UTILS_H_
++
++#include <stdint.h>
++
++namespace perfetto {
++namespace base {
++
++uint32_t GetConfiguredCpuCount();
++
++}  // namespace base
++}  // namespace perfetto
++
++#endif  // SRC_BASE_AROS_UTILS_H_
+diff --git a/src/tracing/service/tracing_service_impl.cc b/src/tracing/service/tracing_service_impl.cc
+index b57f135..96b0c0d 100644
+--- a/src/tracing/service/tracing_service_impl.cc
++++ b/src/tracing/service/tracing_service_impl.cc
+@@ -77,6 +77,9 @@
+ #include "perfetto/tracing/core/tracing_service_capabilities.h"
+ #include "perfetto/tracing/core/tracing_service_state.h"
+ #include "src/android_stats/statsd_logging_helper.h"
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#include "src/base/aros_utils.h"
++#endif
+ #include "src/protozero/filtering/message_filter.h"
+ #include "src/protozero/filtering/string_filter.h"
+ #include "src/tracing/core/shared_memory_arbiter_impl.h"
+@@ -3519,7 +3522,11 @@ void TracingServiceImpl::EmitSystemInfo(std::vector<TracePacket>* packets) {
+     utsname_info->set_release(uname_info.release);
+   }
+   info->set_page_size(static_cast<uint32_t>(sysconf(_SC_PAGESIZE)));
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  info->set_num_cpus(base::GetConfiguredCpuCount());
++#else
+   info->set_num_cpus(static_cast<uint32_t>(sysconf(_SC_NPROCESSORS_CONF)));
++#endif
+ #endif  // !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+   std::string fingerprint_value = base::GetAndroidProp("ro.build.fingerprint");

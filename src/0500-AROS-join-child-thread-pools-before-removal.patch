@@ -1,0 +1,33 @@
+From aa0824c22b4510eccbec7eee926778b8e611d644 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 3 Aug 2026 02:41:53 -0500
+Subject: [PATCH 500/638] AROS: join child thread pools before removal
+
+AROS child processes share the hosted address space, so process exit does not implicitly tear down worker tasks. Join the already-shut-down process-scoped ThreadPool before deleting its registry entry, satisfying pool teardown and preventing recycled process identities from inheriting stopped pools.
+
+
+
+---
+ content/app/content_main_runner_impl.cc | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index 18d9ec1c58..fb1fec1f25 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -1347,10 +1347,12 @@ void ContentMainRunnerImpl::Shutdown() {
+ 
+ #if BUILDFLAG(IS_AROS)
+   // Unlike separate-address-space platforms, a native child leaving does not
+-  // discard address-space globals. Remove its process-scoped ThreadPool entry
+-  // after all child shutdown users are finished so a recycled Task address
+-  // cannot inherit a stopped pool.
++  // discard address-space globals or worker tasks. Join the child's already-
++  // shut-down process-scoped ThreadPool before removing its registry entry.
++  // This keeps workers out of unloaded executable code and prevents a recycled
++  // Task address from inheriting a stopped pool.
+   if (!process_type.empty()) {
++    base::ThreadPoolInstance::Get()->JoinForTesting();
+     base::ThreadPoolInstance::Set(nullptr);
+   }
+ #endif

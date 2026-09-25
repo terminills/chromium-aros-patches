@@ -1,0 +1,34 @@
+From 887f31ce6d18d1fc1cc9e344e15516a5111ccfde Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 07:21:30 -0500
+Subject: [PATCH 563/638] partition_alloc: return AROS pages to exec with
+ execute permission
+
+FreePagesInternal restored read/write before handing a tracked block back
+to exec, so the host pages went back into the RAM pool without PROT_EXEC.
+The next program LoadSeg'ed into them faulted on its first instruction
+(C:Wait, .text+0, while chrome was running). The pool is executable by
+default; restore that.
+---
+ .../src/partition_alloc/page_allocator_internals_aros.h    | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 42d8e6451f..6e834843b0 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -428,8 +428,13 @@ void FreePagesInternal(uintptr_t address, size_t length) {
+     return;
+   }
+ 
++  // The pages go back to a pool whose memory is executable by default (the
++  // hosted RAM block is mapped RWX, the ELF loader puts code anywhere); leave
++  // them as they were found, or the next program loaded into them faults on
++  // its first instruction.
+   SetProtection(KernelBase, record->protected_base, record->protected_length,
+-                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
++                                         MAP_Executable));
+   if (record->exec_owned) {
+     FreeMem(record->allocation_base, record->allocation_length);
+   } else {

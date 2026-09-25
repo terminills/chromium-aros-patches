@@ -1,0 +1,59 @@
+From 47c52cbb41fb4231cf5d89016bf65b42fcd5923a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 19:45:19 -0500
+Subject: [PATCH 150/638] chrome: admit AROS to desktop WebUI resources
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+AI_ROOT_CAUSE: Portable new-tab and tab-search WebUI targets used closed desktop OS allowlists that predated the AROS Views/Ozone port.
+AI_FIX_REASON: Classify AROS with the existing desktop Aura ports for platform-neutral resources and Mojo schema generation.
+AI_SCOPE: chrome/browser/resources/new_tab_page_instant/BUILD.gn, chrome/browser/resources/tab_search/BUILD.gn, chrome/browser/ui/webui/tab_search/BUILD.gn
+AI_VALIDATION: //chrome:chrome GN generation advances through both WebUI targets to the independent desktop image-editor assertion.
+AI_RISK: Runtime tab search still depends on the common Chrome UI implementation; this commit only enables existing portable build surfaces.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap -> native Ozone window -> upstream Chrome desktop resource graph
+---
+ chrome/browser/resources/new_tab_page_instant/BUILD.gn | 2 +-
+ chrome/browser/resources/tab_search/BUILD.gn           | 2 +-
+ chrome/browser/ui/webui/tab_search/BUILD.gn            | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/resources/new_tab_page_instant/BUILD.gn b/chrome/browser/resources/new_tab_page_instant/BUILD.gn
+index 83affcf9f7..0ff8748cc5 100644
+--- a/chrome/browser/resources/new_tab_page_instant/BUILD.gn
++++ b/chrome/browser/resources/new_tab_page_instant/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia)
++assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia || is_aros)
+ 
+ build_webui("build") {
+   grd_prefix = "new_tab_page_instant"
+diff --git a/chrome/browser/resources/tab_search/BUILD.gn b/chrome/browser/resources/tab_search/BUILD.gn
+index 0107e8fe68..53a551ec13 100644
+--- a/chrome/browser/resources/tab_search/BUILD.gn
++++ b/chrome/browser/resources/tab_search/BUILD.gn
+@@ -7,7 +7,7 @@ import("//ui/webui/resources/tools/build_webui.gni")
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia)
++assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia || is_aros)
+ 
+ preprocess_folder = "preprocessed"
+ 
+diff --git a/chrome/browser/ui/webui/tab_search/BUILD.gn b/chrome/browser/ui/webui/tab_search/BUILD.gn
+index 48046ed8a9..7e40afebb9 100644
+--- a/chrome/browser/ui/webui/tab_search/BUILD.gn
++++ b/chrome/browser/ui/webui/tab_search/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//mojo/public/tools/bindings/mojom.gni")
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia)
++assert(is_linux || is_chromeos || is_win || is_mac || is_fuchsia || is_aros)
+ 
+ mojom("mojo_bindings") {
+   sources = [ "tab_search.mojom" ]

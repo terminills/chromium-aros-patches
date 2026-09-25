@@ -1,0 +1,51 @@
+From aee9ca3632a0b4dfba36c4a354e56ad52218b024 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:58:20 -0500
+Subject: [PATCH] tflite: fail closed for dynamic delegates on AROS [chromium]
+ [aros]
+
+Statement:
+TFLite core unconditionally included dlfcn.h for its optional runtime delegate loader, stopping the AROS Chrome graph even though core inference uses statically linked delegates.
+
+Decision:
+Expose an explicit unsupported AROS implementation of SharedLibrary. Runtime delegate loads and symbol lookups return null with a useful error while static inference remains available.
+
+Evidence:
+Chromium obj/third_party/tflite/tflite/interpreter_builder.o builds in out/aros-chrome.
+
+Chain:
+Advances without pretending AROS has a dlopen ABI.
+---
+ tensorflow/lite/shared_library.h | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/tensorflow/lite/shared_library.h b/tensorflow/lite/shared_library.h
+index 73886ccf..b3c7a722 100644
+--- a/tensorflow/lite/shared_library.h
++++ b/tensorflow/lite/shared_library.h
+@@ -18,7 +18,7 @@ limitations under the License.
+ #if defined(_WIN32)
+ // Windows does not have dlfcn.h/dlsym, use GetProcAddress() instead.
+ #include <windows.h>
+-#else
++#elif !defined(__AROS__)
+ #include <dlfcn.h>
+ #endif  // defined(_WIN32)
+ 
+@@ -45,6 +45,16 @@ class SharedLibrary {
+     return FreeLibrary(static_cast<HMODULE>(handle));
+   }
+   static inline const char* GetError() { return "Unknown"; }
++#elif defined(__AROS__)
++  static inline void* LoadLibrary(const char* lib) { return nullptr; }
++  static inline void* GetLibrarySymbol(void* handle, const char* symbol) {
++    return nullptr;
++  }
++  static inline void* GetSymbol(const char* symbol) { return nullptr; }
++  static inline int UnLoadLibrary(void* handle) { return -1; }
++  static inline const char* GetError() {
++    return "dynamic delegates are not supported on AROS";
++  }
+ #else
+   static inline void* LoadLibrary(const char* lib) {
+     return dlopen(lib, RTLD_LAZY | RTLD_LOCAL);

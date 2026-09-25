@@ -1,0 +1,36 @@
+From 5478d28cb0283732c694d9d879427c94d7470973 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:45:37 -0500
+Subject: [PATCH 182/638] tflite: use heap-backed packed caches on AROS
+ [chromium] [aros]
+
+Statement:
+TFLite 4-bit fully connected kernels default to anonymous mmap storage, but pre-MMU AROS does not provide sys/mman mapping semantics.
+
+Decision:
+Select TFLite supported TFLITE_MMAP_DISABLED mode on AROS. Packed caches retain aligned heap storage with matching new[] and delete[] ownership.
+
+Evidence:
+The previously failing fully_connected.o target compiles and no longer includes sys/mman.h.
+
+Chain:
+
+ACD-opal-mmu-backed-enforcement-roadmap
+---
+ third_party/tflite/BUILD.gn | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/third_party/tflite/BUILD.gn b/third_party/tflite/BUILD.gn
+index 1addf21fc2..5a06fdb090 100644
+--- a/third_party/tflite/BUILD.gn
++++ b/third_party/tflite/BUILD.gn
+@@ -89,7 +89,9 @@ config("tflite_flags") {
+       "/DTFL_COMPILE_LIBRARY",
+       "/wd4018",
+     ]
++  }
+ 
++  if (is_win || is_aros) {
+     defines += [ "TFLITE_MMAP_DISABLED" ]
+   }
+ 

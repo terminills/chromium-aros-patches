@@ -1,0 +1,41 @@
+From a4d9ebf4469446639ef689576e2a1057bbdbd9d5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:56:58 -0500
+Subject: [PATCH 060/638] blink: contain the system GetNodeName macro
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Blink WebAudio now retains its AudioNode::GetNodeName C++ API when system headers define the same function-like macro.
+
+ROOT_CAUSE: AROS exec/nodes.h reaches Blink through pthread/libstdc++ headers and expands GetNodeName() declarations and calls as an Exec Node macro.
+
+FIX_REASON: Undefine the colliding macro at the header that owns the C++ identifier, preserving the interface and containing system namespace leakage.
+
+SCOPE: third_party/blink/renderer/modules/webaudio/audio_node.h only.
+
+VALIDATION: The complete 93-action WebAudio archive built successfully for AROS.
+
+RISK: Translation units including audio_node.h can no longer use the legacy system GetNodeName macro afterward; Blink has no such dependency.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/blink/renderer/modules/webaudio/audio_node.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_node.h b/third_party/blink/renderer/modules/webaudio/audio_node.h
+index 0b8181f02b..8ec9d933c5 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_node.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_node.h
+@@ -34,6 +34,12 @@
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+ #include "third_party/blink/renderer/platform/heap/prefinalizer.h"
+ 
++// Some system headers expose this identifier as a function-like macro. Blink
++// owns it as an AudioNode method throughout the WebAudio implementation.
++#ifdef GetNodeName
++#undef GetNodeName
++#endif
++
+ namespace blink {
+ 
+ class BaseAudioContext;

@@ -1,0 +1,84 @@
+From 04328e17922dd1067d27e5d488e7fea3a9f0a0bb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 14:47:05 -0500
+Subject: [PATCH 2/7] rtc_base: resolve hosts through the AROSTCP adapter
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: AsyncDnsResolver instantiated addrinfo and called libc getaddrinfo directly. The public IP header intentionally hides AROS netdb definitions because including bsdsocket macros there corrupts unrelated C++ identifiers, leaving this implementation without declarations.
+
+FIX_REASON: Include netdb only in the resolver implementation after C++ headers, route lookup and release through Chromium's per-task AROSTCP adapter, and add the explicit //base dependency.
+
+SCOPE: rtc_base/async_dns_resolver.cc and its GN target dependency.
+
+VALIDATION: the focused AROS async_dns_resolver object compiles; the full headless graph had reached this target after completing QUIC and public DNS objects.
+
+RISK: low; resolver behavior is unchanged while socket-library ownership is now valid for the calling Exec task.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ rtc_base/BUILD.gn              |  3 +++
+ rtc_base/async_dns_resolver.cc | 16 ++++++++++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index 4e408f2..8f6e866 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -919,6 +919,9 @@ rtc_library("async_dns_resolver") {
+     "../api/task_queue:pending_task_safety_flag",
+     "system:rtc_export",
+   ]
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+ }
+ 
+ rtc_library("async_dns_resolver_unittests") {
+diff --git a/rtc_base/async_dns_resolver.cc b/rtc_base/async_dns_resolver.cc
+index 8cbd21c..5ce2d97 100644
+--- a/rtc_base/async_dns_resolver.cc
++++ b/rtc_base/async_dns_resolver.cc
+@@ -23,6 +23,13 @@
+ #include <dispatch/dispatch.h>
+ #endif
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++
++// Keep AROS bsdsocket macros out of WebRTC's public C++ headers.
++#include <netdb.h>
++#endif
++
+ namespace webrtc {
+ 
+ namespace {
+@@ -61,8 +68,13 @@ int ResolveHostname(absl::string_view hostname,
+   // https://android.googlesource.com/platform/bionic/+/
+   // 7e0bfb511e85834d7c6cb9631206b62f82701d60/libc/netbsd/net/getaddrinfo.c#1657
+   hints.ai_flags = AI_ADDRCONFIG;
++#if defined(__AROS__)
++  int ret = base::aros::GetAddressInfo(std::string(hostname).c_str(), nullptr,
++                                       &hints, &result);
++#else
+   int ret =
+       getaddrinfo(std::string(hostname).c_str(), nullptr, &hints, &result);
++#endif
+   if (ret != 0) {
+     return ret;
+   }
+@@ -75,7 +87,11 @@ int ResolveHostname(absl::string_view hostname,
+       }
+     }
+   }
++#if defined(__AROS__)
++  base::aros::FreeAddressInfo(result);
++#else
+   freeaddrinfo(result);
++#endif
+   return 0;
+ }
+ #endif  // !__native_client__

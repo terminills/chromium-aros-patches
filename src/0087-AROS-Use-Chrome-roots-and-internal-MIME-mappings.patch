@@ -1,0 +1,89 @@
+From 96738fc0aae7522028dd628cafb0a192e3c976fe Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:24:11 -0500
+Subject: [PATCH 087/638] [AROS] Use Chrome roots and internal MIME mappings
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS has a secure certificate-trust baseline and explicit MIME fallback.
+ROOT_CAUSE: Chrome Root Store support was enabled but its platform factory, builtin test-root hooks, and MIME platform methods had no AROS definitions.
+FIX_REASON: Use the Chrome Root Store exclusively, retain builtin test roots, and defer to Chromium's internal MIME tables when no OS registry exists.
+SCOPE: Net source selection, system trust-store factory, and AROS MIME adapter.
+VALIDATION: Three objects and libnet.a build; all eight previously unresolved trust, test-root, and MIME entries are defined.
+RISK: User-installed local roots and OS-specific MIME preferences are not imported; certificate validation remains anchored to Chromium's maintained root set.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ net/BUILD.gn                            |  6 +++++-
+ net/base/platform_mime_util_aros.cc     | 27 +++++++++++++++++++++++++
+ net/cert/internal/system_trust_store.cc |  7 +++++++
+ 3 files changed, 39 insertions(+), 1 deletion(-)
+ create mode 100644 net/base/platform_mime_util_aros.cc
+
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index a0d856f901..8537a9b13a 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1345,7 +1345,11 @@ component("net") {
+   }
+ 
+   if (is_aros) {
+-    sources += [ "base/network_interfaces_aros.cc" ]
++    sources += [
++      "base/network_interfaces_aros.cc",
++      "base/platform_mime_util_aros.cc",
++      "cert/test_root_certs_builtin.cc",
++    ]
+   } else if (is_posix && !is_linux && !is_chromeos) {
+     # Use getifaddrs() on other non-Linux POSIX platforms.
+     sources += [
+diff --git a/net/base/platform_mime_util_aros.cc b/net/base/platform_mime_util_aros.cc
+new file mode 100644
+index 0000000000..2c41cbdb80
+--- /dev/null
++++ b/net/base/platform_mime_util_aros.cc
+@@ -0,0 +1,27 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/base/platform_mime_util.h"
++
++#include <string>
++
++namespace net {
++
++bool PlatformMimeUtil::GetPlatformMimeTypeFromExtension(
++    const base::FilePath::StringType& extension,
++    std::string* result) const {
++  return false;
++}
++
++bool PlatformMimeUtil::GetPlatformPreferredExtensionForMimeType(
++    const std::string& mime_type,
++    base::FilePath::StringType* extension) const {
++  return false;
++}
++
++void PlatformMimeUtil::GetPlatformExtensionsForMimeType(
++    const std::string& mime_type,
++    std::unordered_set<base::FilePath::StringType>* extensions) const {}
++
++}  // namespace net
+diff --git a/net/cert/internal/system_trust_store.cc b/net/cert/internal/system_trust_store.cc
+index 0722863d49..f49eca9342 100644
+--- a/net/cert/internal/system_trust_store.cc
++++ b/net/cert/internal/system_trust_store.cc
+@@ -170,6 +170,13 @@ CreateSslSystemTrustStoreChromeRootWithUserSlotRestriction(
+       std::make_unique<TrustStoreNSS>(std::move(user_slot_restriction)));
+ }
+ 
++#elif BUILDFLAG(IS_AROS)
++
++std::unique_ptr<SystemTrustStore> CreateSslSystemTrustStoreChromeRoot(
++    std::unique_ptr<TrustStoreChrome> chrome_root) {
++  return CreateChromeOnlySystemTrustStore(std::move(chrome_root));
++}
++
+ #elif BUILDFLAG(IS_MAC)
+ 
+ namespace {

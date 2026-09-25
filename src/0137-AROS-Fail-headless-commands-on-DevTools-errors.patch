@@ -1,0 +1,59 @@
+From 476a21da876e5964e93c31ea8966f04ee97ab21d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 01:48:50 -0500
+Subject: [PATCH 137/638] [AROS] Fail headless commands on DevTools errors
+
+---
+ .../headless_command_handler.cc               | 23 +++++++++++++------
+ .../headless_command_handler.h                |  1 +
+ 2 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/components/headless/command_handler/headless_command_handler.cc b/components/headless/command_handler/headless_command_handler.cc
+index 4b82c1e9bd..b6c255efb0 100644
+--- a/components/headless/command_handler/headless_command_handler.cc
++++ b/components/headless/command_handler/headless_command_handler.cc
+@@ -428,16 +428,25 @@ void HeadlessCommandHandler::OnTargetCrashed(const base::Value::Dict&) {
+ }
+ 
+ void HeadlessCommandHandler::OnCommandsResult(base::Value::Dict result) {
++  const bool protocol_error = result.Find("error") != nullptr;
++  const bool exception =
++      result.FindByDottedPath("result.exceptionDetails") != nullptr;
++  const bool has_value =
++      result.FindByDottedPath("result.result.value") != nullptr;
+ #if BUILDFLAG(IS_AROS)
+-  std::string result_json;
+-  base::JSONWriter::Write(result, &result_json);
+   LOG(INFO) << "[Chromium:headless-command] Runtime.evaluate completed error="
+-            << (result.Find("error") != nullptr) << " exception="
+-            << (result.FindByDottedPath("result.exceptionDetails") != nullptr)
+-            << " value="
+-            << (result.FindByDottedPath("result.result.value") != nullptr)
+-            << " payload=" << result_json;
++            << protocol_error << " exception=" << exception
++            << " value=" << has_value;
+ #endif
++  if (protocol_error || exception || !has_value) {
++    std::string result_json;
++    base::JSONWriter::Write(result, &result_json);
++    LOG(ERROR) << "Headless command evaluation failed: " << result_json;
++    result_ = Result::kCommandError;
++    PostDone();
++    return;
++  }
++
+   if (result.FindBoolByDottedPath("result.result.value.pageLoadTimedOut")
+           .value_or(false)) {
+     result_ = Result::kPageLoadTimeout;
+diff --git a/components/headless/command_handler/headless_command_handler.h b/components/headless/command_handler/headless_command_handler.h
+index e90e6cee39..22f57d5b78 100644
+--- a/components/headless/command_handler/headless_command_handler.h
++++ b/components/headless/command_handler/headless_command_handler.h
+@@ -27,6 +27,7 @@ class HeadlessCommandHandler : public content::WebContentsObserver {
+     kSuccess,
+     kPageLoadTimeout,
+     kWriteFileError,
++    kCommandError,
+   };
+ 
+   typedef base::OnceCallback<void(Result)> DoneCallback;

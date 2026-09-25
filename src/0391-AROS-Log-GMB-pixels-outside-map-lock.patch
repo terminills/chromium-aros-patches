@@ -1,0 +1,73 @@
+From 35c0f143ed489c174b61f5ca69d411355951de91 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 01:31:40 -0500
+Subject: [PATCH 391/638] [AROS] Log GMB pixels outside map lock
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic-fix
+
+OBSERVED: Runtime 32 entered a 93-percent CPU freeze at the first expected GMB completion boundary before any fingerprint or compositor-frame record.
+
+FIX_REASON: Limit map_lock_ to map-count mutation, use an atomic global diagnostic sequence, then fingerprint and log after releasing the lock. This removes reentrant logging from the GMB critical section.
+
+SCOPE: AROS-only diagnostic ordering in GpuMemoryBufferImplSharedMemory::Unmap; normal unmap semantics are unchanged.
+
+VALIDATION: Translation unit recompiles in out/aros-v8-library and git diff --check passes; full link and runtime 33 follow.
+
+AI_DECISION_CHAIN: runtime 32
+---
+ .../gpu_memory_buffer_impl_shared_memory.cc   | 28 ++++++++++++++-----
+ 1 file changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc b/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
+index 283aa3c11a..735bbf3be9 100644
+--- a/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
++++ b/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
+@@ -5,6 +5,7 @@
+ #include "gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <stdint.h>
+ 
+ #include <utility>
+@@ -275,18 +276,31 @@ void* GpuMemoryBufferImplSharedMemory::memory(size_t plane) {
+ }
+ 
+ void GpuMemoryBufferImplSharedMemory::Unmap() {
+-  base::AutoLock auto_lock(map_lock_);
+-  DCHECK_GT(map_count_, 0u);
+-  --map_count_;
+ #if BUILDFLAG(IS_AROS)
+-  static size_t aros_unmapped_buffer_count = 0;
+-  if (map_count_ == 0 && aros_unmapped_buffer_count < 64) {
++  static std::atomic_size_t aros_unmapped_buffer_count{0};
++  size_t aros_sequence = 0;
++#endif
++  {
++    base::AutoLock auto_lock(map_lock_);
++    DCHECK_GT(map_count_, 0u);
++    --map_count_;
++#if BUILDFLAG(IS_AROS)
++    if (map_count_ == 0) {
++      const size_t sequence =
++          aros_unmapped_buffer_count.fetch_add(1, std::memory_order_relaxed) +
++          1;
++      if (sequence <= 64)
++        aros_sequence = sequence;
++    }
++#endif
++  }
++#if BUILDFLAG(IS_AROS)
++  if (aros_sequence) {
+     const size_t buffer_size =
+         gfx::BufferSizeForBufferFormat(size_, format_);
+     const void* pixels =
+         static_cast<const uint8_t*>(shared_memory_mapping_.memory()) + offset_;
+-    ++aros_unmapped_buffer_count;
+-    LOG(ERROR) << "[AROS renderer-gmb] seq=" << aros_unmapped_buffer_count
++    LOG(ERROR) << "[AROS renderer-gmb] seq=" << aros_sequence
+                << " id=" << id_.id << " size=" << size_.ToString()
+                << " stride=" << stride_ << " pixels=" << pixels
+                << " fingerprint="

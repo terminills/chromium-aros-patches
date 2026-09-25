@@ -1,0 +1,106 @@
+From 8e9a6afe5c99e5b602b06f86da244e1e066babec Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 17:45:02 -0500
+Subject: [PATCH 146/638] blink: stop AROS compositor before renderer teardown
+ [chromium] [aros]
+
+---
+ content/renderer/render_thread_impl.cc        | 14 +++++++++++---
+ third_party/blink/public/BUILD.gn             |  1 +
+ .../platform/compositor_thread_lifecycle.h    | 19 +++++++++++++++++++
+ .../platform/scheduler/common/thread.cc       |  5 +++++
+ 4 files changed, 36 insertions(+), 3 deletions(-)
+ create mode 100644 third_party/blink/public/platform/compositor_thread_lifecycle.h
+
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 8359259fff..b43b4aeaef 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -145,6 +145,7 @@
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom.h"
++#include "third_party/blink/public/platform/compositor_thread_lifecycle.h"
+ #include "third_party/blink/public/platform/modules/video_capture/web_video_capture_impl_manager.h"
+ #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
+ #include "third_party/blink/public/platform/web_cache.h"
+@@ -669,9 +670,16 @@ void RenderThreadImpl::Shutdown() {
+   blink::LogStatsDuringShutdown();
+ 
+ #if BUILDFLAG(IS_AROS)
+-  if (IsSingleProcess() && main_thread_scheduler_) {
+-    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
+-    main_thread_scheduler_->Shutdown();
++  if (IsSingleProcess()) {
++    if (blink_platform_impl_) {
++      LOG(INFO) << "[Chromium:shutdown] stopping AROS compositor thread";
++      blink::ShutdownCompositorThread();
++      LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
++    }
++    if (main_thread_scheduler_) {
++      LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
++      main_thread_scheduler_->Shutdown();
++    }
+   }
+ #endif
+ 
+diff --git a/third_party/blink/public/BUILD.gn b/third_party/blink/public/BUILD.gn
+index f16531378f..7832454459 100644
+--- a/third_party/blink/public/BUILD.gn
++++ b/third_party/blink/public/BUILD.gn
+@@ -129,6 +129,7 @@ source_set("blink_headers") {
+   sources = [
+     "platform/audio/web_audio_device_source_type.h",
+     "platform/child_url_loader_factory_bundle.h",
++    "platform/compositor_thread_lifecycle.h",
+     "platform/cross_variant_mojo_util.h",
+     "platform/file_path_conversion.h",
+     "platform/interface_registry.h",
+diff --git a/third_party/blink/public/platform/compositor_thread_lifecycle.h b/third_party/blink/public/platform/compositor_thread_lifecycle.h
+new file mode 100644
+index 0000000000..99f7b56e91
+--- /dev/null
++++ b/third_party/blink/public/platform/compositor_thread_lifecycle.h
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_COMPOSITOR_THREAD_LIFECYCLE_H_
++#define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_COMPOSITOR_THREAD_LIFECYCLE_H_
++
++#include "third_party/blink/public/platform/web_common.h"
++
++namespace blink {
++
++// Stops and destroys Blink's process-global compositor thread. Embedders that
++// shut Blink down without terminating the process must call this before
++// tearing down the renderer scheduler.
++BLINK_PLATFORM_EXPORT void ShutdownCompositorThread();
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_PUBLIC_PLATFORM_COMPOSITOR_THREAD_LIFECYCLE_H_
+diff --git a/third_party/blink/renderer/platform/scheduler/common/thread.cc b/third_party/blink/renderer/platform/scheduler/common/thread.cc
+index 1e9d345fa3..4e73e8d3a0 100644
+--- a/third_party/blink/renderer/platform/scheduler/common/thread.cc
++++ b/third_party/blink/renderer/platform/scheduler/common/thread.cc
+@@ -11,6 +11,7 @@
+ #include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/platform/compositor_thread_lifecycle.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
+ #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+@@ -97,6 +98,10 @@ void Thread::CreateAndSetCompositorThread() {
+   GetCompositorThread() = std::move(compositor_thread);
+ }
+ 
++void ShutdownCompositorThread() {
++  GetCompositorThread().reset();
++}
++
+ Thread* Thread::Current() {
+   return current_thread;
+ }

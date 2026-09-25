@@ -1,0 +1,38 @@
+From 3b7682b0fa4d318e3c9683cf791fc3c6b7d8b32b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:51:18 -0500
+Subject: [PATCH 059/638] flags_ui: classify AROS with desktop Unix flags
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: flags_ui now computes a supported platform mask for AROS.
+
+ROOT_CAUSE: GetCurrentPlatform had no AROS branch and deliberately stopped compilation with Unknown platform.
+
+FIX_REASON: Chromium 124 has no AROS flag bit; its kOsLinux mask is already the shared desktop Unix applicability cohort used by OpenBSD.
+
+SCOPE: components/flags_ui/flags_state.cc only.
+
+VALIDATION: The previously failing flags_state.o target compiled for AROS.
+
+RISK: AROS sees flags marked for the desktop Unix cohort until the flags schema gains a distinct AROS applicability bit; runtime OS identity is unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/flags_ui/flags_state.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/components/flags_ui/flags_state.cc b/components/flags_ui/flags_state.cc
+index 35dea65d76..857b124e89 100644
+--- a/components/flags_ui/flags_state.cc
++++ b/components/flags_ui/flags_state.cc
+@@ -741,7 +741,8 @@ unsigned short FlagsState::GetCurrentPlatform() {
+   return kOsCrOS;
+ #elif BUILDFLAG(IS_CHROMEOS_LACROS)
+   return kOsLacros;
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_OPENBSD)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_OPENBSD) || BUILDFLAG(IS_AROS)
++  // kOsLinux is the shared desktop Unix flag-applicability cohort.
+   return kOsLinux;
+ #elif BUILDFLAG(IS_ANDROID)
+   return kOsAndroid;

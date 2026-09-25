@@ -1,0 +1,59 @@
+From ef48856aa4317296bc0c01e042a99df62396ce78 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 08:55:16 -0500
+Subject: [PATCH 407/638] [AROS] Trace Chromium thread priorities
+
+AI_PHASE: chromium-process-model
+AI_STATUS: bounded-runtime-telemetry
+AI_OBSERVED: Runtime50 rendered continuously and did not reproduce Runtime49's slow input batch, while 168 slow tasks still showed heavy startup and database contention.
+AI_FIX_REASON: Verify Chromium ThreadType requests reach the existing AROS SetTaskPri mapping and record actual Exec priorities before changing scheduler policy.
+AI_SCOPE: AROS-only first 128 process-wide priority transitions; no priority mapping or scheduling behavior change.
+AI_VALIDATION: git diff --check passes; compile and hosted multiprocess replay follow as separate evidence checkpoints.
+
+---
+ base/threading/platform_thread_posix.cc | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index ff8f0a7dcc..3e8efbeb63 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -13,6 +13,7 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#include <atomic>
+ #include <memory>
+ #include <tuple>
+ 
+@@ -40,7 +41,6 @@
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <sys/syscall.h>
+-#include <atomic>
+ #endif
+ 
+ #if BUILDFLAG(IS_FUCHSIA)
+@@ -395,7 +395,22 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
+   struct Task* task = FindTask(nullptr);
+   if (task) {
+     const int nice_setting = internal::ThreadTypeToNiceValue(thread_type);
++    const int old_priority = task->tc_Node.ln_Pri;
+     SetTaskPri(task, static_cast<BYTE>(-nice_setting));
++    static std::atomic<uint32_t> aros_priority_reports{0};
++    const uint32_t report = aros_priority_reports.fetch_add(1);
++    if (report < 128) {
++      LOG(ERROR) << "[AROS_PRIORITY] task=" << task
++                 << " name="
++                 << (task->tc_Node.ln_Name ? task->tc_Node.ln_Name
++                                           : "<unnamed>")
++                 << " thread_type=" << static_cast<int>(thread_type)
++                 << " pump_type=" << static_cast<int>(pump_type_hint)
++                 << " old_exec_priority=" << old_priority
++                 << " requested_exec_priority=" << -nice_setting
++                 << " actual_exec_priority="
++                 << static_cast<int>(task->tc_Node.ln_Pri);
++    }
+   }
+ #elif BUILDFLAG(IS_NACL)
+   NOTIMPLEMENTED();

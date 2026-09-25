@@ -1,0 +1,86 @@
+From d11ea5f50c1a593e3d6155152b14a4fb62b1e5e9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:01:21 -0500
+Subject: [PATCH 199/638] extensions: define native messaging paths on AROS
+ [chromium] [aros]
+
+Statement:
+The POSIX native-process launcher is part of desktop Chrome on AROS, but its manifest path keys were only declared for Linux, ChromeOS, and macOS.
+
+Decision:
+Keep native messaging enabled. Resolve system manifests beside the Chromium module and user manifests below DIR_USER_DATA, avoiding Unix-specific /etc assumptions.
+
+Evidence:
+The AROS cross build compiles chrome_paths.o and native_process_launcher_posix.o with both path keys available.
+
+Chain:
+; first native Chromium window; extension host integration.
+---
+ chrome/common/chrome_paths.cc | 17 ++++++++++++-----
+ chrome/common/chrome_paths.h  |  3 ++-
+ 2 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/common/chrome_paths.cc b/chrome/common/chrome_paths.cc
+index 54aca1f19f..411b9c1cea 100644
+--- a/chrome/common/chrome_paths.cc
++++ b/chrome/common/chrome_paths.cc
+@@ -612,9 +612,15 @@ bool PathProvider(int key, base::FilePath* result) {
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS) && \
+-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC))
++    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
++     BUILDFLAG(IS_AROS))
+     case chrome::DIR_NATIVE_MESSAGING:
+-#if BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_AROS)
++      if (!base::PathService::Get(base::DIR_MODULE, &cur)) {
++        return false;
++      }
++      cur = cur.Append(FILE_PATH_LITERAL("NativeMessagingHosts"));
++#elif BUILDFLAG(IS_MAC)
+ #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+       cur = base::FilePath(
+           FILE_PATH_LITERAL("/Library/Google/Chrome/NativeMessagingHosts"));
+@@ -622,7 +628,7 @@ bool PathProvider(int key, base::FilePath* result) {
+       cur = base::FilePath(FILE_PATH_LITERAL(
+           "/Library/Application Support/Chromium/NativeMessagingHosts"));
+ #endif
+-#else  // BUILDFLAG(IS_MAC)
++#else  // !BUILDFLAG(IS_AROS) && !BUILDFLAG(IS_MAC)
+ #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+       cur = base::FilePath(
+           FILE_PATH_LITERAL("/etc/opt/chrome/native-messaging-hosts"));
+@@ -630,7 +636,7 @@ bool PathProvider(int key, base::FilePath* result) {
+       cur = base::FilePath(
+           FILE_PATH_LITERAL("/etc/chromium/native-messaging-hosts"));
+ #endif
+-#endif  // !BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_AROS) || BUILDFLAG(IS_MAC)
+       break;
+ 
+     case chrome::DIR_USER_NATIVE_MESSAGING:
+@@ -639,7 +645,8 @@ bool PathProvider(int key, base::FilePath* result) {
+       }
+       cur = cur.Append(FILE_PATH_LITERAL("NativeMessagingHosts"));
+       break;
+-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
++        // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_AROS)
+ #if !BUILDFLAG(IS_ANDROID)
+     case chrome::DIR_GLOBAL_GCM_STORE:
+       if (!base::PathService::Get(chrome::DIR_USER_DATA, &cur)) {
+diff --git a/chrome/common/chrome_paths.h b/chrome/common/chrome_paths.h
+index 4cde941119..b99958d0d4 100644
+--- a/chrome/common/chrome_paths.h
++++ b/chrome/common/chrome_paths.h
+@@ -126,7 +126,8 @@ enum {
+ 
+ #endif
+ #if BUILDFLAG(ENABLE_EXTENSIONS) && \
+-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC))
++    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
++     BUILDFLAG(IS_AROS))
+   DIR_NATIVE_MESSAGING,       // System directory where native messaging host
+                               // manifest files are stored.
+   DIR_USER_NATIVE_MESSAGING,  // Directory with Native Messaging Hosts

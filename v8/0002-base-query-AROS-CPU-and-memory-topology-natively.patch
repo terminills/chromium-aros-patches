@@ -1,0 +1,70 @@
+From a382b304124c7114ed3b30d768b6c27b49ffc25d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:35:11 -0500
+Subject: [PATCH 02/28] base: query AROS CPU and memory topology natively
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: V8's generic POSIX SysInfo path uses Linux sysconf selectors that AROS neither defines nor implements.
+
+FIX_REASON: Query kernel.resource for active CPU count and Exec AvailMem for physical RAM, containing the SCHED_RR header collision locally.
+
+SCOPE: src/base/sys-info.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/v8/v8_libbase/sys-info.o
+
+RISK: low; AROS-specific branches return conservative fallbacks when kernel.resource is unavailable.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/base/sys-info.cc | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/src/base/sys-info.cc b/src/base/sys-info.cc
+index 3d45c85..d11e49a 100644
+--- a/src/base/sys-info.cc
++++ b/src/base/sys-info.cc
+@@ -4,6 +4,16 @@
+ 
+ #include "src/base/sys-info.h"
+ 
++#if V8_OS_AROS
++#include <exec/memory.h>
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#endif
++
+ #if V8_OS_POSIX
+ #include <sys/stat.h>
+ #include <sys/time.h>
+@@ -37,7 +47,12 @@ namespace base {
+ 
+ // static
+ int SysInfo::NumberOfProcessors() {
+-#if V8_OS_OPENBSD
++#if V8_OS_AROS
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase) return 1;
++  int result = KrnGetCPUCount();
++  return result > 0 ? result : 1;
++#elif V8_OS_OPENBSD
+   int mib[2] = {CTL_HW, HW_NCPU};
+   int ncpu = 0;
+   size_t len = sizeof(ncpu);
+@@ -63,7 +78,9 @@ int SysInfo::NumberOfProcessors() {
+ 
+ // static
+ int64_t SysInfo::AmountOfPhysicalMemory() {
+-#if V8_OS_DARWIN
++#if V8_OS_AROS
++  return static_cast<int64_t>(AvailMem(MEMF_TOTAL));
++#elif V8_OS_DARWIN
+   int mib[2] = {CTL_HW, HW_MEMSIZE};
+   int64_t memsize = 0;
+   size_t len = sizeof(memsize);

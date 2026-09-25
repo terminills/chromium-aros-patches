@@ -1,0 +1,231 @@
+From cc1bb392e9cd58f0c17d6c7aa3035b13c0ad594d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 22:40:53 -0500
+Subject: [PATCH 426/638] [AROS] Watch AROS file paths asynchronously
+
+Replace the AROS FilePathWatcher stub with a polling implementation that fingerprints real file metadata and sorted recursive directory contents on a blocking worker. Deliver changes back on the caller sequence and advertise recursive watches now that they are implemented.
+
+
+
+---
+ base/BUILD.gn                        |   2 +-
+ base/files/file_path_watcher.cc      |   2 +-
+ base/files/file_path_watcher_aros.cc | 183 +++++++++++++++++++++++++++
+ 3 files changed, 185 insertions(+), 2 deletions(-)
+ create mode 100644 base/files/file_path_watcher_aros.cc
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 386dd9e1f6..70204df4e9 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1014,7 +1014,7 @@ component("base") {
+       sources -= [ "files/memory_mapped_file_posix.cc" ]
+       sources += [
+         "base_paths_aros.cc",
+-        "files/file_path_watcher_stub.cc",
++        "files/file_path_watcher_aros.cc",
+         "files/memory_mapped_file_aros.cc",
+         "process/memory_stubs.cc",
+         "process/process_aros.cc",
+diff --git a/base/files/file_path_watcher.cc b/base/files/file_path_watcher.cc
+index 44ce2f04c6..e080df3c9d 100644
+--- a/base/files/file_path_watcher.cc
++++ b/base/files/file_path_watcher.cc
+@@ -25,7 +25,7 @@ FilePathWatcher::~FilePathWatcher() {
+ bool FilePathWatcher::RecursiveWatchAvailable() {
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) ||        \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AIX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   return true;
+ #else
+   // FSEvents isn't available on iOS.
+diff --git a/base/files/file_path_watcher_aros.cc b/base/files/file_path_watcher_aros.cc
+new file mode 100644
+index 0000000000..9a4a25fd68
+--- /dev/null
++++ b/base/files/file_path_watcher_aros.cc
+@@ -0,0 +1,183 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/files/file_path_watcher.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/check.h"
++#include "base/files/file.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "base/time/time.h"
++
++namespace base {
++
++namespace {
++
++constexpr TimeDelta kPollInterval = Milliseconds(500);
++
++template <typename T>
++void AppendValue(std::string* output, const T& value) {
++  output->append(reinterpret_cast<const char*>(&value), sizeof(value));
++}
++
++void AppendString(std::string* output, const std::string& value) {
++  const size_t size = value.size();
++  AppendValue(output, size);
++  output->append(value);
++}
++
++void AppendFileInfo(std::string* output, const File::Info& info) {
++  AppendValue(output, info.size);
++  AppendValue(output, info.is_directory);
++  AppendValue(output, info.is_symbolic_link);
++  AppendValue(output, info.last_modified.ToInternalValue());
++  AppendValue(output, info.creation_time.ToInternalValue());
++}
++
++struct SnapshotEntry {
++  FilePath path;
++  File::Info info;
++};
++
++bool SnapshotEntryLess(const SnapshotEntry& left, const SnapshotEntry& right) {
++  return left.path.value() < right.path.value();
++}
++
++struct FilePathSnapshot {
++  bool exists = false;
++  bool is_directory = false;
++  size_t entry_count = 0;
++  std::string fingerprint;
++};
++
++FilePathSnapshot CaptureSnapshot(const FilePath& path,
++                                 FilePathWatcher::Type type) {
++  FilePathSnapshot snapshot;
++  File::Info root_info;
++  if (!GetFileInfo(path, &root_info)) {
++    AppendValue(&snapshot.fingerprint, snapshot.exists);
++    return snapshot;
++  }
++
++  snapshot.exists = true;
++  snapshot.is_directory = root_info.is_directory;
++  AppendValue(&snapshot.fingerprint, snapshot.exists);
++  AppendString(&snapshot.fingerprint, path.value());
++  AppendFileInfo(&snapshot.fingerprint, root_info);
++
++  if (type != FilePathWatcher::Type::kRecursive || !root_info.is_directory) {
++    return snapshot;
++  }
++
++  std::vector<SnapshotEntry> entries;
++  FileEnumerator enumerator(
++      path, true, FileEnumerator::FILES | FileEnumerator::DIRECTORIES);
++  for (FilePath entry_path = enumerator.Next(); !entry_path.empty();
++       entry_path = enumerator.Next()) {
++    File::Info entry_info;
++    if (GetFileInfo(entry_path, &entry_info)) {
++      entries.push_back({std::move(entry_path), entry_info});
++    }
++  }
++
++  std::sort(entries.begin(), entries.end(), SnapshotEntryLess);
++  snapshot.entry_count = entries.size();
++  for (const SnapshotEntry& entry : entries) {
++    AppendString(&snapshot.fingerprint, entry.path.value());
++    AppendFileInfo(&snapshot.fingerprint, entry.info);
++  }
++  return snapshot;
++}
++
++class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
++ public:
++  FilePathWatcherImpl() = default;
++  FilePathWatcherImpl(const FilePathWatcherImpl&) = delete;
++  FilePathWatcherImpl& operator=(const FilePathWatcherImpl&) = delete;
++  ~FilePathWatcherImpl() override = default;
++
++  bool Watch(const FilePath& path,
++             Type type,
++             const FilePathWatcher::Callback& callback) override {
++    DCHECK(!callback.is_null());
++    DCHECK(callback_.is_null());
++
++    path_ = path;
++    type_ = type;
++    callback_ = callback;
++    SchedulePoll(TimeDelta());
++    return true;
++  }
++
++  void Cancel() override {
++    set_cancelled();
++    weak_factory_.InvalidateWeakPtrs();
++    callback_.Reset();
++  }
++
++ private:
++  void SchedulePoll(TimeDelta delay) {
++    SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        BindOnce(&FilePathWatcherImpl::Poll, weak_factory_.GetWeakPtr()),
++        delay);
++  }
++
++  void Poll() {
++    const bool posted = ThreadPool::PostTaskAndReplyWithResult(
++        FROM_HERE,
++        {MayBlock(), TaskPriority::USER_VISIBLE,
++         TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++        BindOnce(&CaptureSnapshot, path_, type_),
++        BindOnce(&FilePathWatcherImpl::OnSnapshot, weak_factory_.GetWeakPtr()));
++    if (!posted) {
++      LOG(WARNING) << "[Chromium:AROS:FileWatch] poll task rejected path="
++                   << path_.value();
++    }
++  }
++
++  void OnSnapshot(FilePathSnapshot snapshot) {
++    if (!have_snapshot_) {
++      LOG(INFO) << "[Chromium:AROS:FileWatch] initialized path="
++                << path_.value() << " recursive=" << (type_ == Type::kRecursive)
++                << " exists=" << snapshot.exists
++                << " entries=" << snapshot.entry_count;
++      have_snapshot_ = true;
++    } else if (fingerprint_ != snapshot.fingerprint) {
++      LOG(INFO) << "[Chromium:AROS:FileWatch] changed path=" << path_.value()
++                << " exists=" << snapshot.exists
++                << " entries=" << snapshot.entry_count;
++      callback_.Run(path_, false);
++    }
++
++    fingerprint_ = std::move(snapshot.fingerprint);
++    SchedulePoll(kPollInterval);
++  }
++
++  FilePath path_;
++  Type type_ = Type::kNonRecursive;
++  FilePathWatcher::Callback callback_;
++  bool have_snapshot_ = false;
++  std::string fingerprint_;
++  WeakPtrFactory<FilePathWatcherImpl> weak_factory_{this};
++};
++
++}  // namespace
++
++FilePathWatcher::FilePathWatcher()
++    : FilePathWatcher(std::make_unique<FilePathWatcherImpl>()) {}
++
++}  // namespace base

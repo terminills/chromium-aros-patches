@@ -1,0 +1,150 @@
+From 69e0260101bdc344c547a7d2f628e25346053280 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:21:46 -0500
+Subject: [PATCH 163/638] content: use native AROS crash reporting in shell
+ [chromium] [aros]
+
+Statement: AROS content_shell faults are reported by debug.resource and expanded by OPAL; Crashpad's POSIX mmap, paths, and UUID substrate is neither available nor the native reporting path.
+
+Decision: Omit Crashpad app/browser dependencies and initialization on AROS while retaining crash-key support. Keep Chromium web-test-only clients excluded consistently in both GN and ShellMainDelegate.
+
+Evidence: The windowed build failed in Crashpad close_stdio, uuid, and file_io_posix; regeneration then exposed web-test Mojo headers despite support_web_tests=false.
+
+Validation: gn gen out/aros-windowed --root-target=//content/shell:content_shell; content_shell graph contains no Crashpad client/util; shell_main_delegate.o compiles.
+
+Chain:; ACD-chromium-aros-native-crash-reporting
+---
+ content/shell/BUILD.gn                   |  4 ++--
+ content/shell/app/shell_main_delegate.cc | 18 +++++++++---------
+ content/shell/app/shell_main_delegate.h  |  4 ++--
+ 3 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index b983da3bda..7b3df0ac51 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -118,7 +118,7 @@ static_library("content_shell_app") {
+       "//content/web_test:web_test_renderer",
+     ]
+   }
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [
+       "//components/crash/core/app",
+       "//components/crash/core/app:test_support",
+@@ -356,7 +356,7 @@ static_library("content_shell_lib") {
+       "browser/fuchsia_view_presenter.h",
+     ]
+     deps += [ "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.element:fuchsia.element_hlcpp" ]
+-  } else {
++  } else if (!is_aros) {
+     deps += [
+       "//components/crash/content/browser",
+       "//components/crash/core/app",
+diff --git a/content/shell/app/shell_main_delegate.cc b/content/shell/app/shell_main_delegate.cc
+index b5085191c0..2a894788b8 100644
+--- a/content/shell/app/shell_main_delegate.cc
++++ b/content/shell/app/shell_main_delegate.cc
+@@ -49,7 +49,7 @@
+     content::RegisterIPCLogger(msg_id, logger)
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #include "content/web_test/browser/web_test_browser_main_runner.h"  // nogncheck
+ #include "content/web_test/browser/web_test_content_browser_client.h"  // nogncheck
+ #include "content/web_test/renderer/web_test_content_renderer_client.h"  // nogncheck
+@@ -62,7 +62,7 @@
+ #include "content/shell/android/shell_descriptors.h"
+ #endif
+ 
+-#if !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crashpad.h"  // nogncheck
+ #endif
+ 
+@@ -102,7 +102,7 @@ enum class LoggingDest {
+ #endif
+ };
+ 
+-#if !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+ base::LazyInstance<content::ShellCrashReporterClient>::Leaky
+     g_shell_crash_client = LAZY_INSTANCE_INITIALIZER;
+ #endif
+@@ -238,7 +238,7 @@ std::optional<int> ShellMainDelegate::BasicStartupComplete() {
+ 
+   InitLogging(command_line);
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     const bool browser_process =
+         command_line.GetSwitchValueASCII(switches::kProcessType).empty();
+@@ -273,7 +273,7 @@ void ShellMainDelegate::PreSandboxStartup() {
+ // Disable platform crash handling and initialize the crash reporter, if
+ // requested.
+ // TODO(crbug.com/1226159): Implement crash reporter integration for Fuchsia.
+-#if !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kEnableCrashReporter)) {
+     std::string process_type =
+@@ -289,7 +289,7 @@ void ShellMainDelegate::PreSandboxStartup() {
+ #endif
+     }
+   }
+-#endif  // !BUILDFLAG(IS_FUCHSIA)
++#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+ 
+   crash_reporter::InitializeCrashKeys();
+ 
+@@ -308,7 +308,7 @@ absl::variant<int, MainFunctionParams> ShellMainDelegate::RunProcess(
+   base::trace_event::TraceLog::GetInstance()->SetProcessSortIndex(
+       kTraceEventBrowserProcessSortIndex);
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     // Web tests implement their own BrowserMain() replacement.
+     web_test_runner_->RunBrowserMain(std::move(main_function_params));
+@@ -456,7 +456,7 @@ ContentClient* ShellMainDelegate::CreateContentClient() {
+ }
+ 
+ ContentBrowserClient* ShellMainDelegate::CreateContentBrowserClient() {
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     browser_client_ = std::make_unique<WebTestContentBrowserClient>();
+     return browser_client_.get();
+@@ -472,7 +472,7 @@ ContentGpuClient* ShellMainDelegate::CreateContentGpuClient() {
+ }
+ 
+ ContentRendererClient* ShellMainDelegate::CreateContentRendererClient() {
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     renderer_client_ = std::make_unique<WebTestContentRendererClient>();
+     return renderer_client_.get();
+diff --git a/content/shell/app/shell_main_delegate.h b/content/shell/app/shell_main_delegate.h
+index 7e390121d7..dbbf53f24f 100644
+--- a/content/shell/app/shell_main_delegate.h
++++ b/content/shell/app/shell_main_delegate.h
+@@ -19,7 +19,7 @@ class ShellContentGpuClient;
+ class ShellContentRendererClient;
+ class ShellContentUtilityClient;
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ class WebTestBrowserMainRunner;
+ #endif
+ 
+@@ -60,7 +60,7 @@ class ShellMainDelegate : public ContentMainDelegate {
+   // content_browsertests should not set the kRunWebTests command line flag, so
+   // |is_content_browsertests_| and |web_test_runner_| are mututally exclusive.
+   bool is_content_browsertests_;
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   // Only present when running web tests, which run inside Content Shell.
+   //
+   // Web tests are not browser tests, so |is_content_browsertests_| and

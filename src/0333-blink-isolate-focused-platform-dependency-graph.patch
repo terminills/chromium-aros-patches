@@ -1,0 +1,34 @@
+From 9fc61624cffb45059f7e1626025fb45dcc4ae59f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 19:12:00 -0500
+Subject: [PATCH 333/638] blink: isolate focused platform dependency graph
+
+Stop appending browser root_extra_deps to the Blink Platform-only extraction branch. Those extras now traverse Chrome packaging into CEF and are not part of the platform library closure.
+
+AI_PHASE: chromium-blink-platform-library
+
+AI_STATUS: focused-graph-browser-closure-removed
+
+AI_VALIDATION: second gn gen crossed archive target visibility then failed through chrome_paks -> cef_resources at CEF's basic-printing assertion
+
+AI_EVIDENCE: out/aros-blink-platform/test-artifacts/-blink-platform-library-20260725/02-complete-archive-gn-after-visibility.log
+
+AI_LIMITATIONS: focused graph generation and complete archive build still require replay
+
+AI_DECISION_CHAIN:; 41ac368ad4; 53bce9af16
+---
+ BUILD.gn | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 1e7cfe71a7..c6bac2faeb 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -107,7 +107,6 @@ group("gn_all") {
+     assert(!aros_v8_library_only)
+     deps =
+         [ "//third_party/blink/renderer/platform:aros_blink_platform_archive" ]
+-    deps += root_extra_deps
+   } else if (is_aros && aros_v8_library_only) {
+     assert(!aros_cef_library_only)
+     assert(v8_monolithic)

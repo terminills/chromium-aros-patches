@@ -1,0 +1,29 @@
+From 1c53b226d14f74fca13ca8094fba3bbaae36b4ef Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 04:10:59 -0500
+Subject: [PATCH 532/638] Recognize AROS ENOENT as gone child
+
+---
+ base/process/process_posix.cc | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
+index 805637b732..3c383e6ae5 100644
+--- a/base/process/process_posix.cc
++++ b/base/process/process_posix.cc
+@@ -40,10 +40,11 @@ namespace {
+ 
+ #if BUILDFLAG(IS_AROS)
+ bool ArosKillFailureMeansProcessGone(int saved_errno) {
+-  // Hosted AROS can report an already-returned child task as either ESRCH or,
+-  // through the current PosixC signal bridge, a failed kill() with errno left
+-  // at 0. Both mean there is no signalable target left for Chromium to retire.
+-  return saved_errno == ESRCH || saved_errno == 0;
++  // Hosted AROS can report an already-returned child task as ESRCH, ENOENT,
++  // or through the current PosixC signal bridge as a failed kill() with errno
++  // left at 0. All mean there is no signalable target left for Chromium to
++  // retire.
++  return saved_errno == ESRCH || saved_errno == ENOENT || saved_errno == 0;
+ }
+ #endif
+ 

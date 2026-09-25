@@ -1,0 +1,68 @@
+From 265e058710cf891aecaf70add228993ca50ff4fc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:56:10 -0500
+Subject: [PATCH 011/638] skia: define the AROS software-raster platform
+ contract [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS was neither classified as Skia Unix nor admitted by Chromium's raster-canvas platform allowlist, while the allocation shim unconditionally included a non-existent malloc.h despite not using malloc_usable_size on AROS.
+
+FIX_REASON: Select Skia's Unix semaphore/runtime path, expose the existing non-Windows bitmap canvas on AROS, and retain caller-known allocation sizes without a fake allocator introspection API.
+
+SCOPE: skia GN platform definition, platform_canvas declaration, and SkMemory allocation-header selection.
+
+VALIDATION: focused SkSemaphore, platform_canvas, and SkMemory objects compile; the full graph crossed Skia core and Graphite before the later SkOSFile mmap boundary.
+
+RISK: low; software raster only, with allocator accounting limited to requested size until AROS exposes a trustworthy usable-size API.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ skia/BUILD.gn                     | 4 ++++
+ skia/ext/SkMemory_new_handler.cpp | 2 +-
+ skia/ext/platform_canvas.h        | 2 +-
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/skia/BUILD.gn b/skia/BUILD.gn
+index b2a2dd347f..54d900d14f 100644
+--- a/skia/BUILD.gn
++++ b/skia/BUILD.gn
+@@ -101,6 +101,10 @@ config("skia_config") {
+     ]
+   }
+ 
++  if (is_aros) {
++    defines += [ "SK_BUILD_FOR_UNIX" ]
++  }
++
+   if (is_mac) {
+     defines += [ "SK_BUILD_FOR_MAC" ]
+   }
+diff --git a/skia/ext/SkMemory_new_handler.cpp b/skia/ext/SkMemory_new_handler.cpp
+index 3d2c2d263c..966d9583ad 100644
+--- a/skia/ext/SkMemory_new_handler.cpp
++++ b/skia/ext/SkMemory_new_handler.cpp
+@@ -19,7 +19,7 @@
+ #include <windows.h>
+ #elif BUILDFLAG(IS_APPLE)
+ #include <malloc/malloc.h>
+-#else
++#elif !BUILDFLAG(IS_AROS)
+ #include <malloc.h>
+ #endif
+ 
+diff --git a/skia/ext/platform_canvas.h b/skia/ext/platform_canvas.h
+index 34d8b858f5..43bb6b8b69 100644
+--- a/skia/ext/platform_canvas.h
++++ b/skia/ext/platform_canvas.h
+@@ -58,7 +58,7 @@ SK_API HDC GetNativeDrawingContext(SkCanvas* canvas);
+ 
+ #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+     defined(__sun) || defined(ANDROID) || defined(__APPLE__) ||             \
+-    defined(__Fuchsia__)
++    defined(__Fuchsia__) || defined(__AROS__)
+ // Construct a canvas from the given memory region. The memory is not cleared
+ // first. @data must be, at least, @height * StrideForWidth(@width) bytes.
+ SK_API std::unique_ptr<SkCanvas> CreatePlatformCanvasWithPixels(

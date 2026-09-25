@@ -1,0 +1,106 @@
+From 36182a13c27bc875be2c7e557db8226907f1dd0b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 16 Sep 2026 17:09:34 -0500
+Subject: [PATCH 619/638] base: bind the AROS pump's wake-up to the thread that
+ runs it
+
+MessagePumpAROS captures pump_task_, allocates its wake signal and creates its
+timer port in the CONSTRUCTOR. Exec signals are per-task and a MsgPort replies
+to mp_SigTask, so all of that is only correct while the thread that constructs
+a pump is also the thread that runs it. If it ever is not, the pump waits on a
+bit belonging to another task while ScheduleWork() signals that other task, and
+cross-thread posts stop waking the loop - a failure with no symptom other than
+a loop that quietly ignores everything posted to it.
+
+RebindToRunningTask() moves the wake signal and the timer port to the running
+thread and logs when it has to.
+
+This is a guard, not a fix for anything observed: it was written while chasing a
+renderer whose posted tasks ran exactly once, and the measurement disproved the
+hypothesis - the renderer's pump is constructed on the thread that runs it, so
+this never fires there. That bug was elsewhere (nothing pumped the renderer's
+Node loop, fixed in AROS electron/node). Keeping the guard because the class of
+failure is real and silent, and one LOG(ERROR) is cheap.
+---
+ base/message_loop/message_pump_aros.cc | 54 ++++++++++++++++++++++++++
+ base/message_loop/message_pump_aros.h  |  1 +
+ 2 files changed, 55 insertions(+)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 9cd6956e0f..63f32e2fb9 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -276,7 +276,61 @@ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+   return true;
+ }
+ 
++void MessagePumpAROS::RebindToRunningTask() {
++  // Exec signals are per-TASK: a signal bit is allocated out of the calling
++  // task's own set, Signal() delivers to one named task, and a MsgPort replies
++  // to the task recorded in mp_SigTask. All of that is captured in the
++  // constructor - which is only correct if the thread that CONSTRUCTS the pump
++  // is also the thread that RUNS it. If it ever is not, the pump waits on a bit
++  // belonging to another task while ScheduleWork() signals that other task, and
++  // cross-thread posts stop waking the loop entirely.
++  //
++  // A guard, not a fix for anything observed: every pump measured so far is
++  // constructed on the thread that runs it, the renderer's main thread
++  // included, so this does not normally fire. It says so loudly if it does,
++  // because that failure is otherwise invisible - the loop simply stops
++  // responding to posts.
++  Task* const running_task = FindTask(nullptr);
++  if (running_task == pump_task_) {
++    return;
++  }
++
++  const int32_t wake_signal = AllocSignal(-1);
++  if (wake_signal < 0) {
++    LOG(ERROR) << "[Chromium:IO] pump runs on task=" << running_task
++               << " but was built on task=" << pump_task_
++               << " and no signal is free to rebind the wake-up";
++    return;
++  }
++
++  LOG(ERROR) << "[Chromium:IO] rebinding pump: built on task=" << pump_task_
++             << " runs on task=" << running_task << " wake-signal="
++             << wake_signal;
++
++  // The bits allocated in the constructor belong to the constructing task and
++  // cannot be freed from here; they are left to it. One pump binds once.
++  pump_task_ = running_task;
++  wakeup_signal_ = wake_signal;
++  wakeup_mask_ = uint32_t{1} << wake_signal;
++
++  // The timer port replies to whoever waits on it, so it moves too. Nothing is
++  // in flight yet: Run() has not armed a timer request.
++  if (timer_port_) {
++    const int32_t timer_signal = AllocSignal(-1);
++
++    if (timer_signal >= 0) {
++      timer_port_->mp_SigBit = static_cast<UBYTE>(timer_signal);
++      timer_port_->mp_SigTask = running_task;
++    } else {
++      LOG(ERROR) << "[Chromium:IO] no signal free to rebind the pump's timer "
++                    "port; delayed work will not wake this thread";
++    }
++  }
++}
++
+ void MessagePumpAROS::Run(Delegate* delegate) {
++  RebindToRunningTask();
++
+   RunState run_state(delegate);
+   AutoReset<raw_ptr<RunState>> auto_reset_run_state(&run_state_, &run_state);
+ 
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 26a0055556..240f9aaaa9 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -87,6 +87,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+     int ready_mode;
+   };
+ 
++  void RebindToRunningTask();
+   bool WaitForSocketEvents(TimeDelta timeout, bool wait_indefinitely);
+   void WaitForIdleEvents(TimeDelta timeout, bool wait_indefinitely);
+   void DispatchController(const ReadyRegistration& ready);

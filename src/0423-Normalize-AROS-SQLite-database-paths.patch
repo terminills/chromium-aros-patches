@@ -1,0 +1,56 @@
+From 0f5c31b344d3dd426dec61fccba350f778958651 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 21:49:42 -0500
+Subject: [PATCH 423/638] [AROS] Normalize AROS SQLite database paths
+
+---
+ sql/database.cc | 29 ++++++++++++++++++++++++++++-
+ 1 file changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/sql/database.cc b/sql/database.cc
+index 49c8c4ee77..4d05d4f70f 100644
+--- a/sql/database.cc
++++ b/sql/database.cc
+@@ -68,6 +68,28 @@ static constexpr char kSqliteMainDatabaseName[] = "main";
+ // Magic path value telling sqlite3_open_v2() to open an in-memory database.
+ static constexpr char kSqliteOpenInMemoryPath[] = ":memory:";
+ 
++#if BUILDFLAG(IS_AROS)
++// SQLite's Unix VFS recognizes only slash-prefixed paths as absolute. Convert
++// native AROS volume and assign paths before SQLite canonicalizes them, then
++// let POSIXC translate the slash form back at the syscall boundary.
++std::string ArosPathForSqlite(const std::string& path) {
++  const size_t volume_separator = path.find(':');
++  if (volume_separator == std::string::npos || volume_separator == 0) {
++    return path;
++  }
++
++  std::string result("/");
++  result.append(path, 0, volume_separator);
++  result.push_back('/');
++  size_t relative_path = volume_separator + 1;
++  while (relative_path < path.size() && path[relative_path] == '/') {
++    ++relative_path;
++  }
++  result.append(path, relative_path, std::string::npos);
++  return result;
++}
++#endif
++
+ // Spin for up to a second waiting for the lock to clear when setting
+ // up the database.
+ // TODO(shess): Better story on this.  http://crbug.com/56559
+@@ -1821,7 +1843,12 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+   // https://www.sqlite.org/rescode.html for details.
+   int open_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                    SQLITE_OPEN_EXRESCODE | SQLITE_OPEN_PRIVATECACHE;
+-  std::string uri_file_path = db_file_path;
++  std::string uri_file_path =
++#if BUILDFLAG(IS_AROS)
++      ArosPathForSqlite(db_file_path);
++#else
++      db_file_path;
++#endif
+   if (options_.exclusive_database_file_lock) {
+ #if BUILDFLAG(IS_WIN)
+     const bool in_memory = db_file_path == kSqliteOpenInMemoryPath;

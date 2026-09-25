@@ -1,0 +1,43 @@
+From 0c7529d0d34f6d466705935fcd24624079b61740 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:07:34 -0500
+Subject: [PATCH 062/638] net: suppress AROSTCP call macros in addrinfo
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Chromium network headers now import AROSTCP address types without process-global socket call macros.
+
+ROOT_CAUSE: AROS netdb.h transitively enabled proto/bsdsocket macro calls, rewriting Chromium methods such as socket() and ReleaseSocket().
+
+FIX_REASON: Use AROS's documented BSDSOCKET_NOLIBDEFINES mode at sys_addrinfo.h; runtime calls already belong to the per-task base::aros socket adapter.
+
+SCOPE: net/base/sys_addrinfo.h only.
+
+VALIDATION: The previously failing network-service socket_manager.o target compiled with both colliding APIs present.
+
+RISK: AROS code including sys_addrinfo.h cannot use implicit SocketBase call macros and must use the explicit per-task adapter, which is the intended contract.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ net/base/sys_addrinfo.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/net/base/sys_addrinfo.h b/net/base/sys_addrinfo.h
+index ca6dd1f031..ff2cc24a58 100644
+--- a/net/base/sys_addrinfo.h
++++ b/net/base/sys_addrinfo.h
+@@ -28,6 +28,14 @@
+ #if BUILDFLAG(IS_WIN)
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
++#elif BUILDFLAG(IS_AROS)
++// Chromium resolves AROSTCP calls through per-task wrappers. Import the
++// address types without the process-global SocketBase call macros.
++#define BSDSOCKET_NOLIBDEFINES
++#include <netdb.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#undef BSDSOCKET_NOLIBDEFINES
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ #include <netdb.h>
+ #include <netinet/in.h>

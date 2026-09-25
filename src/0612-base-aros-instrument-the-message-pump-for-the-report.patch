@@ -1,0 +1,178 @@
+From 057e048327377294d40e318777c241af7e1056d0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 13 Sep 2026 14:00:35 -0500
+Subject: [PATCH 612/638] base/aros: instrument the message pump for the
+ reported busy-looping
+
+deadwood reports busy-looping with a visibly delayed mouse pointer. Reading the
+pump found a shape that would cause exactly that, but measuring did NOT
+reproduce it, so this adds the two facts needed to settle it from a machine
+that does loop rather than guessing from one that does not.
+
+The shape: a DOS-backed descriptor watched for WATCH_WRITE is reported ready on
+every pass, because DOS writes are synchronous and there is nothing to wait on.
+That makes Run()'s processed_io permanently true, so it continues without ever
+reaching its blocking wait - a full spin, in which the
+kDosDescriptorPollInterval clamp is also never reached.
+
+Measured against it: hosted Chromium loading https://example.com sits at about
+1-4% of one core, and about:blank is flat. The pump blocks correctly there, so
+the condition exists but has not been shown to fire. A first theory that a
+missing fd.library would misclassify every socket as DOS-backed was checked and
+rejected - that path produces a hang rather than a spin, because
+__get_default_file fails on a real socket and nothing is ever reported ready.
+
+Two one-shot reports, both cheap and off the hot path once fired:
+
+  * the first DOS-backed fd registered for WATCH_WRITE is named, with its fd,
+    mode, persistence and the watch count - that identifies the descriptor
+    responsible if the spin is real;
+  * 20000 consecutive Run() passes that skip the blocking wait are reported,
+    with immediate_work / processed_io / dos_write_only broken out.
+    dos_write_only distinguishes "the pump is busy with real work" from "the
+    pump is spinning on a synthesised ready", which is the whole question.
+
+Readiness is now classified as observed (WaitSelect said so, or WaitForChar
+asked the handler) versus synthesised (the always-writable DOS path), which is
+what the dos_write_only flag reports. No behaviour change: nothing is dispatched
+differently and no wait is altered. Deliberately diagnostic only - changing the
+browser's IO pump on an unreproduced theory is how a worse bug gets shipped.
+---
+ base/message_loop/message_pump_aros.cc | 51 ++++++++++++++++++++++++++
+ base/message_loop/message_pump_aros.h  | 20 ++++++++++
+ 2 files changed, 71 insertions(+)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index fa5784efe1..9cd6956e0f 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -56,6 +56,12 @@ namespace {
+ 
+ constexpr TimeDelta kDosDescriptorPollInterval = Milliseconds(10);
+ 
++// Consecutive Run() passes that skip the blocking wait before the pump is
++// reported as spinning. High enough that ordinary bursts of work under load do
++// not trip it; low enough that a real spin trips it within a fraction of a
++// second.
++constexpr uint64_t kSpinReportThreshold = 20000;
++
+ struct LivePumpRegistry {
+   Lock lock;
+   std::vector<MessagePumpAROS*> pumps;
+@@ -288,8 +294,26 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+       break;
+     }
+     if (immediate_work_available || processed_io) {
++      // Spin detector. Every pass through here skips BeforeWait() and the
++      // blocking wait below, so a long unbroken run of them means the pump has
++      // stopped idling - which is what "busy looping / the mouse pointer is
++      // delayed" looks like from the outside. Legitimate bursts happen under
++      // load, hence a high threshold and a one-shot report.
++      if (++consecutive_nonblocking_passes_ == kSpinReportThreshold &&
++          !spin_reported_) {
++        LOG(ERROR) << "[Chromium:IO] pump has not blocked for "
++                   << kSpinReportThreshold << " consecutive passes"
++                   << " immediate_work=" << immediate_work_available
++                   << " processed_io=" << processed_io
++                   << " dos_write_only=" << last_pass_dos_write_only_
++                   << " watches=" << controllers_.size()
++                   << " - if dos_write_only is 1 this is the always-writable"
++                      " DOS descriptor path, not real work";
++        spin_reported_ = true;
++      }
+       continue;
+     }
++    consecutive_nonblocking_passes_ = 0;
+ 
+     if (delegate->DoIdleWork()) {
+       continue;
+@@ -369,6 +393,10 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+   bool watch_socket_read = false;
+   bool watch_socket_write = false;
+   bool watch_dos_descriptor = false;
++  // Set when the only readiness this pass came from the synthesised
++  // always-writable DOS path above, rather than from an observed event.
++  bool dos_write_ready = false;
++  bool observed_event = false;
+   int max_socket_fd = -1;
+   for (const auto& controller : controllers_) {
+     DCHECK(controller->pump_ == this);
+@@ -455,17 +483,37 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+           FD_ISSET(controller->fd_, &write_fds)) {
+         ready_mode |= WATCH_WRITE;
+       }
++      // Socket readiness comes from WaitSelect, i.e. it was observed.
++      if (ready_mode) {
++        observed_event = true;
++      }
+     } else {
+       BPTR handle = BNULL;
+       if (GetDosHandle(controller->fd_, &handle)) {
+         if ((controller->mode_ & WATCH_READ) && WaitForChar(handle, 0)) {
+           ready_mode |= WATCH_READ;
++          // WaitForChar actually asked the handler: observed, not synthesised.
++          observed_event = true;
+         }
+         // DOS writes are synchronous.  This mirrors uv1.library's AROS event
+         // backend: dispatch writable and let the owner perform or retire the
+         // operation instead of feeding a non-socket fd to WaitSelect.
+         if (controller->mode_ & WATCH_WRITE) {
+           ready_mode |= WATCH_WRITE;
++          // Synthesised, not observed: this descriptor is "ready" on every
++          // pass for as long as it stays registered, which is what can stop
++          // Run() ever blocking.  Name it once so a looping machine reports
++          // which descriptor is responsible.
++          dos_write_ready = true;
++          if (!dos_write_watch_reported_) {
++            LOG(ERROR) << "[Chromium:IO] DOS-backed fd watched for WRITE is "
++                          "always-ready: fd=" << controller->fd_
++                       << " mode=" << controller->mode_
++                       << " persistent=" << controller->persistent_
++                       << " watches=" << controllers_.size()
++                       << " - if the pump is spinning, this is why";
++            dos_write_watch_reported_ = true;
++          }
+         }
+       }
+     }
+@@ -485,6 +533,9 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+     processed_io = true;
+     DispatchController(registration);
+   }
++  // True when this pass reported work purely because a DOS descriptor is
++  // permanently writable - the shape that can keep Run() from ever blocking.
++  last_pass_dos_write_only_ = processed_io && dos_write_ready && !observed_event;
+   return processed_io;
+ }
+ 
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 038e96080b..26a0055556 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -105,6 +105,26 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   uint64_t next_generation_ = 1;
+   bool wait_select_error_reported_ = false;
+   bool native_resources_released_ = false;
++
++  // Diagnostics for the reported "busy looping / delayed mouse pointer".
++  //
++  // A DOS-backed descriptor watched for WATCH_WRITE is reported ready on every
++  // pass (DOS writes are synchronous, so there is nothing to wait on). That
++  // makes Run()'s processed_io permanently true, so it continues without ever
++  // reaching its blocking wait - a full spin, in which the
++  // kDosDescriptorPollInterval clamp below is never reached either.
++  //
++  // Measured on hosted Chromium loading a real page this does NOT happen (the
++  // guest sits at a few percent of one core), so the condition exists but has
++  // not been shown to fire. These two counters make the next report from a
++  // machine that DOES loop answer it directly instead of by inference:
++  // dos_write_watch_reported_ names the descriptor that can cause it, and the
++  // consecutive-pass counter records whether the pump actually stopped
++  // blocking. Both log once.
++  bool dos_write_watch_reported_ = false;
++  bool spin_reported_ = false;
++  uint64_t consecutive_nonblocking_passes_ = 0;
++  bool last_pass_dos_write_only_ = false;
+   ThreadChecker watch_file_descriptor_caller_checker_;
+ };
+ 

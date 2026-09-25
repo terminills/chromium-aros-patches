@@ -1,0 +1,27 @@
+From d221eec927160c66dfc1e98cdb96115b69b541d2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 22:47:17 -0500
+Subject: [PATCH 274/638] v8: import AROS shared-library consumer switch
+
+Advance the pinned V8 source to the opt-in //v8:v8 branch that substitutes the AROS import target for engine implementation objects.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: nested-v8-checkpoint
+
+AI_VALIDATION: generated import probe passed hosted runtime before checkpoint
+
+AI_LIMITATIONS: import target implementation follows in a separate exact-file commit
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index d2b88e8f66..df0b1bd50b 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit d2b88e8f6613e4865a63fef96bb972ee3709528c
++Subproject commit df0b1bd50b25aeb6047edad861c215e228d5753c

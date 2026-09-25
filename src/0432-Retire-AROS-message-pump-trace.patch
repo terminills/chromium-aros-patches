@@ -1,0 +1,100 @@
+From 44df5a475b802eaa8bf6bf3eb7e6f41530a53efe Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:18:36 -0500
+Subject: [PATCH 432/638] [AROS] Retire AROS message pump trace
+
+Remove bounded per-iteration and idle-wait telemetry from the established native AROS message pump. Preserve the pump implementation and its one-time construction report.
+
+---
+ base/message_loop/message_pump_aros.cc | 42 ++------------------------
+ base/message_loop/message_pump_aros.h  |  2 --
+ 2 files changed, 2 insertions(+), 42 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index e8e2d35bea..56816439d8 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -66,10 +66,7 @@ MessagePumpAROS::MessagePumpAROS() {
+ 
+   LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec/timer.device pump task="
+             << pump_task_ << " wake-signal=" << wakeup_signal_
+-            << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit)
+-            << " name='"
+-            << (pump_task_->tc_Node.ln_Name ? pump_task_->tc_Node.ln_Name : "")
+-            << "'";
++            << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit);
+ }
+ 
+ MessagePumpAROS::~MessagePumpAROS() {
+@@ -159,22 +156,6 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+   for (;;) {
+     Delegate::NextWorkInfo next_work_info = delegate->DoWork();
+     const bool immediate_work_available = next_work_info.is_immediate();
+-    const bool delayed_work_available =
+-        !immediate_work_available &&
+-        !next_work_info.delayed_run_time.is_max();
+-    if (trace_run_iterations_ < 8) {
+-      LOG(WARNING) << "[Chromium:IO:PumpTrace] task=" << pump_task_
+-                   << " iteration=" << trace_run_iterations_
+-                   << " immediate=" << immediate_work_available
+-                   << " delayed_max="
+-                   << next_work_info.delayed_run_time.is_max()
+-                   << " delay_us="
+-                   << (delayed_work_available
+-                           ? next_work_info.remaining_delay().InMicroseconds()
+-                           : -1)
+-                   << " watches=" << controllers_.size();
+-      ++trace_run_iterations_;
+-    }
+ 
+     if (run_state.should_quit) {
+       break;
+@@ -229,22 +210,8 @@ void MessagePumpAROS::ScheduleDelayedWork(
+ 
+ void MessagePumpAROS::WaitForIdleEvents(TimeDelta timeout,
+                                         bool wait_indefinitely) {
+-  const bool trace_wait = trace_idle_waits_ < 8;
+-  if (trace_wait) {
+-    LOG(WARNING) << "[Chromium:IO:PumpTrace] idle-wait task=" << pump_task_
+-                 << " index=" << trace_idle_waits_
+-                 << " indefinite=" << wait_indefinitely
+-                 << " timeout_us="
+-                 << (wait_indefinitely ? -1 : timeout.InMicroseconds());
+-  }
+   if (wait_indefinitely) {
+-    const uint32_t signals = Wait(wakeup_mask_);
+-    if (trace_wait) {
+-      LOG(WARNING) << "[Chromium:IO:PumpTrace] idle-wake task=" << pump_task_
+-                   << " index=" << trace_idle_waits_
+-                   << " signals=" << signals;
+-      ++trace_idle_waits_;
+-    }
++    Wait(wakeup_mask_);
+     return;
+   }
+ 
+@@ -269,11 +236,6 @@ void MessagePumpAROS::WaitForIdleEvents(TimeDelta timeout,
+   WaitIO(request);
+   SetSignal(0, timer_mask);
+   timer_pending_ = false;
+-  if (trace_wait) {
+-    LOG(WARNING) << "[Chromium:IO:PumpTrace] idle-wake task=" << pump_task_
+-                 << " index=" << trace_idle_waits_ << " signals=" << signals;
+-    ++trace_idle_waits_;
+-  }
+ }
+ 
+ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 29111b715e..36b3a2a9df 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -99,8 +99,6 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   std::vector<raw_ptr<FdWatchController>> controllers_;
+   uint64_t next_generation_ = 1;
+   bool wait_select_error_reported_ = false;
+-  uint32_t trace_run_iterations_ = 0;
+-  uint32_t trace_idle_waits_ = 0;
+   ThreadChecker watch_file_descriptor_caller_checker_;
+ };
+ 

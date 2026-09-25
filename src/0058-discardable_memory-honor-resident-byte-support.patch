@@ -1,0 +1,46 @@
+From 1f0d00f41f3033828178252683d96fd0fdb807e4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:46:40 -0500
+Subject: [PATCH 058/638] discardable_memory: honor resident-byte support
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Discardable-memory tracing now omits resident-size telemetry when the platform cannot provide it.
+
+ROOT_CAUSE: GetResidentSize called ProcessMemoryDump::CountResidentBytes unconditionally even though that API is intentionally absent when COUNT_RESIDENT_BYTES_SUPPORTED is unset.
+
+FIX_REASON: The method already returns std::optional and its caller already omits an unavailable metric, so the compile-time capability should govern the probe.
+
+SCOPE: components/discardable_memory/common/discardable_shared_memory_heap.cc only.
+
+VALIDATION: The previously failing discardable_shared_memory_heap.o target compiled for AROS.
+
+RISK: Background dumps on unsupported platforms omit resident_size while retaining virtual and allocated sizes; supported platform behavior is unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../common/discardable_shared_memory_heap.cc                  | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/components/discardable_memory/common/discardable_shared_memory_heap.cc b/components/discardable_memory/common/discardable_shared_memory_heap.cc
+index ea0d29a7ed..6ec83218e5 100644
+--- a/components/discardable_memory/common/discardable_shared_memory_heap.cc
++++ b/components/discardable_memory/common/discardable_shared_memory_heap.cc
+@@ -303,6 +303,7 @@ size_t DiscardableSharedMemoryHeap::GetFreelistSize() const {
+ }
+ 
+ std::optional<size_t> DiscardableSharedMemoryHeap::GetResidentSize() const {
++#if defined(COUNT_RESIDENT_BYTES_SUPPORTED)
+   size_t resident_size = 0;
+   // Each member of |free_spans_| is a LinkedList of Spans. We need to iterate
+   // over each of these.
+@@ -323,6 +324,9 @@ std::optional<size_t> DiscardableSharedMemoryHeap::GetResidentSize() const {
+     }
+   }
+   return resident_size;
++#else
++  return std::nullopt;
++#endif
+ }
+ 
+ bool DiscardableSharedMemoryHeap::OnMemoryDump(

@@ -1,0 +1,36 @@
+From e33b75fb2402687798f31c71eebd03830997338f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:06:39 -0500
+Subject: [PATCH 089/638] [AROS] Define native event observer boundary
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS now has explicit native-event observer registration definitions.
+ROOT_CAUSE: Chromium expects platform event-source hooks on desktop targets, but AROS has no Ozone/Intuition observer adapter yet.
+FIX_REASON: Use the established no-op boundary while retaining browser task responsiveness accounting; native before/after-dispatch hooks can be connected when the AROS Ozone event source lands.
+SCOPE: Content scheduler native event observer platform guard.
+VALIDATION: native_event_observer.o builds and defines RegisterObserver and DeregisterObserver.
+RISK: Native UI event dispatch latency is not sampled until the Ozone/Intuition event-source adapter supplies callbacks.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../scheduler/responsiveness/native_event_observer.cc        | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/content/browser/scheduler/responsiveness/native_event_observer.cc b/content/browser/scheduler/responsiveness/native_event_observer.cc
+index 1f4248487f..d549012520 100644
+--- a/content/browser/scheduler/responsiveness/native_event_observer.cc
++++ b/content/browser/scheduler/responsiveness/native_event_observer.cc
+@@ -78,10 +78,11 @@ void NativeEventObserver::DidDispatchMSG(const MSG& msg) {
+ }
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS) || BUILDFLAG(IS_FUCHSIA) || \
++    BUILDFLAG(IS_IOS)
+ void NativeEventObserver::RegisterObserver() {}
+ void NativeEventObserver::DeregisterObserver() {}
+-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++#endif
+ 
+ }  // namespace responsiveness
+ }  // namespace content

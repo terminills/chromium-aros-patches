@@ -1,0 +1,41 @@
+From 997f773634113518bd6394d03c548fcde16d2124 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:37:39 -0500
+Subject: [PATCH 222/638] signin: decouple DICE switches from bound sessions
+ [chromium] [aros]
+
+Statement:
+DICE sign-out processing always consults the desktop explicit-signin feature switch, but its declaration was included only when optional bound-session credentials were enabled. AROS supports DICE without that key-storage capability.
+
+Decision:
+Include the generic sign-in switch contract unconditionally while retaining bound-session implementation headers behind their feature flag.
+
+Evidence:
+dice_response_handler.o compiles in out/aros-chrome with bound-session credentials disabled.
+
+Chain:
+Preserves upstream desktop sign-in while advancing the full Chrome graph in.
+---
+ chrome/browser/signin/dice_response_handler.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/signin/dice_response_handler.cc b/chrome/browser/signin/dice_response_handler.cc
+index e0abaffadc..9c14111f28 100644
+--- a/chrome/browser/signin/dice_response_handler.cc
++++ b/chrome/browser/signin/dice_response_handler.cc
+@@ -28,6 +28,7 @@
+ #include "components/signin/public/base/signin_buildflags.h"
+ #include "components/signin/public/base/signin_client.h"
+ #include "components/signin/public/base/signin_metrics.h"
++#include "components/signin/public/base/signin_switches.h"
+ #include "components/signin/public/identity_manager/accounts_mutator.h"
+ #include "components/signin/public/identity_manager/identity_manager.h"
+ #include "google_apis/gaia/gaia_auth_fetcher.h"
+@@ -39,7 +40,6 @@
+ 
+ #include "chrome/browser/signin/bound_session_credentials/registration_token_helper.h"  // nogncheck
+ #include "chrome/browser/signin/bound_session_credentials/unexportable_key_service_factory.h"  // nogncheck
+-#include "components/signin/public/base/signin_switches.h"
+ #include "components/unexportable_keys/unexportable_key_id.h"       // nogncheck
+ #include "components/unexportable_keys/unexportable_key_service.h"  // nogncheck
+ #include "google_apis/gaia/gaia_urls.h"

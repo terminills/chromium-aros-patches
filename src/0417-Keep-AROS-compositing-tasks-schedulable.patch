@@ -1,0 +1,40 @@
+From bd88043b91905b325d6cec1468d08caaa324639c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 14:09:56 -0500
+Subject: [PATCH 417/638] [AROS] Keep AROS compositing tasks schedulable
+
+Map Chromium compositing threads to normal Exec priority so continuously-ready compositor work cannot starve priority-zero graphics.library, Intuition, and Wanderer tasks. Leave all other thread classes unchanged for a bounded control.
+
+
+
+---
+ base/threading/platform_thread_aros.cc | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 8f40ebd8ad..77d8c9946a 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -18,7 +18,7 @@ const ThreadPriorityToNiceValuePairForTest
+     kThreadPriorityToNiceValueMapForTest[7] = {
+         {ThreadPriorityForTest::kRealtimeAudio, -10},
+         {ThreadPriorityForTest::kDisplay, -8},
+-        {ThreadPriorityForTest::kCompositing, -1},
++        {ThreadPriorityForTest::kCompositing, 0},
+         {ThreadPriorityForTest::kNormal, 0},
+         {ThreadPriorityForTest::kResourceEfficient, 1},
+         {ThreadPriorityForTest::kUtility, 2},
+@@ -30,7 +30,12 @@ const ThreadTypeToNiceValuePair kThreadTypeToNiceValueMap[7] = {
+     {ThreadType::kUtility, 2},
+     {ThreadType::kResourceEfficient, 1},
+     {ThreadType::kDefault, 0},
+-    {ThreadType::kCompositing, -1},
++    // Exec does not guarantee service to priority-0 system tasks while a
++    // higher-priority task remains ready. Chromium can keep several
++    // compositing tasks runnable at once, so a +1 mapping can starve
++    // graphics.library, Intuition, and Wanderer rather than merely favoring
++    // foreground rendering.
++    {ThreadType::kCompositing, 0},
+     {ThreadType::kDisplayCritical, -8},
+     {ThreadType::kRealtimeAudio, -10},
+ };

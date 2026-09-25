@@ -1,0 +1,48 @@
+From a7a92afa98e712174c3f14d680136b3dffb63d47 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 19:13:32 -0500
+Subject: [PATCH 120/638] [AROS] Measure open files through their seek position
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: Hosted run 0120 traced a 4381189-byte headless pack whose AROS fstat-backed GetLength returned 1783862532; the subsequent read reached the correct EOF, proving a struct stat ABI/layout mismatch rather than file corruption.
+FIX_REASON: On AROS, serialize access with the existing file-position lock, save the current 64-bit offset, seek to end, restore the offset, and preserve errno. Other platforms retain fstat.
+SCOPE: base/files/file_posix.cc
+VALIDATION: file_posix.o cross-compiled; debug.resource trace in artifact 22 records requested=1783862532 and actual=4381189 for the host file whose stat size is 4381189.
+RISK: GetLength now performs three serialized seeks on AROS and therefore requires a seekable descriptor, matching the existing regular-file callers and avoiding an unstable struct stat ABI.
+AI_DECISION_CHAIN: mapper page fixed -> copied map still oversized -> actual read reaches correct EOF -> replace AROS fstat length with seek end/restore
+Continues: f76ee8ff88
+---
+ base/files/file_posix.cc | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index ee99c9aabc..73894c2d05 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -455,11 +455,25 @@ int64_t File::GetLength() const {
+ 
+   SCOPED_FILE_TRACE("GetLength");
+ 
++#if BUILDFLAG(IS_AROS)
++  AutoLock lock(ArosFilePositionLock());
++  const off_t original_offset = HANDLE_EINTR(lseek(file_.get(), 0, SEEK_CUR));
++  if (original_offset < 0)
++    return -1;
++
++  const off_t end_offset = HANDLE_EINTR(lseek(file_.get(), 0, SEEK_END));
++  const int saved_errno = errno;
++  if (HANDLE_EINTR(lseek(file_.get(), original_offset, SEEK_SET)) < 0)
++    return -1;
++  errno = saved_errno;
++  return end_offset;
++#else
+   stat_wrapper_t file_info;
+   if (Fstat(file_.get(), &file_info))
+     return -1;
+ 
+   return file_info.st_size;
++#endif
+ }
+ 
+ bool File::SetLength(int64_t length) {

@@ -1,0 +1,154 @@
+From 144963c35eedc183b7e7941100de4b7bf9e629e0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 15:56:47 -0500
+Subject: [PATCH 579/638] ozone/aros: do not hand popup activation back over a
+ pending request
+
+ActivateWindow() is asynchronous on AROS, so when a menu command opens a
+new browser window the popup still reads as Intuition's active window
+while it is being hidden, and returning activation to its owner queued
+behind the new window's request and won: the next accelerator went to
+the old window.  Track the last requested activation in the window
+manager and let a closing popup leave it alone.
+---
+ ui/ozone/platform/aros/aros_window.cc         | 32 +++++++++++++++----
+ ui/ozone/platform/aros/aros_window.h          |  1 +
+ ui/ozone/platform/aros/aros_window_manager.cc | 15 +++++++++
+ ui/ozone/platform/aros/aros_window_manager.h  |  9 ++++++
+ 4 files changed, 51 insertions(+), 6 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 372245ad2b..2be072de9c 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -475,7 +475,7 @@ void ArosWindow::Show(bool inactive) {
+     ShowWindow(window_, nullptr);
+     if (!inactive && activatable_) {
+       VLOG(1) << "[Chromium:Ozone:AROS] show activates widget=" << widget_;
+-      ActivateWindow(window_);
++      RequestIntuitionActivation();
+     }
+   }
+   visible_ = true;
+@@ -610,7 +610,7 @@ void ArosWindow::Activate() {
+   }
+   if (window_) {
+     VLOG(1) << "[Chromium:Ozone:AROS] Activate() widget=" << widget_;
+-    ActivateWindow(window_);
++    RequestIntuitionActivation();
+   }
+   SetActive(true);
+ }
+@@ -647,10 +647,18 @@ bool ArosWindow::OwnsIntuitionActivation() {
+   return active && (active == this || active->FocusOwner() == this);
+ }
+ 
++void ArosWindow::RequestIntuitionActivation() {
++  manager_->SetRequestedActivation(widget_);
++  ActivateWindow(window_);
++}
++
+ void ArosWindow::HandleActiveWindow() {
+   VLOG(1) << "[Chromium:Ozone:AROS] IDCMP_ACTIVEWINDOW widget=" << widget_
+           << " owner=" << FocusOwner()->widget_;
+   if (activatable_) {
++    // Whatever was requested has either landed here or been overridden by
++    // the user; either way nothing is in flight any more.
++    manager_->ClearRequestedActivation();
+     SetActive(true);
+     return;
+   }
+@@ -687,12 +695,24 @@ void ArosWindow::ReturnIntuitionActivationToOwner() {
+     return;
+   }
+   ArosWindow* const owner = FocusOwner();
+-  if (owner != this && owner->window_ &&
+-      manager_->GetIntuitionActiveWindow() == this) {
++  if (owner == this || !owner->window_ ||
++      manager_->GetIntuitionActiveWindow() != this) {
++    return;
++  }
++  // A menu command that opened a new browser window has already asked
++  // Intuition to activate it; ActivateWindow() is asynchronous, so this
++  // popup still reads as active.  Activating the owner now would queue
++  // behind that request and win, sending the next keystrokes to the old
++  // window (menus-5: Ctrl+Shift+W closed the original window).
++  const gfx::AcceleratedWidget requested = manager_->requested_activation();
++  if (requested != gfx::kNullAcceleratedWidget && requested != widget_) {
+     VLOG(1) << "[Chromium:Ozone:AROS] popup widget=" << widget_
+-            << " returns activation to widget=" << owner->widget_;
+-    ActivateWindow(owner->window_);
++            << " leaves activation to pending widget=" << requested;
++    return;
+   }
++  VLOG(1) << "[Chromium:Ozone:AROS] popup widget=" << widget_
++          << " returns activation to widget=" << owner->widget_;
++  owner->RequestIntuitionActivation();
+ }
+ 
+ void ArosWindow::SetUseNativeFrame(bool use_native_frame) {}
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 421d4e9dd6..0716c316cd 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -106,6 +106,7 @@ class ArosWindow : public PlatformWindow {
+   void HandleActiveWindow();
+   void HandleInactiveWindow();
+   void ReturnIntuitionActivationToOwner();
++  void RequestIntuitionActivation();
+   void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
+   void DispatchMouseButton(uint16_t code,
+                            uint16_t qualifier,
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 4ce2e1334c..98af5b389b 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -133,6 +133,21 @@ void ArosWindowManager::RemoveWindow(gfx::AcceleratedWidget widget,
+   CHECK(it != windows_.end());
+   CHECK_EQ(window, it->second);
+   windows_.erase(it);
++  if (requested_activation_ == widget) {
++    requested_activation_ = gfx::kNullAcceleratedWidget;
++  }
++}
++
++void ArosWindowManager::SetRequestedActivation(gfx::AcceleratedWidget widget) {
++  requested_activation_ = widget;
++}
++
++void ArosWindowManager::ClearRequestedActivation() {
++  requested_activation_ = gfx::kNullAcceleratedWidget;
++}
++
++gfx::AcceleratedWidget ArosWindowManager::requested_activation() const {
++  return requested_activation_;
+ }
+ 
+ void ArosWindowManager::AttachNativeWindow(gfx::AcceleratedWidget widget,
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 92083543f3..d57dd2394a 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -55,6 +55,14 @@ class ArosWindowManager {
+   // one of ours.
+   ArosWindow* GetIntuitionActiveWindow();
+ 
++  // ActivateWindow() is asynchronous (Intuition's input task performs it),
++  // so IntuitionBase->ActiveWindow lags our requests.  The widget whose
++  // activation was requested last and has not been seen active yet;
++  // kNullAcceleratedWidget when nothing is in flight.
++  void SetRequestedActivation(gfx::AcceleratedWidget widget);
++  void ClearRequestedActivation();
++  gfx::AcceleratedWidget requested_activation() const;
++
+   bool PresentCanvas(gfx::AcceleratedWidget widget,
+                      const void* pixels,
+                      size_t row_bytes,
+@@ -73,6 +81,7 @@ class ArosWindowManager {
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
+   bool owns_presentation_port_ = false;
+   bool native_resources_released_ = false;
++  gfx::AcceleratedWidget requested_activation_ = gfx::kNullAcceleratedWidget;
+   bool logged_received_present_ GUARDED_BY(lock_) = false;
+   bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;

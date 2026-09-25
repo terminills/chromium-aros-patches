@@ -1,0 +1,48 @@
+From ebf7e9de37f7112d6ab9a9a34c33f9c626d249a4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 02:20:39 -0500
+Subject: [PATCH 139/638] blink: resolve AROS last-resort fonts [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Skia's custom directory manager intentionally matches family names exactly, but Chromium's portable last-resort sequence asks for Sans and Arial while base AROS ships Bitstream Vera Sans.
+
+FIX_REASON: When the normal fallback sequence reaches its explicit last-resort stage on AROS, select the packaged Bitstream Vera Sans family and retain the manager's default typeface as a secondary safety net.
+
+SCOPE: Blink's Skia FontPlatformData creation path on AROS only; requested web-font matching remains exact and other platforms are unchanged.
+
+VALIDATION: obj/third_party/blink/renderer/platform/platform/font_cache_skia.o compiles successfully in out/aros-headless after the change.
+
+RISK: low; substitution is restricted to kLastResort after normal and alternate family resolution have failed.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../renderer/platform/fonts/skia/font_cache_skia.cc  | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+index 47bb831486..e8fc54beea 100644
+--- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
++++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+@@ -270,6 +270,18 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
+   typeface = CreateTypeface(font_description, creation_params, name);
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  if (!typeface && alternate_name == AlternateFontName::kLastResort) {
++    auto font_manager = font_manager_ ? font_manager_ : skia::DefaultFontMgr();
++    typeface = font_manager->matchFamilyStyle(
++        "Bitstream Vera Sans", font_description.SkiaFontStyle());
++    if (!typeface) {
++      typeface = font_manager->legacyMakeTypeface(
++          nullptr, font_description.SkiaFontStyle());
++    }
++  }
++#endif
++
+   if (!typeface)
+     return nullptr;
+ 

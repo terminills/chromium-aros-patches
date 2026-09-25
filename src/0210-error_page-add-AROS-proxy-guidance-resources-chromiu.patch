@@ -1,0 +1,48 @@
+From a2a97a6f604c39d54022917ec44e90f26abcb3cb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:38:42 -0500
+Subject: [PATCH 210/638] error_page: add AROS proxy guidance resources
+ [chromium] [aros]
+
+Statement:
+Generic error-page code displays platform instructions when a proxy blocks navigation, but the AROS GRIT target had no corresponding branded or unbranded string.
+
+Decision:
+Use the existing browser-settings proxy guidance for AROS in both Chromium and Google Chrome resource sets. The text describes Chrome's own proxy configuration path and is not Linux-system-specific.
+
+Evidence:
+The branded components GRIT action regenerates successfully and localized_error.o compiles for AROS.
+
+Chain:
+Follows the distinct AROS GRIT identity in 2b08d739c3 and advances.
+---
+ components/components_chromium_strings.grd      | 2 +-
+ components/components_google_chrome_strings.grd | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/components/components_chromium_strings.grd b/components/components_chromium_strings.grd
+index 1bb22e041c..de2a864ee0 100644
+--- a/components/components_chromium_strings.grd
++++ b/components/components_chromium_strings.grd
+@@ -220,7 +220,7 @@
+         </message>
+       </if>
+       <!-- The ChromeOS version of this string is defined in //components/error_page_strings.grdp. -->
+-      <if expr="is_linux">
++      <if expr="is_linux or is_aros">
+         <message name="IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM" desc="Linux instructions for disabling use of a proxy server.">
+           Go to
+           the Chromium menu &gt;
+diff --git a/components/components_google_chrome_strings.grd b/components/components_google_chrome_strings.grd
+index f07279ac69..5e92e32fd3 100644
+--- a/components/components_google_chrome_strings.grd
++++ b/components/components_google_chrome_strings.grd
+@@ -220,7 +220,7 @@
+         </message>
+       </if>
+       <!-- The ChromeOS version of this string is defined in //components/error_page_strings.grdp. -->
+-      <if expr="is_linux">
++      <if expr="is_linux or is_aros">
+         <message name="IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM" desc="Linux instructions for disabling use of a proxy server.">
+           Go to
+           the Chrome menu &gt;

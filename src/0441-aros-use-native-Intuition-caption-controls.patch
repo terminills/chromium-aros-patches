@@ -1,0 +1,32 @@
+From f1ab42a9f4298ee5f94ea27eba9dd641c92523c5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 13:24:32 -0500
+Subject: [PATCH 441/638] aros: use native Intuition caption controls
+
+Suppress Chromium client-side caption buttons on AROS while preserving the browser tab strip and toolbar. Intuition remains authoritative for close, depth, and zoom gadgets and their native hit testing.
+
+
+
+---
+ chrome/browser/ui/views/frame/opaque_browser_frame_view.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+index 677e4de829..992c24861d 100644
+--- a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
++++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+@@ -485,7 +485,14 @@ gfx::Size OpaqueBrowserFrameView::GetBrowserViewMinimumSize() const {
+ }
+ 
+ bool OpaqueBrowserFrameView::ShouldShowCaptionButtons() const {
++#if BUILDFLAG(IS_AROS)
++  // Intuition owns the native close, depth, and zoom gadgets. Keep Chromium's
++  // tab strip and toolbar, but do not duplicate window controls in the client
++  // area or install competing caption-button hit targets.
++  return false;
++#else
+   return GetShowWindowTitleBar();
++#endif
+ }
+ 
+ bool OpaqueBrowserFrameView::IsRegularOrGuestSession() const {

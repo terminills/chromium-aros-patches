@@ -1,0 +1,323 @@
+From 3e42c47a8e38181fd5e743911efe4d0ef1c2e872 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 17:42:03 -0500
+Subject: [PATCH 115/638] [AROS] Add tracked pre-MMU PartitionAlloc backing
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: KrnAllocPages delegates to the kernel mm_linear allocator, but transition-era Exec MemHeaders are not initialized through KrnInitMemory; hosted 0115 proved an unhinted 1 GiB request failed despite a 3 GiB largest free block.
+FIX_REASON: Keep KrnAllocPages as the preferred backend and provide an unhinted, page-aligned AllocMem fallback with explicit backing records, retained alignment slack, exact final ownership release, and zero-before-recommit semantics.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc; base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+VALIDATION: AROS PartitionAlloc page_allocator.o cross-compiled; unattended 0115 diagnostics ruled out capacity and fragmentation at the kernel page boundary.
+RISK: The fallback consumes physical Exec backing and retains alignment slack until final free; it is a bounded pre-MMU substrate, not sparse reservation, discard, or production W^X enforcement.
+AI_DECISION_CHAIN: 512 MiB pools -> unhinted 1 GiB allocation fails with 3 GiB contiguous -> mm_linear initialization gap -> tracked Exec backing bridge
+Continues: d4b26ee0d8
+---
+ .../src/partition_alloc/page_allocator.cc     |  15 +-
+ .../page_allocator_internals_aros.h           | 209 ++++++++++++++++--
+ 2 files changed, 205 insertions(+), 19 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+index 18ed5efafb..04a01e32f3 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+@@ -91,8 +91,19 @@ uintptr_t TrimMapping(uintptr_t base_address,
+   PA_DCHECK(base_length == trim_length || pre_slack || post_slack);
+   PA_DCHECK(pre_slack < base_length);
+   PA_DCHECK(post_slack < base_length);
+-  return internal::TrimMappingInternal(base_address, base_length, trim_length,
+-                                       accessibility, pre_slack, post_slack);
++  uintptr_t result = internal::TrimMappingInternal(
++      base_address, base_length, trim_length, accessibility, pre_slack,
++      post_slack);
++#if BUILDFLAG(IS_AROS)
++  // The pre-MMU backend retains alignment slack in the owning Exec block and
++  // releases it with the final trimmed mapping. Keep the logical mapped-space
++  // counter consistent with the address range visible to PartitionAlloc.
++  if (result) {
++    g_total_mapped_address_space.fetch_sub(base_length - trim_length,
++                                           std::memory_order_relaxed);
++  }
++#endif
++  return result;
+ }
+ 
+ }  // namespace
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 4b242b8c0b..443b244f78 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -77,11 +77,116 @@ void SetProtection(APTR KernelBase,
+   }
+ }
+ 
++struct PageAllocationRecord {
++  PageAllocationRecord* next;
++  uintptr_t exposed_base;
++  size_t exposed_length;
++  uintptr_t protected_base;
++  size_t protected_length;
++  void* allocation_base;
++  size_t allocation_length;
++  bool exec_owned;
++};
++
++std::atomic_flag s_pageAllocationLock = ATOMIC_FLAG_INIT;
++PageAllocationRecord* s_pageAllocations = nullptr;
++
++void LockPageAllocations() {
++  while (s_pageAllocationLock.test_and_set(std::memory_order_acquire)) {
++  }
++}
++
++void UnlockPageAllocations() {
++  s_pageAllocationLock.clear(std::memory_order_release);
++}
++
++bool TrackPageAllocation(uintptr_t exposed_base,
++                         size_t exposed_length,
++                         uintptr_t protected_base,
++                         size_t protected_length,
++                         void* allocation_base,
++                         size_t allocation_length,
++                         bool exec_owned) {
++  auto* record = static_cast<PageAllocationRecord*>(
++      AllocMem(sizeof(PageAllocationRecord), MEMF_PUBLIC | MEMF_CLEAR));
++  if (!record) {
++    return false;
++  }
++
++  record->exposed_base = exposed_base;
++  record->exposed_length = exposed_length;
++  record->protected_base = protected_base;
++  record->protected_length = protected_length;
++  record->allocation_base = allocation_base;
++  record->allocation_length = allocation_length;
++  record->exec_owned = exec_owned;
++
++  LockPageAllocations();
++  record->next = s_pageAllocations;
++  s_pageAllocations = record;
++  UnlockPageAllocations();
++  return true;
++}
++
++PageAllocationRecord* TakePageAllocation(uintptr_t exposed_base) {
++  PageAllocationRecord* record;
++  PageAllocationRecord* previous = nullptr;
++
++  LockPageAllocations();
++  for (record = s_pageAllocations; record; record = record->next) {
++    if (record->exposed_base == exposed_base) {
++      if (previous) {
++        previous->next = record->next;
++      } else {
++        s_pageAllocations = record->next;
++      }
++      break;
++    }
++    previous = record;
++  }
++  UnlockPageAllocations();
++  return record;
++}
++
++bool RetainTrimmedPageAllocation(uintptr_t base_address,
++                                 size_t base_length,
++                                 uintptr_t result,
++                                 size_t trim_length) {
++  bool found = false;
++
++  LockPageAllocations();
++  for (PageAllocationRecord* record = s_pageAllocations; record;
++       record = record->next) {
++    if (record->exposed_base == base_address &&
++        record->exposed_length == base_length) {
++      record->exposed_base = result;
++      record->exposed_length = trim_length;
++      found = true;
++      break;
++    }
++  }
++  UnlockPageAllocations();
++  return found;
++}
++
++void* AllocateExecPages(size_t length,
++                        ULONG flags,
++                        size_t* allocation_length) {
++  const size_t granularity = PageAllocationGranularity();
++  if (length > std::numeric_limits<size_t>::max() - granularity) {
++    return nullptr;
++  }
++
++  *allocation_length = length + granularity;
++  return AllocMem(*allocation_length, flags);
++}
++
+ void LogLargePageAllocation(uintptr_t hint,
+                             size_t length,
+                             KRN_MapAttr protection,
+                             IPTR available,
+                             IPTR largest,
++                            const char* allocator,
+                             void* result,
+                             int error) {
+   char line[256];
+@@ -92,8 +197,9 @@ void LogLargePageAllocation(uintptr_t hint,
+ 
+   std::snprintf(
+       line, sizeof(line),
+-      "[Chromium:PA] KrnAllocPages hint=%p len=%llu protection=0x%lx "
++      "[Chromium:PA] pages allocator=%s hint=%p len=%llu protection=0x%lx "
+       "available=%llu largest=%llu result=%p error=%d\n",
++      allocator,
+       reinterpret_cast<void*>(hint), static_cast<unsigned long long>(length),
+       static_cast<unsigned long>(protection),
+       static_cast<unsigned long long>(available),
+@@ -135,12 +241,59 @@ uintptr_t SystemAllocPagesInternal(
+       log_request ? AvailMem(MEMF_PUBLIC | MEMF_LARGEST) : 0;
+   const KRN_MapAttr protection = GetAccessFlags(accessibility);
+   void* result = KrnAllocPages(reinterpret_cast<void*>(hint), length, flags);
++  bool exec_owned = false;
++  void* allocation_base = result;
++  size_t allocation_length = length;
++
+   if (!result) {
+-    s_allocPageErrorCode = ENOMEM;
+     if (log_request) {
+       LogLargePageAllocation(hint, length, protection, available, largest,
+-                             result, ENOMEM);
++                             "kernel", result, ENOMEM);
++    }
++
++    // The transition-era Exec MemHeaders are not initialized for mm_linear,
++    // so KrnAllocPages cannot yet provide anonymous pages. Exact-address
++    // requests must fail, but an unhinted request can use tracked Exec backing.
++    if (hint) {
++      s_allocPageErrorCode = ENOMEM;
++      return 0;
+     }
++
++    ULONG exec_flags = flags;
++    if (accessibility.permissions ==
++            PageAccessibilityConfiguration::kInaccessible ||
++        accessibility.permissions ==
++            PageAccessibilityConfiguration::kInaccessibleWillJitLater) {
++      exec_flags &= ~MEMF_CLEAR;
++    }
++
++    allocation_base =
++        AllocateExecPages(length, exec_flags, &allocation_length);
++    if (!allocation_base) {
++      s_allocPageErrorCode = ENOMEM;
++      if (log_request) {
++        LogLargePageAllocation(hint, length, protection, available, largest,
++                               "exec", nullptr, ENOMEM);
++      }
++      return 0;
++    }
++
++    const uintptr_t granularity_mask = PageAllocationGranularity() - 1;
++    result = reinterpret_cast<void*>(
++        (reinterpret_cast<uintptr_t>(allocation_base) + granularity_mask) &
++        ~granularity_mask);
++    exec_owned = true;
++  }
++
++  if (!TrackPageAllocation(reinterpret_cast<uintptr_t>(result), length,
++                           reinterpret_cast<uintptr_t>(result), length,
++                           allocation_base, allocation_length, exec_owned)) {
++    if (exec_owned) {
++      FreeMem(allocation_base, allocation_length);
++    } else {
++      KrnFreePages(result, length);
++    }
++    s_allocPageErrorCode = ENOMEM;
+     return 0;
+   }
+ 
+@@ -149,7 +302,7 @@ uintptr_t SystemAllocPagesInternal(
+   s_allocPageErrorCode = 0;
+   if (log_request) {
+     LogLargePageAllocation(hint, length, protection, available, largest,
+-                           result, 0);
++                           exec_owned ? "exec" : "kernel", result, 0);
+   }
+   return reinterpret_cast<uintptr_t>(result);
+ }
+@@ -176,23 +329,32 @@ void SetSystemPagesAccessInternal(
+ void FreePagesInternal(uintptr_t address, size_t length) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
+-  KrnFreePages(reinterpret_cast<void*>(address), length);
++  PageAllocationRecord* record = TakePageAllocation(address);
++  if (!record) {
++    KrnFreePages(reinterpret_cast<void*>(address), length);
++    return;
++  }
++
++  PA_CHECK(record->exposed_length == length);
++  SetProtection(KernelBase, record->protected_base, record->protected_length,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  if (record->exec_owned) {
++    FreeMem(record->allocation_base, record->allocation_length);
++  } else {
++    KrnFreePages(record->allocation_base, record->allocation_length);
++  }
++  FreeMem(record, sizeof(PageAllocationRecord));
+ }
+ 
+ uintptr_t TrimMappingInternal(uintptr_t base_address,
+-                              size_t,
++                              size_t base_length,
+                               size_t trim_length,
+                               PageAccessibilityConfiguration,
+                               size_t pre_slack,
+-                              size_t post_slack) {
+-  uintptr_t result = base_address;
+-  if (pre_slack) {
+-    FreePages(base_address, pre_slack);
+-    result += pre_slack;
+-  }
+-  if (post_slack) {
+-    FreePages(result + trim_length, post_slack);
+-  }
++                              size_t) {
++  const uintptr_t result = base_address + pre_slack;
++  PA_CHECK(RetainTrimmedPageAllocation(base_address, base_length, result,
++                                       trim_length));
+   return result;
+ }
+ 
+@@ -221,7 +383,12 @@ void RecommitSystemPagesInternal(
+     size_t length,
+     PageAccessibilityConfiguration accessibility,
+     PageAccessibilityDisposition) {
+-  SetSystemPagesAccess(address, length, accessibility);
++  APTR KernelBase = OpenKernelResource();
++  PA_CHECK(KernelBase);
++  SetProtection(KernelBase, address, length,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  std::memset(reinterpret_cast<void*>(address), 0, length);
++  SetProtection(KernelBase, address, length, GetAccessFlags(accessibility));
+ }
+ 
+ bool TryRecommitSystemPagesInternal(
+@@ -229,7 +396,15 @@ bool TryRecommitSystemPagesInternal(
+     size_t length,
+     PageAccessibilityConfiguration accessibility,
+     PageAccessibilityDisposition) {
+-  return TrySetSystemPagesAccess(address, length, accessibility);
++  APTR KernelBase = OpenKernelResource();
++  if (!KernelBase) {
++    return false;
++  }
++  SetProtection(KernelBase, address, length,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  std::memset(reinterpret_cast<void*>(address), 0, length);
++  SetProtection(KernelBase, address, length, GetAccessFlags(accessibility));
++  return true;
+ }
+ 
+ void DiscardSystemPagesInternal(uintptr_t, size_t) {

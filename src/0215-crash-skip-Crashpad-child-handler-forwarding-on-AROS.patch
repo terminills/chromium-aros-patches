@@ -1,0 +1,34 @@
+From fbc4f797015143dd9745c33d7732185e2383b104 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:07:37 -0500
+Subject: [PATCH 215/638] crash: skip Crashpad child-handler forwarding on AROS
+ [chromium] [aros]
+
+Statement:
+The portable POSIX child command-line path attempted to query and forward a Crashpad handler PID on AROS even though AROS deliberately uses native debug.resource and OPAL reporting and does not build the Crashpad handler client.
+
+Decision:
+Exclude only the Crashpad handler-socket propagation block on AROS. Preserve the generic crash-reporter switch, crash keys, chrome://crashes surface, and native OS reporting established by the earlier crash boundary.
+
+Evidence:
+chrome_content_browser_client.o compiles in out/aros-chrome after the capability guard.
+
+Chain:
+Extends the native crash-reporting decisions in 0a01aba370 and e784d6c915 while advancing.
+---
+ chrome/browser/chrome_content_browser_client.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 66b50cf0fd..bb2d561791 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2530,7 +2530,7 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+                                     client_info->client_id);
+   }
+ #elif BUILDFLAG(IS_POSIX)
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   pid_t pid;
+   if (crash_reporter::GetHandlerSocket(nullptr, &pid)) {
+     command_line->AppendSwitchASCII(

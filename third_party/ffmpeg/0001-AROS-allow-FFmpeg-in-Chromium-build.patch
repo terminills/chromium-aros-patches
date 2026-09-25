@@ -1,0 +1,103 @@
+From d01ca72ebbb2a03a7cc96795a54d2da20c3194a3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 20:19:08 -0500
+Subject: [PATCH] AROS: allow FFmpeg in Chromium build
+
+---
+ BUILD.gn             | 10 ++++++++--
+ ffmpeg_generated.gni |  2 +-
+ ffmpeg_options.gni   |  4 +++-
+ libavformat/img2.h   |  5 +++++
+ libavutil/mem.c      |  2 +-
+ 5 files changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 3cce799..8b1f250 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -316,11 +316,15 @@ target(link_target_type, "ffmpeg_internal") {
+     ]
+     cflags += [
+       "-std=c99",
+-      "-pthread",
+       "-fno-math-errno",
+       "-fno-signed-zeros",
+       "-fno-tree-vectorize",
+     ]
++    if (is_aros) {
++      cflags += [ "-fpthread" ]
++    } else {
++      cflags += [ "-pthread" ]
++    }
+     ldflags = [
+       "-L",
+       rebase_path(target_gen_dir, root_build_dir),
+@@ -343,8 +347,10 @@ target(link_target_type, "ffmpeg_internal") {
+       libs += [
+         "m",
+         "z",
+-        "rt",
+       ]
++      if (!is_aros) {
++        libs += [ "rt" ]
++      }
+     }
+     if (is_component_ffmpeg) {
+       # Export all symbols when building as component.
+diff --git a/ffmpeg_generated.gni b/ffmpeg_generated.gni
+index 21a28ea..625b450 100644
+--- a/ffmpeg_generated.gni
++++ b/ffmpeg_generated.gni
+@@ -12,7 +12,7 @@ ffmpeg_c_sources = []
+ ffmpeg_gas_sources = []
+ ffmpeg_asm_sources = []
+ 
+-use_linux_config = is_linux || is_chromeos || is_fuchsia
++use_linux_config = is_linux || is_chromeos || is_fuchsia || is_aros
+ 
+ if ((is_android && current_cpu == "arm" && arm_use_neon) ||
+     (is_android && current_cpu == "arm64") ||
+diff --git a/ffmpeg_options.gni b/ffmpeg_options.gni
+index 8ef4502..7ac6656 100644
+--- a/ffmpeg_options.gni
++++ b/ffmpeg_options.gni
+@@ -62,7 +62,9 @@ if (current_cpu == "x86") {
+ }
+ 
+ os_config = current_os
+-if ((is_linux || is_chromeos) && is_msan) {
++if (is_aros) {
++  os_config = "linux"
++} else if ((is_linux || is_chromeos) && is_msan) {
+   os_config = "linux-noasm"
+ } else if (is_chromeos || is_fuchsia) {
+   os_config = "linux"
+diff --git a/libavformat/img2.h b/libavformat/img2.h
+index 5fd8ff7..ddfdba8 100644
+--- a/libavformat/img2.h
++++ b/libavformat/img2.h
+@@ -26,6 +26,11 @@
+ #include "avformat.h"
+ #include "libavutil/opt.h"
+ 
++#if defined(__AROS__) && HAVE_GLOB
++#undef HAVE_GLOB
++#define HAVE_GLOB 0
++#endif
++
+ #if HAVE_GLOB
+ #include <glob.h>
+ #endif
+diff --git a/libavutil/mem.c b/libavutil/mem.c
+index 37933f9..894cd25 100644
+--- a/libavutil/mem.c
++++ b/libavutil/mem.c
+@@ -33,7 +33,7 @@
+ #include <stdlib.h>
+ #include <stdatomic.h>
+ #include <string.h>
+-#if HAVE_MALLOC_H
++#if HAVE_MALLOC_H && !defined(__AROS__)
+ #include <malloc.h>
+ #endif
+ 

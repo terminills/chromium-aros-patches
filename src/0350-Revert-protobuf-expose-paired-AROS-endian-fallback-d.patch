@@ -1,0 +1,24 @@
+From 4282c6a47efab5310358df93302536eb5973513c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:58:22 -0500
+Subject: [PATCH 350/638] Revert "protobuf: expose paired AROS endian fallback
+ declarations"
+
+This reverts commit c4949d85e8eede79837695fe36defefc46075aa2.
+---
+ third_party/protobuf/src/google/protobuf/io/coded_stream.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/protobuf/src/google/protobuf/io/coded_stream.h b/third_party/protobuf/src/google/protobuf/io/coded_stream.h
+index adb3c7ffac..1024b40086 100644
+--- a/third_party/protobuf/src/google/protobuf/io/coded_stream.h
++++ b/third_party/protobuf/src/google/protobuf/io/coded_stream.h
+@@ -957,7 +957,7 @@ class PROTOBUF_EXPORT EpsCopyOutputStream {
+ 
+   template <int S>
+   uint8_t* WriteRawLittleEndian(const void* data, int size, uint8_t* ptr);
+-#if !defined(PROTOBUF_LITTLE_ENDIAN) || defined(__AROS__)
++#ifndef PROTOBUF_LITTLE_ENDIAN
+   uint8_t* WriteRawLittleEndian32(const void* data, int size, uint8_t* ptr);
+   uint8_t* WriteRawLittleEndian64(const void* data, int size, uint8_t* ptr);
+ #endif

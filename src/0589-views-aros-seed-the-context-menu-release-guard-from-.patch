@@ -1,0 +1,44 @@
+From 720bc3e1194753b028e60d1a3d0c899e0b82c2a2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 20:21:19 -0500
+Subject: [PATCH 589/638] views/aros: seed the context-menu release guard from
+ the cursor position
+
+Web-content context menus open asynchronously, so MenuController::Run
+finds no ET_MOUSE_PRESSED as the parent's current event and
+menu_start_mouse_press_loc_ stays (0,0).  With the menu holding capture,
+a right-button release that lands after the menu opened is rerouted to
+it; when the menu is clamped to the bottom of a 768px screen that
+release sits on an item and executes it (observed: 'Send to your
+devices' on a plain right-click at y=500).  Use the cursor position so
+the existing 200ms/4px guard applies.
+---
+ ui/views/controls/menu/menu_controller.cc | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/ui/views/controls/menu/menu_controller.cc b/ui/views/controls/menu/menu_controller.cc
+index 6d4f40f2f4..ed055998bf 100644
+--- a/ui/views/controls/menu/menu_controller.cc
++++ b/ui/views/controls/menu/menu_controller.cc
+@@ -600,6 +600,21 @@ void MenuController::Run(Widget* parent,
+       }
+     }
+   }
++#if BUILDFLAG(IS_AROS)
++  // A web-content context menu is shown asynchronously (renderer round trip),
++  // so the press that opened it is no longer the parent's current event and
++  // the release-under-cursor guard in OnMouseReleased has no press location
++  // to compare against.  Once the menu has capture, a release that lands
++  // after the menu opened is rerouted to it; with the menu clamped to the
++  // screen bottom (768px displays) that release sits on an item and executes
++  // it.  Use the cursor position as the press location: the button is still
++  // held and the pointer has not moved since the press.
++  if (context_menu && menu_start_mouse_press_loc_ == gfx::Point()) {
++    if (display::Screen* screen = display::Screen::GetScreen()) {
++      menu_start_mouse_press_loc_ = screen->GetCursorScreenPoint();
++    }
++  }
++#endif
+ 
+   // If we are already showing, this new menu is being nested. Such as context
+   // menus on top of normal menus.

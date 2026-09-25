@@ -1,0 +1,29 @@
+From 95bd0a4603e30836be629a659017aa1913b1446c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 00:10:51 -0500
+Subject: [PATCH 279/638] v8: import AROS task ID namespace correction
+
+Advance the pinned V8 checkout to the build correction that expands GetETaskID outside namespace v8.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: task-id-namespace-correction-imported
+
+AI_ASSUMPTION: nested V8 commit cf6aab6 preserves the Exec-task identity design
+
+AI_VALIDATION: failed AROS compile is preserved in v8-exec-task-id-build.log
+
+AI_LIMITATIONS: rebuild and runtime revalidation remain pending
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 884d405c26..cf6aab6d1a 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 884d405c267fedd87fb72ae42666ef1bb76f4a5a
++Subproject commit cf6aab6d1a035d57333c400a2e44e0586e54b57d

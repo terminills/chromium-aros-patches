@@ -1,0 +1,59 @@
+From e4ac08b62fe93d8898f70a75491ed1b340eb8651 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 21:56:14 -0500
+Subject: [PATCH 125/638] [AROS] Reject untracked page releases before the
+ kernel
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted run 0125 cleared all V8 cages, then FreePagesInternal passed an address absent from the AROS page-allocation table to KrnFreePages. The kernel matched that address to an Exec/TLSF MemHeader and crashed at mm_Free+0x24 while dereferencing its null mh_First as an mm_linear BlockHeader.
+FIX_REASON: Every allocation produced by this backend is tracked. Log an unknown release through debug.resource and fail with PA_CHECK so OPAL records the Chromium caller stack instead of crossing an invalid allocator ownership boundary.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+VALIDATION: AROS PartitionAlloc page_allocator.o cross-compiled; run-0125 RIP 0x60821e94 decoded against kernel .text base 0x60817000 as mm_Free+0x24.
+RISK: The controlled check intentionally stops on the same invalid release and may retain memory; it converts an opaque kernel death into actionable ownership evidence without guessing whether the request is a prefix, suffix, or foreign mapping.
+AI_DECISION_CHAIN: full-width V8 -> run 0125 mm_Free kernel crash -> reject untracked release -> OPAL caller capture
+---
+ .../page_allocator_internals_aros.h           | 23 ++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index fa1abc8cc4..38cbca58f1 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -208,6 +208,22 @@ void LogLargePageAllocation(uintptr_t hint,
+   CloseLibrary(DebugBase);
+ }
+ 
++void LogUntrackedPageFree(uintptr_t address, size_t length) {
++  char line[192];
++  struct Library* DebugBase = OpenLibrary("debug.library", 0);
++  if (!DebugBase) {
++    return;
++  }
++
++  std::snprintf(
++      line, sizeof(line),
++      "[Chromium:PA] rejected untracked page free address=%p len=%llu\n",
++      reinterpret_cast<void*>(address),
++      static_cast<unsigned long long>(length));
++  ArosKPutStr(line);
++  CloseLibrary(DebugBase);
++}
++
+ }  // namespace
+ 
+ uintptr_t SystemAllocPagesInternal(
+@@ -325,7 +341,12 @@ void FreePagesInternal(uintptr_t address, size_t length) {
+   PA_CHECK(KernelBase);
+   PageAllocationRecord* record = TakePageAllocation(address);
+   if (!record) {
+-    KrnFreePages(reinterpret_cast<void*>(address), length);
++    // Every mapping created by this backend is tracked. Passing an unknown
++    // address to KrnFreePages can mistake an Exec-managed MemHeader for an
++    // mm_linear header, so preserve the caller context with a controlled
++    // PartitionAlloc failure instead of crossing that ownership boundary.
++    LogUntrackedPageFree(address, length);
++    PA_CHECK(record);
+     return;
+   }
+ 

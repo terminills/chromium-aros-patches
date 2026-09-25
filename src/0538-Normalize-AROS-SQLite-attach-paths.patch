@@ -1,0 +1,22 @@
+From 16bc72438bb110bf8a5c16a246b433c1379d5802 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 07:18:24 -0500
+Subject: [PATCH 538/638] Normalize AROS SQLite attach paths
+
+---
+ sql/database.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sql/database.cc b/sql/database.cc
+index cc7b6cecd3..d240ed78aa 100644
+--- a/sql/database.cc
++++ b/sql/database.cc
+@@ -1329,6 +1329,8 @@ bool Database::AttachDatabase(const base::FilePath& other_db_path,
+   Statement statement(GetUniqueStatement("ATTACH ? AS ?"));
+ #if BUILDFLAG(IS_WIN)
+   statement.BindString16(0, base::AsStringPiece16(other_db_path.value()));
++#elif BUILDFLAG(IS_AROS)
++  statement.BindString(0, ArosPathForSqlite(other_db_path.value()));
+ #else
+   statement.BindString(0, other_db_path.value());
+ #endif

@@ -1,0 +1,39 @@
+From 85ca4aea25c5cab5866e75475415701207885fdb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:18:53 -0500
+Subject: [PATCH 033/638] media: bound WAV chunk IDs in error logs
+
+AI_PHASE: chromium-aros-phase3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: The WAV parser streamed a four-byte uint8_t chunk ID as a NUL-terminated C string on an error path, allowing an out-of-bounds read.
+
+FIX_REASON: Convert the fixed-size array through base::span and as_string_view so logging carries the exact four bytes.
+
+SCOPE: media/audio/wav_audio_handler.cc
+
+VALIDATION: wav_audio_handler.o rebuilds successfully and GCC no longer emits -Wstringop-overread for kFmtSubchunkId.
+
+RISK: minimal; only malformed-WAV diagnostic formatting changes.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ media/audio/wav_audio_handler.cc | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/media/audio/wav_audio_handler.cc b/media/audio/wav_audio_handler.cc
+index c89ccf9a48..933b66996f 100644
+--- a/media/audio/wav_audio_handler.cc
++++ b/media/audio/wav_audio_handler.cc
+@@ -180,7 +180,9 @@ bool ParseWavData(const std::string_view wav_data,
+ 
+   // Check that data format has been read in and is valid.
+   if (!got_format) {
+-    LOG(ERROR) << "Invalid: No \"" << kFmtSubchunkId << "\" header found!";
++    LOG(ERROR) << "Invalid: No \""
++               << base::as_string_view(base::span(kFmtSubchunkId))
++               << "\" header found!";
+     return false;
+   } else if (!ParamsAreValid(*params_out)) {
+     LOG(ERROR) << "Format is invalid. "

@@ -1,0 +1,66 @@
+From eeddcaaeddc112ab85a059dad4453413a5f103b1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:10:41 -0500
+Subject: [PATCH 304/638] cef: restore Blink WebElement attribute access
+
+Apply CEF's upstream blink_web_element_4200240 patch as a discrete prerequisite. It restores the indexed attribute accessors used by CEF DOM wrappers.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-blink-web-element-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: libcef_static DOM compilation reported missing AttributeCount, AttributeLocalName, and AttributeValue
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/12-libcef-static-after-browser-plugin-owner.log
+
+AI_DECISION_CHAIN:; 52dac911; 8edb5bbaa0
+---
+ third_party/blink/public/web/web_element.h     |  3 +++
+ .../renderer/core/exported/web_element.cc      | 18 ++++++++++++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/third_party/blink/public/web/web_element.h b/third_party/blink/public/web/web_element.h
+index 103cbab74b..3b763e5100 100644
+--- a/third_party/blink/public/web/web_element.h
++++ b/third_party/blink/public/web/web_element.h
+@@ -82,6 +82,9 @@ class BLINK_EXPORT WebElement : public WebNode {
+   WebString TextContent() const;
+   WebString TextContentAbridged(unsigned int max_length) const;
+   WebString InnerHTML() const;
++  WebString AttributeLocalName(unsigned index) const;
++  WebString AttributeValue(unsigned index) const;
++  unsigned AttributeCount() const;
+ 
+   // Returns true if the element's contenteditable attribute is in the true
+   // state or in the plaintext-only state:
+diff --git a/third_party/blink/renderer/core/exported/web_element.cc b/third_party/blink/renderer/core/exported/web_element.cc
+index 3c71a93d1a..df2c5cd35b 100644
+--- a/third_party/blink/renderer/core/exported/web_element.cc
++++ b/third_party/blink/renderer/core/exported/web_element.cc
+@@ -116,6 +116,24 @@ void WebElement::SetAttribute(const WebString& attr_name,
+                                   IGNORE_EXCEPTION_FOR_TESTING);
+ }
+ 
++unsigned WebElement::AttributeCount() const {
++  if (!ConstUnwrap<Element>()->hasAttributes())
++    return 0;
++  return ConstUnwrap<Element>()->Attributes().size();
++}
++
++WebString WebElement::AttributeLocalName(unsigned index) const {
++  if (index >= AttributeCount())
++    return WebString();
++  return ConstUnwrap<Element>()->Attributes().at(index).LocalName();
++}
++
++WebString WebElement::AttributeValue(unsigned index) const {
++  if (index >= AttributeCount())
++    return WebString();
++  return ConstUnwrap<Element>()->Attributes().at(index).Value();
++}
++
+ WebString WebElement::TextContent() const {
+   return ConstUnwrap<Element>()->textContent();
+ }

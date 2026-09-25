@@ -1,0 +1,109 @@
+From a4fa223d5ff7c69520fb3ccb17c7845977d193cd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 21:02:19 -0500
+Subject: [PATCH 590/638] ozone/aros: derive mouse button flags from the input
+ qualifier
+
+Button state is per pointer; the per-window mouse_button_flags_ copy went
+stale whenever a press and its release landed on different windows
+(page press, release rerouted to the context menu under capture) and was
+only resynced by the next move over that window. Key and wheel events in
+between carried the stale buttons. Use MouseFlagsFromQualifier everywhere
+and drop the member.
+---
+ ui/ozone/platform/aros/aros_window.cc | 32 ++++++++++++---------------
+ ui/ozone/platform/aros/aros_window.h  |  1 -
+ 2 files changed, 14 insertions(+), 19 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index bb2f53b5ef..3415471a84 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -681,7 +681,6 @@ void ArosWindow::HandleActiveWindow() {
+ }
+ 
+ void ArosWindow::HandleInactiveWindow() {
+-  mouse_button_flags_ = EF_NONE;
+   // Activation moving into one of this window's own popups is not a
+   // deactivation from Chromium's point of view; MenuPreTargetHandlerAura
+   // cancels the menu on any activation change, which is exactly what a
+@@ -952,10 +951,9 @@ void ArosWindow::DispatchMouseMove(uint16_t qualifier,
+     return;
+   }
+ 
+-  target->mouse_button_flags_ = MouseFlagsFromQualifier(qualifier);
+   MouseEvent event(ET_MOUSE_MOVED, location, root_location, EventTimeForNow(),
+                    ModifierFlagsFromQualifier(qualifier) |
+-                       target->mouse_button_flags_,
++                       MouseFlagsFromQualifier(qualifier),
+                    EF_NONE);
+   target->delegate_->DispatchEvent(&event);
+ }
+@@ -977,26 +975,23 @@ void ArosWindow::DispatchMouseButton(uint16_t code,
+   gfx::Point root_location;
+   ArosWindow* const target =
+       MouseEventTarget(mouse_x, mouse_y, &location, &root_location);
+-
+-  // Button state follows the window the event is delivered to; a press
+-  // ignored for landing outside our client area still updates ours.
+-  ArosWindow* const state_owner = target ? target : this;
+-  const bool released = (code & IECODE_UP_PREFIX) != 0;
+-  if (released) {
+-    state_owner->mouse_button_flags_ &= ~changed_button;
+-  } else {
+-    state_owner->mouse_button_flags_ |= changed_button;
+-  }
+   if (!target) {
+     return;
+   }
+ 
+-  // Release events still identify the changed button after persistent state
+-  // has been cleared.
++  // Button state comes from the qualifier: it is per pointer, not per
++  // window.  A per-window copy is stale from the moment a press and its
++  // release are delivered to different windows (a press on the page whose
++  // release is rerouted to the context menu that opened under capture) until
++  // the next move over the first window resyncs it, and key and wheel events
++  // in between carry the stale buttons.  The qualifier of a release no
++  // longer carries the released button; Chromium expects it in flags, so add
++  // it back.
++  const bool released = (code & IECODE_UP_PREFIX) != 0;
+   MouseEvent event(released ? ET_MOUSE_RELEASED : ET_MOUSE_PRESSED, location,
+                    root_location, EventTimeForNow(),
+                    ModifierFlagsFromQualifier(qualifier) |
+-                       target->mouse_button_flags_ | changed_button,
++                       MouseFlagsFromQualifier(qualifier) | changed_button,
+                    changed_button);
+   event.InitializeNative();
+   target->delegate_->DispatchEvent(&event);
+@@ -1037,7 +1032,7 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+     }
+     MouseWheelEvent event(offset, location, root_location, EventTimeForNow(),
+                           ModifierFlagsFromQualifier(qualifier) |
+-                              target->mouse_button_flags_,
++                              MouseFlagsFromQualifier(qualifier),
+                           EF_NONE);
+     target->delegate_->DispatchEvent(&event);
+     return;
+@@ -1049,7 +1044,8 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+     return;
+   }
+ 
+-  int flags = ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_;
++  int flags = ModifierFlagsFromQualifier(qualifier) |
++              MouseFlagsFromQualifier(qualifier);
+   if (qualifier & IEQUALIFIER_REPEAT) {
+     flags |= EF_IS_REPEAT;
+   }
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 13266c9a69..409bd7e30f 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -146,7 +146,6 @@ class ArosWindow : public PlatformWindow {
+   bool capture_ = false;
+   bool shutting_down_ = false;
+   bool native_events_enabled_ = false;
+-  int mouse_button_flags_ = 0;
+ };
+ 
+ }  // namespace ui

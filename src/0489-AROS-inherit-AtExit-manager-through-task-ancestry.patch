@@ -1,0 +1,100 @@
+From 8e50263f4581e5e5caa864b99b057447400ce925 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 19:37:05 -0500
+Subject: [PATCH 489/638] AROS: inherit AtExit manager through task ancestry
+
+Register each manager against its exact creating task, then let descendant pthread workers resolve the first registered ETask ancestor. This preserves independent native child-process managers while keeping in-process renderer workers attached to their owning process.
+
+
+
+---
+ base/at_exit.cc | 48 ++++++++++++++++++++++++++++++++++--------------
+ 1 file changed, 34 insertions(+), 14 deletions(-)
+
+diff --git a/base/at_exit.cc b/base/at_exit.cc
+index 00fb35798b..bd51cb5118 100644
+--- a/base/at_exit.cc
++++ b/base/at_exit.cc
+@@ -48,26 +48,41 @@ AtExitProcessRegistry& GetAtExitProcessRegistry() {
+   return *registry;
+ }
+ 
+-struct Task* GetCurrentProcessTask() {
+-  struct Task* task = FindTask(nullptr);
+-  struct Task* const current = task;
++AtExitProcessState& GetCurrentTaskState() {
++  auto& registry = GetAtExitProcessRegistry();
++  AutoLock lock(registry.lock);
++  return registry.states[FindTask(nullptr)];
++}
+ 
++AtExitProcessState& GetCurrentProcessState() {
++  auto& registry = GetAtExitProcessRegistry();
++  AutoLock lock(registry.lock);
++  struct Task* const current = FindTask(nullptr);
++  struct Task* task = current;
++
++  // Native child processes and pthread workers do not all expose an
++  // NT_PROCESS node at the same point in their ETask ancestry.  Bind a new
++  // manager to the task that creates it, then let descendants find the first
++  // already-registered owner.  This is the same ownership rule used by the
++  // AROS CommandLine registry and keeps in-process renderer workers attached
++  // to the browser process's AtExitManager.
+   for (size_t depth = 0; task && depth < 64; ++depth) {
+-    if (task->tc_Node.ln_Type == NT_PROCESS) {
+-      return task;
++    const auto it = registry.states.find(task);
++    if (it != registry.states.end()) {
++      return it->second;
+     }
+ 
+     struct ETask* etask = GetETask(task);
+     task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
+   }
+ 
+-  return current;
++  return registry.states[current];
+ }
+ 
+-AtExitProcessState& GetCurrentProcessState() {
+-  auto& registry = GetAtExitProcessRegistry();
+-  AutoLock lock(registry.lock);
+-  return registry.states[GetCurrentProcessTask()];
++AtExitManager*& GetTopManagerForNewManager() {
++  // Constructing an AtExitManager defines a new native-process owner.  Do not
++  // inherit an ancestor's manager here: only descendant lookups inherit.
++  return GetCurrentTaskState().top_manager;
+ }
+ 
+ AtExitManager*& GetTopManager() {
+@@ -98,12 +113,16 @@ bool& GetDisableManagers() {
+   return g_disable_managers;
+ }
+ 
++AtExitManager*& GetTopManagerForNewManager() {
++  return GetTopManager();
++}
++
+ #endif
+ 
+ }  // namespace
+ 
+-AtExitManager::AtExitManager() : next_manager_(GetTopManager()) {
+-  AtExitManager*& top_manager = GetTopManager();
++AtExitManager::AtExitManager() : next_manager_(GetTopManagerForNewManager()) {
++  AtExitManager*& top_manager = GetTopManagerForNewManager();
+ // If multiple modules instantiate AtExitManagers they'll end up living in this
+ // module... they have to coexist.
+ #if !defined(COMPONENT_BUILD)
+@@ -189,8 +208,9 @@ void AtExitManager::DisableAllAtExitManagers() {
+   GetDisableManagers() = true;
+ }
+ 
+-AtExitManager::AtExitManager(bool shadow) : next_manager_(GetTopManager()) {
+-  AtExitManager*& top_manager = GetTopManager();
++AtExitManager::AtExitManager(bool shadow)
++    : next_manager_(GetTopManagerForNewManager()) {
++  AtExitManager*& top_manager = GetTopManagerForNewManager();
+   DCHECK(shadow || !top_manager);
+   top_manager = this;
+ }

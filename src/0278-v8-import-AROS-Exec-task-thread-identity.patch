@@ -1,0 +1,29 @@
+From e261e9b4abdd1a86d3998e7006202405b3d4c58e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 00:10:08 -0500
+Subject: [PATCH 278/638] v8: import AROS Exec task thread identity
+
+Update the pinned V8 checkout so library-hosted main and background tasks receive distinct V8 ThreadId values from Exec.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: runtime-thread-identity-correction-imported
+
+AI_ASSUMPTION: nested V8 commit 884d405 is the canonical task identity implementation
+
+AI_VALIDATION: shared-v8 YouTube runtime reached provisional load before compiler background-task identity DCHECK failures
+
+AI_LIMITATIONS: rebuild and runtime revalidation remain pending
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 921060e60f..884d405c26 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 921060e60fc47b92d896cbf289cce0fcac32654f
++Subproject commit 884d405c267fedd87fb72ae42666ef1bb76f4a5a

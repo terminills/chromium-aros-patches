@@ -1,0 +1,61 @@
+From c6e775d22b14dbd8f73c5437b9bc0b9a9140f40f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:11:19 -0500
+Subject: [PATCH 085/638] [AROS] Fail closed for process VM metrics
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Chromium memory instrumentation has an explicit AROS backend.
+ROOT_CAUSE: OSMetrics had no implementation for AROS, and current shared-address-space accounting cannot truthfully satisfy per-process VM dump or map semantics.
+FIX_REASON: Return unavailable and an empty map until MMU-backed OPAL domains expose real per-process mappings.
+SCOPE: Resource coordinator memory-instrumentation source selection and AROS OSMetrics backend.
+VALIDATION: os_metrics_aros.o and libmemory_instrumentation.a build; both previously unresolved OSMetrics entries are defined.
+RISK: OS-level process RSS and VM map diagnostics remain unavailable; allocator-level and OPAL telemetry are unaffected.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../cpp/memory_instrumentation/BUILD.gn       |  4 ++++
+ .../memory_instrumentation/os_metrics_aros.cc | 20 +++++++++++++++++++
+ 2 files changed, 24 insertions(+)
+ create mode 100644 services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
+
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/BUILD.gn b/services/resource_coordinator/public/cpp/memory_instrumentation/BUILD.gn
+index 820928b98e..aad38ee80d 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/BUILD.gn
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/BUILD.gn
+@@ -37,6 +37,10 @@ component("memory_instrumentation") {
+     sources += [ "os_metrics_fuchsia.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "os_metrics_aros.cc" ]
++  }
++
+   defines = [ "IS_RESOURCE_COORDINATOR_PUBLIC_MEMORY_INSTRUMENTATION_IMPL" ]
+ 
+   deps = []
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
+new file mode 100644
+index 0000000000..6db0418d15
+--- /dev/null
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
+@@ -0,0 +1,20 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics.h"
++
++namespace memory_instrumentation {
++
++// static
++bool OSMetrics::FillOSMemoryDump(base::ProcessId, mojom::RawOSMemDump*) {
++  return false;
++}
++
++// static
++std::vector<mojom::VmRegionPtr> OSMetrics::GetProcessMemoryMaps(
++    base::ProcessId) {
++  return {};
++}
++
++}  // namespace memory_instrumentation

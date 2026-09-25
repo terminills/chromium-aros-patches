@@ -1,0 +1,62 @@
+From df1b955c87150dfe44785cc939df2e2ea454a41a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 10:07:54 -0500
+Subject: [PATCH 568/638] aros: trace every page-allocator and shared-memory
+ event
+
+The 64 KiB thresholds hid the small allocations that could share pages
+with a raster tile; log everything until the gather_8888 fault is
+explained. TracePageEvent no longer opens debug.library per event -
+KPutStr comes from the auto-opened link library like the other trace
+helpers, and the per-event OpenLibrary produced 15k exec log lines.
+---
+ .../src/partition_alloc/page_allocator_internals_aros.h  | 9 +++------
+ base/memory/platform_shared_memory_region_aros.cc        | 2 +-
+ 2 files changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 1ee1414edf..2f5c59299d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -288,7 +288,7 @@ void LogRetainedPageSuffix(uintptr_t address,
+ // Ownership trace for the viz gather_8888 trap: page-level events on ranges
+ // large enough to hold a raster tile, so a faulting address can be matched
+ // to the reservation, decommit or protection change that made it fault.
+-constexpr size_t kTracePageEventSize = 64 * 1024;
++constexpr size_t kTracePageEventSize = 0;
+ 
+ void TracePageEvent(const char* what,
+                     uintptr_t address,
+@@ -297,17 +297,14 @@ void TracePageEvent(const char* what,
+   if (length < kTracePageEventSize) {
+     return;
+   }
++  // debug.library is opened once by the auto-init code that binds KPutStr;
++  // an OpenLibrary per event showed up as 15k exec log lines per run.
+   char line[160];
+-  struct Library* DebugBase = OpenLibrary("debug.library", 0);
+-  if (!DebugBase) {
+-    return;
+-  }
+   std::snprintf(line, sizeof(line),
+                 "[Chromium:PA] %s address=%p len=%llu protection=0x%lx\n",
+                 what, reinterpret_cast<void*>(address),
+                 static_cast<unsigned long long>(length), protection);
+   ArosKPutStr(line);
+-  CloseLibrary(DebugBase);
+ }
+ 
+ }  // namespace
+diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
+index 04cdf8c1eb..811ed76285 100644
+--- a/base/memory/platform_shared_memory_region_aros.cc
++++ b/base/memory/platform_shared_memory_region_aros.cc
+@@ -73,7 +73,7 @@ bool IsValidRegion(const SharedRegionData* region) {
+ // Ownership trace for the viz gather_8888 trap: every region large enough
+ // to hold a raster tile is logged at creation and destruction so a faulting
+ // pixel address can be matched to the region that held it.
+-constexpr size_t kTraceRegionSize = 64 * 1024;
++constexpr size_t kTraceRegionSize = 0;
+ 
+ void TraceRegion(const char* what, const SharedRegionData* region) {
+   if (region->allocation_size < kTraceRegionSize)

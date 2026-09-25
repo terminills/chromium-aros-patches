@@ -1,0 +1,64 @@
+From 1b9b22e44f4b19ca6c53c0afa9df016480a688b7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 12:55:44 -0500
+Subject: [PATCH 370/638] cef: gate Blink glue to CEF builds
+
+AI_PHASE: chromium-process-model
+AI_STATUS: cef-glue-boundary-restored
+ROOT_CAUSE: The prior Blink controller integration compiled CEF blink_glue unconditionally, causing enable_cef=false Chrome builds to require generated CEF headers and embed CEF glue.
+FIX_REASON: Gate CEF renderer glue, configuration, and cef_config.h generation on enable_cef while leaving the ordinary Chrome Blink controller pristine.
+SCOPE: third_party/blink/renderer/controller/BUILD.gn
+VALIDATION: The AROS Chrome libblink_controller archive rebuilt successfully and exact archive inspection reports no blink_glue object.
+RISK: The CEF enable_cef=true tree needs a later focused regression to confirm the now-explicit make_config_header dependency and retained glue symbols.
+AI_DECISION_CHAIN: full Chrome failure -> missing cef_config.h -> identify unconditional CEF source -> restore buildflag boundary -> Chrome controller archive PASS without blink_glue.
+Evidence:-chromium-browser-renderer-20260728/build-07-full-resume.log;-chromium-browser-renderer-20260728/build-08-chrome-blink-controller.log
+Job:
+---
+ third_party/blink/renderer/controller/BUILD.gn | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/third_party/blink/renderer/controller/BUILD.gn b/third_party/blink/renderer/controller/BUILD.gn
+index 48362cecfc..788f1a666d 100644
+--- a/third_party/blink/renderer/controller/BUILD.gn
++++ b/third_party/blink/renderer/controller/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+ 
+ import("//build/config/ui.gni")
++import("//cef/libcef/features/features.gni")
+ import("//testing/test.gni")
+ import("//third_party/blink/renderer/bindings/bindings.gni")
+ import("//third_party/blink/renderer/config.gni")
+@@ -38,7 +39,6 @@ component("controller") {
+   }
+ 
+   configs += [
+-    "//cef/libcef/features:config",
+     "//third_party/blink/renderer:config",
+     "//third_party/blink/renderer:inside_blink",
+     "//third_party/blink/renderer:non_test_config",
+@@ -48,8 +48,6 @@ component("controller") {
+   defines = [ "BLINK_CONTROLLER_IMPLEMENTATION=1" ]
+ 
+   sources = [
+-    "//cef/libcef/renderer/blink_glue.cc",
+-    "//cef/libcef/renderer/blink_glue.h",
+     "blink_initializer.cc",
+     "blink_initializer.h",
+     "blink_leak_detector.cc",
+@@ -68,6 +66,15 @@ component("controller") {
+     "performance_manager/v8_worker_memory_reporter.h",
+   ]
+ 
++  if (enable_cef) {
++    sources += [
++      "//cef/libcef/renderer/blink_glue.cc",
++      "//cef/libcef/renderer/blink_glue.h",
++    ]
++    configs += [ "//cef/libcef/features:config" ]
++    deps += [ "//cef:make_config_header" ]
++  }
++
+   if (is_linux || is_chromeos) {
+     sources += [
+       "memory_usage_monitor_posix.cc",

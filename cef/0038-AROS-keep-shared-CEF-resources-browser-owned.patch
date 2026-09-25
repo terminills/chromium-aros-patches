@@ -1,0 +1,51 @@
+From c5d559de9e248c9c0dcefcab6cc1bfca7cf75334 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 15:30:36 -0500
+Subject: [PATCH 38/43] AROS: keep shared CEF resources browser-owned
+
+Initialize and destroy ResourceBundle only in the browser native process. AROS child processes share the address-space-global singleton and must neither replace nor tear it down.
+
+
+
+---
+ libcef/common/alloy/alloy_main_delegate.cc | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/libcef/common/alloy/alloy_main_delegate.cc b/libcef/common/alloy/alloy_main_delegate.cc
+index db5fe9c3..544283e5 100644
+--- a/libcef/common/alloy/alloy_main_delegate.cc
++++ b/libcef/common/alloy/alloy_main_delegate.cc
+@@ -602,7 +602,17 @@ void AlloyMainDelegate::PreSandboxStartup() {
+                                           chrome::DIR_INTERNAL_PLUGINS,
+                                           chrome::DIR_USER_DATA);
+ 
++#if BUILDFLAG(IS_AROS)
++  // Native child processes share the browser's address space. ResourceBundle
++  // is therefore a process-global singleton from Chromium's perspective but
++  // an address-space-global singleton on AROS; children reuse the browser's
++  // initialized instance.
++  if (process_type.empty()) {
++    InitializeResourceBundle();
++  }
++#else
+   InitializeResourceBundle();
++#endif
+   MaybePatchGdiGetFontData();
+ }
+ 
+@@ -617,7 +627,15 @@ absl::variant<int, content::MainFunctionParams> AlloyMainDelegate::RunProcess(
+ }
+ 
+ void AlloyMainDelegate::ProcessExiting(const std::string& process_type) {
++#if BUILDFLAG(IS_AROS)
++  // A child must not destroy the ResourceBundle still owned and used by the
++  // browser process in the shared address space.
++  if (process_type.empty()) {
++    ui::ResourceBundle::CleanupSharedInstance();
++  }
++#else
+   ui::ResourceBundle::CleanupSharedInstance();
++#endif
+ }
+ 
+ #if BUILDFLAG(IS_LINUX)

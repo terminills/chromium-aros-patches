@@ -1,0 +1,58 @@
+From 0f82318415d7b1b0d7ae7e2fe088302a5505128a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 13:17:59 -0500
+Subject: [PATCH 245/638] clipboard: allocate AROS selection buffer [fix]
+ [chromium]
+
+AI_PHASE: chromium-native-input
+AI_STATUS: complete
+
+ROOT_CAUSE: AROS Ozone advertised ClipboardBuffer::kSelection, but ClipboardNonBacked allocated no map entry, so first text input CHECKed in flat_map::at.
+
+FIX_REASON: Allocate an independent in-process kSelection buffer on AROS and retain the supported-buffer contract. This matches AROS clipboard.device's numbered-unit model while leaving native FTXT/CHRS integration for a later PlatformClipboard.
+
+SCOPE: ui/base/clipboard/clipboard_non_backed.cc and its AROS regression test only.
+
+HOSTED_NATIVE: shared; this is Chromium compile-time platform behavior.
+
+VALIDATION: Focused Ninja objects are current; full ET_REL runtime SHA-256 is c8a7f0859e48083bb77fe6e315fcb953de040a91aed3feb2d4868fb3194ce2c3. Hosted about:blank replay reached first presentation; repeated input produced a, ar, aro, aros, and aros-space with no flat_map fatal. The later V8 OOM occurred after the validation boundary at the hosted 4090 MB ceiling.
+
+RISK: low; AROS gains storage for a buffer it already advertised, with no other platform behavior changed.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap,,
+---
+ ui/base/clipboard/clipboard_non_backed.cc          | 2 +-
+ ui/base/clipboard/clipboard_non_backed_unittest.cc | 7 +++++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/ui/base/clipboard/clipboard_non_backed.cc b/ui/base/clipboard/clipboard_non_backed.cc
+index 79644d4531..73750ec29d 100644
+--- a/ui/base/clipboard/clipboard_non_backed.cc
++++ b/ui/base/clipboard/clipboard_non_backed.cc
+@@ -460,7 +460,7 @@ ClipboardNonBacked::ClipboardNonBacked() {
+   // so create internal clipboards for platform supported clipboard buffers.
+   constexpr ClipboardBuffer kClipboardBuffers[] = {
+     ClipboardBuffer::kCopyPaste,
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+     ClipboardBuffer::kSelection,
+ #endif
+ #if BUILDFLAG(IS_MAC)
+diff --git a/ui/base/clipboard/clipboard_non_backed_unittest.cc b/ui/base/clipboard/clipboard_non_backed_unittest.cc
+index adf644b7d6..c3bab5cba5 100644
+--- a/ui/base/clipboard/clipboard_non_backed_unittest.cc
++++ b/ui/base/clipboard/clipboard_non_backed_unittest.cc
+@@ -411,6 +411,13 @@ TEST_F(ClipboardNonBackedTest, ClipboardBufferTypes) {
+   }
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++TEST_F(ClipboardNonBackedTest, SelectionBufferAvailableOnAros) {
++  EXPECT_TRUE(ui::Clipboard::IsSupportedClipboardBuffer(
++      ui::ClipboardBuffer::kSelection));
++}
++#endif
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ // Base class for tests of `ClipboardNonBacked` which use mock time.
+ class ClipboardNonBackedMockTimeTest : public ClipboardNonBackedTestBase {

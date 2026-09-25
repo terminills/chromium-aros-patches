@@ -1,0 +1,287 @@
+From 00233c4f56df34eb5158cde18abdd81ce481260e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:09:00 -0500
+Subject: [PATCH 627/638] aros: --aros-native-threadpool wakes the idle worker
+ on the least-loaded core
+
+Which idle worker the thread group wakes IS the placement decision on
+AROS: a task runs on whichever worker picks it up and a worker never
+leaves its core, and exec's own placement (rom/exec/signal.c:190-199)
+takes the first set bit rather than the least-loaded core. Chromium's
+default - front of the idle set - is right on an OS that rebalances and
+piles work onto one core here.
+
+WorkerThread samples KrnGetCPUNumber() once in ThreadMain() (the only
+thread that can answer for itself; stable because nothing migrates it).
+TakeIdleWorkerOnLeastLoadedCoreLockRequired() counts awake workers per
+core under lock_ and wakes the idle worker on the lightest one. Off by
+default; the default Take() path is untouched.
+
+Unmeasured so far: every earlier comparison ran with all workers on
+CPU 0 (see the pin-workers commit), so this degenerated to "first idle
+worker" and compared one policy against itself. The comment says so.
+
+
+---
+ base/task/thread_pool/thread_group_impl.cc | 102 ++++++++++++++++++++-
+ base/task/thread_pool/thread_group_impl.h  |  12 +++
+ base/task/thread_pool/worker_thread.cc     |  23 +++++
+ base/task/thread_pool/worker_thread.h      |  19 ++++
+ 4 files changed, 155 insertions(+), 1 deletion(-)
+
+diff --git a/base/task/thread_pool/thread_group_impl.cc b/base/task/thread_pool/thread_group_impl.cc
+index 5ad680e760..c643bc354e 100644
+--- a/base/task/thread_pool/thread_group_impl.cc
++++ b/base/task/thread_pool/thread_group_impl.cc
+@@ -4,8 +4,11 @@
+ 
+ #include "base/task/thread_pool/thread_group_impl.h"
+ 
++#include <limits>
++#include <map>
+ #include <optional>
+ #include <string_view>
++#include <vector>
+ 
+ #include "base/auto_reset.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -13,11 +16,13 @@
+ #include "base/task/common/checked_lock.h"
+ #include "base/task/thread_pool/thread_group_worker_delegate.h"
+ #include "base/task/thread_pool/worker_thread_waitable_event.h"
++#include "base/threading/platform_thread_internal_posix.h"
+ #include "base/threading/scoped_blocking_call.h"
+ #include "base/threading/scoped_blocking_call_internal.h"
+ #include "base/threading/thread_checker.h"
+ #include "base/time/time_override.h"
+ #include "base/trace_event/base_tracing.h"
++#include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
+ 
+ namespace base {
+@@ -493,6 +498,93 @@ void ThreadGroupImpl::OnShutdownStarted() {
+   OnShutDownStartedImpl(&executor);
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++WorkerThreadWaitableEvent*
++ThreadGroupImpl::TakeIdleWorkerOnLeastLoadedCoreLockRequired() {
++  // Which idle worker we wake IS the placement decision on AROS, because a
++  // task runs on whichever worker picks it up and a worker never leaves its
++  // core. Chromium's default - take whichever worker is at the front of the
++  // idle set - is the right answer on an OS that rebalances. AROS does not:
++  // rom/exec/signal.c:190-199 picks the first set bit of the affinity mask,
++  // never the least-loaded core, and its own comment says "Use CPU balancing
++  // some day...". So waking an arbitrary idle worker piles work onto whatever
++  // core that worker happens to sit on while other cores stay idle, and the
++  // cost lands on the frame-time TAIL rather than on throughput.
++  //
++  // Load is counted as awake (non-idle) workers per core. That is a coarse
++  // proxy - it does not know how long each task will run - but it is the
++  // measure available under `lock_` without adding accounting to every task,
++  // and it is exactly the quantity that produces head-of-line blocking.
++  //
++  // WorkerThreadSet exposes no iteration, only Take/Peek/Insert/Remove, so the
++  // idle set is drained into a small vector, scored, and the losers put back.
++  // The set holds at most max_tasks_ workers (single digits here), so this is
++  // cheap; it is O(k log k) on a set that is normally near-empty, and it runs
++  // only when a task source is enqueued.
++  std::vector<WorkerThreadWaitableEvent*> idle;
++  while (WorkerThreadWaitableEvent* w = idle_workers_set_.Take()) {
++    idle.push_back(w);
++  }
++  if (idle.empty()) {
++    return nullptr;
++  }
++
++  // Awake workers per core. Anything whose core is not yet known (-1, i.e. its
++  // thread has not reached ThreadMain()) is simply not counted.
++  std::map<int, size_t> load;
++  for (const auto& worker : workers_) {
++    const int cpu = worker->aros_cpu();
++    if (cpu < 0) {
++      continue;
++    }
++    load.try_emplace(cpu, 0u);
++    // Every worker in a ThreadGroupImpl is a WorkerThreadWaitableEvent; the
++    // WorkerThread* overload of IsOnIdleSetLockRequired is declared but never
++    // defined, so calling it links to nothing. The rest of this file casts the
++    // same way.
++    if (!IsOnIdleSetLockRequired(
++            static_cast<WorkerThreadWaitableEvent*>(worker.get()))) {
++      ++load[cpu];
++    }
++  }
++
++  // Pure least-loaded, with NO locality bias.
++  //
++  // The reasoning for a locality tiebreak is sound on its face: waking a worker
++  // on another core goes through exec's cross-core IPI path
++  // (rom/exec/signal.c:168-205 - a Hook, a CallIPI claim, an interrupt on the
++  // target core), which costs more than waking one on the current core, so
++  // preferring the local core unless another is meaningfully lighter ought to
++  // cut the tail. It is left out because it is UNMEASURED, not because it was
++  // measured worse: every jank-probe run before 2026-09-20 had all workers on
++  // CPU 0 (the affinity attribute never reached exec - see kArosPinWorkers in
++  // base/base_switches.cc), so aros_cpu() was 0 for every worker, this
++  // function degenerated to "first idle worker", and the numbers that once sat
++  // in this comment compared one policy against itself. Adding a tiebreak
++  // needs repeated pinned runs that actually differ in placement.
++  size_t best = 0;
++  size_t best_load = std::numeric_limits<size_t>::max();
++  for (size_t i = 0; i < idle.size(); ++i) {
++    const int cpu = idle[i]->aros_cpu();
++    // An unknown core sorts last: prefer a worker we can actually reason about.
++    const size_t l = (cpu < 0) ? std::numeric_limits<size_t>::max() - 1
++                               : load[cpu];
++    if (l < best_load) {
++      best_load = l;
++      best = i;
++    }
++  }
++
++  WorkerThreadWaitableEvent* chosen = idle[best];
++  for (size_t i = 0; i < idle.size(); ++i) {
++    if (i != best) {
++      idle_workers_set_.Insert(idle[i]);
++    }
++  }
++  return chosen;
++}
++#endif  // BUILDFLAG(IS_AROS)
++
+ void ThreadGroupImpl::EnsureEnoughWorkersLockRequired(
+     BaseScopedCommandsExecutor* base_executor) {
+   // Don't do anything if the thread group isn't started.
+@@ -514,7 +606,15 @@ void ThreadGroupImpl::EnsureEnoughWorkersLockRequired(
+   // Wake up the appropriate number of workers.
+   for (size_t i = 0; i < num_workers_to_wake_up; ++i) {
+     MaintainAtLeastOneIdleWorkerLockRequired(executor);
+-    WorkerThreadWaitableEvent* worker_to_wakeup = idle_workers_set_.Take();
++    WorkerThreadWaitableEvent* worker_to_wakeup = nullptr;
++#if BUILDFLAG(IS_AROS)
++    if (internal::ArosNativeThreadPoolEnabled()) {
++      worker_to_wakeup = TakeIdleWorkerOnLeastLoadedCoreLockRequired();
++    }
++#endif
++    if (!worker_to_wakeup) {
++      worker_to_wakeup = idle_workers_set_.Take();
++    }
+     DCHECK(worker_to_wakeup);
+     executor->ScheduleWakeUp(worker_to_wakeup);
+   }
+diff --git a/base/task/thread_pool/thread_group_impl.h b/base/task/thread_pool/thread_group_impl.h
+index e939137a5b..fab30a8f97 100644
+--- a/base/task/thread_pool/thread_group_impl.h
++++ b/base/task/thread_pool/thread_group_impl.h
+@@ -9,6 +9,7 @@
+ #include <string_view>
+ #include <vector>
+ 
++#include "build/build_config.h"
+ #include "base/base_export.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/synchronization/condition_variable.h"
+@@ -118,6 +119,17 @@ class BASE_EXPORT ThreadGroupImpl : public ThreadGroup {
+   bool IsOnIdleSetLockRequired(WorkerThreadWaitableEvent* worker) const
+       EXCLUSIVE_LOCKS_REQUIRED(lock_);
+ 
++#if BUILDFLAG(IS_AROS)
++  // Takes the idle worker whose CPU currently has the fewest awake workers,
++  // or nullptr if no worker is idle. On AROS, choosing which idle worker to
++  // wake IS the placement decision: tasks never migrate, and exec picks the
++  // first set bit of an affinity mask rather than the least-loaded core
++  // (rom/exec/signal.c:190-199). Only used when --aros-native-threadpool is
++  // given; otherwise the default idle_workers_set_.Take() is kept.
++  WorkerThreadWaitableEvent* TakeIdleWorkerOnLeastLoadedCoreLockRequired()
++      EXCLUSIVE_LOCKS_REQUIRED(lock_);
++#endif
++
+   size_t worker_sequence_num_ GUARDED_BY(lock_) = 0;
+ 
+   // Ordered set of idle workers; the order uses pointer comparison, this is
+diff --git a/base/task/thread_pool/worker_thread.cc b/base/task/thread_pool/worker_thread.cc
+index 620184e782..77d2f8566c 100644
+--- a/base/task/thread_pool/worker_thread.cc
++++ b/base/task/thread_pool/worker_thread.cc
+@@ -21,6 +21,12 @@
+ #include "base/task/thread_pool/environment_config.h"
+ #include "base/task/thread_pool/worker_thread_observer.h"
+ #include "base/threading/hang_watcher.h"
++#if BUILDFLAG(IS_AROS)
++// Declares ArosCurrentCpu(); the AROS headers it wraps stay in
++// platform_thread_aros.cc, since <aros/kernel.h> defines an Allocate macro that
++// collides with PartitionAlloc.
++#include "base/threading/platform_thread_internal_posix.h"
++#endif
+ #include "base/time/time.h"
+ #include "base/time/time_override.h"
+ #include "base/trace_event/base_tracing.h"
+@@ -270,6 +276,23 @@ void WorkerThread::UpdateThreadType(ThreadType desired_thread_type) {
+ }
+ 
+ void WorkerThread::ThreadMain() {
++#if BUILDFLAG(IS_AROS)
++  // Record which core this worker actually landed on.
++  //
++  // AROS does not migrate tasks: a task is placed once and stays there
++  // (rom/exec/exec_util.c Exec_InitETask), and when exec does pick a core for a
++  // task that is not running it takes the FIRST bit set in the affinity mask,
++  // never the least-loaded one - rom/exec/signal.c:190-199, whose own comment
++  // reads "Use CPU balancing some day...". So the core a worker runs on is
++  // fixed for its lifetime and nothing will rebalance it.
++  //
++  // That makes "which core is this worker on" a real, stable property that the
++  // thread group can schedule against, and it has to be sampled HERE because
++  // KrnGetCPUNumber() only answers for the thread that calls it. Asking where
++  // the thread ended up is also more honest than assuming where we asked it to
++  // go: if pinning was off, or the mask was ignored, this reports the truth.
++  aros_cpu_.store(ArosCurrentCpu(), std::memory_order_relaxed);
++#endif
+ #if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
+   DCHECK(io_thread_task_runner_);
+   FileDescriptorWatcher file_descriptor_watcher(io_thread_task_runner_);
+diff --git a/base/task/thread_pool/worker_thread.h b/base/task/thread_pool/worker_thread.h
+index 93233e25f7..3a5cb6f46f 100644
+--- a/base/task/thread_pool/worker_thread.h
++++ b/base/task/thread_pool/worker_thread.h
+@@ -5,6 +5,8 @@
+ #ifndef BASE_TASK_THREAD_POOL_WORKER_THREAD_H_
+ #define BASE_TASK_THREAD_POOL_WORKER_THREAD_H_
+ 
++#include <atomic>
++
+ #include "base/base_export.h"
+ #include "base/compiler_specific.h"
+ #include "base/memory/raw_ptr.h"
+@@ -191,6 +193,18 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
+ 
+   size_t sequence_num() const { return sequence_num_; }
+ 
++#if BUILDFLAG(IS_AROS)
++  // The CPU this worker is running on, or -1 before its thread has entered
++  // ThreadMain() (or if it could not be determined). Sampled once by the worker
++  // thread itself and never changed afterwards, because AROS does not migrate
++  // tasks - so this is a stable property, not a snapshot that goes stale.
++  //
++  // Thread-safe and deliberately relaxed: the thread group reads it to decide
++  // which worker to wake, where a momentarily stale -1 costs at most one
++  // suboptimal placement and never correctness.
++  int aros_cpu() const { return aros_cpu_.load(std::memory_order_relaxed); }
++#endif
++
+  protected:
+   friend class RefCountedThreadSafe<WorkerThread>;
+   class Thread;
+@@ -252,6 +266,11 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
+   // Whether the thread should exit. Set by Cleanup().
+   AtomicFlag should_exit_;
+ 
++#if BUILDFLAG(IS_AROS)
++  // See aros_cpu(). Written once by this worker's own thread in ThreadMain().
++  std::atomic<int> aros_cpu_{-1};
++#endif
++
+   const TrackedRef<TaskTracker> task_tracker_;
+ 
+   // Optional observer notified when a worker enters and exits its main

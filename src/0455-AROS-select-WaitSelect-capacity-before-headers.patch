@@ -1,0 +1,51 @@
+From eb418a9b806e101e5ebe448295f9111237104eda Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 01:37:46 -0500
+Subject: [PATCH 455/638] AROS: select WaitSelect capacity before headers
+
+Define FD_SETSIZE before message_pump_aros.h can transitively include sys/select.h. The previous ordering left fd_set at 64 bits and writes for normal Chromium descriptors above 63 corrupted the stack, producing phantom WaitSelect descriptors such as fd 111.
+
+Add a compile-time capacity assertion so this include-order regression cannot silently return.
+
+
+
+---
+ base/message_loop/message_pump_aros.cc | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index b884e9669c..7bf7315cc1 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -2,19 +2,26 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-#include "base/message_loop/message_pump_aros.h"
+-
+-#include <errno.h>
+ #if defined(__AROS__)
+ // AROSTCP's WaitSelect() accepts variable-sized descriptor masks.  Its public
+ // fd_set defaults to the historical 64 sockets unless the application selects
+-// a larger mask before including <sys/select.h>.  Chromium regularly exceeds
+-// that during normal browsing (Fast.com reaches descriptors above 100).
++// a larger mask before any header can transitively include <sys/select.h>.
++// Chromium regularly exceeds that during normal browsing (Fast.com reaches
++// descriptors above 100).
+ #undef FD_SETSIZE
+ #define FD_SETSIZE 1024
+ #endif
++
++#include "base/message_loop/message_pump_aros.h"
++
++#include <errno.h>
+ #include <sys/select.h>
+ 
++#if defined(__AROS__)
++static_assert(sizeof(fd_set) * NBBY >= FD_SETSIZE,
++              "AROS fd_set was defined before Chromium selected its capacity");
++#endif
++
+ #include <algorithm>
+ #include <utility>
+ 

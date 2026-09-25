@@ -1,0 +1,23 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 8b1f250..ae206d6 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -281,9 +281,16 @@ target(link_target_type, "ffmpeg_internal") {
+   }
+ 
+   if (is_fuchsia || is_posix) {
++    if (is_aros) {
++      # AROS executables are relocatable objects fixed up by LoadSeg()'s
++      # static relocator; there is no GOT/PLT.  -fPIC with the large code
++      # model emits R_X86_64_GOTPC64/GOT64/PLTOFF64, which the loader
++      # rejects ("Unknown relocation type 29").
++      cflags += [ "-fno-pic" ]
++    } else {
++      cflags += [ "-fPIC" ]
++    }
+     cflags += [
+-      "-fPIC",
+-
+       # ffmpeg uses its own deprecated functions.
+       "-Wno-deprecated-declarations",
+     ]

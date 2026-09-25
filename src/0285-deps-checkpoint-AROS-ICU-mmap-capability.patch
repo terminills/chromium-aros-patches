@@ -1,0 +1,29 @@
+From fd4957abd4128d8f24b1d9bdacb1b5d9821a4c00 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:59 -0500
+Subject: [PATCH 285/638] deps: checkpoint AROS ICU mmap capability
+
+Point Chromium at ICU commit 4c5d9f8 with the explicit U_HAVE_MMAP=0 platform definition.
+
+AI_PHASE: chromium-aros-icu
+
+AI_STATUS: gitlink-checkpoint
+
+AI_ASSUMPTION: the nested ICU change is the complete AROS capability delta
+
+AI_VALIDATION: focused blink_platform build completed 15781/15781 from the identical nested source
+
+AI_LIMITATIONS: full browser runtime replay remains pending
+
+AI_DECISION_CHAIN:
+---
+ third_party/icu | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/icu b/third_party/icu
+index bad7ddbf92..4c5d9f82fe 160000
+--- a/third_party/icu
++++ b/third_party/icu
+@@ -1 +1 @@
+-Subproject commit bad7ddbf921358177e56fd723c2f59f8041a370f
++Subproject commit 4c5d9f82fe9bb3eec1b59c8068478365f8423a9c

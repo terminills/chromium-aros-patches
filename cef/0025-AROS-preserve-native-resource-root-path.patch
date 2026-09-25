@@ -1,0 +1,39 @@
+From 736a52d111037405949236e5334e82ae9e1714df Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 10:49:00 -0500
+Subject: [PATCH 25/43] AROS: preserve native resource root path
+
+AI_PHASE: cef-library-lifecycle
+AI_STATUS: in-progress
+ROOT_CAUSE: Alloy directly loaded resource paks from the native AROS assign but registered chrome::DIR_RESOURCES with PathService::Override, whose POSIX canonicalization discarded the assign; the extension system later failed PathService::Get.
+FIX_REASON: Register the already-absolute AROS resource assign with OverrideAndCreateIfNeeded(is_absolute=true), mirroring the runtime-proven locale and user-data contracts while retaining generic behavior elsewhere.
+SCOPE: libcef/common/alloy/alloy_main_delegate.cc
+VALIDATION: hosted locale replay passed the prior prefs fatal and isolated extension_system.cc:499; exact object and complete libcef archive rebuilt successfully; archive SHA 5ea68e69..., 34,492 members, 8,532 Blink, 426 CEF-owned, zero true V8 engine target members.
+RISK: AROS path existence is created/validated without POSIX canonicalization; all non-AROS builds retain the original Override call.
+AI_DECISION_CHAIN: locale fix passed -> general paks mapped -> extension system requested chrome::DIR_RESOURCES -> PathService key absent -> same native-assign canonicalization seam
+Evidence:-cef-locale-runtime-20260725;-cef-aros-resource-override-20260725
+Job:
+---
+ libcef/common/alloy/alloy_main_delegate.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/libcef/common/alloy/alloy_main_delegate.cc b/libcef/common/alloy/alloy_main_delegate.cc
+index dbdb914a..db5fe9c3 100644
+--- a/libcef/common/alloy/alloy_main_delegate.cc
++++ b/libcef/common/alloy/alloy_main_delegate.cc
+@@ -717,7 +717,15 @@ void AlloyMainDelegate::InitializeResourceBundle() {
+     resources_dir = resource_util::GetResourcesDir();
+   }
+   if (!resources_dir.empty()) {
++#if BUILDFLAG(IS_AROS)
++    // Native assigns are already absolute but cannot be canonicalized through
++    // the POSIX MakeAbsoluteFilePath path used by PathService::Override.
++    base::PathService::OverrideAndCreateIfNeeded(
++        chrome::DIR_RESOURCES, resources_dir, /*is_absolute=*/true,
++        /*create=*/true);
++#else
+     base::PathService::Override(chrome::DIR_RESOURCES, resources_dir);
++#endif
+   }
+ 
+   if (!resource_bundle_delegate_.pack_loading_disabled()) {

@@ -1,0 +1,56 @@
+From 20e45d86febd34bacc2d9419d6f1fb3c9771b7db Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 16:37:04 -0500
+Subject: [PATCH 27/43] cef: complete observer teardown before renderer
+ deletion
+
+AI_PHASE: cef-osr-browser
+
+AI_STATUS: shutdown-order-fix-under-validation
+
+ROOT_CAUSE: RunSingleProcessCleanupOnUIThread called RenderProcessHostImpl::Cleanup while run_renderer_in_process remained true; Cleanup returned before notifying RenderProcessHostDestroyed, leaving AgentSchedulingGroupHost bound when the host was directly deleted.
+
+FIX_REASON: Clear the in-process renderer flag before Cleanup so normal observer teardown runs before host deletion.
+
+SCOPE: libcef/renderer/alloy/alloy_content_renderer_client.cc
+
+VALIDATION: prior hosted OSR replay painted and closed, then isolated the AgentSchedulingGroupHost state DCHECK to CEFShutdown; capped coherent archive rebuild and hosted shutdown replay remain pending.
+
+RISK: Changes ordering only in CEF's single-process cleanup path; multiprocess behavior is untouched.
+
+AI_DECISION_CHAIN:; painted-and-closed PASS; shutdown DCHECK; Cleanup early-return source audit
+
+Evidence:-cef-osr-geometric-runtime-20260725;-cef-shutdown-order-fix-20260725
+
+Job:
+---
+ libcef/renderer/alloy/alloy_content_renderer_client.cc | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index e7855e33..5853d66d 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -573,16 +573,18 @@ void AlloyContentRendererClient::RunSingleProcessCleanupOnUIThread() {
+       content::RenderProcessHost::AllHostsIterator());
+   if (!iterator.IsAtEnd()) {
+     host = iterator.GetCurrentValue();
++
++    // RenderProcessHostImpl::Cleanup() deliberately returns without observer
++    // teardown while the in-process renderer flag is set. Clear the flag
++    // first so Cleanup() reaches RenderProcessHostDestroyed notifications
++    // before the host and its AgentSchedulingGroupHost are deleted.
++    content::RenderProcessHost::SetRunRendererInProcess(false);
+     host->Cleanup();
+     iterator.Advance();
+     DCHECK(iterator.IsAtEnd());
+   }
+   DCHECK(host);
+ 
+-  // Clear the run_renderer_in_process() flag to avoid a DCHECK in the
+-  // RenderProcessHost destructor.
+-  content::RenderProcessHost::SetRunRendererInProcess(false);
+-
+   // Deletion of the RenderProcessHost object will stop the render thread and
+   // result in a call to WillDestroyCurrentMessageLoop.
+   // Cleanup() will cause deletion to be posted as a task on the UI thread but

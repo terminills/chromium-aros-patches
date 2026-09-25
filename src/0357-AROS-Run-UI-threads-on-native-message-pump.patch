@@ -1,0 +1,45 @@
+From 0e7d6523e0b531ee6de7876f6f3b1594ce4de676 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 27 Jul 2026 20:55:48 -0500
+Subject: [PATCH 357/638] [AROS] Run UI threads on native message pump
+
+AI_PHASE: electron-event-loop-coexistence
+AI_STATUS: renderer-native-delayed-waits
+ROOT_CAUSE: AROS UI threads used MessagePumpDefault, whose POSIX condition-variable timed waits left Blink renderer timers dormant; runtime task evidence showed the renderer never constructed MessagePumpAROS.
+FIX_REASON: Reuse the proven Exec-signal and timer.device pump for AROS UI threads so delayed Blink work has a native timeout and wake path.
+SCOPE: base/message_loop/message_pump_for_ui.h
+VALIDATION: Exact CEF and hosted Electron rebuild/replay follows; prior corrected IO-pump run captured first paint and successful timer installation but zero callbacks.
+RISK: MessagePumpAROS must service UI task cadence correctly; the focused OSR test covers Blink timer delivery, Node pump cadence, and shutdown.
+AI_DECISION_CHAIN: corrected libcef still installed timer without callbacks -> correlate renderer task with pump construction logs -> renderer used default UI alias -> select native AROS pump.
+Job:
+---
+ base/message_loop/message_pump_for_ui.h | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/base/message_loop/message_pump_for_ui.h b/base/message_loop/message_pump_for_ui.h
+index 3f2db9af5d..17415edb75 100644
+--- a/base/message_loop/message_pump_for_ui.h
++++ b/base/message_loop/message_pump_for_ui.h
+@@ -25,7 +25,7 @@
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #include "base/message_loop/message_pump_fuchsia.h"
+ #elif BUILDFLAG(IS_AROS)
+-#include "base/message_loop/message_pump_default.h"
++#include "base/message_loop/message_pump_aros.h"
+ #endif
+ 
+ namespace base {
+@@ -50,9 +50,10 @@ using MessagePumpForUI = MessagePumpLibevent;
+ #elif BUILDFLAG(IS_FUCHSIA)
+ using MessagePumpForUI = MessagePumpFuchsia;
+ #elif BUILDFLAG(IS_AROS)
+-// Provisional base bring-up pump. Native Intuition/Exec integration belongs
+-// in the AROS Ozone message pump before windowed content_shell.
+-using MessagePumpForUI = MessagePumpDefault;
++// Use the native Exec/timer.device pump for UI threads as well as IO threads.
++// MessagePumpDefault depends on POSIX condition-variable timed waits, which do
++// not reliably wake delayed Blink work on AROS.
++using MessagePumpForUI = MessagePumpAROS;
+ #else
+ #error Platform does not define MessagePumpForUI
+ #endif

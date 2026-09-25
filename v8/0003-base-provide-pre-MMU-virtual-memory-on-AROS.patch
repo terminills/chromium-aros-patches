@@ -1,0 +1,367 @@
+From 90e50a15c6c0f42de08598cc178c180220820d98 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:42:21 -0500
+Subject: [PATCH 03/28] base: provide pre-MMU virtual memory on AROS
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: AROS has no sys/mman API, while native V8 requires aligned reservations, partial release, permission transitions, decommit, discard, and file mappings.
+
+FIX_REASON: Back reservations with page-aligned Exec allocations, track contiguous live ranges for trim/free, emulate commit state by zeroing, keep protection transitions explicit no-ops, and load/write mapped files through serialized seek I/O.
+
+SCOPE: src/base/platform/platform-posix.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/v8/libv8_libbase.a
+
+RISK: high; this is a functional single-process pre-MMU model, not isolation, true lazy commit, or cross-process shared mapping, and must be replaced by OPAL/MMU backing.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/base/platform/platform-posix.cc | 256 +++++++++++++++++++++++++++-
+ 1 file changed, 252 insertions(+), 4 deletions(-)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 529a073..2a97d91 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -9,6 +9,8 @@
+ #include <errno.h>
+ #include <limits.h>
+ #include <pthread.h>
++#include <stdint.h>
++#include <string.h>
+ 
+ #include "src/base/logging.h"
+ #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+@@ -17,7 +19,16 @@
+ #include <fcntl.h>
+ #include <sched.h>  // for sched_yield
+ #include <stdio.h>
++#if V8_OS_AROS
++#include <exec/memory.h>
++#include <proto/exec.h>
++#undef Allocate
++#undef Remove
++#undef Signal
++#undef Wait
++#else
+ #include <sys/mman.h>
++#endif
+ #include <sys/stat.h>
+ #include <sys/time.h>
+ #include <sys/types.h>
+@@ -54,7 +65,7 @@
+ #if V8_OS_DARWIN
+ #include <mach/mach.h>
+ #include <malloc/malloc.h>
+-#else
++#elif !V8_OS_AROS
+ #include <malloc.h>
+ #endif
+ 
+@@ -68,10 +79,24 @@
+ #include <sys/resource.h>
+ #endif
+ 
+-#if !defined(_AIX) && !defined(V8_OS_FUCHSIA)
++#if !defined(_AIX) && !defined(V8_OS_FUCHSIA) && !V8_OS_AROS
+ #include <sys/syscall.h>
+ #endif
+ 
++#if V8_OS_AROS
++#define PROT_NONE 0
++#define PROT_READ 1
++#define PROT_WRITE 2
++#define PROT_EXEC 4
++#define MAP_SHARED 1
++#define MAP_PRIVATE 2
++#define MAP_FIXED 0x10
++#define MAP_ANONYMOUS 0x20
++#define MAP_NORESERVE 0x4000
++#define MAP_FAILED ((void*)-1)
++#define MADV_DONTNEED 4
++#endif
++
+ #if V8_OS_FREEBSD || V8_OS_DARWIN || V8_OS_OPENBSD || V8_OS_SOLARIS
+ #define MAP_ANONYMOUS MAP_ANON
+ #endif
+@@ -97,6 +122,198 @@ namespace base {
+ 
+ namespace {
+ 
++#if V8_OS_AROS
++struct ArosMapping {
++  ArosMapping* next;
++  void* raw;
++  size_t raw_size;
++  uintptr_t mapping_start;
++  size_t mapping_size;
++  uintptr_t live_start;
++  uintptr_t live_end;
++  int fd;
++  off_t offset;
++  bool write_back;
++};
++
++ArosMapping* g_aros_mappings = nullptr;
++volatile unsigned char g_aros_mappings_lock = 0;
++
++void LockArosMappings() {
++  while (__atomic_test_and_set(&g_aros_mappings_lock, __ATOMIC_ACQUIRE)) {
++    __asm__ __volatile__("pause");
++  }
++}
++
++void UnlockArosMappings() {
++  __atomic_clear(&g_aros_mappings_lock, __ATOMIC_RELEASE);
++}
++
++bool TransferArosFile(int fd, off_t offset, void* data, size_t size,
++                      bool write_back) {
++  LockArosMappings();
++  off_t previous = ::lseek(fd, 0, SEEK_CUR);
++  bool ok = previous != static_cast<off_t>(-1) &&
++            ::lseek(fd, offset, SEEK_SET) != static_cast<off_t>(-1);
++  size_t transferred = 0;
++  while (ok && transferred < size) {
++    char* cursor = static_cast<char*>(data) + transferred;
++    ssize_t result = write_back ? ::write(fd, cursor, size - transferred)
++                                : ::read(fd, cursor, size - transferred);
++    if (result > 0) {
++      transferred += static_cast<size_t>(result);
++    } else if (!write_back && result == 0) {
++      memset(cursor, 0, size - transferred);
++      transferred = size;
++    } else if (result < 0 && errno == EINTR) {
++      continue;
++    } else {
++      ok = false;
++    }
++  }
++  if (previous != static_cast<off_t>(-1) &&
++      ::lseek(fd, previous, SEEK_SET) == static_cast<off_t>(-1)) {
++    ok = false;
++  }
++  UnlockArosMappings();
++  return ok;
++}
++
++void* ArosMmap(void* address, size_t size, int prot, int flags, int fd,
++               off_t offset) {
++  if (size == 0) {
++    errno = EINVAL;
++    return MAP_FAILED;
++  }
++
++  if (flags & MAP_FIXED) {
++    if (address == nullptr || address == MAP_FAILED) {
++      errno = EINVAL;
++      return MAP_FAILED;
++    }
++    if (fd >= 0) {
++      if (!TransferArosFile(fd, offset, address, size, false)) {
++        return MAP_FAILED;
++      }
++    } else {
++      memset(address, 0, size);
++    }
++    return address;
++  }
++
++  constexpr size_t kPageSize = 4096;
++  if (size > SIZE_MAX - (kPageSize - 1)) {
++    errno = ENOMEM;
++    return MAP_FAILED;
++  }
++  size_t raw_size = size + kPageSize - 1;
++  void* raw = AllocMem(raw_size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (!raw) {
++    errno = ENOMEM;
++    return MAP_FAILED;
++  }
++  uintptr_t mapping_start =
++      (reinterpret_cast<uintptr_t>(raw) + kPageSize - 1) &
++      ~(static_cast<uintptr_t>(kPageSize) - 1);
++
++  if (fd >= 0 &&
++      !TransferArosFile(fd, offset, reinterpret_cast<void*>(mapping_start),
++                        size, false)) {
++    FreeMem(raw, raw_size);
++    return MAP_FAILED;
++  }
++
++  auto* mapping = static_cast<ArosMapping*>(
++      AllocMem(sizeof(ArosMapping), MEMF_PUBLIC | MEMF_CLEAR));
++  if (!mapping) {
++    FreeMem(raw, raw_size);
++    errno = ENOMEM;
++    return MAP_FAILED;
++  }
++  mapping->raw = raw;
++  mapping->raw_size = raw_size;
++  mapping->mapping_start = mapping_start;
++  mapping->mapping_size = size;
++  mapping->live_start = mapping_start;
++  mapping->live_end = mapping_start + size;
++  mapping->fd = fd;
++  mapping->offset = offset;
++  mapping->write_back =
++      fd >= 0 && (flags & MAP_SHARED) != 0 && (prot & PROT_WRITE) != 0;
++
++  LockArosMappings();
++  mapping->next = g_aros_mappings;
++  g_aros_mappings = mapping;
++  UnlockArosMappings();
++  return reinterpret_cast<void*>(mapping_start);
++}
++
++int ArosMunmap(void* address, size_t size) {
++  if (!address || address == MAP_FAILED || size == 0) {
++    errno = EINVAL;
++    return -1;
++  }
++
++  uintptr_t start = reinterpret_cast<uintptr_t>(address);
++  uintptr_t end = start + size;
++  if (end < start) end = UINTPTR_MAX;
++
++  LockArosMappings();
++  ArosMapping** link = &g_aros_mappings;
++  while (*link) {
++    ArosMapping* mapping = *link;
++    if (start >= mapping->live_start && start < mapping->live_end) {
++      if (start == mapping->live_start) {
++        mapping->live_start = end < mapping->live_end ? end : mapping->live_end;
++      } else if (end >= mapping->live_end) {
++        mapping->live_end = start;
++      } else {
++        UnlockArosMappings();
++        return 0;
++      }
++
++      if (mapping->live_start < mapping->live_end) {
++        UnlockArosMappings();
++        return 0;
++      }
++
++      *link = mapping->next;
++      UnlockArosMappings();
++      if (mapping->write_back) {
++        TransferArosFile(mapping->fd, mapping->offset,
++                         reinterpret_cast<void*>(mapping->mapping_start),
++                         mapping->mapping_size, true);
++      }
++      FreeMem(mapping->raw, mapping->raw_size);
++      FreeMem(mapping, sizeof(ArosMapping));
++      return 0;
++    }
++    link = &mapping->next;
++  }
++  UnlockArosMappings();
++  return 0;
++}
++
++int ArosMprotect(void* address, size_t size, int prot) {
++  USE(address);
++  USE(size);
++  USE(prot);
++  return 0;
++}
++
++int ArosMadvise(void* address, size_t size, int advice) {
++  if (advice == MADV_DONTNEED || advice == MADV_FREE) {
++    memset(address, 0, size);
++  }
++  return 0;
++}
++
++#define mmap ArosMmap
++#define munmap ArosMunmap
++#define mprotect ArosMprotect
++#define madvise ArosMadvise
++#endif
++
+ // 0 is never a valid thread id.
+ const pthread_t kNoThread = static_cast<pthread_t>(0);
+ 
+@@ -522,6 +739,11 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
+ 
+ // static
+ void OS::SetDataReadOnly(void* address, size_t size) {
++#if V8_OS_AROS
++  USE(address);
++  USE(size);
++  return;
++#else
+   CHECK_EQ(0, reinterpret_cast<uintptr_t>(address) % CommitPageSize());
+   CHECK_EQ(0, size % CommitPageSize());
+ 
+@@ -529,6 +751,7 @@ void OS::SetDataReadOnly(void* address, size_t size) {
+     FATAL("Failed to protect data memory at %p +%zu; error %d\n", address, size,
+           errno);
+   }
++#endif
+ }
+ 
+ // static
+@@ -824,6 +1047,8 @@ int OS::GetCurrentThreadId() {
+   return static_cast<int>(zx_thread_self());
+ #elif V8_OS_SOLARIS
+   return static_cast<int>(pthread_self());
++#elif V8_OS_AROS
++  return static_cast<int>(pthread_self());
+ #else
+   return static_cast<int>(reinterpret_cast<intptr_t>(pthread_self()));
+ #endif
+@@ -843,18 +1068,24 @@ void OS::ExitProcess(int exit_code) {
+ 
+ #if !defined(V8_OS_FUCHSIA)
+ int OS::GetUserTime(uint32_t* secs, uint32_t* usecs) {
++#if V8_OS_AROS
++  *secs = 0;
++  *usecs = 0;
++  return -1;
++#else
+   struct rusage usage;
+ 
+   if (getrusage(RUSAGE_SELF, &usage) < 0) return -1;
+   *secs = static_cast<uint32_t>(usage.ru_utime.tv_sec);
+   *usecs = static_cast<uint32_t>(usage.ru_utime.tv_usec);
+   return 0;
++#endif
+ }
+ #endif
+ 
+ int OS::GetPeakMemoryUsageKb() {
+-#if defined(V8_OS_FUCHSIA)
+-  // Fuchsia does not implement getrusage()
++#if defined(V8_OS_FUCHSIA) || V8_OS_AROS
++  // Fuchsia and AROS do not implement getrusage().
+   return -1;
+ #else
+   struct rusage usage;
+@@ -1366,5 +1597,22 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
+ #undef MAP_ANONYMOUS
+ #undef MADV_FREE
+ 
++#if V8_OS_AROS
++#undef mmap
++#undef munmap
++#undef mprotect
++#undef madvise
++#undef PROT_NONE
++#undef PROT_READ
++#undef PROT_WRITE
++#undef PROT_EXEC
++#undef MAP_SHARED
++#undef MAP_PRIVATE
++#undef MAP_FIXED
++#undef MAP_NORESERVE
++#undef MAP_FAILED
++#undef MADV_DONTNEED
++#endif
++
+ }  // namespace base
+ }  // namespace v8

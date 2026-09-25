@@ -1,0 +1,425 @@
+From b1d0a9ed0f4433173d5ab45ea66de1315cd3f984 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 10 Sep 2026 06:46:06 -0500
+Subject: [PATCH 605/638] Implement file dialogs on AROS with the ASL file
+ requester
+
+AROS built shell_dialog_stub.cc, whose CreateSelectFileDialog() returns
+nullptr. SelectFileDialog::Create() hands that straight back and callers
+dereference it, so the browser process died with 0x80000003 illegal
+address access in ui::SelectFileDialog::Sele... on anything that opens a
+chooser: Downloads "Change", Save As, or an <input type=file> on a page.
+A missing platform piece presenting as a crash on ordinary use.
+
+Adds SelectFileDialogAros, backed by asl.library's ASL_FileRequest:
+
+- Open, Save As, multi-select and the three folder types all map onto
+  ASLFR_DoSaveMode / ASLFR_DoMultiSelect / ASLFR_DrawersOnly.
+- Chromium's extension groups become an ASL pattern, so
+  {{"htm","html"},{"txt"}} shows as "(#?.htm|#?.html|#?.txt)".
+  include_all_files or a "*" entry means no filter at all.
+- The requester is modal and blocks its thread, so it runs on a
+  MayBlock()/USER_BLOCKING thread-pool sequence and replies on the
+  sequence that asked. Intuition is never touched from the UI thread.
+- asl.library is opened around each requester rather than held for the
+  process lifetime; a file dialog is rare.
+- Multi-select results come back as WBArg entries, so each name is
+  joined to its drawer through AddPart() - the only join that gets the
+  AROS "Volume:dir/file" colon-vs-slash rule right.
+- If asl.library will not open or the requester cannot be allocated, the
+  listener is told the selection was cancelled. That path logs and
+  continues; it never returns nullptr again.
+
+Verified against the real pc-x86_64-smp SDK with x86_64-aros-g++: every
+tag, FileRequester field and WBArg access compiles clean. Note STRPTR is
+char* under C++ (exec/types.h swaps it deliberately) but wa_Name stays
+BYTE*, so that one needs an explicit cast.
+
+Not yet exercised on hardware - the requester's behaviour under a live
+Chromium still needs a run.
+---
+ ui/shell_dialogs/BUILD.gn                   |  13 +-
+ ui/shell_dialogs/select_file_dialog_aros.cc | 256 ++++++++++++++++++++
+ ui/shell_dialogs/select_file_dialog_aros.h  |  83 +++++++
+ 3 files changed, 351 insertions(+), 1 deletion(-)
+ create mode 100644 ui/shell_dialogs/select_file_dialog_aros.cc
+ create mode 100644 ui/shell_dialogs/select_file_dialog_aros.h
+
+diff --git a/ui/shell_dialogs/BUILD.gn b/ui/shell_dialogs/BUILD.gn
+index 1caba4fc1c..16dc65c6f3 100644
+--- a/ui/shell_dialogs/BUILD.gn
++++ b/ui/shell_dialogs/BUILD.gn
+@@ -41,10 +41,21 @@ component("shell_dialogs") {
+     "//url",
+   ]
+ 
+-  if (is_chromeos || is_castos || is_cast_android || is_aros) {
++  if (is_chromeos || is_castos || is_cast_android) {
+     sources += [ "shell_dialog_stub.cc" ]
+   }
+ 
++  if (is_aros) {
++    # Real ASL file requester. Before this, AROS used shell_dialog_stub.cc,
++    # whose CreateSelectFileDialog() returns nullptr - which callers then
++    # dereference, taking the browser process down on any Save As, Downloads
++    # "Change", or <input type=file>.
++    sources += [
++      "select_file_dialog_aros.cc",
++      "select_file_dialog_aros.h",
++    ]
++  }
++
+   if (is_linux && !is_castos) {
+     sources += [
+       "select_file_dialog_linux.cc",
+diff --git a/ui/shell_dialogs/select_file_dialog_aros.cc b/ui/shell_dialogs/select_file_dialog_aros.cc
+new file mode 100644
+index 0000000000..8b2ac7a88f
+--- /dev/null
++++ b/ui/shell_dialogs/select_file_dialog_aros.cc
+@@ -0,0 +1,256 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/shell_dialogs/select_file_dialog_aros.h"
++
++#include <utility>
++
++#include <dos/dos.h>
++#include <libraries/asl.h>
++#include <proto/asl.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++// libraries/asl.h forward-declares WBArg for fr_ArgList; multi-select reads
++// wa_Lock/wa_Name, so the definition has to come from here.
++#include <workbench/startup.h>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/bind_post_task.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "ui/shell_dialogs/select_file_policy.h"
++#include "ui/shell_dialogs/selected_file_info.h"
++
++namespace ui {
++namespace {
++
++// asl.library is not one of the bases the AROS startup opens for us, so it is
++// opened around each requester rather than held for the life of the process:
++// a file dialog is rare, and holding a library base across a browser lifetime
++// buys nothing.
++class ScopedAslBase {
++ public:
++  ScopedAslBase() { base_ = OpenLibrary("asl.library", 37); }
++  ScopedAslBase(const ScopedAslBase&) = delete;
++  ScopedAslBase& operator=(const ScopedAslBase&) = delete;
++  ~ScopedAslBase() {
++    if (base_)
++      CloseLibrary(base_);
++  }
++
++  explicit operator bool() const { return base_ != nullptr; }
++  struct Library* get() const { return base_; }
++
++ private:
++  struct Library* base_ = nullptr;
++};
++
++// AROS paths are "Volume:dir/file"; AddPart() is the only join that gets the
++// colon-vs-slash rule right, so use it rather than assembling by hand.
++base::FilePath JoinAmigaPath(const char* drawer, const char* file) {
++  if (!drawer || !*drawer)
++    return base::FilePath(file ? file : "");
++  if (!file || !*file)
++    return base::FilePath(drawer);
++
++  char joined[1024];
++  base::strlcpy(joined, drawer, sizeof(joined));
++  if (!AddPart(joined, file, sizeof(joined))) {
++    // Only fails when the result would not fit; the caller gets the drawer,
++    // which is still a valid location, rather than a truncated path.
++    return base::FilePath(drawer);
++  }
++  return base::FilePath(joined);
++}
++
++// Builds an ASL pattern from Chromium's extension groups, e.g.
++// {{"htm","html"},{"txt"}} -> "(#?.htm|#?.html|#?.txt)". An empty result means
++// "no filter", which ASL shows as every file.
++std::string BuildAslPattern(const SelectFileDialog::FileTypeInfo* file_types) {
++  if (!file_types || file_types->include_all_files ||
++      file_types->extensions.empty()) {
++    return std::string();
++  }
++
++  std::vector<std::string> terms;
++  for (const auto& group : file_types->extensions) {
++    for (const auto& extension : group) {
++      if (extension.empty())
++        continue;
++      // A "*" or empty group means everything; no point filtering at all.
++      if (extension == "*")
++        return std::string();
++      terms.push_back("#?." + extension);
++    }
++  }
++  if (terms.empty())
++    return std::string();
++  return "(" + base::JoinString(terms, "|") + ")";
++}
++
++}  // namespace
++
++SelectFileDialogAros::Request::Request() = default;
++SelectFileDialogAros::Request::Request(Request&&) = default;
++SelectFileDialogAros::Request& SelectFileDialogAros::Request::operator=(
++    Request&&) = default;
++SelectFileDialogAros::Request::~Request() = default;
++
++SelectFileDialogAros::SelectFileDialogAros(
++    Listener* listener,
++    std::unique_ptr<SelectFilePolicy> policy)
++    : SelectFileDialog(listener, std::move(policy)) {}
++
++SelectFileDialogAros::~SelectFileDialogAros() = default;
++
++// static
++SelectFileDialogAros::Request SelectFileDialogAros::RunRequester(
++    Request request) {
++  ScopedAslBase asl;
++  if (!asl) {
++    LOG(ERROR) << "asl.library is not available; cannot show a file requester";
++    return request;
++  }
++
++  struct FileRequester* requester = static_cast<struct FileRequester*>(
++      AllocAslRequestTags(ASL_FileRequest, TAG_END));
++  if (!requester) {
++    LOG(ERROR) << "AllocAslRequestTags(ASL_FileRequest) failed";
++    return request;
++  }
++
++  const std::string drawer = request.default_path.DirName().value();
++  const std::string file = request.default_path.BaseName().value();
++
++  const BOOL accepted = AslRequestTags(
++      requester,
++      ASLFR_TitleText, reinterpret_cast<IPTR>(request.title.c_str()),
++      ASLFR_InitialDrawer, reinterpret_cast<IPTR>(drawer.c_str()),
++      ASLFR_InitialFile, reinterpret_cast<IPTR>(file.c_str()),
++      ASLFR_DoSaveMode, request.save_mode ? TRUE : FALSE,
++      ASLFR_DoMultiSelect, request.multi_select ? TRUE : FALSE,
++      ASLFR_DrawersOnly, request.drawers_only ? TRUE : FALSE,
++      ASLFR_DoPatterns, request.pattern.empty() ? FALSE : TRUE,
++      ASLFR_InitialPattern,
++      reinterpret_cast<IPTR>(request.pattern.empty() ? "#?"
++                                                     : request.pattern.c_str()),
++      TAG_END);
++
++  if (accepted) {
++    if (request.drawers_only) {
++      // A drawer requester reports the chosen drawer in fr_Drawer and leaves
++      // fr_File empty.
++      request.files.emplace_back(requester->fr_Drawer);
++      request.cancelled = false;
++    } else if (request.multi_select && requester->fr_NumArgs > 0) {
++      for (LONG i = 0; i < requester->fr_NumArgs; ++i) {
++        const struct WBArg& arg = requester->fr_ArgList[i];
++        char drawer_name[1024] = {0};
++        if (arg.wa_Lock)
++          NameFromLock(arg.wa_Lock, drawer_name, sizeof(drawer_name));
++        // wa_Name is BYTE* (signed char) even in C++, unlike STRPTR which the
++        // SDK redefines to char* for exactly this reason.
++        request.files.push_back(JoinAmigaPath(
++            drawer_name, reinterpret_cast<const char*>(arg.wa_Name)));
++      }
++      request.cancelled = request.files.empty();
++    } else {
++      request.files.push_back(
++          JoinAmigaPath(requester->fr_Drawer, requester->fr_File));
++      request.cancelled = request.files.back().empty();
++    }
++  }
++
++  FreeAslRequest(requester);
++  return request;
++}
++
++void SelectFileDialogAros::SelectFileImpl(
++    Type type,
++    const std::u16string& title,
++    const base::FilePath& default_path,
++    const FileTypeInfo* file_types,
++    int file_type_index,
++    const base::FilePath::StringType& default_extension,
++    gfx::NativeWindow owning_window,
++    void* params,
++    const GURL* caller) {
++  has_multiple_file_type_choices_ =
++      file_types ? file_types->extensions.size() > 1 : true;
++
++  Request request;
++  request.title = base::UTF16ToUTF8(title);
++  request.default_path = default_path;
++  request.pattern = BuildAslPattern(file_types);
++  request.save_mode = type == SELECT_SAVEAS_FILE;
++  request.multi_select = type == SELECT_OPEN_MULTI_FILE;
++  request.drawers_only = type == SELECT_FOLDER ||
++                         type == SELECT_UPLOAD_FOLDER ||
++                         type == SELECT_EXISTING_FOLDER;
++
++  if (request.title.empty()) {
++    // ASL draws an empty title bar otherwise, which reads as a broken window.
++    request.title = request.save_mode ? "Save As" : "Open";
++  }
++
++  running_ = true;
++
++  // USER_BLOCKING: a person is staring at a modal requester waiting for it.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&SelectFileDialogAros::RunRequester, std::move(request)),
++      base::BindOnce(&SelectFileDialogAros::OnRequesterFinished, this, params,
++                     file_type_index));
++}
++
++void SelectFileDialogAros::OnRequesterFinished(void* params,
++                                               int file_type_index,
++                                               Request request) {
++  running_ = false;
++
++  // ListenerDestroyed() may have run while the requester was up.
++  if (!listener_)
++    return;
++
++  if (request.cancelled || request.files.empty()) {
++    listener_->FileSelectionCanceled(params);
++    return;
++  }
++
++  if (request.multi_select) {
++    std::vector<SelectedFileInfo> selected;
++    selected.reserve(request.files.size());
++    for (const base::FilePath& path : request.files)
++      selected.emplace_back(path);
++    listener_->MultiFilesSelected(selected, params);
++    return;
++  }
++
++  listener_->FileSelected(SelectedFileInfo(request.files.front()),
++                          file_type_index, params);
++}
++
++bool SelectFileDialogAros::HasMultipleFileTypeChoicesImpl() {
++  return has_multiple_file_type_choices_;
++}
++
++bool SelectFileDialogAros::IsRunning(gfx::NativeWindow owning_window) const {
++  return running_;
++}
++
++void SelectFileDialogAros::ListenerDestroyed() {
++  listener_ = nullptr;
++}
++
++SelectFileDialog* CreateSelectFileDialog(
++    SelectFileDialog::Listener* listener,
++    std::unique_ptr<SelectFilePolicy> policy) {
++  return new SelectFileDialogAros(listener, std::move(policy));
++}
++
++}  // namespace ui
+diff --git a/ui/shell_dialogs/select_file_dialog_aros.h b/ui/shell_dialogs/select_file_dialog_aros.h
+new file mode 100644
+index 0000000000..8fa2671d9a
+--- /dev/null
++++ b/ui/shell_dialogs/select_file_dialog_aros.h
+@@ -0,0 +1,83 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_SHELL_DIALOGS_SELECT_FILE_DIALOG_AROS_H_
++#define UI_SHELL_DIALOGS_SELECT_FILE_DIALOG_AROS_H_
++
++#include <memory>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "ui/shell_dialogs/select_file_dialog.h"
++#include "ui/shell_dialogs/shell_dialogs_export.h"
++
++namespace ui {
++
++// File open/save dialogs backed by the AROS ASL file requester
++// (asl.library ASL_FileRequest).
++//
++// The requester is modal and blocks the thread it runs on, so it is driven
++// from a MayBlock() thread-pool sequence and the listener is called back on
++// the sequence that asked for the dialog. Nothing here touches Intuition on
++// the UI thread.
++class SHELL_DIALOGS_EXPORT SelectFileDialogAros : public SelectFileDialog {
++ public:
++  SelectFileDialogAros(Listener* listener,
++                       std::unique_ptr<SelectFilePolicy> policy);
++  SelectFileDialogAros(const SelectFileDialogAros&) = delete;
++  SelectFileDialogAros& operator=(const SelectFileDialogAros&) = delete;
++
++  // SelectFileDialog:
++  void SelectFileImpl(Type type,
++                      const std::u16string& title,
++                      const base::FilePath& default_path,
++                      const FileTypeInfo* file_types,
++                      int file_type_index,
++                      const base::FilePath::StringType& default_extension,
++                      gfx::NativeWindow owning_window,
++                      void* params,
++                      const GURL* caller) override;
++  bool HasMultipleFileTypeChoicesImpl() override;
++  bool IsRunning(gfx::NativeWindow owning_window) const override;
++  void ListenerDestroyed() override;
++
++ private:
++  // Private because SelectFileDialog is ref-counted.
++  ~SelectFileDialogAros() override;
++
++  // What the requester was asked for and what came back. Passed whole between
++  // sequences so the blocking side touches no member state.
++  struct Request {
++    Request();
++    Request(const Request&) = delete;
++    Request& operator=(const Request&) = delete;
++    Request(Request&&);
++    Request& operator=(Request&&);
++    ~Request();
++
++    std::string title;
++    base::FilePath default_path;
++    // ASL pattern such as "(#?.htm|#?.html)", empty for "show everything".
++    std::string pattern;
++    bool save_mode = false;
++    bool multi_select = false;
++    bool drawers_only = false;
++
++    std::vector<base::FilePath> files;
++    bool cancelled = true;
++  };
++
++  // Runs the ASL requester. Blocking; never called on the UI thread.
++  static Request RunRequester(Request request);
++
++  // Delivers the outcome to `listener_` on the calling sequence.
++  void OnRequesterFinished(void* params, int file_type_index, Request request);
++
++  bool has_multiple_file_type_choices_ = false;
++  bool running_ = false;
++};
++
++}  // namespace ui
++
++#endif  // UI_SHELL_DIALOGS_SELECT_FILE_DIALOG_AROS_H_

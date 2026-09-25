@@ -1,0 +1,111 @@
+From 0a01aba3707c883a551ee2e3b13e0cbc124609ed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:23:20 -0500
+Subject: [PATCH 178/638] chrome: use native crash reporting on AROS [chromium]
+ [aros]
+
+Statement: AROS already reports native faults through debug.resource, with OPAL supplying expanded runtime context when present; Chrome nevertheless inherited the POSIX Crashpad client and handler graph.
+
+Decision: Keep Chromium crash-key initialization, but exclude Crashpad client construction, initialization, and the browser crash-reporter source dependency on AROS.
+
+Evidence: The first full //chrome:chrome build stopped in Crashpad POSIX utility sources requiring paths.h and sys/mman.h; chrome_main_delegate selected Crashpad only because AROS is POSIX.
+
+Validation: GN regenerates for //chrome:chrome and obj/chrome/chrome_initial/chrome_main_delegate.o compiles successfully.
+
+Chain:; ACD-chromium-aros-native-crash-reporting; ACD-chromium-native-port-roadmap
+---
+ chrome/BUILD.gn                    |  5 ++++-
+ chrome/app/chrome_main_delegate.cc | 14 +++++++++-----
+ chrome/browser/BUILD.gn            |  2 +-
+ 3 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index d893cef1eb..07f755e771 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1427,7 +1427,6 @@ group("dependencies") {
+     "//chrome/renderer",
+     "//chrome/utility",
+     "//components/about_ui",
+-    "//components/crash/core/app",
+     "//components/devtools/devtools_pipe",
+     "//components/memory_system",
+     "//components/startup_metric_utils",
+@@ -1441,6 +1440,10 @@ group("dependencies") {
+     "//v8:v8_headers",
+   ]
+ 
++  if (!is_aros) {
++    public_deps += [ "//components/crash/core/app" ]
++  }
++
+   if (enable_ppapi) {
+     public_deps += [ "//ppapi/host" ]
+   }
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 73b6ab0934..83e9c8e42f 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -68,7 +68,6 @@
+ #include "chrome/utility/chrome_content_utility_client.h"
+ #include "components/component_updater/component_updater_paths.h"
+ #include "components/content_settings/core/common/content_settings_pattern.h"
+-#include "components/crash/core/app/crash_reporter_client.h"
+ #include "components/crash/core/common/crash_key.h"
+ #include "components/crash/core/common/crash_keys.h"
+ #include "components/devtools/devtools_pipe/devtools_pipe.h"
+@@ -142,8 +141,12 @@
+ #include <locale.h>
+ #include <signal.h>
+ 
+-#include "chrome/app/chrome_crash_reporter_client.h"
+ #include "components/about_ui/credit_utils.h"
++
++#if !BUILDFLAG(IS_AROS)
++#include "chrome/app/chrome_crash_reporter_client.h"
++#include "components/crash/core/app/crash_reporter_client.h"
++#endif
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_NACL) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+@@ -1530,7 +1533,7 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   }
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   ChromeCrashReporterClient::Create();
+ #endif
+ 
+@@ -1750,7 +1753,7 @@ void ChromeMainDelegate::PreSandboxStartup() {
+     CHECK(!loaded_locale.empty()) << "Locale could not be found for " << locale;
+   }
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_AROS)
+   // Zygote needs to call InitCrashReporter() in RunZygote().
+   if (process_type != switches::kZygoteProcess) {
+     if (command_line.HasSwitch(switches::kPreCrashpadCrashTest)) {
+@@ -1774,7 +1777,8 @@ void ChromeMainDelegate::PreSandboxStartup() {
+         v8::TryHandleWebAssemblyTrapPosix);
+ #endif  // BUILDFLAG(IS_ANDROID)
+   }
+-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) &&
++        // !BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+   CHECK_EQ(base::android::GetLibraryProcessType(),
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 366de6b80d..f774ecfb91 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6733,7 +6733,7 @@ static_library("browser") {
+     ]
+   }
+ 
+-  if (is_posix && !is_mac) {
++  if (is_posix && !is_mac && !is_aros) {
+     # TODO(crbug.com/1226159): Complete crash reporting integration on Fuchsia.
+     sources += [
+       "//chrome/app/chrome_crash_reporter_client.cc",

@@ -1,0 +1,64 @@
+From f8d64124d5a328f57784b14cef721e98eca1d5ab Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:59:54 -0500
+Subject: [PATCH 2/4] translator: contain Exec qualifiers around GLSL tokens
+ [angle] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS exec/types.h exports RESTRICT and VOLATILE compatibility macros through pthread/C++ runtime headers. ANGLE's generated GLSL parser uses those exact uppercase names as token identifiers, so macro substitution invalidated the token enum and cascaded across the lexer.
+
+FIX_REASON: Undefine only RESTRICT and VOLATILE for AROS inside Bison's code-requires block and mirror the generated header. Keeping the grammar source and generated artifact synchronized preserves the containment across parser regeneration.
+
+SCOPE: ANGLE GLSL Bison grammar and checked-in generated token header.
+
+VALIDATION: glslang_tab_autogen.o and glslang_lex_autogen.o compile; all prior missing-token errors are eliminated.
+
+RISK: low; ANGLE requires these names as identifiers and does not use the legacy Exec qualifier aliases.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/compiler/translator/glslang.y             | 8 ++++++++
+ src/compiler/translator/glslang_tab_autogen.h | 8 ++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/src/compiler/translator/glslang.y b/src/compiler/translator/glslang.y
+index fec89cf..64e15a2 100644
+--- a/src/compiler/translator/glslang.y
++++ b/src/compiler/translator/glslang.y
+@@ -60,6 +60,14 @@ using namespace sh;
+ %locations
+ 
+ %code requires {
++#if defined(__AROS__)
++#ifdef RESTRICT
++#undef RESTRICT
++#endif
++#ifdef VOLATILE
++#undef VOLATILE
++#endif
++#endif
+ #define YYLTYPE TSourceLoc
+ #define YYLTYPE_IS_DECLARED 1
+ #define YYLTYPE_IS_TRIVIAL 1
+diff --git a/src/compiler/translator/glslang_tab_autogen.h b/src/compiler/translator/glslang_tab_autogen.h
+index d5a48ed..51b586f 100644
+--- a/src/compiler/translator/glslang_tab_autogen.h
++++ b/src/compiler/translator/glslang_tab_autogen.h
+@@ -46,6 +46,14 @@ extern int yydebug;
+ #endif
+ /* "%code requires" blocks.  */
+ 
++#if defined(__AROS__)
++#    ifdef RESTRICT
++#        undef RESTRICT
++#    endif
++#    ifdef VOLATILE
++#        undef VOLATILE
++#    endif
++#endif
+ #define YYLTYPE TSourceLoc
+ #define YYLTYPE_IS_DECLARED 1
+ #define YYLTYPE_IS_TRIVIAL 1

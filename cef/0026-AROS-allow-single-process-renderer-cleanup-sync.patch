@@ -1,0 +1,46 @@
+From 47b77168a3f3e2b1c8d1d98e9a8927c4700f0ec7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 13:05:50 -0500
+Subject: [PATCH 26/43] AROS: allow single-process renderer cleanup sync
+
+AI_PHASE: cef-osr-browser
+AI_STATUS: in-progress
+ROOT_CAUSE: The first native OSR browser painted and closed, then CefShutdown entered Alloy single-process renderer cleanup and acquired AutoLock after Content had disallowed UI-thread base sync primitives, triggering thread_restrictions.cc:161.
+FIX_REASON: Scope CEF's existing sync-primitives-for-testing allowance to the AROS single-process cleanup routine, which already documents and performs synchronous spin/renderer destruction while native child-process transport is unavailable.
+SCOPE: libcef/renderer/alloy/alloy_content_renderer_client.cc
+VALIDATION: hosted OSR reached CreateBrowser=1, on_after_created, 960x540 first paint, on_before_close, and client PASS before the isolated shutdown fatal; exact object and coherent libcef archive rebuild passed, archive SHA fc9445ea..., zero true V8 engine members.
+RISK: Allowance is AROS-only and limited to single-process shutdown; non-AROS and normal runtime synchronization rules are unchanged.
+AI_DECISION_CHAIN: first paint PASS -> browser close PASS -> CefShutdown fatal -> stack isolates single-process AutoLock under UI restriction -> scope allowance to existing cleanup
+Evidence:-cef-osr-cache-runtime-20260725;-cef-aros-shutdown-sync-20260725
+Job:
+---
+ libcef/renderer/alloy/alloy_content_renderer_client.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index 2de1bc97..e7855e33 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -46,6 +46,7 @@
+ #include "base/process/current_process.h"
+ #include "base/stl_util.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/threading/thread_restrictions.h"
+ #include "build/build_config.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "chrome/common/pdf_util.h"
+@@ -141,6 +142,14 @@ AlloyContentRendererClient::GetCurrentTaskRunner() {
+ void AlloyContentRendererClient::RunSingleProcessCleanup() {
+   DCHECK(content::RenderProcessHost::run_renderer_in_process());
+ 
++#if BUILDFLAG(IS_AROS)
++  // AROS currently uses CEF's single-process path while native child-process
++  // and Mojo transports are brought up. This cleanup intentionally spins on
++  // an AutoLock and synchronously destroys the in-process renderer from the UI
++  // thread, after Content has disallowed UI-thread base sync primitives.
++  base::ScopedAllowBaseSyncPrimitivesForTesting scoped_allow_sync_primitives;
++#endif
++
+   // Make sure the render thread was actually started.
+   if (!render_task_runner_.get()) {
+     return;

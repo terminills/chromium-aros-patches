@@ -1,0 +1,87 @@
+From d68da7db8dc50a858ec987b97831b890016692f2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 10:35:05 -0500
+Subject: [PATCH 435/638] [AROS] Implement AROS OS memory dumps
+
+Report the real shared-address-space physical footprint from a coherent Exec AvailMem snapshot, expose it through Chromium's private-footprint conversion, and cover the AROS result in the platform metrics test. Keep OPAL optional and leave unsupported memory maps explicit.
+
+
+
+---
+ .../queued_request_dispatcher.cc              |  2 +-
+ .../memory_instrumentation/os_metrics_aros.cc | 32 +++++++++++++++++--
+ .../os_metrics_unittest.cc                    |  2 +-
+ 3 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+index 8f2a4f69d6..998ea3d1bd 100644
+--- a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
++++ b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+@@ -53,7 +53,7 @@ uint32_t CalculatePrivateFootprintKb(const mojom::RawOSMemDump& os_dump,
+                                      uint32_t shared_resident_kb) {
+   DCHECK(os_dump.platform_private_footprint);
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   uint64_t rss_anon_bytes = os_dump.platform_private_footprint->rss_anon_bytes;
+   uint64_t vm_swap_bytes = os_dump.platform_private_footprint->vm_swap_bytes;
+   return (rss_anon_bytes + vm_swap_bytes) / 1024;
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
+index 6db0418d15..15067dad34 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
+@@ -4,11 +4,39 @@
+ 
+ #include "services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics.h"
+ 
++#include <exec/memory.h>
++#include <proto/exec.h>
++
++#include "base/numerics/safe_conversions.h"
++
+ namespace memory_instrumentation {
+ 
+ // static
+-bool OSMetrics::FillOSMemoryDump(base::ProcessId, mojom::RawOSMemDump*) {
+-  return false;
++bool OSMetrics::FillOSMemoryDump(base::ProcessId,
++                                 mojom::RawOSMemDump* dump) {
++  if (!dump || !dump->platform_private_footprint)
++    return false;
++
++  // AROS has one address space, so Exec exposes one physical-memory footprint
++  // rather than a distinct RSS for each logical Process. Take both values
++  // while task switching is forbidden so the subtraction is a coherent
++  // snapshot. Do not depend on optional OPAL accounting here: Chromium must
++  // work on a standard AROS installation.
++  Forbid();
++  const IPTR total_bytes = AvailMem(MEMF_ANY | MEMF_TOTAL);
++  const IPTR free_bytes = AvailMem(MEMF_ANY);
++  Permit();
++
++  if (total_bytes == 0 || free_bytes > total_bytes)
++    return false;
++
++  const uint64_t used_bytes =
++      static_cast<uint64_t>(total_bytes - free_bytes);
++  dump->resident_set_kb =
++      base::saturated_cast<uint32_t>(used_bytes / 1024);
++  dump->platform_private_footprint->rss_anon_bytes = used_bytes;
++  dump->platform_private_footprint->vm_swap_bytes = 0;
++  return true;
+ }
+ 
+ // static
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_unittest.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_unittest.cc
+index 842ca01e48..3fcc0b07c9 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_unittest.cc
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_unittest.cc
+@@ -138,7 +138,7 @@ TEST(OSMetricsTest, GivesNonZeroResults) {
+   EXPECT_TRUE(OSMetrics::FillOSMemoryDump(pid, &dump));
+   EXPECT_TRUE(dump.platform_private_footprint);
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   EXPECT_GT(dump.platform_private_footprint->rss_anon_bytes, 0u);
+ #elif BUILDFLAG(IS_WIN)
+   EXPECT_GT(dump.platform_private_footprint->private_bytes, 0u);

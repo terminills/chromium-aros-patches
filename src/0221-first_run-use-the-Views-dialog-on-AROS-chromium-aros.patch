@@ -1,0 +1,96 @@
+From 4306ab10e10e2152978a129b7de313739bb53713 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:33:29 -0500
+Subject: [PATCH 221/638] first_run: use the Views dialog on AROS [chromium]
+ [aros]
+
+Statement:
+The POSIX first-run controller calls the desktop first-run dialog, but AROS could neither see the declaration nor build its generic Views implementation and branded title.
+
+Decision:
+Expose the existing Views dialog and its single title resource on AROS. Keep Linux/macOS password-relaunch sources and os_crypt dependency behind their original platform condition.
+
+Evidence:
+first_run_internal_posix.o and first_run_dialog.o compile in out/aros-chrome; branded_strings_grit regenerates for the AROS target.
+
+Chain:
+Advances the upstream Chrome startup UI graph in.
+---
+ chrome/app/chromium_strings.grd             |  4 ++--
+ chrome/app/google_chrome_strings.grd        |  4 ++--
+ chrome/browser/first_run/first_run_dialog.h |  3 ++-
+ chrome/browser/ui/BUILD.gn                  | 11 +++++++----
+ 4 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/app/chromium_strings.grd b/chrome/app/chromium_strings.grd
+index 971afe985f..9852de7e7f 100644
+--- a/chrome/app/chromium_strings.grd
++++ b/chrome/app/chromium_strings.grd
+@@ -315,8 +315,8 @@ If you update this file, be sure also to update google_chrome_strings.grd. -->
+           Welcome to Chromium; new browser window opened
+         </message>
+       </if>
+-      <if expr="is_macosx or is_linux">
+-        <message name="IDS_FIRST_RUN_DIALOG_WINDOW_TITLE" desc="Window title of First Run dialog on Mac and Linux, displayed in title bar">
++      <if expr="is_macosx or is_linux or is_aros">
++        <message name="IDS_FIRST_RUN_DIALOG_WINDOW_TITLE" desc="Window title of First Run dialog on desktop platforms, displayed in title bar">
+           Welcome to Chromium
+         </message>
+       </if>
+diff --git a/chrome/app/google_chrome_strings.grd b/chrome/app/google_chrome_strings.grd
+index 812f7c89cb..86a2ac1804 100644
+--- a/chrome/app/google_chrome_strings.grd
++++ b/chrome/app/google_chrome_strings.grd
+@@ -301,8 +301,8 @@ chromium_strings.grd. -->
+           Welcome to Chrome; new browser window opened
+         </message>
+       </if>
+-      <if expr="is_macosx or is_linux">
+-        <message name="IDS_FIRST_RUN_DIALOG_WINDOW_TITLE" desc="Window title of First Run dialog on Mac and Linux, displayed in title bar">
++      <if expr="is_macosx or is_linux or is_aros">
++        <message name="IDS_FIRST_RUN_DIALOG_WINDOW_TITLE" desc="Window title of First Run dialog on desktop platforms, displayed in title bar">
+           Welcome to Google Chrome
+         </message>
+       </if>
+diff --git a/chrome/browser/first_run/first_run_dialog.h b/chrome/browser/first_run/first_run_dialog.h
+index 19eeb90fcc..16f5afe8b8 100644
+--- a/chrome/browser/first_run/first_run_dialog.h
++++ b/chrome/browser/first_run/first_run_dialog.h
+@@ -12,7 +12,8 @@
+ // Hide this function on platforms where the dialog does not exist.
+ // TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+ // of lacros-chrome is complete.
+-#if BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_AROS)
+ 
+ namespace first_run {
+ 
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 60e1e82d90..f3840f43fb 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4688,16 +4688,19 @@ static_library("ui") {
+       "passwords/bubble_controllers/relaunch_chrome_bubble_controller.h",
+       "webui/password_manager/promo_cards/relaunch_chrome_promo.cc",
+       "webui/password_manager/promo_cards/relaunch_chrome_promo.h",
+-
+-      # The first run dialog shows only on Linux and macOS.
+-      "views/first_run_dialog.cc",
+-      "views/first_run_dialog.h",
+       "views/passwords/password_relaunch_chrome_view.cc",
+       "views/passwords/password_relaunch_chrome_view.h",
+     ]
+     deps += [ "//components/os_crypt/sync:os_crypt" ]
+   }
+ 
++  if (is_linux || is_mac || is_aros) {
++    sources += [
++      "views/first_run_dialog.cc",
++      "views/first_run_dialog.h",
++    ]
++  }
++
+   if (is_linux) {
+     sources += [
+       "views/frame/desktop_browser_frame_aura_linux.cc",

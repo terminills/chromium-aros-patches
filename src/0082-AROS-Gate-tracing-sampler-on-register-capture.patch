@@ -1,0 +1,39 @@
+From e427d8283d6ee05833e13efbdbdc9d32dc8bcce5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 17:54:58 -0500
+Subject: [PATCH 082/638] [AROS] Gate tracing sampler on register capture
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Tracing no longer pulls the POSIX thread delegate into AROS.
+ROOT_CAUSE: Chromium treated every non-Apple POSIX target as capable of asynchronous cross-thread stack sampling, but AROS has no signal/ucontext register-capture contract.
+FIX_REASON: Keep the existing runtime profiler support check while excluding AROS from ThreadDelegatePosix initialization until native task suspension and register capture exist.
+SCOPE: TracingSamplerProfiler's POSIX delegate capability guard.
+VALIDATION: tracing_sampler_profiler.o builds and has no undefined ThreadDelegatePosix::Create reference.
+RISK: CPU sampling traces remain unavailable on AROS; ordinary tracing is unchanged.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../public/cpp/stack_sampling/tracing_sampler_profiler.cc  | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.cc b/services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.cc
+index ac15b1a473..2a655d81fc 100644
+--- a/services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.cc
++++ b/services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.cc
+@@ -38,12 +38,13 @@
+ #include "third_party/perfetto/protos/perfetto/trace/track_event/process_descriptor.pbzero.h"
+ #include "third_party/perfetto/protos/perfetto/trace/track_event/thread_descriptor.pbzero.h"
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+ #include "base/profiler/thread_delegate_posix.h"
+ #define INITIALIZE_THREAD_DELEGATE_POSIX 1
+-#else  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#else
+ #define INITIALIZE_THREAD_DELEGATE_POSIX 0
+-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#endif
+ 
+ #if ANDROID_ARM64_UNWINDING_SUPPORTED || ANDROID_CFI_UNWINDING_SUPPORTED
+ #include <dlfcn.h>

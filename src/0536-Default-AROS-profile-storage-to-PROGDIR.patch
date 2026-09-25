@@ -1,0 +1,22 @@
+From 16e10c485a59e13793f5d65a305e8b306d17e9e6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 06:50:24 -0500
+Subject: [PATCH 536/638] Default AROS profile storage to PROGDIR
+
+---
+ chrome/common/chrome_paths_aros.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
+index 4a1e6f215d..3b892c0149 100644
+--- a/chrome/common/chrome_paths_aros.cc
++++ b/chrome/common/chrome_paths_aros.cc
+@@ -11,7 +11,7 @@
+ namespace chrome {
+ namespace {
+ 
+-constexpr char kUserDataDirectory[] = "ENVARC:Chromium";
++constexpr char kUserDataDirectory[] = "PROGDIR:Profiles";
+ constexpr char kVolatileUserDirectory[] = "RAM:";
+ 
+ }  // namespace

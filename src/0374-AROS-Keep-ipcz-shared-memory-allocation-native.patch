@@ -1,0 +1,89 @@
+From 6ec18d01b750e8bc5e2e051cde91771f58670f14 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 14:17:52 -0500
+Subject: [PATCH 374/638] [AROS] Keep ipcz shared memory allocation native
+
+AI_PHASE: chromium-process-model
+AI_STATUS: first-utility-ipcz-broker-fatal-fixed
+ROOT_CAUSE: Mojo ipcz classified AROS as generic POSIX and created its sandbox shared-memory Broker over a native ArosChannel, then called GetFD/fcntl and fatally rejected the non-FD handle.
+FIX_REASON: Exclude AROS from the POSIX socket broker service and leave base shared-memory hooks untouched so child Processes allocate through the existing native AROS shared-memory implementation.
+SCOPE: mojo/core/ipcz_driver/base_shared_memory_service.cc
+VALIDATION: ninja -C out/aros-chrome -j32 chrome rebuilt base_shared_memory_service.o and linked full Chrome; cleanup pass removed AROS-specific unused-hook warnings. Runtime-03 had already proven utility pid=82 survived ChannelAros construction before the broker fatal.
+RISK: Next hosted replay must validate direct child shared-memory creation and renderer traffic; current loader still serializes large child launches.
+AI_DECISION_CHAIN: endpoint recovery PASS -> utility invitation reaches ipcz -> fcntl Bad file number -> identify sandbox-only POSIX allocation broker -> retain native AROS allocation -> full link PASS.
+Evidence:-chromium-browser-renderer-20260728/runtime-03.log,-chromium-browser-renderer-20260728/build-16-aros-direct-shared-memory-clean.log
+Job:
+---
+ .../ipcz_driver/base_shared_memory_service.cc  | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/mojo/core/ipcz_driver/base_shared_memory_service.cc b/mojo/core/ipcz_driver/base_shared_memory_service.cc
+index a5c56798c8..ac0726e5b2 100644
+--- a/mojo/core/ipcz_driver/base_shared_memory_service.cc
++++ b/mojo/core/ipcz_driver/base_shared_memory_service.cc
+@@ -30,7 +30,8 @@ namespace mojo::core::ipcz_driver {
+ 
+ namespace {
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+ 
+ void CreateBrokerHostOnIOThread(PlatformChannelEndpoint endpoint) {
+   // Self-owned. Note that a valid remote process handle is only needed by
+@@ -104,8 +105,9 @@ void WaitForClientConnection(ScopedIpczHandle portal) {
+ 
+ Broker* g_client = nullptr;
+ 
+-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#endif  // IS_POSIX && !IS_NACL && !IS_APPLE && !IS_AROS
+ 
++#if !BUILDFLAG(IS_AROS)
+ base::WritableSharedMemoryRegion CreateWritableSharedMemoryRegion(size_t size) {
+   return BaseSharedMemoryService::CreateWritableRegion(size);
+ }
+@@ -133,19 +135,22 @@ base::UnsafeSharedMemoryRegion CreateUnsafeSharedMemoryRegion(size_t size) {
+   return base::WritableSharedMemoryRegion::ConvertToUnsafe(
+       std::move(writable_region));
+ }
++#endif
+ 
+ }  // namespace
+ 
+ // static
+ void BaseSharedMemoryService::CreateService(ScopedIpczHandle portal) {
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+   WaitForClientConnection(std::move(portal));
+ #endif
+ }
+ 
+ // static
+ void BaseSharedMemoryService::CreateClient(ScopedIpczHandle portal) {
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+   PlatformChannel channel;
+ 
+   ScopedIpczHandle box{Transport::Box(Transport::Create(
+@@ -164,15 +169,18 @@ void BaseSharedMemoryService::CreateClient(ScopedIpczHandle portal) {
+ 
+ // static
+ void BaseSharedMemoryService::InstallHooks() {
++#if !BUILDFLAG(IS_AROS)
+   base::SharedMemoryHooks::SetCreateHooks(&CreateReadOnlySharedMemoryRegion,
+                                           &CreateUnsafeSharedMemoryRegion,
+                                           &CreateWritableSharedMemoryRegion);
++#endif
+ }
+ 
+ // static
+ base::WritableSharedMemoryRegion BaseSharedMemoryService::CreateWritableRegion(
+     size_t size) {
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+   if (!g_client) {
+     return {};
+   }

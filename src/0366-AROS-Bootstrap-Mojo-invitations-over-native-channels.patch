@@ -1,0 +1,78 @@
+From c3d7da65057c86c5b87a94a46cc3c8ba25b3659b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 11:20:43 -0500
+Subject: [PATCH 366/638] [AROS] Bootstrap Mojo invitations over native
+ channels
+
+AI_PHASE: chromium-process-model
+AI_STATUS: node-controller-direct-bootstrap
+ROOT_CAUSE: Mojo selected its POSIX synchronous broker bootstrap on AROS and attempted GetFD() on a native MessagePort-backed PlatformChannel.
+FIX_REASON: Route AROS through NodeController's direct passed-channel invitation path, matching platforms whose bootstrap endpoint is already a complete native transport.
+SCOPE: mojo/core/node_controller.cc
+VALIDATION: Focused hosted invitation probe launched Process 18 and Process 29, exchanged two primordial payloads, collected child death, and exited zero in 8.11 seconds.
+RISK: Full Chromium browser/renderer service binding remains the next runtime gate.
+AI_DECISION_CHAIN: cross-Process Channel PASS -> invitation Broker fatal -> isolate POSIX fd assumption -> direct NodeController bootstrap -> primordial duplex PASS.
+Evidence:-invitation-aros-process-20260728
+Job:
+---
+ mojo/core/node_controller.cc | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/mojo/core/node_controller.cc b/mojo/core/node_controller.cc
+index 4a6eb296a6..560e8900c0 100644
+--- a/mojo/core/node_controller.cc
++++ b/mojo/core/node_controller.cc
+@@ -147,7 +147,8 @@ class ThreadDestructionObserver
+   base::OnceClosure callback_;
+ };
+ 
+-#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+ std::optional<ConnectionParams> CreateSyncNodeConnectionParams(
+     const base::Process& target_process,
+     ConnectionParams connection_params,
+@@ -174,7 +175,7 @@ std::optional<ConnectionParams> CreateSyncNodeConnectionParams(
+ 
+   return node_connection_params;
+ }
+-#endif  // !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#endif  // !IS_APPLE && !IS_NACL && !IS_FUCHSIA && !IS_AROS
+ 
+ }  // namespace
+ 
+@@ -224,7 +225,8 @@ void NodeController::AcceptBrokerClientInvitation(
+     ConnectionParams connection_params) {
+   std::optional<PlatformHandle> broker_host_handle;
+   DCHECK(!GetConfiguration().is_broker_process);
+-#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+   if (!connection_params.is_async()) {
+     // Use the bootstrap channel for the broker and receive the node's channel
+     // synchronously as the first message from the broker.
+@@ -406,7 +408,8 @@ void NodeController::SendBrokerClientInvitationOnIOThread(
+     const ProcessErrorCallback& process_error_callback) {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+ 
+-#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && \
++    !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+   Channel::HandlePolicy handle_policy = Channel::HandlePolicy::kAcceptHandles;
+   ConnectionParams node_connection_params;
+ 
+@@ -477,12 +480,12 @@ void NodeController::SendBrokerClientInvitationOnIOThread(
+   FinishSendBrokerClientInvitationOnIOThread(
+       std::move(target_process), std::move(node_connection_params),
+       temporary_node_name, handle_policy, process_error_callback);
+-#else   // !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#else  // !IS_APPLE && !IS_NACL && !IS_FUCHSIA && !IS_AROS
+   FinishSendBrokerClientInvitationOnIOThread(
+       std::move(target_process), std::move(connection_params),
+       temporary_node_name, Channel::HandlePolicy::kAcceptHandles,
+       process_error_callback);
+-#endif  // !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_FUCHSIA)
++#endif  // !IS_APPLE && !IS_NACL && !IS_FUCHSIA && !IS_AROS
+ }
+ 
+ void NodeController::FinishSendBrokerClientInvitationOnIOThread(

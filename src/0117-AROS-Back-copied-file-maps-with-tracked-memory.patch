@@ -1,0 +1,125 @@
+From 61371a21b100313e1e5c870e2583f62f8ef0a4c0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 18:19:49 -0500
+Subject: [PATCH 117/638] [AROS] Back copied file maps with tracked memory
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: The AROS MemoryMappedFile backend implements file maps as owned copies but allocated those copies only through KrnAllocPages; hosted run 0117 reached the correct headless data pack and failed because the transition-era kernel page allocator has no registered page inventory.
+FIX_REASON: Preserve KrnAllocPages as the preferred backend, then fall back to a page-aligned MEMF_PUBLIC Exec allocation whose original base, full size, and allocator type remain recorded for exact release. Exec allocations are visible to OPAL accounting.
+SCOPE: base/files/memory_mapped_file_aros.cc; base/files/memory_mapped_file.h
+VALIDATION: memory_mapped_file_aros.o cross-compiled; hosted 0117 emitted Failed to mmap datapack after resolving System:Developer/Chromium/headless_lib_strings.pak and produced a symbolized unattended OPAL alert.
+RISK: The fallback eagerly consumes physical memory and alignment slack because AROS lacks sparse file mapping here; it is a pre-MMU bridge and leaves the preferred page-backed path unchanged.
+AI_DECISION_CHAIN: executable basename fixed -> real headless pack selected -> copy-backed map lacks kernel pages -> tracked aligned Exec backing
+Continues: 0ab25908db
+---
+ base/files/memory_mapped_file.h       |  1 +
+ base/files/memory_mapped_file_aros.cc | 57 +++++++++++++++++++++------
+ 2 files changed, 45 insertions(+), 13 deletions(-)
+
+diff --git a/base/files/memory_mapped_file.h b/base/files/memory_mapped_file.h
+index 69208f164b..f3d12bde7a 100644
+--- a/base/files/memory_mapped_file.h
++++ b/base/files/memory_mapped_file.h
+@@ -163,6 +163,7 @@ class BASE_EXPORT MemoryMappedFile {
+ #if BUILDFLAG(IS_AROS)
+   RAW_PTR_EXCLUSION void* allocation_base_ = nullptr;
+   size_t allocation_size_ = 0;
++  bool uses_kernel_pages_ = false;
+   int64_t file_offset_ = 0;
+   Access access_ = READ_ONLY;
+ #endif
+diff --git a/base/files/memory_mapped_file_aros.cc b/base/files/memory_mapped_file_aros.cc
+index be9381b0f6..f72f180553 100644
+--- a/base/files/memory_mapped_file_aros.cc
++++ b/base/files/memory_mapped_file_aros.cc
+@@ -5,6 +5,7 @@
+ #include "base/files/memory_mapped_file.h"
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <limits>
+ 
+ #pragma push_macro("SCHED_RR")
+@@ -72,24 +73,48 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+   if (!allocation_size.IsValid())
+     return false;
+ 
+-  APTR KernelBase = OpenResource("kernel.resource");
+-  if (!KernelBase)
+-    return false;
+-
+   const size_t rounded_size = allocation_size.ValueOrDie();
++  APTR KernelBase = OpenResource("kernel.resource");
+   void* allocation =
+-      KrnAllocPages(nullptr, rounded_size, MEMF_PUBLIC | MEMF_CLEAR);
+-  if (!allocation)
+-    return false;
++      KernelBase
++          ? KrnAllocPages(nullptr, rounded_size, MEMF_PUBLIC | MEMF_CLEAR)
++          : nullptr;
++  void* allocation_base = allocation;
++  size_t backing_size = rounded_size;
++  bool uses_kernel_pages = allocation != nullptr;
++
++  if (!allocation) {
++    CheckedNumeric<size_t> exec_allocation_size(rounded_size);
++    exec_allocation_size += granularity - 1;
++    if (!exec_allocation_size.IsValid())
++      return false;
++
++    backing_size = exec_allocation_size.ValueOrDie();
++    allocation_base = AllocMem(backing_size, MEMF_PUBLIC | MEMF_CLEAR);
++    if (!allocation_base)
++      return false;
++
++    const uintptr_t raw_address =
++        reinterpret_cast<uintptr_t>(allocation_base);
++    const uintptr_t aligned_address =
++        (raw_address + granularity - 1) & ~(granularity - 1);
++    allocation = reinterpret_cast<void*>(aligned_address);
++    DLOG(WARNING) << "KrnAllocPages unavailable; using tracked Exec backing "
++                  << backing_size << " bytes for MemoryMappedFile";
++  }
+ 
+   span<uint8_t> contents(static_cast<uint8_t*>(allocation), data_size);
+   if (!file_.ReadAndCheck(file_offset, contents)) {
+-    KrnFreePages(allocation, rounded_size);
++    if (uses_kernel_pages)
++      KrnFreePages(allocation_base, backing_size);
++    else
++      FreeMem(allocation_base, backing_size);
+     return false;
+   }
+ 
+-  allocation_base_ = allocation;
+-  allocation_size_ = rounded_size;
++  allocation_base_ = allocation_base;
++  allocation_size_ = backing_size;
++  uses_kernel_pages_ = uses_kernel_pages;
+   data_ = static_cast<uint8_t*>(allocation);
+   length_ = data_size;
+   file_offset_ = file_offset;
+@@ -117,13 +142,19 @@ void MemoryMappedFile::CloseHandles() {
+     const bool flushed = Flush(length_, true);
+     DPCHECK(flushed);
+ 
+-    APTR KernelBase = OpenResource("kernel.resource");
+-    if (KernelBase)
+-      KrnFreePages(allocation_base_, allocation_size_);
++    if (uses_kernel_pages_) {
++      APTR KernelBase = OpenResource("kernel.resource");
++      DCHECK(KernelBase);
++      if (KernelBase)
++        KrnFreePages(allocation_base_, allocation_size_);
++    } else {
++      FreeMem(allocation_base_, allocation_size_);
++    }
+   }
+ 
+   allocation_base_ = nullptr;
+   allocation_size_ = 0;
++  uses_kernel_pages_ = false;
+   data_ = nullptr;
+   length_ = 0;
+   file_offset_ = 0;

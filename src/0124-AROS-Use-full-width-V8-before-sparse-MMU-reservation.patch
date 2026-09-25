@@ -1,0 +1,25 @@
+From ce6684174d3ab2aee88fd79a595214614be7b109 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 21:09:53 -0500
+Subject: [PATCH 124/638] [AROS] Use full-width V8 before sparse MMU
+ reservations
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: complete
+ROOT_CAUSE: Hosted run 0124 reached V8 process initialization but the main sandbox requires at least 8 GiB of sparse virtual address space; hosted AROS is already at its 4090 MB maximum and the pre-MMU allocator physically backs reservations. A 4 GiB pointer-compression cage would fail next even with the sandbox disabled.
+FIX_REASON: Advance V8 to its supported full-width, uncaged AROS configuration so all cage-derived features are disabled coherently until OPAL/MMU supplies sparse reservations.
+SCOPE: v8 submodule pointer
+VALIDATION: Headless GN regenerated 13,556 targets and both target and host V8 graphs contain zero compression, sandbox, external-code-space, or cppgc cage-derived defines; artifact 27 captures the exact sandbox OOM.
+RISK: V8 uses wider heap pointers and no process sandbox during bring-up; this is an explicit temporary security/performance tradeoff, not the final MMU-backed configuration.
+AI_DECISION_CHAIN: run 0124 sandbox OOM -> V8 d1700ca898 -> hosted run 0125
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 91d3ac5a3c..d1700ca4e4 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 91d3ac5a3cb542a5bdcc54e5af4623a101264c55
++Subproject commit d1700ca4e47bbcd381e4d35c8bcee4b69ed064e1

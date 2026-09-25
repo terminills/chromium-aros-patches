@@ -1,0 +1,263 @@
+From ef946c806c56202f088777b2a05dec41ee170f72 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 18:49:27 -0500
+Subject: [PATCH 249/638] ozone: respect AROS Workbench work area [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: implemented
+ROOT_CAUSE: ArosScreen advertised the physical screen as the usable work area while ArosWindow treated requested dimensions as client bounds and then added the native frame.
+FIX_REASON: Separate physical and work-area bounds, then constrain client geometry using the native frame insets.
+SCOPE: AROS Ozone screen and window geometry only; manual dragging and the current decorated fullscreen behavior remain unchanged.
+VALIDATION: git diff --check; 42,527-step full chrome build; ninja no-work verification.
+RISK: Low to medium; the port still exposes one display and has no dynamic display observer.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ ui/ozone/platform/aros/aros_screen.cc | 28 +++++++---
+ ui/ozone/platform/aros/aros_screen.h  |  8 +++
+ ui/ozone/platform/aros/aros_window.cc | 80 ++++++++++++++++++++++-----
+ ui/ozone/platform/aros/aros_window.h  |  2 +-
+ 4 files changed, 94 insertions(+), 24 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_screen.cc b/ui/ozone/platform/aros/aros_screen.cc
+index dfb454390c..5b53be9d51 100644
+--- a/ui/ozone/platform/aros/aros_screen.cc
++++ b/ui/ozone/platform/aros/aros_screen.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "ui/ozone/platform/aros/aros_screen.h"
+ 
++#include <algorithm>
++
+ #include "base/logging.h"
+ #include "ui/display/display.h"
+ 
+@@ -18,24 +20,34 @@ constexpr int64_t kArosDisplayId = 1;
+ constexpr int kFallbackWidth = 1024;
+ constexpr int kFallbackHeight = 768;
+ 
+-gfx::Rect GetPrimaryScreenBounds() {
++}  // namespace
++
++ArosScreenGeometry GetPrimaryArosScreenGeometry() {
+   struct Screen* screen = LockPubScreen(nullptr);
+   if (!screen) {
+-    return gfx::Rect(0, 0, kFallbackWidth, kFallbackHeight);
++    const gfx::Rect fallback(0, 0, kFallbackWidth, kFallbackHeight);
++    return {fallback, fallback};
+   }
+-  const gfx::Rect bounds(0, 0, screen->Width, screen->Height);
++
++  const int width = std::max<int>(1, screen->Width);
++  const int height = std::max<int>(1, screen->Height);
++  const int work_area_top = std::clamp<int>(screen->BarHeight + 1, 0, height);
++  const ArosScreenGeometry geometry{
++      gfx::Rect(0, 0, width, height),
++      gfx::Rect(0, work_area_top, width, height - work_area_top)};
+   UnlockPubScreen(nullptr, screen);
+-  return bounds;
++  return geometry;
+ }
+ 
+-}  // namespace
+-
+ ArosScreen::ArosScreen() {
++  const ArosScreenGeometry geometry = GetPrimaryArosScreenGeometry();
+   display::Display display(kArosDisplayId);
+-  display.SetScaleAndBounds(1.0f, GetPrimaryScreenBounds());
++  display.SetScaleAndBounds(1.0f, geometry.bounds);
++  display.set_work_area(geometry.work_area);
+   display_list_.AddDisplay(display, display::DisplayList::Type::PRIMARY);
+   LOG(INFO) << "[Chromium:Ozone:AROS] primary display="
+-            << display.bounds().ToString();
++            << display.bounds().ToString()
++            << " work_area=" << display.work_area().ToString();
+ }
+ 
+ ArosScreen::~ArosScreen() = default;
+diff --git a/ui/ozone/platform/aros/aros_screen.h b/ui/ozone/platform/aros/aros_screen.h
+index fa6033bd6b..dfbd77eac9 100644
+--- a/ui/ozone/platform/aros/aros_screen.h
++++ b/ui/ozone/platform/aros/aros_screen.h
+@@ -8,10 +8,18 @@
+ #include <vector>
+ 
+ #include "ui/display/display_list.h"
++#include "ui/gfx/geometry/rect.h"
+ #include "ui/ozone/public/platform_screen.h"
+ 
+ namespace ui {
+ 
++struct ArosScreenGeometry {
++  gfx::Rect bounds;
++  gfx::Rect work_area;
++};
++
++ArosScreenGeometry GetPrimaryArosScreenGeometry();
++
+ class ArosScreen : public PlatformScreen {
+  public:
+   ArosScreen();
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 14f2cc3432..014a26c537 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -17,6 +17,7 @@
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_key.h"
+ #include "ui/events/keycodes/keyboard_code_conversion.h"
++#include "ui/ozone/platform/aros/aros_screen.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
+ #include <cybergraphx/cybergraphics.h>
+@@ -43,6 +44,35 @@ int PositiveOrDefault(int value, int fallback) {
+   return value > 0 ? value : fallback;
+ }
+ 
++gfx::Rect ConstrainClientBoundsToWorkArea(const gfx::Rect& requested,
++                                          const gfx::Rect& work_area,
++                                          int border_left,
++                                          int border_top,
++                                          int border_right,
++                                          int border_bottom) {
++  border_left = std::max(0, border_left);
++  border_top = std::max(0, border_top);
++  border_right = std::max(0, border_right);
++  border_bottom = std::max(0, border_bottom);
++
++  const int max_client_width =
++      std::max(1, work_area.width() - border_left - border_right);
++  const int max_client_height =
++      std::max(1, work_area.height() - border_top - border_bottom);
++  const int client_width =
++      std::min(PositiveOrDefault(requested.width(), 1), max_client_width);
++  const int client_height =
++      std::min(PositiveOrDefault(requested.height(), 1), max_client_height);
++  const int outer_width = client_width + border_left + border_right;
++  const int outer_height = client_height + border_top + border_bottom;
++  const int max_x = std::max(work_area.x(), work_area.right() - outer_width);
++  const int max_y = std::max(work_area.y(), work_area.bottom() - outer_height);
++
++  return gfx::Rect(std::clamp(requested.x(), work_area.x(), max_x),
++                   std::clamp(requested.y(), work_area.y(), max_y),
++                   client_width, client_height);
++}
++
+ int ModifierFlagsFromQualifier(uint16_t qualifier) {
+   int flags = EF_NONE;
+   if (qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) {
+@@ -318,6 +348,8 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+     : delegate_(delegate), manager_(manager), bounds_(requested_bounds) {
+   bounds_.set_width(PositiveOrDefault(bounds_.width(), kDefaultWindowWidth));
+   bounds_.set_height(PositiveOrDefault(bounds_.height(), kDefaultWindowHeight));
++  const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
++  bounds_ = ConstrainClientBoundsToWorkArea(bounds_, work_area, 0, 0, 0, 0);
+ 
+   widget_ = manager_->AddWindow(this);
+   window_ = OpenWindowTags(
+@@ -346,9 +378,21 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+   if (window_) {
+     manager_->AttachNativeWindow(widget_, this, window_);
+     UpdateBoundsFromNative(/*notify_delegate=*/false);
++    const gfx::Rect native_bounds = bounds_;
++    const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
++        native_bounds, work_area, window_->BorderLeft, window_->BorderTop,
++        window_->BorderRight, window_->BorderBottom);
++    if (constrained != native_bounds) {
++      ChangeWindowBox(
++          window_, constrained.x(), constrained.y(),
++          constrained.width() + window_->BorderLeft + window_->BorderRight,
++          constrained.height() + window_->BorderTop + window_->BorderBottom);
++      UpdateBoundsFromNative(/*notify_delegate=*/false);
++    }
+     LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
+               << widget_ << " native=" << window_
+-              << " client=" << bounds_.ToString();
++              << " client=" << bounds_.ToString()
++              << " work_area=" << work_area.ToString();
+   }
+ 
+   delegate_->OnAcceleratedWidgetAvailable(widget_);
+@@ -396,9 +440,13 @@ void ArosWindow::PrepareForShutdown() {
+ }
+ 
+ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
+-  bounds_ = bounds;
+-  bounds_.set_width(PositiveOrDefault(bounds_.width(), 1));
+-  bounds_.set_height(PositiveOrDefault(bounds_.height(), 1));
++  const gfx::Rect old_bounds = bounds_;
++  const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
++  const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
++      bounds, work_area, window_ ? window_->BorderLeft : 0,
++      window_ ? window_->BorderTop : 0, window_ ? window_->BorderRight : 0,
++      window_ ? window_->BorderBottom : 0);
++  bounds_ = constrained;
+   if (window_) {
+     const int outer_width =
+         bounds_.width() + window_->BorderLeft + window_->BorderRight;
+@@ -406,8 +454,16 @@ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
+         bounds_.height() + window_->BorderTop + window_->BorderBottom;
+     ChangeWindowBox(window_, bounds_.x(), bounds_.y(), outer_width,
+                     outer_height);
++    UpdateBoundsFromNative(/*notify_delegate=*/false);
++  }
++  if (bounds_ != old_bounds) {
++    delegate_->OnBoundsChanged({bounds_.origin() != old_bounds.origin()});
++  }
++  if (constrained != bounds) {
++    VLOG(1) << "[Chromium:Ozone:AROS] constrained client bounds requested="
++            << bounds.ToString() << " actual=" << bounds_.ToString()
++            << " work_area=" << work_area.ToString();
+   }
+-  delegate_->OnBoundsChanged({true});
+ }
+ 
+ gfx::Rect ArosWindow::GetBoundsInPixels() const {
+@@ -447,7 +503,7 @@ void ArosWindow::SetFullscreen(bool fullscreen, int64_t target_display_id) {
+     if (!restored_bounds_) {
+       restored_bounds_ = bounds_;
+     }
+-    SetBoundsInPixels(PrimaryScreenBounds());
++    SetBoundsInPixels(PrimaryScreenWorkArea());
+     UpdateWindowState(PlatformWindowState::kFullScreen);
+   } else if (window_state_ == PlatformWindowState::kFullScreen) {
+     Restore();
+@@ -462,7 +518,7 @@ void ArosWindow::Maximize() {
+   if (!restored_bounds_) {
+     restored_bounds_ = bounds_;
+   }
+-  SetBoundsInPixels(PrimaryScreenBounds());
++  SetBoundsInPixels(PrimaryScreenWorkArea());
+   UpdateWindowState(PlatformWindowState::kMaximized);
+ }
+ 
+@@ -786,14 +842,8 @@ void ArosWindow::DisableNativeEvents() {
+   manager_->ProcessNativeEvents();
+ }
+ 
+-gfx::Rect ArosWindow::PrimaryScreenBounds() const {
+-  struct Screen* screen = LockPubScreen(nullptr);
+-  if (!screen) {
+-    return gfx::Rect(0, 0, kDefaultWindowWidth, kDefaultWindowHeight);
+-  }
+-  const gfx::Rect bounds(0, 0, screen->Width, screen->Height);
+-  UnlockPubScreen(nullptr, screen);
+-  return bounds;
++gfx::Rect ArosWindow::PrimaryScreenWorkArea() const {
++  return GetPrimaryArosScreenGeometry().work_area;
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 39668713d8..f16505b2d2 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -93,7 +93,7 @@ class ArosWindow : public PlatformWindow {
+                       uint16_t qualifier,
+                       int16_t mouse_x,
+                       int16_t mouse_y);
+-  gfx::Rect PrimaryScreenBounds() const;
++  gfx::Rect PrimaryScreenWorkArea() const;
+ 
+   raw_ptr<PlatformWindowDelegate> delegate_ = nullptr;
+   raw_ptr<ArosWindowManager> manager_ = nullptr;

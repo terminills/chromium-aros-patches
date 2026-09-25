@@ -1,0 +1,102 @@
+From 4dd4a13312c871cb9d43dc44ea91860d1ddc9ed2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 03:06:19 -0500
+Subject: [PATCH 396/638] [AROS] Count software compositor quad materials
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: investigating
+
+OBSERVED: Runtime 36 proved the renderer content-region samples are already white in the completed root canvas before EndPaint while SharedImage imports contain live pixels.
+
+FIX_REASON: Count aggregated quad materials once per completed software frame to distinguish missing child-surface aggregation from downstream transform, clip, blend, or draw failure.
+
+SCOPE: components/viz/service/display/software_renderer.cc only; AROS-only counters, reset and emitted once per frame, with no resource-lock logging.
+
+VALIDATION: git diff --check passes; coherent -j32 build and runtime37 follow.
+
+AI_DECISION_CHAIN: runtime 36 -> runtime 37
+---
+ .../viz/service/display/software_renderer.cc  | 48 ++++++++++++++++++-
+ 1 file changed, 47 insertions(+), 1 deletion(-)
+
+diff --git a/components/viz/service/display/software_renderer.cc b/components/viz/service/display/software_renderer.cc
+index 3c77862e6f..ac9d158fb1 100644
+--- a/components/viz/service/display/software_renderer.cc
++++ b/components/viz/service/display/software_renderer.cc
+@@ -56,6 +56,18 @@ namespace viz {
+ namespace {
+ 
+ #if BUILDFLAG(IS_AROS)
++struct ArosSoftwareFrameStats {
++  uint32_t total = 0;
++  uint32_t render_pass = 0;
++  uint32_t picture = 0;
++  uint32_t solid = 0;
++  uint32_t texture = 0;
++  uint32_t tile = 0;
++  uint32_t other = 0;
++};
++
++ArosSoftwareFrameStats g_aros_software_frame_stats;
++
+ uint32_t ArosPixmapFingerprint(const SkPixmap& pixmap) {
+   if (!pixmap.addr() || pixmap.width() <= 0 || pixmap.height() <= 0) {
+     return 0;
+@@ -128,6 +140,9 @@ bool SoftwareRenderer::CanPartialSwap() {
+ 
+ void SoftwareRenderer::BeginDrawingFrame() {
+   TRACE_EVENT0("viz", "SoftwareRenderer::BeginDrawingFrame");
++#if BUILDFLAG(IS_AROS)
++  g_aros_software_frame_stats = ArosSoftwareFrameStats();
++#endif
+ }
+ 
+ void SoftwareRenderer::FinishDrawingFrame() {
+@@ -149,7 +164,14 @@ void SoftwareRenderer::FinishDrawingFrame() {
+                << (peeked ? ArosPixmapFingerprint(pixmap) : 0) << " center="
+                << (peeked ? pixmap.getColor(center_x, center_y) : 0)
+                << " lower="
+-               << (peeked ? pixmap.getColor(center_x, lower_y) : 0);
++               << (peeked ? pixmap.getColor(center_x, lower_y) : 0)
++               << " quads=" << g_aros_software_frame_stats.total
++               << " render_pass=" << g_aros_software_frame_stats.render_pass
++               << " picture=" << g_aros_software_frame_stats.picture
++               << " solid=" << g_aros_software_frame_stats.solid
++               << " texture=" << g_aros_software_frame_stats.texture
++               << " tile=" << g_aros_software_frame_stats.tile
++               << " other=" << g_aros_software_frame_stats.other;
+   }
+ #endif
+   // `current_canvas_` may be pointing to `current_framebuffer_canvas_`. Make
+@@ -297,6 +319,30 @@ void SoftwareRenderer::DoDrawQuad(const DrawQuad* quad,
+   if (!current_canvas_)
+     return;
+ 
++#if BUILDFLAG(IS_AROS)
++  ++g_aros_software_frame_stats.total;
++  switch (quad->material) {
++    case DrawQuad::Material::kAggregatedRenderPass:
++      ++g_aros_software_frame_stats.render_pass;
++      break;
++    case DrawQuad::Material::kPictureContent:
++      ++g_aros_software_frame_stats.picture;
++      break;
++    case DrawQuad::Material::kSolidColor:
++      ++g_aros_software_frame_stats.solid;
++      break;
++    case DrawQuad::Material::kTextureContent:
++      ++g_aros_software_frame_stats.texture;
++      break;
++    case DrawQuad::Material::kTiledContent:
++      ++g_aros_software_frame_stats.tile;
++      break;
++    default:
++      ++g_aros_software_frame_stats.other;
++      break;
++  }
++#endif
++
+   TRACE_EVENT0("viz", "SoftwareRenderer::DoDrawQuad");
+   const bool should_apply_rounded_corner = ShouldApplyRoundedCorner(quad);
+   bool do_save =

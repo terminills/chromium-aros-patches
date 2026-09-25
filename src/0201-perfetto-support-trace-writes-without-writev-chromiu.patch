@@ -1,0 +1,28 @@
+From 6b02e9859876fbf573a137f8761a577903948e83 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:16:25 -0500
+Subject: [PATCH 201/638] perfetto: support trace writes without writev
+ [chromium] [aros]
+
+Statement:
+The AROS libc declares writev but does not export it, so Chromium's Perfetto service could not link into the full Chrome graph.
+
+Decision:
+Advance the pinned Perfetto checkout to b939854, where AROS uses Perfetto's sequential WriteAll vector fallback rather than claiming an unavailable libc primitive.
+
+Evidence:
+//chrome/browser/new_tab_page/chrome_colors:generate_colors_info links for AROS and generate_chrome_colors_info completes with the Linux host toolchain.
+
+Chain:
+ first native Chromium window; follows 9302ecc403 Autofill survey enablement.
+---
+ third_party/perfetto | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/perfetto b/third_party/perfetto
+index 288d79a0e9..b9398543bf 160000
+--- a/third_party/perfetto
++++ b/third_party/perfetto
+@@ -1 +1 @@
+-Subproject commit 288d79a0e9b6bacc523004dfea3278c0e01f96f4
++Subproject commit b9398543bf2209c630320a22416bcef67a382599

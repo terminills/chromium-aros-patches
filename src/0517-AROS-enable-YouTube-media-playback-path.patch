@@ -1,0 +1,115 @@
+From 202762fbac5000cc139513c559db467d68be30ea Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 20:19:19 -0500
+Subject: [PATCH 517/638] AROS: enable YouTube media playback path
+
+---
+ build/config/BUILD.gn                  |  2 +-
+ build/config/aros/chrome_args.gn       |  6 +++++-
+ build/config/c++/BUILD.gn              |  4 +++-
+ media/renderers/audio_renderer_impl.cc |  7 +++++++
+ sql/vfs_wrapper.cc                     | 12 +++++++++++-
+ third_party/ffmpeg                     |  2 +-
+ 6 files changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/build/config/BUILD.gn b/build/config/BUILD.gn
+index 9410bc6cea..0307480a9a 100644
+--- a/build/config/BUILD.gn
++++ b/build/config/BUILD.gn
+@@ -214,7 +214,7 @@ config("default_libs") {
+     # Targets should choose to explicitly link frameworks they require. Since
+     # linking can have run-time side effects, nothing should be listed here.
+     libs = []
+-  } else if (is_linux || is_chromeos) {
++  } else if ((is_linux || is_chromeos) && !is_aros) {
+     libs = [
+       "dl",
+       "pthread",
+diff --git a/build/config/aros/chrome_args.gn b/build/config/aros/chrome_args.gn
+index cf6a10f134..be797656a5 100644
+--- a/build/config/aros/chrome_args.gn
++++ b/build/config/aros/chrome_args.gn
+@@ -36,7 +36,11 @@ enable_extensions = true
+ enable_print_preview = false
+ enable_printing = false
+ enable_pdf = false
+-media_use_ffmpeg = false
++media_use_ffmpeg = true
++media_use_openh264 = false
++proprietary_codecs = true
++ffmpeg_branding = "Chrome"
++rtc_use_h264 = false
+ rtc_use_pipewire = false
+ icu_use_data_file = false
+ v8_use_external_startup_data = false
+diff --git a/build/config/c++/BUILD.gn b/build/config/c++/BUILD.gn
+index 1cf9619fb8..61996abbe5 100644
+--- a/build/config/c++/BUILD.gn
++++ b/build/config/c++/BUILD.gn
+@@ -99,8 +99,10 @@ config("runtime_library") {
+         "c",
+         "gcc_s",
+         "m",
+-        "rt",
+       ]
++      if (!is_aros) {
++        libs += [ "rt" ]
++      }
+     }
+   }
+ 
+diff --git a/media/renderers/audio_renderer_impl.cc b/media/renderers/audio_renderer_impl.cc
+index d3b51e47cc..c690f60433 100644
+--- a/media/renderers/audio_renderer_impl.cc
++++ b/media/renderers/audio_renderer_impl.cc
+@@ -420,6 +420,12 @@ void AudioRendererImpl::OnDeviceInfoReceived(
+   UMA_HISTOGRAM_ENUMERATION("Media.AudioRendererImpl.SinkStatus",
+                             output_device_info.device_status(),
+                             OUTPUT_DEVICE_STATUS_MAX + 1);
++#if BUILDFLAG(IS_AROS)
++  MEDIA_LOG(INFO, media_log_)
++      << "AROS using null audio sink until native output is wired";
++  sink_ = new NullAudioSink(task_runner_);
++  output_device_info = sink_->GetOutputDeviceInfo();
++#else
+   if (output_device_info.device_status() != OUTPUT_DEVICE_STATUS_OK) {
+     MEDIA_LOG(ERROR, media_log_)
+         << "Output device error, falling back to null sink. device_status="
+@@ -430,6 +436,7 @@ void AudioRendererImpl::OnDeviceInfoReceived(
+     // If playback is muted, we use a fake sink for output until it unmutes.
+     null_sink_ = new NullAudioSink(task_runner_);
+   }
++#endif
+ 
+   current_decoder_config_ = stream->audio_decoder_config();
+   DCHECK(current_decoder_config_.IsValidConfig());
+diff --git a/sql/vfs_wrapper.cc b/sql/vfs_wrapper.cc
+index 55b0ca14db..2ff3fb3a11 100644
+--- a/sql/vfs_wrapper.cc
++++ b/sql/vfs_wrapper.cc
+@@ -119,7 +119,17 @@ int Unlock(sqlite3_file* sqlite_file, int file_lock)
+ int CheckReservedLock(sqlite3_file* sqlite_file, int* result)
+ {
+   sqlite3_file* wrapped_file = GetWrappedFile(sqlite_file);
+-  return wrapped_file->pMethods->xCheckReservedLock(wrapped_file, result);
++  int rc = wrapped_file->pMethods->xCheckReservedLock(wrapped_file, result);
++#if BUILDFLAG(IS_AROS)
++  if (rc == SQLITE_IOERR_CHECKRESERVEDLOCK) {
++    // AROS POSIXC does not implement F_GETLK, which SQLite's Unix VFS uses
++    // only to probe for another reserved writer. Chromium's profile ownership
++    // gate is the effective cross-process guard on AROS.
++    *result = 0;
++    return SQLITE_OK;
++  }
++#endif
++  return rc;
+ }
+ 
+ #endif  // !BUILDFLAG(IS_FUCHSIA)
+diff --git a/third_party/ffmpeg b/third_party/ffmpeg
+index 52d8ef3799..d01ca72ebb 160000
+--- a/third_party/ffmpeg
++++ b/third_party/ffmpeg
+@@ -1 +1 @@
+-Subproject commit 52d8ef3799b2f16b66351dd0972bb0bcee1648ac
++Subproject commit d01ca72ebbb2a03a7cc96795a54d2da20c3194a3

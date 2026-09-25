@@ -1,0 +1,85 @@
+From 965111f556d33d0fbd5333997c327c028c33fd54 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:17:24 -0500
+Subject: [PATCH 191/638] media_router: enumerate AROS networks natively
+ [chromium] [aros]
+
+Statement:
+Cast and DIAL discovery selected a getifaddrs implementation that AROS does not expose even though Chromium already has a native AROSTCP interface enumerator.
+
+Decision:
+Add an AROS discovery backend over net::GetNetworkList. Use a hardware address when available and fall back to the interface IP for a stable network identity.
+
+Evidence:
+obj/chrome/browser/media/router/discovery/discovery/discovery_network_list_aros.o builds after GN regeneration; git diff --check passes.
+
+Chain:
+Reuses the AROS network substrate and advances without disabling Media Router.
+---
+ .../browser/media/router/discovery/BUILD.gn   |  4 +-
+ .../discovery/discovery_network_list_aros.cc  | 41 +++++++++++++++++++
+ 2 files changed, 44 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/media/router/discovery/discovery_network_list_aros.cc
+
+diff --git a/chrome/browser/media/router/discovery/BUILD.gn b/chrome/browser/media/router/discovery/BUILD.gn
+index 2f3c1aa3d0..0b768a7838 100644
+--- a/chrome/browser/media/router/discovery/BUILD.gn
++++ b/chrome/browser/media/router/discovery/BUILD.gn
+@@ -89,7 +89,9 @@ static_library("discovery") {
+     deps += [ "//chromeos/ash/components/network" ]
+   }
+ 
+-  if (is_posix) {
++  if (is_aros) {
++    sources += [ "discovery_network_list_aros.cc" ]
++  } else if (is_posix) {
+     sources += [ "discovery_network_list_posix.cc" ]
+   }
+ 
+diff --git a/chrome/browser/media/router/discovery/discovery_network_list_aros.cc b/chrome/browser/media/router/discovery/discovery_network_list_aros.cc
+new file mode 100644
+index 0000000000..584db7fecf
+--- /dev/null
++++ b/chrome/browser/media/router/discovery/discovery_network_list_aros.cc
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/media/router/discovery/discovery_network_list.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/strings/string_number_conversions.h"
++#include "net/base/network_interfaces.h"
++
++namespace media_router {
++
++std::vector<DiscoveryNetworkInfo> GetDiscoveryNetworkInfoList() {
++  std::vector<DiscoveryNetworkInfo> network_ids;
++  net::NetworkInterfaceList interfaces;
++  if (!net::GetNetworkList(
++          &interfaces, net::EXCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES)) {
++    return network_ids;
++  }
++
++  for (const auto& interface : interfaces) {
++    std::string network_id;
++    if (interface.mac_address) {
++      network_id = base::HexEncode(interface.mac_address->data(),
++                                   interface.mac_address->size());
++    } else {
++      network_id = interface.address.ToString();
++    }
++    if (!interface.name.empty() && !network_id.empty()) {
++      network_ids.push_back({interface.name, std::move(network_id)});
++    }
++  }
++
++  StableSortDiscoveryNetworkInfo(network_ids.begin(), network_ids.end());
++  return network_ids;
++}
++
++}  // namespace media_router

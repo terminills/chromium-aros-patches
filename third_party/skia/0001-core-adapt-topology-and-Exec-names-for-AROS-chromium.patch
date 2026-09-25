@@ -1,0 +1,102 @@
+From ac051dd3fd740baa5ee275dc00d2dde5ab9636f0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 14:08:52 -0500
+Subject: [PATCH 1/3] core: adapt topology and Exec names for AROS [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Skia queried _SC_NPROCESSORS_ONLN, which AROS does not expose, and global identifiers from Exec headers collided with Skia's source-local List alias and pthread's SCHED_RR macro.
+
+FIX_REASON: Query kernel.resource for the native SMP CPU count, contain the SCHED_RR include collision with push/pop guards, and rename only the source-local listener alias without changing Skia ABI.
+
+SCOPE: SkExecutor CPU topology and SkIDChangeListener source-local naming.
+
+VALIDATION: focused SkExecutor and SkIDChangeListener objects compile with the AROS cross toolchain; the full graph advanced through Skia core and Graphite.
+
+RISK: low; the executor falls back to one core if kernel.resource is unavailable.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/core/SkExecutor.cpp         | 13 ++++++++++++-
+ src/core/SkIDChangeListener.cpp | 14 +++++++-------
+ 2 files changed, 19 insertions(+), 8 deletions(-)
+
+diff --git a/src/core/SkExecutor.cpp b/src/core/SkExecutor.cpp
+index 4c97f7f..9781c04 100644
+--- a/src/core/SkExecutor.cpp
++++ b/src/core/SkExecutor.cpp
+@@ -17,7 +17,18 @@
+ 
+ using namespace skia_private;
+ 
+-#if defined(SK_BUILD_FOR_WIN)
++#if defined(__AROS__)
++    #include <exec/types.h>
++    #include <proto/exec.h>
++    #pragma push_macro("SCHED_RR")
++    #undef SCHED_RR
++    #include <proto/kernel.h>
++    #pragma pop_macro("SCHED_RR")
++    static int num_cores() {
++        APTR KernelBase = OpenResource("kernel.resource");
++        return KernelBase ? (int)KrnGetCPUCount() : 1;
++    }
++#elif defined(SK_BUILD_FOR_WIN)
+     #include "src/base/SkLeanWindows.h"
+     static int num_cores() {
+         SYSTEM_INFO sysinfo;
+diff --git a/src/core/SkIDChangeListener.cpp b/src/core/SkIDChangeListener.cpp
+index cc357ef..b95208f 100644
+--- a/src/core/SkIDChangeListener.cpp
++++ b/src/core/SkIDChangeListener.cpp
+@@ -22,11 +22,11 @@ SkIDChangeListener::SkIDChangeListener() : fShouldDeregister(false) {}
+ 
+ SkIDChangeListener::~SkIDChangeListener() = default;
+ 
+-using List = SkIDChangeListener::List;
++using ListenerList = SkIDChangeListener::List;
+ 
+-List::List() = default;
++ListenerList::List() = default;
+ 
+-List::~List() {
++ListenerList::~List() {
+     // We don't need the mutex. No other thread should have this list while it's being
+     // destroyed.
+     for (auto& listener : fListeners) {
+@@ -36,7 +36,7 @@ List::~List() {
+     }
+ }
+ 
+-void List::add(sk_sp<SkIDChangeListener> listener) {
++void ListenerList::add(sk_sp<SkIDChangeListener> listener) {
+     if (!listener) {
+         return;
+     }
+@@ -52,12 +52,12 @@ void List::add(sk_sp<SkIDChangeListener> listener) {
+     fListeners.push_back(std::move(listener));
+ }
+ 
+-int List::count() const {
++int ListenerList::count() const {
+     SkAutoMutexExclusive lock(fMutex);
+     return fListeners.size();
+ }
+ 
+-void List::changed() {
++void ListenerList::changed() {
+     SkAutoMutexExclusive lock(fMutex);
+     for (auto& listener : fListeners) {
+         if (!listener->shouldDeregister()) {
+@@ -67,7 +67,7 @@ void List::changed() {
+     fListeners.clear();
+ }
+ 
+-void List::reset() {
++void ListenerList::reset() {
+     SkAutoMutexExclusive lock(fMutex);
+     fListeners.clear();
+ }

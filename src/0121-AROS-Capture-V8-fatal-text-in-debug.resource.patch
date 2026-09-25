@@ -1,0 +1,25 @@
+From 19a864b7c2efa5a0b8ab73b7e8203bc1a200d97c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 19:35:04 -0500
+Subject: [PATCH 121/638] [AROS] Capture V8 fatal text in debug.resource
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted run 0121 advanced through browser context and command posting, then V8 worker thread 19 aborted; the C-runtime requester exposed only the FailureMessage marker because V8 fatal text was written exclusively to stderr.
+FIX_REASON: Record the existing AROS V8 port stack plus its AROS-only fatal-output mirror so serial and Sashimi diagnostics receive the same text while stderr behavior remains intact.
+SCOPE: v8 parent pointer 309640da62fa -> 35a278897fa0; checked-out AROS V8 tip 2409ee2adca9 -> 35a278897fa0
+VALIDATION: V8 platform-posix.o cross-compiled; artifacts 23 and 24 preserve the requester boundary and absent serial reason.
+RISK: The parent pointer now records the previously checked-out AROS V8 port ancestry as well as this diagnostic commit; AROS debug output truncates each fatal fragment to 2047 bytes, while normal stderr output is unchanged.
+AI_DECISION_CHAIN: existing AROS V8 port -> resource packs load -> command posted -> worker abort reason hidden -> V8 debug.resource mirror
+Continues: a7a92afa98
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 309640da62..35a278897f 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 309640da62fae0485c7e4f64829627c92d53b35d
++Subproject commit 35a278897fa08a1be8adc13c72fae8ceca010c01

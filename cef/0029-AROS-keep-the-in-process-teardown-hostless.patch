@@ -1,0 +1,56 @@
+From d909c759bdfbefb3aa3e8fc368fbbe2f249883d7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 18:27:40 -0500
+Subject: [PATCH 29/43] AROS: keep the in-process teardown hostless
+
+AI_PHASE: cef-osr-browser
+
+AI_STATUS: focused-compile-clean
+
+FIX_REASON: The AROS path delegates host lookup and deletion to Content's dedicated in-process teardown, so retaining CEF's raw host local produced an avoidable unused-variable warning.
+
+VALIDATION: focused alloy_content_renderer_client.o rebuild passed and the AROS unused host warning is absent; generic GCC template diagnostics remain.
+
+AI_LIMITATIONS: coherent archive update, native relink, visible desktop capture, and clean shutdown replay remain pending.
+
+AI_EVIDENCE:-cef-shutdown-order-fix-20260725/build-inprocess-warning-cleanup.log
+
+AI_DECISION_CHAIN:; c7a8da59
+
+Job:
+---
+ libcef/renderer/alloy/alloy_content_renderer_client.cc | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index afccb95f..8fde9b09 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -568,14 +568,14 @@ void AlloyContentRendererClient::RunSingleProcessCleanupOnUIThread() {
+   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+ 
+   // Clean up the single existing RenderProcessHost.
+-  content::RenderProcessHost* host = nullptr;
+ #if BUILDFLAG(IS_AROS)
+   bool destroyed_host = false;
++#else
++  content::RenderProcessHost* host = nullptr;
+ #endif
+   content::RenderProcessHost::iterator iterator(
+       content::RenderProcessHost::AllHostsIterator());
+   if (!iterator.IsAtEnd()) {
+-    host = iterator.GetCurrentValue();
+ #if BUILDFLAG(IS_AROS)
+     iterator.Advance();
+     DCHECK(iterator.IsAtEnd());
+@@ -584,9 +584,9 @@ void AlloyContentRendererClient::RunSingleProcessCleanupOnUIThread() {
+     // in-process teardown. This notifies observers before deleting the host
+     // without querying the nonexistent ChildProcessLauncher.
+     content::RenderProcessHost::ShutDownInProcessRenderer();
+-    host = nullptr;
+     destroyed_host = true;
+ #else
++    host = iterator.GetCurrentValue();
+     host->Cleanup();
+     iterator.Advance();
+     DCHECK(iterator.IsAtEnd());

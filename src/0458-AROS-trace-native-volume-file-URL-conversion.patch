@@ -1,0 +1,38 @@
+From b3610cd956198f8eb41b6c7b173d662690e1b0b9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 06:16:01 -0500
+Subject: [PATCH 458/638] AROS: trace native volume file URL conversion
+
+Log only decoded file URLs containing an AROS-style volume separator. This keeps the BrowserWindow startup diagnostic bounded while distinguishing URL conversion from downstream DOS path handling.
+
+
+
+---
+ net/base/filename_util.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/net/base/filename_util.cc b/net/base/filename_util.cc
+index da91227b4a..a7772d9e50 100644
+--- a/net/base/filename_util.cc
++++ b/net/base/filename_util.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
++#include "base/logging.h"
+ #include "base/path_service.h"
+ #include "base/strings/escape.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -109,6 +110,12 @@ bool FileURLToFilePath(const GURL& url, base::FilePath* file_path) {
+       path.erase(0, 1);
+     }
+   }
++  // Keep this diagnostic narrow: ordinary POSIX paths are both frequent and
++  // unrelated to AROS volume-name conversion failures.
++  if (path.find(':') != std::string::npos) {
++    LOG(WARNING) << "[Chromium:AROS:FileURL] url='" << url.spec()
++                 << "' native_path='" << path << "'";
++  }
+ #endif
+ #endif  // !BUILDFLAG(IS_WIN)
+ 

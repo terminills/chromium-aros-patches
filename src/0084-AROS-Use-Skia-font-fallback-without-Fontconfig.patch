@@ -1,0 +1,53 @@
+From 5ce04f3fd33d0890e4f76228ffa3679bac125273 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:07:10 -0500
+Subject: [PATCH 084/638] [AROS] Use Skia font fallback without Fontconfig
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS uses Chromium's portable Skia font fallback and render defaults.
+ROOT_CAUSE: GN selected neither Linux Fontconfig nor the generic Skia font sources, while Blink still compiled a Fontconfig-only identity reconstruction path.
+FIX_REASON: Select Skia fallback/render implementations and reject Fontconfig IDs while retaining filename-based typeface loading.
+SCOPE: UI gfx font source selection and Blink SkTypeface factory capability guard.
+VALIDATION: Four affected objects build; expected fallback/render symbols are defined and the Blink object no longer references SkFontConfigInterface::RefGlobal.
+RISK: System font enumeration remains limited to the configured Skia/FreeType manager; Fontconfig identities are unsupported by design.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../blink/renderer/platform/fonts/skia/sktypeface_factory.cc  | 2 +-
+ ui/gfx/BUILD.gn                                               | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.cc b/third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.cc
+index 85611f8204..f586abb8ea 100644
+--- a/third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.cc
++++ b/third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.cc
+@@ -17,7 +17,7 @@ sk_sp<SkTypeface> SkTypeface_Factory::FromFontConfigInterfaceIdAndTtcIndex(
+     int config_id,
+     int ttc_index) {
+ #if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_WIN) && \
+-    !BUILDFLAG(IS_FUCHSIA)
++    !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
+   sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());
+   SkFontConfigInterface::FontIdentity font_identity;
+   font_identity.fID = config_id;
+diff --git a/ui/gfx/BUILD.gn b/ui/gfx/BUILD.gn
+index 3702eefa91..51be7c8e34 100644
+--- a/ui/gfx/BUILD.gn
++++ b/ui/gfx/BUILD.gn
+@@ -367,14 +367,14 @@ component("gfx") {
+   }
+ 
+   if (use_blink) {
+-    if (is_android || is_fuchsia || is_ios) {
++    if (is_android || is_fuchsia || is_ios || is_aros) {
+       sources += [
+         "font_fallback_skia.cc",
+         "font_render_params_skia.cc",
+       ]
+     }
+ 
+-    if (is_android || is_fuchsia || is_win || is_apple) {
++    if (is_android || is_fuchsia || is_win || is_apple || is_aros) {
+       sources += [
+         "font_fallback_skia_impl.cc",
+         "font_fallback_skia_impl.h",

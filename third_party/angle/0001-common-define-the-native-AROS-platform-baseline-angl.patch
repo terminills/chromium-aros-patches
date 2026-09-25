@@ -1,0 +1,39 @@
+From 4f4a20b5a24edc82c20a4d469ab14d1a5f582d41 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:49:11 -0500
+Subject: [PATCH 1/4] common: define the native AROS platform baseline [angle]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: ANGLE rejected the AROS compiler target before defining any OS family. That also suppressed its POSIX GCC bit-scan overloads, producing secondary ambiguous-call failures throughout common math code.
+
+FIX_REASON: Define ANGLE_PLATFORM_AROS and the POSIX baseline while deliberately not defining ANGLE_PLATFORM_LINUX. This enables portable compiler and threading primitives without claiming Linux-only loaders, filesystems, or window systems.
+
+SCOPE: ANGLE common platform detection.
+
+VALIDATION: PackedEGLEnums_autogen.o, MemoryBuffer.o, Float16ToFloat32.o, and PackedEnums.o compile in the filtered AROS headless graph.
+
+RISK: medium; ANGLE_PLATFORM_POSIX exposes later facility-level assumptions that must be adapted explicitly when encountered.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/common/platform.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/common/platform.h b/src/common/platform.h
+index 1184891..df469d3 100644
+--- a/src/common/platform.h
++++ b/src/common/platform.h
+@@ -20,6 +20,9 @@
+ #elif defined(ANDROID)
+ #    define ANGLE_PLATFORM_ANDROID 1
+ #    define ANGLE_PLATFORM_POSIX 1
++#elif defined(__AROS__)
++#    define ANGLE_PLATFORM_AROS 1
++#    define ANGLE_PLATFORM_POSIX 1
+ #elif defined(__ggp__)
+ #    define ANGLE_PLATFORM_GGP 1
+ #    define ANGLE_PLATFORM_POSIX 1

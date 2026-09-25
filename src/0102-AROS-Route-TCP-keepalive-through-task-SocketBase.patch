@@ -1,0 +1,48 @@
+From 15fe3b614501fa3af862b77a5053cc0e6e300322 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 21:06:39 -0500
+Subject: [PATCH 102/638] [AROS] Route TCP keepalive through task SocketBase
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: TCP keepalive now uses the same per-task AROSTCP adapter as Chromium socket creation, I/O, and other options.
+ROOT_CAUSE: tcp_socket_posix.cc called setsockopt directly for SO_KEEPALIVE, bypassing the AROS task-local SocketBase contract and producing an unresolved C++-linkage symbol.
+FIX_REASON: Dispatch the keepalive option through base::aros::SetSocketOption while retaining the existing POSIX call on other systems.
+SCOPE: Chromium POSIX TCP keepalive option setup.
+VALIDATION: tcp_socket_posix.o builds; x86_64-aros-nm shows no undefined setsockopt reference.
+RISK: AROS still uses the stack default keepalive interval because platform-specific TCP_KEEPIDLE and TCP_KEEPINTVL tuning is not claimed.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-aros-native-crash-reporting
+---
+ net/socket/tcp_socket_posix.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/net/socket/tcp_socket_posix.cc b/net/socket/tcp_socket_posix.cc
+index 4a7091cd67..829f0ba8d6 100644
+--- a/net/socket/tcp_socket_posix.cc
++++ b/net/socket/tcp_socket_posix.cc
+@@ -44,6 +44,10 @@
+ #include "net/socket/socket_tag.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "net/android/network_library.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+@@ -68,7 +72,13 @@ namespace {
+ bool SetTCPKeepAlive(int fd, bool enable, int delay) {
+   // Enabling TCP keepalives is the same on all platforms.
+   int on = enable ? 1 : 0;
+-  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on))) {
++#if BUILDFLAG(IS_AROS)
++  int result = base::aros::SetSocketOption(
++      fd, SOL_SOCKET, SO_KEEPALIVE, &on, static_cast<socklen_t>(sizeof(on)));
++#else
++  int result = setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
++#endif
++  if (result) {
+     PLOG(ERROR) << "Failed to set SO_KEEPALIVE on fd: " << fd;
+     return false;
+   }

@@ -1,0 +1,32 @@
+From 699e54d9d1809d39fa5df3fd148cadc6b8c9c4cf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:21:24 -0500
+Subject: [PATCH 176/638] signin: select desktop DICE support on AROS
+ [chromium] [aros]
+
+Statement: Upstream desktop Chrome requires one account-consistency capability, while AROS previously selected neither DICE nor Mirror.
+
+Decision: Admit AROS to the portable desktop DICE build graph. Runtime sign-in remains feature-controlled; this does not claim OS account integration.
+
+Evidence: GN generation for the real browser proved both account consistency modes false and left desktop identity resources structurally undefined.
+
+Validation: out/aros-chrome regenerates and compiles the dependent Chrome startup graph through all 10,906 requested steps.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ components/signin/features.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/components/signin/features.gni b/components/signin/features.gni
+index ae1b0ea92e..7d60a6e8df 100644
+--- a/components/signin/features.gni
++++ b/components/signin/features.gni
+@@ -11,7 +11,7 @@ declare_args() {
+ }
+ 
+ # Dice is supported on the platform (but not necessarily enabled).
+-enable_dice_support = is_linux || is_mac || is_win || is_fuchsia
++enable_dice_support = is_linux || is_mac || is_win || is_fuchsia || is_aros
+ 
+ # Mirror is enabled and other account consistency mechanisms are not available.
+ enable_mirror = is_android || is_chromeos || is_ios

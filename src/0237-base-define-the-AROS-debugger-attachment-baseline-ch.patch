@@ -1,0 +1,31 @@
+From 68ec74d1b8d50b179f48f639066cb1f344937779 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 09:28:45 -0500
+Subject: [PATCH 237/638] base: define the AROS debugger attachment baseline
+ [chromium] [aros]
+
+---
+ base/debug/debugger_posix.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/base/debug/debugger_posix.cc b/base/debug/debugger_posix.cc
+index 4539865218..93a00bb152 100644
+--- a/base/debug/debugger_posix.cc
++++ b/base/debug/debugger_posix.cc
+@@ -225,6 +225,16 @@ void VerifyDebugger() {
+ #endif
+ }
+ 
++#elif BUILDFLAG(IS_AROS)
++
++bool BeingDebugged() {
++  // AROS has native crash diagnostics but no attachment-state query that is
++  // safe to call from Chromium's in-process signal handlers.
++  return false;
++}
++
++void VerifyDebugger() {}
++
+ #else
+ 
+ bool BeingDebugged() {

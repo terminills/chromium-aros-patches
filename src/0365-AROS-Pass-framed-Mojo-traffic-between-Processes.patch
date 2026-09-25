@@ -1,0 +1,279 @@
+From 67896b31d67c9eff57d721c7a91c5ea348c05eaa Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:56:20 -0500
+Subject: [PATCH 365/638] [AROS] Pass framed Mojo traffic between Processes
+
+AI_PHASE: chromium-process-model
+AI_STATUS: cross-process-channel-runtime-pass
+ROOT_CAUSE: AROS was still forced into Chromium single-process mode despite having independently scheduled Processes and working shared-address-space launch primitives.
+FIX_REASON: Add a focused parent/child ChannelAros probe that hands an endpoint through the real command line, launches with CreateNewProc, exchanges framed messages, transfers another endpoint, and waits for child exit.
+SCOPE: mojo/core/BUILD.gn; mojo/core/channel_aros_process_probe.cc
+VALIDATION: Hosted 16 GiB run identified parent PID 18 and child PID 29, reported child and parent PASS framed=2 handles=1, and exited zero in 8.01 seconds.
+RISK: Direct Channel traffic is proven; NodeController invitations, service binding, and browser/renderer role startup remain next.
+AI_DECISION_CHAIN: same-Process Channel PASS -> LaunchProcess endpoint handoff -> child endpoint recovery -> independent IO pumps -> duplex frames -> attached handle -> clean child exit.
+Evidence:-channel-aros-process-20260728
+Job:
+---
+ mojo/core/BUILD.gn                      |  15 +-
+ mojo/core/channel_aros_process_probe.cc | 219 ++++++++++++++++++++++++
+ 2 files changed, 233 insertions(+), 1 deletion(-)
+ create mode 100644 mojo/core/channel_aros_process_probe.cc
+
+diff --git a/mojo/core/BUILD.gn b/mojo/core/BUILD.gn
+index 7eeb8023a2..3b299c3753 100644
+--- a/mojo/core/BUILD.gn
++++ b/mojo/core/BUILD.gn
+@@ -25,7 +25,10 @@ component("embedder_internal") {
+     "//mojo/core/test:test_support",
+   ]
+   if (is_aros) {
+-    visibility += [ ":channel_aros_probe" ]
++    visibility += [
++      ":channel_aros_probe",
++      ":channel_aros_process_probe",
++    ]
+   }
+ }
+ 
+@@ -374,6 +377,16 @@ if (is_aros) {
+       "//mojo/public/cpp/platform",
+     ]
+   }
++
++  executable("channel_aros_process_probe") {
++    testonly = true
++    sources = [ "channel_aros_process_probe.cc" ]
++    deps = [
++      ":embedder_internal",
++      "//base",
++      "//mojo/public/cpp/platform",
++    ]
++  }
+ }
+ 
+ fuzzer_test("mojo_core_channel_fuzzer") {
+diff --git a/mojo/core/channel_aros_process_probe.cc b/mojo/core/channel_aros_process_probe.cc
+new file mode 100644
+index 0000000000..a7ffa62652
+--- /dev/null
++++ b/mojo/core/channel_aros_process_probe.cc
+@@ -0,0 +1,219 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <cstring>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/at_exit.h"
++#include "base/base_paths.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/path_service.h"
++#include "base/process/launch.h"
++#include "base/process/process.h"
++#include "base/run_loop.h"
++#include "base/task/single_thread_task_executor.h"
++#include "mojo/core/channel.h"
++#include "mojo/core/connection_params.h"
++#include "mojo/public/cpp/platform/platform_channel.h"
++
++#include <aros/debug.h>
++
++namespace {
++
++constexpr char kChildSwitch[] = "aros-mojo-channel-child";
++constexpr char kParentPayload[] = "browser-to-renderer";
++constexpr char kChildPayload[] = "renderer-to-browser";
++
++mojo::core::Channel::MessagePtr MakeMessage(std::string_view payload,
++                                            size_t max_handles) {
++  auto message = mojo::core::Channel::Message::CreateMessage(
++      payload.size() + 1, max_handles,
++      mojo::core::Channel::Message::MessageType::NORMAL);
++  std::memcpy(message->mutable_payload(), payload.data(), payload.size());
++  static_cast<char*>(message->mutable_payload())[payload.size()] = '\0';
++  return message;
++}
++
++bool ValidateMessage(const void* payload,
++                     size_t payload_size,
++                     std::string_view expected) {
++  return payload_size == expected.size() + 1 &&
++         std::memcmp(payload, expected.data(), expected.size()) == 0 &&
++         static_cast<const char*>(payload)[expected.size()] == '\0';
++}
++
++class ParentDelegate final : public mojo::core::Channel::Delegate {
++ public:
++  explicit ParentDelegate(base::RunLoop* run_loop) : run_loop_(run_loop) {}
++
++  void OnChannelMessage(
++      const void* payload,
++      size_t payload_size,
++      std::vector<mojo::PlatformHandle> handles) override {
++    received_ =
++        handles.empty() &&
++        ValidateMessage(payload, payload_size, kChildPayload);
++    if (!received_)
++      failed_ = true;
++    run_loop_->Quit();
++  }
++
++  void OnChannelError(mojo::core::Channel::Error error) override {
++    if (!received_) {
++      failed_ = true;
++      run_loop_->Quit();
++    }
++  }
++
++  bool passed() const { return received_ && !failed_; }
++
++ private:
++  base::RunLoop* const run_loop_;
++  bool received_ = false;
++  bool failed_ = false;
++};
++
++class ChildDelegate final : public mojo::core::Channel::Delegate {
++ public:
++  explicit ChildDelegate(base::RunLoop* run_loop) : run_loop_(run_loop) {}
++
++  void set_channel(scoped_refptr<mojo::core::Channel> channel) {
++    channel_ = std::move(channel);
++  }
++
++  void OnChannelMessage(
++      const void* payload,
++      size_t payload_size,
++      std::vector<mojo::PlatformHandle> handles) override {
++    if (!ValidateMessage(payload, payload_size, kParentPayload) ||
++        handles.size() != 1 || !handles[0].is_aros_channel()) {
++      failed_ = true;
++      run_loop_->Quit();
++      return;
++    }
++    channel_->Write(MakeMessage(kChildPayload, 0));
++    received_ = true;
++    run_loop_->Quit();
++  }
++
++  void OnChannelError(mojo::core::Channel::Error error) override {
++    if (!received_) {
++      failed_ = true;
++      run_loop_->Quit();
++    }
++  }
++
++  bool passed() const { return received_ && !failed_; }
++
++ private:
++  base::RunLoop* const run_loop_;
++  scoped_refptr<mojo::core::Channel> channel_;
++  bool received_ = false;
++  bool failed_ = false;
++};
++
++int RunChild() {
++  mojo::PlatformChannelEndpoint endpoint =
++      mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
++          *base::CommandLine::ForCurrentProcess());
++  if (!endpoint.is_valid()) {
++    bug("[Mojo:AROS:ProcessChannelProbe] CHILD FAIL endpoint recovery\n");
++    return 40;
++  }
++
++  base::SingleThreadTaskExecutor task_executor(base::MessagePumpType::IO);
++  base::RunLoop run_loop;
++  ChildDelegate delegate(&run_loop);
++  scoped_refptr<mojo::core::Channel> channel = mojo::core::Channel::Create(
++      &delegate, mojo::core::ConnectionParams(std::move(endpoint)),
++      mojo::core::Channel::HandlePolicy::kAcceptHandles,
++      base::SingleThreadTaskRunner::GetCurrentDefault());
++  delegate.set_channel(channel);
++  channel->Start();
++  run_loop.Run();
++  channel->ShutDown();
++  base::RunLoop().RunUntilIdle();
++  channel = nullptr;
++
++  if (!delegate.passed()) {
++    bug("[Mojo:AROS:ProcessChannelProbe] CHILD FAIL message\n");
++    return 41;
++  }
++  bug("[Mojo:AROS:ProcessChannelProbe] CHILD PASS pid=%ld\n",
++      static_cast<long>(base::GetCurrentProcId()));
++  return 0;
++}
++
++int RunParent() {
++  base::FilePath executable;
++  if (!base::PathService::Get(base::FILE_EXE, &executable)) {
++    bug("[Mojo:AROS:ProcessChannelProbe] PARENT FAIL executable\n");
++    return 42;
++  }
++
++  mojo::PlatformChannel transport;
++  base::CommandLine child_command(executable);
++  child_command.AppendSwitch(kChildSwitch);
++  base::LaunchOptions options;
++  options.current_directory = executable.DirName();
++  transport.PrepareToPassRemoteEndpoint(&options, &child_command);
++  base::Process child = base::LaunchProcess(child_command, options);
++  transport.RemoteProcessLaunchAttempted();
++  if (!child.IsValid()) {
++    bug("[Mojo:AROS:ProcessChannelProbe] PARENT FAIL launch\n");
++    return 43;
++  }
++
++  base::SingleThreadTaskExecutor task_executor(base::MessagePumpType::IO);
++  base::RunLoop run_loop;
++  ParentDelegate delegate(&run_loop);
++  scoped_refptr<mojo::core::Channel> channel = mojo::core::Channel::Create(
++      &delegate,
++      mojo::core::ConnectionParams(transport.TakeLocalEndpoint()),
++      mojo::core::Channel::HandlePolicy::kAcceptHandles,
++      base::SingleThreadTaskRunner::GetCurrentDefault());
++  channel->Start();
++
++  mojo::PlatformChannel transferred_channel;
++  std::vector<mojo::PlatformHandle> handles;
++  handles.push_back(
++      transferred_channel.TakeLocalEndpoint().TakePlatformHandle());
++  auto message = MakeMessage(kParentPayload, 1);
++  message->SetHandles(std::move(handles));
++  channel->Write(std::move(message));
++  run_loop.Run();
++
++  channel->ShutDown();
++  base::RunLoop().RunUntilIdle();
++  channel = nullptr;
++
++  int child_exit = -1;
++  if (!child.WaitForExit(&child_exit) || child_exit != 0 ||
++      !delegate.passed()) {
++    bug(
++        "[Mojo:AROS:ProcessChannelProbe] PARENT FAIL message=%ld child=%ld\n",
++        static_cast<long>(delegate.passed()),
++        static_cast<long>(child_exit));
++    return 44;
++  }
++  bug("[Mojo:AROS:ProcessChannelProbe] PASS parent=%ld child=%ld framed=2 "
++      "handles=1\n",
++      static_cast<long>(base::GetCurrentProcId()),
++      static_cast<long>(child.Pid()));
++  return 0;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  base::AtExitManager at_exit_manager;
++  if (!base::CommandLine::Init(argc, argv))
++    return 45;
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kChildSwitch))
++    return RunChild();
++  return RunParent();
++}

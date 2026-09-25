@@ -1,0 +1,37 @@
+From 11ad0e765e4ca375550c54f05c543adc89675998 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 22 Sep 2026 13:09:45 -0500
+Subject: [PATCH 636/638] aros: launch with --aros-pin-workers from the
+ Workbench icon
+
+The icon's CHROME_ARG tooltypes are the launch switches for a Workbench
+start (chrome_exe_main_aura.cc reads them when argc == 0). Without
+--aros-pin-workers every Chromium thread stays on the core that created it -
+CPU 0, with the main thread, Intuition and the handlers - so a double-clicked
+browser used one core of however many the machine has.
+
+The switch was kept off by default while pinned runs wedged the kernel; the
+two kernel causes are fixed (aros-adt-src b77045a4 lost-IPI ICR race,
+924d645a APIC-exception exit never taking the pending switch) and pinned
+runs at 8 and 16 cores are clean, single- and multi-tab. On a
+1-core guest the switch is a no-op (PinWorkersCpuCap: cpus < 2 pins nothing).
+
+openurl.library's default browser entry carries the same list for the
+command-line start, which never reads the icon.
+
+---
+ chrome/app/theme/aros/Chromium.info.src | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/chrome/app/theme/aros/Chromium.info.src b/chrome/app/theme/aros/Chromium.info.src
+index 6e8a283542..245b732025 100644
+--- a/chrome/app/theme/aros/Chromium.info.src
++++ b/chrome/app/theme/aros/Chromium.info.src
+@@ -8,6 +8,7 @@ TOOLTYPE = "CHROME_ARG=--ozone-platform=aros"
+ TOOLTYPE = "CHROME_ARG=--no-first-run"
+ TOOLTYPE = "CHROME_ARG=--no-default-browser-check"
+ TOOLTYPE = "CHROME_ARG=--aros-spoof-platform=linux"
++TOOLTYPE = "CHROME_ARG=--aros-pin-workers"
+ TOOLTYPE = "(CHROME_ARG=--user-data-dir=PROGDIR:Profiles)"
+ TOOLTYPE = "(CHROME_ARG=--incognito)"
+ TOOLTYPE = "(CHROME_ARG=--start-fullscreen)"

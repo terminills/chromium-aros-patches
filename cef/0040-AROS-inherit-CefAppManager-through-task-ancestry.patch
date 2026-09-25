@@ -1,0 +1,91 @@
+From 19b7ad6a766b2a609286fd03ce86de5995288ce1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 19:37:05 -0500
+Subject: [PATCH 40/43] AROS: inherit CefAppManager through task ancestry
+
+Register the manager on its exact constructing task and let descendant renderer workers find the first registered ETask ancestor. This fixes resource initialization without aliasing separately launched native processes.
+
+
+
+---
+ libcef/common/app_manager.cc | 27 +++++++++++++--------------
+ 1 file changed, 13 insertions(+), 14 deletions(-)
+
+diff --git a/libcef/common/app_manager.cc b/libcef/common/app_manager.cc
+index ee84aef1..19fe2011 100644
+--- a/libcef/common/app_manager.cc
++++ b/libcef/common/app_manager.cc
+@@ -34,9 +34,11 @@ namespace {
+ 
+ // AROS processes share one address space, so a C++ process-global singleton is
+ // shared by the browser and every native child process. Chromium/CEF expects a
+-// distinct CefAppManager in each process. Key the registry by the nearest
+-// native Process ancestor so worker tasks inherit their process manager while
+-// renderer/GPU processes retain independent state.
++// distinct CefAppManager in each process. Managers are registered against the
++// task that constructs them. Descendant worker tasks inherit the first manager
++// found in their ETask parent chain, while a newly launched native process
++// constructs and registers its own manager before any lookup can inherit the
++// creator's state.
+ struct CefAppManagerRegistry {
+   base::Lock lock;
+   std::map<struct Task*, CefAppManager*> managers;
+@@ -47,14 +49,13 @@ CefAppManagerRegistry& GetManagerRegistry() {
+   return *registry;
+ }
+ 
+-struct Task* GetCurrentProcessTask() {
++struct Task* FindManagerOwner(const CefAppManagerRegistry& registry) {
+   struct Task* task = FindTask(nullptr);
+-  struct Task* const current = task;
+ 
+   // Parent chains are normally only one or two entries deep. Keep the walk
+   // bounded so corrupt task metadata cannot hang process startup.
+   for (size_t depth = 0; task && depth < 64; ++depth) {
+-    if (task->tc_Node.ln_Type == NT_PROCESS) {
++    if (registry.managers.find(task) != registry.managers.end()) {
+       return task;
+     }
+ 
+@@ -62,10 +63,7 @@ struct Task* GetCurrentProcessTask() {
+     task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
+   }
+ 
+-  // A task without a Process ancestor still needs isolation from unrelated
+-  // tasks. This fallback preserves the old one-manager-per-execution-context
+-  // behavior instead of aliasing it to another process.
+-  return current;
++  return nullptr;
+ }
+ 
+ #else
+@@ -81,7 +79,8 @@ CefAppManager* CefAppManager::Get() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  const auto it = registry.managers.find(GetCurrentProcessTask());
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
+   return it == registry.managers.end() ? nullptr : it->second;
+ #else
+   return g_manager;
+@@ -93,8 +92,7 @@ CefAppManager::CefAppManager() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  auto [it, inserted] =
+-      registry.managers.emplace(GetCurrentProcessTask(), this);
++  auto [it, inserted] = registry.managers.emplace(FindTask(nullptr), this);
+   DCHECK(inserted);
+   if (!inserted) {
+     it->second = this;
+@@ -109,7 +107,8 @@ CefAppManager::~CefAppManager() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  const auto it = registry.managers.find(GetCurrentProcessTask());
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
+   if (it != registry.managers.end() && it->second == this) {
+     registry.managers.erase(it);
+   }

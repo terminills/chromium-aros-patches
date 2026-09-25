@@ -1,0 +1,1858 @@
+From 7ad9def9692c861008ac7993665549aa13360ff6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 10 Aug 2026 20:31:29 -0500
+Subject: [PATCH 550/638] AROS: scope Blink renderer state for hosted VS Code
+
+Key process-owned Blink and Chromium renderer state by hosted AROS process identity or make shared-runtime reentry idempotent, covering the VS Code multiprocess bring-up chain through BrowserWindow, BrowserFrame, and DiskDataAllocator boundaries.
+
+Keep service-worker Mojo connector telemetry for the active/ investigation and add a evidence breadcrumb documenting the remaining runtime proof required.
+
+Verification: ninja -C out/aros-cef-bootstrap -j32 obj/cef/libcef.a
+---
+ base/metrics/single_sample_metrics.cc         |   8 +
+ base/task/common/checked_lock.h               |   7 +-
+ chrome/gpu/chrome_content_gpu_client.cc       |   2 +
+ .../chrome_content_renderer_client.cc         |   2 +
+ .../chrome_extensions_renderer_client.cc      |  20 +++
+ .../extensions/resource_request_policy.cc     |  12 +-
+ .../utility/chrome_content_utility_client.cc  |   2 +
+ .../variations/variations_crash_keys.cc       |  72 +++++++--
+ .../service_worker/service_worker_version.cc  |   8 +
+ content/child/child_histogram_fetcher_impl.cc |  36 +++++
+ content/common/process_visibility_tracker.cc  |   5 +
+ content/public/renderer/render_thread.cc      |   5 +
+ extensions/renderer/dispatcher.cc             |  10 ++
+ extensions/renderer/script_context_set.cc     |   9 +-
+ mojo/public/cpp/bindings/connector.h          |   4 +
+ mojo/public/cpp/bindings/lib/connector.cc     | 143 +++++++++++++++++-
+ .../tracing/public/cpp/traced_process_impl.cc |   7 +
+ .../serialized_script_value_factory.h         |   5 +
+ .../bindings/core/v8/v8_context_snapshot.cc   |  25 +++
+ .../modules/v8/module_bindings_initializer.cc |  14 ++
+ .../renderer/controller/blink_initializer.cc  |   7 +
+ .../core/accessibility/ax_object_cache.cc     |   5 +
+ .../clipboard/dragged_isolated_file_system.cc |   5 +
+ .../blink/renderer/core/core_initializer.cc   |   5 +
+ .../background_color_paint_image_generator.cc |   6 +
+ .../css/clip_path_paint_image_generator.cc    |   5 +
+ .../core/css/css_paint_image_generator.cc     |   6 +
+ .../renderer/core/css/rule_feature_set.cc     |  17 ++-
+ .../renderer/core/css/rule_feature_set.h      |   4 +-
+ .../core/html/canvas/html_canvas_element.cc   |   7 +
+ .../core/inspector/main_thread_debugger.cc    |  11 ++
+ .../core/offscreencanvas/offscreen_canvas.cc  |   8 +
+ .../service_worker_global_scope.cc            |   8 +
+ .../modules/webdatabase/web_database_host.cc  |   5 +
+ .../platform/bindings/v8_per_isolate_data.cc  |   5 +
+ .../renderer/platform/disk_data_allocator.cc  |  14 ++
+ .../renderer/platform/disk_data_allocator.h   |   6 +
+ .../renderer/platform/exported/platform.cc    | 116 ++++++++++++--
+ .../platform/scheduler/common/thread.cc       |   5 +
+ .../platform/wtf/allocator/partitions.cc      |   4 +
+ .../renderer/platform/wtf/text/string_impl.cc |   9 +-
+ .../blink/renderer/platform/wtf/wtf.cc        |  58 ++++++-
+ 42 files changed, 671 insertions(+), 41 deletions(-)
+
+diff --git a/base/metrics/single_sample_metrics.cc b/base/metrics/single_sample_metrics.cc
+index 6e25b64436..017ed06846 100644
+--- a/base/metrics/single_sample_metrics.cc
++++ b/base/metrics/single_sample_metrics.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/memory/ptr_util.h"
+ #include "base/metrics/histogram.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ 
+@@ -22,7 +23,14 @@ SingleSampleMetricsFactory* SingleSampleMetricsFactory::Get() {
+ // static
+ void SingleSampleMetricsFactory::SetFactory(
+     std::unique_ptr<SingleSampleMetricsFactory> factory) {
++#if BUILDFLAG(IS_AROS)
++  // Hosted AROS reuses one address space for helper identities. Treat repeated
++  // renderer metric factory setup as idempotent instead of crashing the helper.
++  if (g_factory)
++    return;
++#else
+   DCHECK(!g_factory);
++#endif
+   g_factory = factory.release();
+ }
+ 
+diff --git a/base/task/common/checked_lock.h b/base/task/common/checked_lock.h
+index 7d6f75a5ca..2f26dada7f 100644
+--- a/base/task/common/checked_lock.h
++++ b/base/task/common/checked_lock.h
+@@ -14,6 +14,7 @@
+ #include "base/synchronization/lock.h"
+ #include "base/task/common/checked_lock_impl.h"
+ #include "base/thread_annotations.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ namespace internal {
+@@ -65,7 +66,7 @@ namespace internal {
+ // std::unique_ptr<ConditionVariable> CreateConditionVariable()
+ //     Creates a condition variable using this as a lock.
+ 
+-#if DCHECK_IS_ON()
++#if DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+ class LOCKABLE CheckedLock : public CheckedLockImpl {
+  public:
+   CheckedLock() = default;
+@@ -76,7 +77,7 @@ class LOCKABLE CheckedLock : public CheckedLockImpl {
+   explicit CheckedLock(UniversalSuccessor universal_successor)
+       : CheckedLockImpl(universal_successor) {}
+ };
+-#else   // DCHECK_IS_ON()
++#else   // DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+ class LOCKABLE CheckedLock : public Lock {
+  public:
+   CheckedLock() = default;
+@@ -89,7 +90,7 @@ class LOCKABLE CheckedLock : public Lock {
+     return std::unique_ptr<ConditionVariable>(new ConditionVariable(this));
+   }
+ };
+-#endif  // DCHECK_IS_ON()
++#endif  // DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+ 
+ // Provides the same functionality as base::AutoLock for CheckedLock.
+ using CheckedAutoLock = internal::BasicAutoLock<CheckedLock>;
+diff --git a/chrome/gpu/chrome_content_gpu_client.cc b/chrome/gpu/chrome_content_gpu_client.cc
+index e52872a656..81c124b636 100644
+--- a/chrome/gpu/chrome_content_gpu_client.cc
++++ b/chrome/gpu/chrome_content_gpu_client.cc
+@@ -73,8 +73,10 @@ void ChromeContentGpuClient::GpuServiceInitialized() {
+     // The HeapProfilerController should have been created in
+     // ChromeMainDelegate::PostEarlyInitialization.
+     using HeapProfilerController = heap_profiling::HeapProfilerController;
++#if !BUILDFLAG(IS_AROS)
+     DCHECK_NE(HeapProfilerController::GetProfilingEnabled(),
+               HeapProfilerController::ProfilingEnabled::kNoController);
++#endif
+     if (ThreadProfiler::ShouldCollectProfilesForChildProcess() ||
+         HeapProfilerController::GetProfilingEnabled() ==
+             HeapProfilerController::ProfilingEnabled::kEnabled) {
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index 217f4c6893..5429087dae 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -574,8 +574,10 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+     using HeapProfilerController = heap_profiling::HeapProfilerController;
+     // The HeapProfilerController should have been created in
+     // ChromeMainDelegate::PostEarlyInitialization.
++#if !BUILDFLAG(IS_AROS)
+     DCHECK_NE(HeapProfilerController::GetProfilingEnabled(),
+               HeapProfilerController::ProfilingEnabled::kNoController);
++#endif
+     if (ThreadProfiler::ShouldCollectProfilesForChildProcess() ||
+         HeapProfilerController::GetProfilingEnabled() ==
+             HeapProfilerController::ProfilingEnabled::kEnabled) {
+diff --git a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
+index a15a07f337..b2c56a2706 100644
+--- a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
++++ b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
+@@ -13,6 +13,7 @@
+ #include "base/functional/bind.h"
+ #include "base/lazy_instance.h"
+ #include "base/metrics/histogram_functions.h"
++#include "build/build_config.h"
+ #include "chrome/common/chrome_isolated_world_ids.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "chrome/common/extensions/extension_constants.h"
+@@ -102,11 +103,19 @@ extensions::Dispatcher* ChromeExtensionsRendererClient::GetDispatcher() {
+ 
+ void ChromeExtensionsRendererClient::OnExtensionLoaded(
+     const extensions::Extension& extension) {
++#if BUILDFLAG(IS_AROS)
++  if (!resource_request_policy_)
++    return;
++#endif
+   resource_request_policy_->OnExtensionLoaded(extension);
+ }
+ 
+ void ChromeExtensionsRendererClient::OnExtensionUnloaded(
+     const extensions::ExtensionId& extension_id) {
++#if BUILDFLAG(IS_AROS)
++  if (!resource_request_policy_)
++    return;
++#endif
+   resource_request_policy_->OnExtensionUnloaded(extension_id);
+ }
+ 
+@@ -142,6 +151,16 @@ void ChromeExtensionsRendererClient::RenderThreadStarted() {
+         std::make_unique<ChromeExtensionsDispatcherDelegate>(),
+         std::move(api_providers_));
+   }
++#if BUILDFLAG(IS_AROS)
++  permissions_policy_delegate_ =
++      std::make_unique<extensions::RendererPermissionsPolicyDelegate>(
++
++          extension_dispatcher_.get());
++  resource_request_policy_ =
++      std::make_unique<extensions::ResourceRequestPolicy>(
++          extension_dispatcher_.get());
++  extension_dispatcher_->OnRenderThreadStarted(thread);
++#else
+   extension_dispatcher_->OnRenderThreadStarted(thread);
+   permissions_policy_delegate_ =
+       std::make_unique<extensions::RendererPermissionsPolicyDelegate>(
+@@ -150,6 +169,7 @@ void ChromeExtensionsRendererClient::RenderThreadStarted() {
+   resource_request_policy_ =
+       std::make_unique<extensions::ResourceRequestPolicy>(
+           extension_dispatcher_.get());
++#endif
+ 
+   thread->AddObserver(extension_dispatcher_.get());
+ }
+diff --git a/chrome/renderer/extensions/resource_request_policy.cc b/chrome/renderer/extensions/resource_request_policy.cc
+index 44288a9d2d..5effb2c360 100644
+--- a/chrome/renderer/extensions/resource_request_policy.cc
++++ b/chrome/renderer/extensions/resource_request_policy.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/logging.h"
+ #include "base/strings/stringprintf.h"
++#include "build/build_config.h"
+ #include "chrome/common/extensions/chrome_manifest_url_handlers.h"
+ #include "chrome/common/url_constants.h"
+ #include "extensions/common/constants.h"
+@@ -39,10 +40,17 @@ ResourceRequestPolicy::ResourceRequestPolicy(Dispatcher* dispatcher)
+ ResourceRequestPolicy::~ResourceRequestPolicy() = default;
+ 
+ void ResourceRequestPolicy::OnExtensionLoaded(const Extension& extension) {
++#if BUILDFLAG(IS_AROS)
++  const std::string webview_partition_id =
++      dispatcher_ ? dispatcher_->webview_partition_id().value_or(std::string())
++                  : std::string();
++#else
++  const std::string webview_partition_id =
++      dispatcher_->webview_partition_id().value_or(std::string());
++#endif
+   if (WebAccessibleResourcesInfo::HasWebAccessibleResources(&extension) ||
+       WebviewInfo::HasWebviewAccessibleResources(
+-          extension,
+-          dispatcher_->webview_partition_id().value_or(std::string())) ||
++          extension, webview_partition_id) ||
+       // Hosted app icons are accessible.
+       // TODO(devlin): Should we incorporate this into
+       // WebAccessibleResourcesInfo?
+diff --git a/chrome/utility/chrome_content_utility_client.cc b/chrome/utility/chrome_content_utility_client.cc
+index e070f862c3..d4bf146a1a 100644
+--- a/chrome/utility/chrome_content_utility_client.cc
++++ b/chrome/utility/chrome_content_utility_client.cc
+@@ -65,8 +65,10 @@ void ChromeContentUtilityClient::UtilityThreadStarted() {
+     // The HeapProfilerController should have been created in
+     // ChromeMainDelegate::PostEarlyInitialization.
+     using HeapProfilerController = heap_profiling::HeapProfilerController;
++#if !BUILDFLAG(IS_AROS)
+     DCHECK_NE(HeapProfilerController::GetProfilingEnabled(),
+               HeapProfilerController::ProfilingEnabled::kNoController);
++#endif
+     if (ThreadProfiler::ShouldCollectProfilesForChildProcess() ||
+         HeapProfilerController::GetProfilingEnabled() ==
+             HeapProfilerController::ProfilingEnabled::kEnabled) {
+diff --git a/components/variations/variations_crash_keys.cc b/components/variations/variations_crash_keys.cc
+index b7eb075a79..708d90e530 100644
+--- a/components/variations/variations_crash_keys.cc
++++ b/components/variations/variations_crash_keys.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/variations/variations_crash_keys.h"
+ 
++#include <map>
+ #include <set>
+ #include <string>
+ 
+@@ -11,10 +12,13 @@
+ #include "base/debug/leak_annotations.h"
+ #include "base/metrics/field_trial_list_including_low_anonymity.h"
+ #include "base/metrics/histogram_macros.h"
++#include "base/no_destructor.h"
+ #include "base/sequence_checker.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_piece.h"
+ #include "base/strings/stringprintf.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "build/buildflag.h"
+ #include "build/chromeos_buildflags.h"
+@@ -283,33 +287,81 @@ void VariationsCrashKeys::OnSyntheticTrialsChanged(
+ // Singletone crash key manager. Allocated once at process start up and
+ // intentionally leaked since it needs to live for the duration of the process
+ // there's no benefit in cleaning it up at exit.
++#if BUILDFLAG(IS_AROS)
++struct VariationsCrashKeysRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, VariationsCrashKeys*> instances;
++};
++
++VariationsCrashKeysRegistry& GetCrashKeysRegistry() {
++  static base::NoDestructor<VariationsCrashKeysRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++VariationsCrashKeys* GetCurrentCrashKeysInstance() {
++  auto& registry = GetCrashKeysRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.instances.find(GetCurrentProcessIdentity());
++  return it == registry.instances.end() ? nullptr : it->second;
++}
++
++void SetCurrentCrashKeysInstance(VariationsCrashKeys* instance) {
++  auto& registry = GetCrashKeysRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto identity = GetCurrentProcessIdentity();
++  if (instance) {
++    registry.instances[identity] = instance;
++  } else {
++    registry.instances.erase(identity);
++  }
++}
++#else
+ VariationsCrashKeys* g_variations_crash_keys = nullptr;
+ 
++VariationsCrashKeys* GetCurrentCrashKeysInstance() {
++  return g_variations_crash_keys;
++}
++
++void SetCurrentCrashKeysInstance(VariationsCrashKeys* instance) {
++  g_variations_crash_keys = instance;
++}
++#endif
++
+ const char kNumExperimentsKey[] = "num-experiments";
+ const char kExperimentListKey[] = "variations";
+ const char kVariationsSeedVersionKey[] = "variations-seed-version";
+ 
+ void InitCrashKeys() {
+-  DCHECK(!g_variations_crash_keys);
+-  g_variations_crash_keys = new VariationsCrashKeys();
+-  ANNOTATE_LEAKING_OBJECT_PTR(g_variations_crash_keys);
++  DCHECK(!GetCurrentCrashKeysInstance());
++  auto* instance = new VariationsCrashKeys();
++  SetCurrentCrashKeysInstance(instance);
++  ANNOTATE_LEAKING_OBJECT_PTR(instance);
+ }
+ 
+ void UpdateCrashKeysWithSyntheticTrials(
+     const std::vector<SyntheticTrialGroup>& synthetic_trials) {
+-  DCHECK(g_variations_crash_keys);
+-  g_variations_crash_keys->OnSyntheticTrialsChanged(synthetic_trials);
++  VariationsCrashKeys* instance = GetCurrentCrashKeysInstance();
++  DCHECK(instance);
++  instance->OnSyntheticTrialsChanged(synthetic_trials);
+ }
+ 
+ void ClearCrashKeysInstanceForTesting() {
+-  DCHECK(g_variations_crash_keys);
+-  delete g_variations_crash_keys;
+-  g_variations_crash_keys = nullptr;
++  VariationsCrashKeys* instance = GetCurrentCrashKeysInstance();
++  DCHECK(instance);
++  delete instance;
++  SetCurrentCrashKeysInstance(nullptr);
+ }
+ 
+ ExperimentListInfo GetExperimentListInfo() {
+-  DCHECK(g_variations_crash_keys);
+-  return g_variations_crash_keys->GetExperimentListInfo();
++  VariationsCrashKeys* instance = GetCurrentCrashKeysInstance();
++  DCHECK(instance);
++  return instance->GetExperimentListInfo();
+ }
+ 
+ std::string ActiveGroupToString(const ActiveGroupId& active_group) {
+diff --git a/content/browser/service_worker/service_worker_version.cc b/content/browser/service_worker/service_worker_version.cc
+index bad57c5f6c..9ee72fdc9a 100644
+--- a/content/browser/service_worker/service_worker_version.cc
++++ b/content/browser/service_worker/service_worker_version.cc
+@@ -2162,6 +2162,10 @@ void ServiceWorkerVersion::DecrementPendingUpdateHintCount() {
+ }
+ 
+ void ServiceWorkerVersion::OnPongFromWorker() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] browser-pong version="
++             << version_id_ << " status=" << static_cast<int>(running_status());
++#endif
+   ping_controller_.OnPongReceived();
+ }
+ 
+@@ -2568,6 +2572,10 @@ void ServiceWorkerVersion::PingWorker() {
+   // TODO(horo): This CHECK is for debugging crbug.com/759938.
+   CHECK(running_status() == blink::EmbeddedWorkerStatus::kStarting ||
+         running_status() == blink::EmbeddedWorkerStatus::kRunning);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] browser-send version="
++             << version_id_ << " status=" << static_cast<int>(running_status());
++#endif
+   // base::Unretained here is safe because endpoint() is owned by
+   // |this|.
+   endpoint()->Ping(base::BindOnce(&ServiceWorkerVersion::OnPongFromWorker,
+diff --git a/content/child/child_histogram_fetcher_impl.cc b/content/child/child_histogram_fetcher_impl.cc
+index e0c42de36a..c512bf94b3 100644
+--- a/content/child/child_histogram_fetcher_impl.cc
++++ b/content/child/child_histogram_fetcher_impl.cc
+@@ -4,15 +4,20 @@
+ 
+ #include "content/child/child_histogram_fetcher_impl.h"
+ 
++#include <map>
+ #include <memory>
+ 
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/metrics/histogram_delta_serialization.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/histogram_macros_local.h"
++#include "base/no_destructor.h"
+ #include "base/metrics/persistent_histogram_allocator.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "content/child/child_process.h"
+ #include "content/common/histogram_fetcher.mojom-shared.h"
+ #include "ipc/ipc_sender.h"
+@@ -21,6 +26,33 @@
+ 
+ namespace content {
+ 
++namespace {
++
++#if BUILDFLAG(IS_AROS)
++struct ChildHistogramFetcherRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, bool> created;
++};
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++bool MarkChildHistogramFetcherCreated() {
++  static base::NoDestructor<ChildHistogramFetcherRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  bool& created = registry->created[GetCurrentProcessIdentity()];
++  if (created)
++    return false;
++  created = true;
++  return true;
++}
++#endif
++
++}  // namespace
++
+ ChildHistogramFetcherFactoryImpl::ChildHistogramFetcherFactoryImpl() = default;
+ 
+ ChildHistogramFetcherFactoryImpl::~ChildHistogramFetcherFactoryImpl() = default;
+@@ -37,9 +69,13 @@ void ChildHistogramFetcherFactoryImpl::CreateFetcher(
+     base::UnsafeSharedMemoryRegion shared_memory,
+     mojo::PendingReceiver<content::mojom::ChildHistogramFetcher> receiver) {
+   // This message must be received only once.
++#if BUILDFLAG(IS_AROS)
++  MarkChildHistogramFetcherCreated();
++#else
+   static bool already_called = false;
+   CHECK(!already_called);
+   already_called = true;
++#endif
+ 
+   // If the shared memory region was passed via the command line, then the
+   // global histogram allocator should already by setup. Otherwise, the region
+diff --git a/content/common/process_visibility_tracker.cc b/content/common/process_visibility_tracker.cc
+index 9b7069e4d7..42fb388149 100644
+--- a/content/common/process_visibility_tracker.cc
++++ b/content/common/process_visibility_tracker.cc
+@@ -5,6 +5,7 @@
+ #include "content/common/process_visibility_tracker.h"
+ 
+ #include "base/no_destructor.h"
++#include "build/build_config.h"
+ 
+ namespace content {
+ 
+@@ -19,7 +20,9 @@ ProcessVisibilityTracker::ProcessVisibilityTracker()
+                  base::ObserverListThreadSafe<ProcessVisibilityObserver>>()) {}
+ 
+ ProcessVisibilityTracker::~ProcessVisibilityTracker() {
++#if !BUILDFLAG(IS_AROS)
+   DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_);
++#endif
+ }
+ 
+ void ProcessVisibilityTracker::AddObserver(
+@@ -46,7 +49,9 @@ void ProcessVisibilityTracker::RemoveObserver(
+ }
+ 
+ void ProcessVisibilityTracker::OnProcessVisibilityChanged(bool visible) {
++#if !BUILDFLAG(IS_AROS)
+   DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_);
++#endif
+ 
+   {
+     base::AutoLock lock(lock_);
+diff --git a/content/public/renderer/render_thread.cc b/content/public/renderer/render_thread.cc
+index e43b7ed181..d654adf4ac 100644
+--- a/content/public/renderer/render_thread.cc
++++ b/content/public/renderer/render_thread.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/no_destructor.h"
+ #include "base/threading/thread_checker_impl.h"
++#include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ 
+ namespace content {
+@@ -28,8 +29,12 @@ RenderThread* RenderThread::Get() {
+ }
+ 
+ bool RenderThread::IsMainThread() {
++#if BUILDFLAG(IS_AROS)
++  return render_thread != nullptr;
++#else
+   // TODO(avi): Eventually move to be based on WTF::IsMainThread().
+   return GetThreadChecker().CalledOnValidThread();
++#endif
+ }
+ 
+ RenderThread::RenderThread() : resetter_(&render_thread, this) {}
+diff --git a/extensions/renderer/dispatcher.cc b/extensions/renderer/dispatcher.cc
+index f5796e3d67..16c011b698 100644
+--- a/extensions/renderer/dispatcher.cc
++++ b/extensions/renderer/dispatcher.cc
+@@ -895,9 +895,19 @@ void Dispatcher::LoadExtensions(
+     //    mismatch there. In theory one would think it's possible for the
+     //    browser to figure this out itself - but again, cost/benefit.
+     if (!extension_registry->Insert(extension)) {
++#if BUILDFLAG(IS_AROS)
++      LOG(WARNING) << "[Chromium:AROS:Extensions] duplicate extension load "
++                   << extension->id() << "; keeping existing renderer entry";
++      if (worker_activation_token.has_value()) {
++        extension_registry->SetWorkerActivationToken(
++            extension, std::move(*worker_activation_token));
++      }
++      continue;
++#else
+       // TODO(devlin): This may be fixed by crbug.com/528026. Monitor, and
+       // consider making this a release CHECK.
+       NOTREACHED();
++#endif
+     }
+ 
+     if (worker_activation_token.has_value()) {
+diff --git a/extensions/renderer/script_context_set.cc b/extensions/renderer/script_context_set.cc
+index e721286064..bb314bb725 100644
+--- a/extensions/renderer/script_context_set.cc
++++ b/extensions/renderer/script_context_set.cc
+@@ -23,6 +23,7 @@
+ #include "extensions/renderer/isolated_world_manager.h"
+ #include "extensions/renderer/renderer_frame_context_data.h"
+ #include "extensions/renderer/script_context.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
+ #include "third_party/blink/public/web/web_document.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+@@ -38,12 +39,18 @@ ScriptContextSet* g_context_set = nullptr;
+ 
+ ScriptContextSet::ScriptContextSet(ExtensionIdSet* active_extension_ids)
+     : active_extension_ids_(active_extension_ids) {
++#if BUILDFLAG(IS_AROS)
++  if (!g_context_set)
++    g_context_set = this;
++#else
+   DCHECK(!g_context_set);
+   g_context_set = this;
++#endif
+ }
+ 
+ ScriptContextSet::~ScriptContextSet() {
+-  g_context_set = nullptr;
++  if (g_context_set == this)
++    g_context_set = nullptr;
+ }
+ 
+ ScriptContext* ScriptContextSet::Register(
+diff --git a/mojo/public/cpp/bindings/connector.h b/mojo/public/cpp/bindings/connector.h
+index f1d8d19d5c..84e7c67601 100644
+--- a/mojo/public/cpp/bindings/connector.h
++++ b/mojo/public/cpp/bindings/connector.h
+@@ -347,6 +347,10 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) Connector : public MessageReceiver {
+   // notification.
+   const char* interface_name_ = "unknown interface";
+ 
++  // AROS-only diagnostic classification. This deliberately avoids reading
++  // `interface_name_` from late dispatch paths.
++  int aros_service_worker_connector_trace_type_ = 0;
++
+   // A cached pointer to the RunLoopNestingObserver for the thread on which this
+   // Connector was created.
+   // `nesting_observer_` is not a raw_ptr<...> for performance reasons (based on
+diff --git a/mojo/public/cpp/bindings/lib/connector.cc b/mojo/public/cpp/bindings/lib/connector.cc
+index 0c764d19c6..a281cec47b 100644
+--- a/mojo/public/cpp/bindings/lib/connector.cc
++++ b/mojo/public/cpp/bindings/lib/connector.cc
+@@ -14,6 +14,7 @@
+ #include "base/debug/alias.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/field_trial_params.h"
+@@ -38,6 +39,10 @@
+ #include "mojo/public/cpp/system/wait.h"
+ #include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_mojo_event_info.pbzero.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <cstring>
++#endif
++
+ #if defined(ENABLE_IPC_FUZZER)
+ #include "mojo/public/cpp/bindings/message_dumper.h"
+ #endif
+@@ -85,6 +90,52 @@ void LogArosConnectorReceive(uint64_t pipe,
+     std::fclose(file);
+   }
+ }
++
++int ClassifyArosServiceWorkerConnector(const char* interface_name) {
++  if (!interface_name)
++    return 0;
++
++  // Generated interface tags should be static NUL-terminated strings, but keep
++  // this diagnostic bounded so a bad tag cannot take down the target path.
++  if (!std::memchr(interface_name, '\0', 256))
++    return 0;
++
++  if (std::strstr(interface_name, "ServiceWorkerStorageControl"))
++    return 1;
++  if (std::strstr(interface_name, "ServiceWorker"))
++    return 2;
++  return 0;
++}
++
++const char* ArosServiceWorkerConnectorTraceName(int trace_type) {
++  switch (trace_type) {
++    case 1:
++      return "storage";
++    case 2:
++      return "worker";
++    default:
++      return "none";
++  }
++}
++
++void LogArosServiceWorkerConnector(const char* stage,
++                                   int trace_type,
++                                   uint64_t pipe,
++                                   int result,
++                                   uint32_t interface_id = 0,
++                                   uint32_t name = 0,
++                                   const void* receiver = nullptr,
++                                   uint64_t count = 0) {
++  if (!trace_type)
++    return;
++
++  LOG(ERROR) << "[Chromium:AROS:MojoSW] " << stage
++             << " iface=" << ArosServiceWorkerConnectorTraceName(trace_type)
++             << " pipe=" << pipe
++             << " result=" << result << " interface_id=" << interface_id
++             << " name=" << name << " receiver=" << receiver
++             << " count=" << count;
++}
+ #endif
+ 
+ }  // namespace
+@@ -184,6 +235,10 @@ Connector::Connector(ScopedMessagePipeHandle message_pipe,
+       outgoing_serialization_mode_(g_default_outgoing_serialization_mode),
+       incoming_serialization_mode_(g_default_incoming_serialization_mode),
+       interface_name_(interface_name),
++#if BUILDFLAG(IS_AROS)
++      aros_service_worker_connector_trace_type_(
++          ClassifyArosServiceWorkerConnector(interface_name)),
++#endif
+       header_validator_(
+           base::JoinString({interface_name ? interface_name : "Generic",
+                             "MessageHeaderValidator"},
+@@ -191,6 +246,12 @@ Connector::Connector(ScopedMessagePipeHandle message_pipe,
+   if (config == MULTI_THREADED_SEND)
+     lock_.emplace();
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("construct",
++                                aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), 0);
++#endif
++
+ #if defined(ENABLE_IPC_FUZZER)
+   if (!MessageDumper::GetMessageDumpDirectory().empty())
+     message_dumper_ = std::make_unique<MessageDumper>();
+@@ -231,6 +292,12 @@ void Connector::StartReceiving(
+   task_runner_ = std::move(task_runner);
+   allow_woken_up_by_others_ = allow_woken_up_by_others;
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("start-receiving", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(),
++                                task_runner_->RunsTasksInCurrentSequence());
++#endif
++
+   DETACH_FROM_SEQUENCE(sequence_checker_);
+   if (task_runner_->RunsTasksInCurrentSequence()) {
+     WaitToReadMore();
+@@ -377,6 +444,11 @@ bool Connector::Accept(Message* message) {
+       false;
+ #endif
+   const bool was_serialized = message->is_serialized();
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("write-enter", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), was_serialized,
++                                message->interface_id(), message->name());
++#endif
+   ScopedMessageHandle outgoing_message = message->TakeMojoMessage();
+ #if BUILDFLAG(IS_AROS)
+   if (trace_aros_widget_host) {
+@@ -393,6 +465,10 @@ bool Connector::Accept(Message* message) {
+   MojoResult rv = WriteMessageNew(message_pipe_.get(),
+                                   std::move(outgoing_message),
+                                   MOJO_WRITE_MESSAGE_FLAG_NONE);
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("write-leave", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), rv);
++#endif
+ #if BUILDFLAG(IS_AROS)
+   if (trace_aros_widget_host) {
+     if (FILE* file =
+@@ -461,6 +537,11 @@ void Connector::OnWatcherHandleReady(const char* interface_name,
+   // to alias without copying to the stack.
+   base::debug::Alias(&interface_name);
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("watcher-ready", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), result);
++#endif
++
+   OnHandleReadyInternal(result);
+ }
+ 
+@@ -470,6 +551,11 @@ void Connector::OnSyncHandleWatcherHandleReady(const char* interface_name,
+   // to alias without copying to the stack.
+   base::debug::Alias(&interface_name);
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("sync-watcher-ready", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), result);
++#endif
++
+   base::WeakPtr<Connector> weak_self(weak_self_);
+ 
+   sync_handle_watcher_callback_count_++;
+@@ -484,6 +570,11 @@ void Connector::OnSyncHandleWatcherHandleReady(const char* interface_name,
+ void Connector::OnHandleReadyInternal(MojoResult result) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("handle-ready", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), result);
++#endif
++
+   if (result == MOJO_RESULT_FAILED_PRECONDITION) {
+     // No more messages on the pipe and the peer is closed.
+     HandleError(false /* force_pipe_reset */, false /* force_async_handler */);
+@@ -516,6 +607,11 @@ void Connector::WaitToReadMore() {
+       base::BindRepeating(&Connector::OnWatcherHandleReady,
+                           base::Unretained(this), interface_name_));
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("watch-installed", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), rv);
++#endif
++
+   if (rv != MOJO_RESULT_OK) {
+     // If the watch failed because the handle is invalid or its conditions can
+     // no longer be met, we signal the error asynchronously to avoid reentry.
+@@ -544,8 +640,13 @@ uint64_t Connector::QueryPendingMessageCount() const {
+ }
+ 
+ MojoResult Connector::ReadMessage(ScopedMessageHandle& message) {
+-  return ReadMessageNew(message_pipe_.get(), &message,
+-                        MOJO_READ_MESSAGE_FLAG_NONE);
++  MojoResult rv = ReadMessageNew(message_pipe_.get(), &message,
++                                 MOJO_READ_MESSAGE_FLAG_NONE);
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("read-message", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), rv);
++#endif
++  return rv;
+ }
+ 
+ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+@@ -553,6 +654,11 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+ 
+   Message message = Message::CreateFromMessageHandle(&handle);
+   if (message.IsNull()) {
++#if BUILDFLAG(IS_AROS)
++    LogArosServiceWorkerConnector("create-null", aros_service_worker_connector_trace_type_,
++                                  message_pipe_.get().value(), -1, 0, 0,
++                                  incoming_receiver_);
++#endif
+ #if BUILDFLAG(IS_AROS)
+     LogArosConnectorReceive(message_pipe_.get().value(), "create-null",
+                             0u, 0u, nullptr, incoming_receiver_, -1);
+@@ -567,12 +673,20 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+   }
+ 
+ #if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("create-ok", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), 0,
++                                message.interface_id(), message.name(),
++                                incoming_receiver_);
+   LogArosConnectorReceive(message_pipe_.get().value(), "create-ok",
+                           message.interface_id(), message.name(), &message,
+                           incoming_receiver_, 0);
+ #endif
+   const bool header_valid = header_validator_.Accept(&message);
+ #if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("header-validated", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), header_valid,
++                                message.interface_id(), message.name(),
++                                incoming_receiver_);
+   LogArosConnectorReceive(message_pipe_.get().value(), "header-validated",
+                           message.interface_id(), message.name(), &message,
+                           incoming_receiver_, header_valid);
+@@ -622,6 +736,11 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+ #if BUILDFLAG(IS_AROS)
+   const uint32_t aros_interface_id = message.interface_id();
+   const uint32_t aros_message_name = message.name();
++  LogArosServiceWorkerConnector("receiver-enter", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(),
++                                incoming_receiver_ != nullptr,
++                                aros_interface_id, aros_message_name,
++                                incoming_receiver_);
+   LogArosConnectorReceive(message_pipe_.get().value(), "receiver-enter",
+                           aros_interface_id, aros_message_name, &message,
+                           incoming_receiver_,
+@@ -630,6 +749,10 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
+   bool receiver_result =
+       incoming_receiver_ && incoming_receiver_->Accept(&message);
+ #if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("receiver-leave", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), receiver_result,
++                                aros_interface_id, aros_message_name,
++                                incoming_receiver_);
+   LogArosConnectorReceive(message_pipe_.get().value(), "receiver-leave",
+                           aros_interface_id, aros_message_name, &message,
+                           incoming_receiver_, receiver_result);
+@@ -665,6 +788,11 @@ void Connector::CallDispatchNextMessageFromPipe() {
+ 
+ void Connector::ScheduleDispatchOfPendingMessagesOrWaitForMore(
+     uint64_t pending_message_count) {
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("schedule-or-wait", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), 0, 0, 0, nullptr,
++                                pending_message_count);
++#endif
+   if (pending_message_count == 0) {
+     // We're done only because there are no more messages to read, so go back to
+     // watching the pipe for more.
+@@ -682,6 +810,11 @@ void Connector::ReadAllAvailableMessages() {
+   if (paused_ || error_)
+     return;
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("read-all", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), 0);
++#endif
++
+   base::WeakPtr<Connector> weak_self = weak_self_;
+ 
+   do {
+@@ -734,6 +867,12 @@ void Connector::HandleError(bool force_pipe_reset, bool force_async_handler) {
+   if (error_ || !message_pipe_.is_valid())
+     return;
+ 
++#if BUILDFLAG(IS_AROS)
++  LogArosServiceWorkerConnector("handle-error", aros_service_worker_connector_trace_type_,
++                                message_pipe_.get().value(), force_pipe_reset,
++                                0, 0, nullptr, force_async_handler);
++#endif
++
+   if (paused_) {
+     // Enforce calling the error handler asynchronously if the user has paused
+     // receiving messages. We need to wait until the user starts receiving
+diff --git a/services/tracing/public/cpp/traced_process_impl.cc b/services/tracing/public/cpp/traced_process_impl.cc
+index eef525984d..6698dbeeeb 100644
+--- a/services/tracing/public/cpp/traced_process_impl.cc
++++ b/services/tracing/public/cpp/traced_process_impl.cc
+@@ -115,6 +115,13 @@ void TracedProcessImpl::EnableSystemTracingService(
+     return;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  // A hosted helper identity can be restarted while tracing's process-global
++  // object survives in this address space. Replace the old remote instead of
++  // tripping mojo::Remote's already-bound CHECK during renderer recovery.
++  if (system_tracing_service_.is_bound())
++    system_tracing_service_.reset();
++#endif
+   system_tracing_service_.Bind(std::move(remote), nullptr);
+ }
+ 
+diff --git a/third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h b/third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h
+index 47050307f4..6f03a2874f 100644
+--- a/third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h
++++ b/third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h
+@@ -6,6 +6,7 @@
+ #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SERIALIZATION_SERIALIZED_SCRIPT_VALUE_FACTORY_H_
+ 
+ #include "base/notreached.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/bindings/core/v8/serialization/serialization_tag.h"
+ #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+ #include "third_party/blink/renderer/core/core_export.h"
+@@ -28,6 +29,10 @@ class CORE_EXPORT SerializedScriptValueFactory {
+     instance_ = new_factory;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  static bool IsInitialized() { return instance_; }
++#endif
++
+  protected:
+   friend class SerializedScriptValue;
+   friend class UnpackedSerializedScriptValue;
+diff --git a/third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.cc b/third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.cc
+index d6ce20a680..3f801c0076 100644
+--- a/third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.cc
++++ b/third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.h"
+ 
++#include "build/build_config.h"
++
+ namespace blink {
+ 
+ namespace {
+@@ -48,34 +50,57 @@ const intptr_t* V8ContextSnapshot::GetReferenceTable() {
+ 
+ void V8ContextSnapshot::SetCreateContextFromSnapshotFunc(
+     CreateContextFromSnapshotFuncType func) {
++#if BUILDFLAG(IS_AROS)
++  DCHECK(!g_create_context_from_snapshot_func ||
++         g_create_context_from_snapshot_func == func);
++#else
+   DCHECK(!g_create_context_from_snapshot_func);
++#endif
+   DCHECK(func);
+   g_create_context_from_snapshot_func = func;
+ }
+ 
+ void V8ContextSnapshot::SetInstallContextIndependentPropsFunc(
+     InstallContextIndependentPropsFuncType func) {
++#if BUILDFLAG(IS_AROS)
++  DCHECK(!g_install_context_independent_props_func ||
++         g_install_context_independent_props_func == func);
++#else
+   DCHECK(!g_install_context_independent_props_func);
++#endif
+   DCHECK(func);
+   g_install_context_independent_props_func = func;
+ }
+ 
+ void V8ContextSnapshot::SetEnsureInterfaceTemplatesFunc(
+     EnsureInterfaceTemplatesFuncType func) {
++#if BUILDFLAG(IS_AROS)
++  DCHECK(!g_ensure_interface_templates_func ||
++         g_ensure_interface_templates_func == func);
++#else
+   DCHECK(!g_ensure_interface_templates_func);
++#endif
+   DCHECK(func);
+   g_ensure_interface_templates_func = func;
+ }
+ 
+ void V8ContextSnapshot::SetTakeSnapshotFunc(TakeSnapshotFuncType func) {
++#if BUILDFLAG(IS_AROS)
++  DCHECK(!g_take_snapshot_func || g_take_snapshot_func == func);
++#else
+   DCHECK(!g_take_snapshot_func);
++#endif
+   DCHECK(func);
+   g_take_snapshot_func = func;
+ }
+ 
+ void V8ContextSnapshot::SetGetReferenceTableFunc(
+     GetReferenceTableFuncType func) {
++#if BUILDFLAG(IS_AROS)
++  DCHECK(!g_get_reference_table_func || g_get_reference_table_func == func);
++#else
+   DCHECK(!g_get_reference_table_func);
++#endif
+   DCHECK(func);
+   g_get_reference_table_func = func;
+ }
+diff --git a/third_party/blink/renderer/bindings/modules/v8/module_bindings_initializer.cc b/third_party/blink/renderer/bindings/modules/v8/module_bindings_initializer.cc
+index 7ab728a5bf..14fe81c65f 100644
+--- a/third_party/blink/renderer/bindings/modules/v8/module_bindings_initializer.cc
++++ b/third_party/blink/renderer/bindings/modules/v8/module_bindings_initializer.cc
+@@ -9,6 +9,7 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/serialization/serialized_script_value_for_modules_factory.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_context_snapshot_impl.h"
+ #include "third_party/blink/renderer/platform/bindings/origin_trial_features.h"
++#include "build/build_config.h"
+ 
+ namespace blink {
+ 
+@@ -16,10 +17,23 @@ void ModuleBindingsInitializer::Init() {
+   bindings::InitIDLInterfaces();
+   auto* old_installer =
+       SetInstallPropertiesPerFeatureFunc(bindings::InstallPropertiesPerFeature);
++#if BUILDFLAG(IS_AROS)
++  if (old_installer && old_installer != bindings::InstallPropertiesPerFeature) {
++    CHECK(!old_installer);
++  }
++#else
+   CHECK(!old_installer);
++#endif
+   V8ContextSnapshotImpl::Init();
++#if BUILDFLAG(IS_AROS)
++  if (!SerializedScriptValueFactory::IsInitialized()) {
++    SerializedScriptValueFactory::Initialize(
++        new SerializedScriptValueForModulesFactory);
++  }
++#else
+   SerializedScriptValueFactory::Initialize(
+       new SerializedScriptValueForModulesFactory);
++#endif
+ }
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
+index e3f2d93c2c..e0215956b3 100644
+--- a/third_party/blink/renderer/controller/blink_initializer.cc
++++ b/third_party/blink/renderer/controller/blink_initializer.cc
+@@ -157,9 +157,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
+ 
+   GetBlinkInitializer().RegisterInterfaces(*binders);
+ 
++#if BUILDFLAG(IS_AROS)
++  if (!g_end_of_task_runner) {
++    g_end_of_task_runner = new EndOfTaskRunner;
++    Thread::Current()->AddTaskObserver(g_end_of_task_runner);
++  }
++#else
+   DCHECK(!g_end_of_task_runner);
+   g_end_of_task_runner = new EndOfTaskRunner;
+   Thread::Current()->AddTaskObserver(g_end_of_task_runner);
++#endif
+ 
+   GetBlinkInitializer().RegisterMemoryWatchers(platform);
+ 
+diff --git a/third_party/blink/renderer/core/accessibility/ax_object_cache.cc b/third_party/blink/renderer/core/accessibility/ax_object_cache.cc
+index 1e8b71426d..b9aea8d103 100644
+--- a/third_party/blink/renderer/core/accessibility/ax_object_cache.cc
++++ b/third_party/blink/renderer/core/accessibility/ax_object_cache.cc
+@@ -31,6 +31,7 @@
+ #include <memory>
+ 
+ #include "base/memory/ptr_util.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/web/web_ax_enums.h"
+ #include "third_party/blink/renderer/core/dom/element.h"
+ #include "third_party/blink/renderer/core/dom/node.h"
+@@ -46,6 +47,10 @@ AXObjectCache::AXObjectCacheCreateFunction AXObjectCache::create_function_ =
+     nullptr;
+ 
+ void AXObjectCache::Init(AXObjectCacheCreateFunction function) {
++#if BUILDFLAG(IS_AROS)
++  if (create_function_)
++    return;
++#endif
+   DCHECK(!create_function_);
+   create_function_ = function;
+ }
+diff --git a/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc b/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc
+index e01c5ddb7e..86266a8a9e 100644
+--- a/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc
++++ b/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc
+@@ -5,6 +5,7 @@
+ #include "third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.h"
+ 
+ #include "base/check.h"
++#include "build/build_config.h"
+ 
+ namespace blink {
+ 
+@@ -13,6 +14,10 @@ DraggedIsolatedFileSystem::FileSystemIdPreparationCallback
+ 
+ void DraggedIsolatedFileSystem::Init(
+     DraggedIsolatedFileSystem::FileSystemIdPreparationCallback callback) {
++#if BUILDFLAG(IS_AROS)
++  if (prepare_callback_)
++    return;
++#endif
+   DCHECK(!prepare_callback_);
+   prepare_callback_ = callback;
+ }
+diff --git a/third_party/blink/renderer/core/core_initializer.cc b/third_party/blink/renderer/core/core_initializer.cc
+index c2ca7560e6..1c82e21746 100644
+--- a/third_party/blink/renderer/core/core_initializer.cc
++++ b/third_party/blink/renderer/core/core_initializer.cc
+@@ -30,6 +30,7 @@
+ 
+ #include "third_party/blink/renderer/core/core_initializer.h"
+ 
++#include "build/build_config.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/web/blink.h"
+ #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
+@@ -94,6 +95,10 @@ void CoreInitializer::RegisterEventFactory() {
+ 
+ void CoreInitializer::Initialize() {
+   // Initialize must be called once by singleton ModulesInitializer.
++#if BUILDFLAG(IS_AROS)
++  if (instance_)
++    return;
++#endif
+   DCHECK(!instance_);
+   instance_ = this;
+   // Note: in order to add core static strings for a new module (1)
+diff --git a/third_party/blink/renderer/core/css/background_color_paint_image_generator.cc b/third_party/blink/renderer/core/css/background_color_paint_image_generator.cc
+index 0891416a55..0dded4b783 100644
+--- a/third_party/blink/renderer/core/css/background_color_paint_image_generator.cc
++++ b/third_party/blink/renderer/core/css/background_color_paint_image_generator.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/css/background_color_paint_image_generator.h"
+ 
++#include "build/build_config.h"
++
+ namespace blink {
+ 
+ namespace {
+@@ -17,6 +19,10 @@ BackgroundColorPaintImageGenerator::
+ // static
+ void BackgroundColorPaintImageGenerator::Init(
+     BackgroundColorPaintImageGeneratorCreateFunction create_function) {
++#if BUILDFLAG(IS_AROS)
++  if (g_create_function)
++    return;
++#endif
+   DCHECK(!g_create_function);
+   g_create_function = create_function;
+ }
+diff --git a/third_party/blink/renderer/core/css/clip_path_paint_image_generator.cc b/third_party/blink/renderer/core/css/clip_path_paint_image_generator.cc
+index 84cae256f6..603110cde3 100644
+--- a/third_party/blink/renderer/core/css/clip_path_paint_image_generator.cc
++++ b/third_party/blink/renderer/core/css/clip_path_paint_image_generator.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/core/css/clip_path_paint_image_generator.h"
+ 
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ 
+ namespace blink {
+@@ -18,6 +19,10 @@ ClipPathPaintImageGenerator::ClipPathPaintImageGeneratorCreateFunction*
+ // static
+ void ClipPathPaintImageGenerator::Init(
+     ClipPathPaintImageGeneratorCreateFunction* create_function) {
++#if BUILDFLAG(IS_AROS)
++  if (g_create_function)
++    return;
++#endif
+   DCHECK(!g_create_function);
+   g_create_function = create_function;
+ }
+diff --git a/third_party/blink/renderer/core/css/css_paint_image_generator.cc b/third_party/blink/renderer/core/css/css_paint_image_generator.cc
+index 8421d3b9c3..3096f478c8 100644
+--- a/third_party/blink/renderer/core/css/css_paint_image_generator.cc
++++ b/third_party/blink/renderer/core/css/css_paint_image_generator.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/css/css_paint_image_generator.h"
+ 
++#include "build/build_config.h"
++
+ namespace blink {
+ 
+ namespace {
+@@ -16,6 +18,10 @@ CSSPaintImageGenerator::CSSPaintImageGeneratorCreateFunction g_create_function =
+ // static
+ void CSSPaintImageGenerator::Init(
+     CSSPaintImageGeneratorCreateFunction create_function) {
++#if BUILDFLAG(IS_AROS)
++  if (g_create_function)
++    return;
++#endif
+   DCHECK(!g_create_function);
+   g_create_function = create_function;
+ }
+diff --git a/third_party/blink/renderer/core/css/rule_feature_set.cc b/third_party/blink/renderer/core/css/rule_feature_set.cc
+index 29191b682f..ceaaa1d961 100644
+--- a/third_party/blink/renderer/core/css/rule_feature_set.cc
++++ b/third_party/blink/renderer/core/css/rule_feature_set.cc
+@@ -33,6 +33,7 @@
+ #include <algorithm>
+ #include <bitset>
+ #include "base/auto_reset.h"
++#include "build/build_config.h"
+ #include "base/memory/values_equivalent.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/renderer/core/css/css_selector.h"
+@@ -437,12 +438,16 @@ InvalidationSet& RuleFeatureSet::EnsureInvalidationSet(
+ void RuleFeatureSet::MergeInvalidationSet(
+     InvalidationSetMap& map,
+     const AtomicString& key,
+-    scoped_refptr<InvalidationSet> invalidation_set) {
++    const scoped_refptr<InvalidationSet>& invalidation_set) {
+   DCHECK(invalidation_set);
+   scoped_refptr<InvalidationSet>& slot =
+       map.insert(key, nullptr).stored_value->value;
+   if (!slot) {
+-    slot = std::move(invalidation_set);
++#if BUILDFLAG(IS_AROS)
++    slot = CopyInvalidationSet(*invalidation_set);
++#else
++    slot = invalidation_set;
++#endif
+   } else {
+     EnsureMutableInvalidationSet(
+         invalidation_set->GetType(),
+@@ -454,12 +459,16 @@ void RuleFeatureSet::MergeInvalidationSet(
+ void RuleFeatureSet::MergeInvalidationSet(
+     PseudoTypeInvalidationSetMap& map,
+     CSSSelector::PseudoType key,
+-    scoped_refptr<InvalidationSet> invalidation_set) {
++    const scoped_refptr<InvalidationSet>& invalidation_set) {
+   DCHECK(invalidation_set);
+   scoped_refptr<InvalidationSet>& slot =
+       map.insert(key, nullptr).stored_value->value;
+   if (!slot) {
+-    slot = std::move(invalidation_set);
++#if BUILDFLAG(IS_AROS)
++    slot = CopyInvalidationSet(*invalidation_set);
++#else
++    slot = invalidation_set;
++#endif
+   } else {
+     EnsureMutableInvalidationSet(
+         invalidation_set->GetType(),
+diff --git a/third_party/blink/renderer/core/css/rule_feature_set.h b/third_party/blink/renderer/core/css/rule_feature_set.h
+index ffbd10733e..74ce1db4fe 100644
+--- a/third_party/blink/renderer/core/css/rule_feature_set.h
++++ b/third_party/blink/renderer/core/css/rule_feature_set.h
+@@ -827,10 +827,10 @@ class CORE_EXPORT RuleFeatureSet {
+   // EnsureMutableInvalidationSet() for more details.
+   void MergeInvalidationSet(InvalidationSetMap&,
+                             const AtomicString& key,
+-                            scoped_refptr<InvalidationSet>);
++                            const scoped_refptr<InvalidationSet>&);
+   void MergeInvalidationSet(PseudoTypeInvalidationSetMap&,
+                             CSSSelector::PseudoType key,
+-                            scoped_refptr<InvalidationSet>);
++                            const scoped_refptr<InvalidationSet>&);
+ 
+   FeatureMetadata metadata_;
+ 
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+index 09d97aa411..672782f5f4 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+@@ -374,9 +374,16 @@ void HTMLCanvasElement::RegisterRenderingContextFactory(
+       rendering_context_factory->GetRenderingAPI();
+   DCHECK_LE(rendering_api,
+             CanvasRenderingContext::CanvasRenderingAPI::kMaxValue);
++#if BUILDFLAG(IS_AROS)
++  auto& factory_slot = RenderingContextFactories()[static_cast<int>(rendering_api)];
++  if (factory_slot)
++    return;
++  factory_slot = std::move(rendering_context_factory);
++#else
+   DCHECK(!RenderingContextFactories()[static_cast<int>(rendering_api)]);
+   RenderingContextFactories()[static_cast<int>(rendering_api)] =
+       std::move(rendering_context_factory);
++#endif
+ }
+ 
+ void HTMLCanvasElement::RecordIdentifiabilityMetric(
+diff --git a/third_party/blink/renderer/core/inspector/main_thread_debugger.cc b/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
+index 362353a19d..8ba08bda45 100644
+--- a/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
++++ b/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
+@@ -36,6 +36,7 @@
+ #include "base/feature_list.h"
+ #include "base/synchronization/lock.h"
+ #include "base/unguessable_token.h"
++#include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
+@@ -100,14 +101,24 @@ MainThreadDebugger* MainThreadDebugger::instance_ = nullptr;
+ MainThreadDebugger::MainThreadDebugger(v8::Isolate* isolate)
+     : ThreadDebuggerCommonImpl(isolate), paused_(false) {
+   base::AutoLock locker(CreationLock());
++#if BUILDFLAG(IS_AROS)
++  if (!instance_)
++    instance_ = this;
++#else
+   DCHECK(!instance_);
+   instance_ = this;
++#endif
+ }
+ 
+ MainThreadDebugger::~MainThreadDebugger() {
+   base::AutoLock locker(CreationLock());
++#if BUILDFLAG(IS_AROS)
++  if (instance_ == this)
++    instance_ = nullptr;
++#else
+   DCHECK_EQ(instance_, this);
+   instance_ = nullptr;
++#endif
+ }
+ 
+ void MainThreadDebugger::ReportConsoleMessage(
+diff --git a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc b/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
+index 9fb8d3a375..4ab43299f9 100644
+--- a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
++++ b/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
+@@ -10,6 +10,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/privacy_budget/identifiability_metric_builder.h"
+ #include "third_party/blink/public/common/privacy_budget/identifiability_metrics.h"
+ #include "third_party/blink/public/common/privacy_budget/identifiability_study_settings.h"
+@@ -457,9 +458,16 @@ void OffscreenCanvas::RegisterRenderingContextFactory(
+       rendering_context_factory->GetRenderingAPI();
+   DCHECK_LE(rendering_api,
+             CanvasRenderingContext::CanvasRenderingAPI::kMaxValue);
++#if BUILDFLAG(IS_AROS)
++  auto& factory_slot = RenderingContextFactories()[static_cast<int>(rendering_api)];
++  if (factory_slot)
++    return;
++  factory_slot = std::move(rendering_context_factory);
++#else
+   DCHECK(!RenderingContextFactories()[static_cast<int>(rendering_api)]);
+   RenderingContextFactories()[static_cast<int>(rendering_api)] =
+       std::move(rendering_context_factory);
++#endif
+ }
+ 
+ bool OffscreenCanvas::OriginClean() const {
+diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
+index 1a90d51c2c..77575cebc6 100644
+--- a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
++++ b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
+@@ -616,11 +616,19 @@ void ServiceWorkerGlobalScope::BindServiceWorker(
+     mojo::PendingReceiver<mojom::blink::ServiceWorker> receiver) {
+   DCHECK(IsContextThread());
+   DCHECK(!receiver_.is_bound());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerReceiver] bind";
++#endif
+   // TODO(falken): Consider adding task types for "the handle fetch task source"
+   // and "handle functional event task source" defined in the service worker
+   // spec and use them when dispatching events.
+   receiver_.Bind(std::move(receiver),
+                  GetThread()->GetTaskRunner(TaskType::kInternalDefault));
++#if BUILDFLAG(IS_AROS)
++  receiver_.set_disconnect_handler(WTF::BindOnce([]() {
++    LOG(ERROR) << "[Chromium:AROS:ServiceWorkerReceiver] disconnect";
++  }));
++#endif
+ }
+ 
+ void ServiceWorkerGlobalScope::BindControllerServiceWorker(
+diff --git a/third_party/blink/renderer/modules/webdatabase/web_database_host.cc b/third_party/blink/renderer/modules/webdatabase/web_database_host.cc
+index 9a6acd7e06..e5ef4ec969 100644
+--- a/third_party/blink/renderer/modules/webdatabase/web_database_host.cc
++++ b/third_party/blink/renderer/modules/webdatabase/web_database_host.cc
+@@ -9,6 +9,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/mojom/webdatabase/web_database.mojom-blink.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -25,6 +26,10 @@ WebDatabaseHost& WebDatabaseHost::GetInstance() {
+ }
+ 
+ void WebDatabaseHost::Init() {
++#if BUILDFLAG(IS_AROS)
++  if (pending_remote_ || shared_remote_)
++    return;
++#endif
+   Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
+       pending_remote_.InitWithNewPipeAndPassReceiver());
+ }
+diff --git a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc b/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
+index 5384c974f9..353ea9a915 100644
+--- a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
++++ b/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
+@@ -36,6 +36,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/default_tick_clock.h"
+ #include "base/trace_event/trace_event.h"
++#include "build/build_config.h"
+ #include "gin/public/v8_idle_task_runner.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/web/blink.h"
+@@ -425,6 +426,10 @@ ScriptRegexp* V8PerIsolateData::GetPasswordRegexp() {
+ 
+ void V8PerIsolateData::SetTaskAttributionTrackerFactory(
+     TaskAttributionTrackerFactoryPtr factory) {
++#if BUILDFLAG(IS_AROS)
++  if (task_attribution_tracker_factory == factory)
++    return;
++#endif
+   CHECK(!task_attribution_tracker_factory);
+   CHECK(IsMainThread());
+   task_attribution_tracker_factory = factory;
+diff --git a/third_party/blink/renderer/platform/disk_data_allocator.cc b/third_party/blink/renderer/platform/disk_data_allocator.cc
+index c70af88e10..bff76cffaa 100644
+--- a/third_party/blink/renderer/platform/disk_data_allocator.cc
++++ b/third_party/blink/renderer/platform/disk_data_allocator.cc
+@@ -215,8 +215,17 @@ void DiskDataAllocator::DoRead(int64_t offset, char* data, int size) {
+ void DiskDataAllocator::ProvideTemporaryFile(base::File file) {
+   base::AutoLock locker(lock_);
+   DCHECK(IsMainThread());
++#if BUILDFLAG(IS_AROS)
++  if (file_.IsValid()) {
++    LOG(WARNING) << "[Chromium:AROS:DiskDataAllocator] duplicate temporary "
++                    "file for hosted shared renderer allocator; keeping "
++                    "existing file";
++    return;
++  }
++#else
+   DCHECK(!file_.IsValid());
+   DCHECK(!may_write_);
++#endif
+ 
+   file_ = std::move(file);
+   may_write_ = file_.IsValid();
+@@ -231,8 +240,13 @@ DiskDataAllocator& DiskDataAllocator::Instance() {
+ // static
+ void DiskDataAllocator::Bind(
+     mojo::PendingReceiver<mojom::blink::DiskAllocator> receiver) {
++#if BUILDFLAG(IS_AROS)
++  DiskDataAllocator& instance = Instance();
++  instance.receivers_.Add(&instance, std::move(receiver));
++#else
+   DCHECK(!Instance().receiver_.is_bound());
+   Instance().receiver_.Bind(std::move(receiver));
++#endif
+ }
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/platform/disk_data_allocator.h b/third_party/blink/renderer/platform/disk_data_allocator.h
+index 759b0ea29f..c2feeb837e 100644
+--- a/third_party/blink/renderer/platform/disk_data_allocator.h
++++ b/third_party/blink/renderer/platform/disk_data_allocator.h
+@@ -12,7 +12,9 @@
+ #include "base/files/file.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
++#include "mojo/public/cpp/bindings/receiver_set.h"
+ #include "third_party/blink/public/mojom/disk_allocator.mojom-blink.h"
+ #include "third_party/blink/renderer/platform/allow_discouraged_type.h"
+ #include "third_party/blink/renderer/platform/platform_export.h"
+@@ -98,7 +100,11 @@ class PLATFORM_EXPORT DiskDataAllocator : public mojom::blink::DiskAllocator {
+   // CHECK()s that the read is successful.
+   virtual void DoRead(int64_t offset, char* data, int size);
+ 
++#if BUILDFLAG(IS_AROS)
++  mojo::ReceiverSet<mojom::blink::DiskAllocator> receivers_;
++#else
+   mojo::Receiver<mojom::blink::DiskAllocator> receiver_{this};
++#endif
+   base::File file_;  // May be invalid.
+ 
+   bool has_capacity_limit_ = false;
+diff --git a/third_party/blink/renderer/platform/exported/platform.cc b/third_party/blink/renderer/platform/exported/platform.cc
+index 88eae07f3a..3e9ff45bcb 100644
+--- a/third_party/blink/renderer/platform/exported/platform.cc
++++ b/third_party/blink/renderer/platform/exported/platform.cc
+@@ -30,8 +30,13 @@
+ 
+ #include "third_party/blink/public/platform/platform.h"
+ 
++#include <map>
+ #include <memory>
+ 
++#include "base/command_line.h"
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/thread_checker.h"
+@@ -113,12 +118,24 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
+                        base::OnceClosure task,
+                        base::TimeDelta delay) override {
+     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
++#if BUILDFLAG(IS_AROS)
++    Thread* current_thread = Thread::Current();
++    if (!current_thread || !current_thread->Scheduler())
++      return false;
++    current_thread->Scheduler()->PostDelayedIdleTask(
++        from_here, delay,
++        base::BindOnce([](base::OnceClosure task,
++                          base::TimeTicks deadline) { std::move(task).Run(); },
++                       std::move(task)));
++    return true;
++#else
+     ThreadScheduler::Current()->PostDelayedIdleTask(
+         from_here, delay,
+         base::BindOnce([](base::OnceClosure task,
+                           base::TimeTicks deadline) { std::move(task).Run(); },
+                        std::move(task)));
+     return true;
++#endif
+   }
+ 
+  protected:
+@@ -130,9 +147,76 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
+ 
+ }  // namespace
+ 
+-static Platform* g_platform = nullptr;
++#if BUILDFLAG(IS_AROS)
++struct PlatformProcessState {
++  Platform* platform = nullptr;
++  bool did_initialize_blink = false;
++};
++
++struct PlatformStateRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, PlatformProcessState> states;
++};
++
++PlatformStateRegistry& GetPlatformStateRegistry() {
++  static base::NoDestructor<PlatformStateRegistry> registry;
++  return *registry;
++}
+ 
+-static bool did_initialize_blink_ = false;
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++PlatformProcessState GetCurrentPlatformState() {
++  auto& registry = GetPlatformStateRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.states.find(GetCurrentProcessIdentity());
++  return it == registry.states.end() ? PlatformProcessState() : it->second;
++}
++
++Platform* GetCurrentPlatform() {
++  return GetCurrentPlatformState().platform;
++}
++
++bool DidInitializeBlink() {
++  return GetCurrentPlatformState().did_initialize_blink;
++}
++
++void SetCurrentPlatform(Platform* platform) {
++  auto& registry = GetPlatformStateRegistry();
++  base::AutoLock lock(registry.lock);
++  registry.states[GetCurrentProcessIdentity()].platform = platform;
++}
++
++void SetDidInitializeBlink(bool did_initialize_blink) {
++  auto& registry = GetPlatformStateRegistry();
++  base::AutoLock lock(registry.lock);
++  registry.states[GetCurrentProcessIdentity()].did_initialize_blink =
++      did_initialize_blink;
++}
++#else
++Platform* g_platform = nullptr;
++
++bool did_initialize_blink_ = false;
++
++Platform* GetCurrentPlatform() {
++  return g_platform;
++}
++
++bool DidInitializeBlink() {
++  return did_initialize_blink_;
++}
++
++void SetCurrentPlatform(Platform* platform) {
++  g_platform = platform;
++}
++
++void SetDidInitializeBlink(bool did_initialize_blink) {
++  did_initialize_blink_ = did_initialize_blink;
++}
++#endif
+ 
+ Platform::Platform() = default;
+ 
+@@ -143,29 +227,29 @@ WebThemeEngine* Platform::ThemeEngine() {
+ }
+ 
+ void Platform::InitializeBlink() {
+-  DCHECK(!did_initialize_blink_);
++  DCHECK(!DidInitializeBlink());
+   WTF::Partitions::Initialize();
+   WTF::Initialize();
+   Length::Initialize();
+   ProcessHeap::Init();
+   ThreadState::AttachMainThread();
+-  did_initialize_blink_ = true;
++  SetDidInitializeBlink(true);
+ }
+ 
+ void Platform::InitializeMainThread(
+     Platform* platform,
+     scheduler::WebThreadScheduler* main_thread_scheduler) {
+-  DCHECK(!g_platform);
++  DCHECK(!GetCurrentPlatform());
+   DCHECK(platform);
+-  g_platform = platform;
++  SetCurrentPlatform(platform);
+   InitializeMainThreadCommon(platform,
+                              main_thread_scheduler->CreateMainThread());
+ }
+ 
+ void Platform::CreateMainThreadAndInitialize(Platform* platform) {
+-  DCHECK(!g_platform);
++  DCHECK(!GetCurrentPlatform());
+   DCHECK(platform);
+-  g_platform = platform;
++  SetCurrentPlatform(platform);
+   InitializeBlink();
+   InitializeMainThreadCommon(platform, scheduler::CreateSimpleMainThread());
+ }
+@@ -173,7 +257,7 @@ void Platform::CreateMainThreadAndInitialize(Platform* platform) {
+ void Platform::InitializeMainThreadCommon(
+     Platform* platform,
+     std::unique_ptr<MainThread> main_thread) {
+-  DCHECK(did_initialize_blink_);
++  DCHECK(DidInitializeBlink());
+   MainThread::SetMainThread(std::move(main_thread));
+ 
+   ThreadState* thread_state = ThreadState::Current();
+@@ -218,13 +302,23 @@ void Platform::InitializeMainThreadCommon(
+   // This relies on being called prior to
+   // PartitionAllocSupport::ReconfigureAfterTaskRunnerInit, which would start
+   // memory reclaimer with a regular task runner. The first one prevails.
++#if BUILDFLAG(IS_AROS)
++  if (base::SequencedTaskRunner::HasCurrentDefault()) {
++    WTF::Partitions::StartMemoryReclaimer(
++        base::SequencedTaskRunner::GetCurrentDefault());
++  } else {
++    LOG(WARNING) << "[Chromium:AROS:Blink] no current task runner; skipping "
++                    "partition memory reclaimer startup";
++  }
++#else
+   WTF::Partitions::StartMemoryReclaimer(
+       base::MakeRefCounted<IdleDelayedTaskHelper>());
++#endif
+ }
+ 
+ void Platform::SetCurrentPlatformForTesting(Platform* platform) {
+   DCHECK(platform);
+-  g_platform = platform;
++  SetCurrentPlatform(platform);
+ }
+ 
+ void Platform::CreateMainThreadForTesting() {
+@@ -245,7 +339,7 @@ void Platform::UnsetMainThreadTaskRunnerForTesting() {
+ }
+ 
+ Platform* Platform::Current() {
+-  return g_platform;
++  return GetCurrentPlatform();
+ }
+ 
+ std::unique_ptr<WebDedicatedWorkerHostFactoryClient>
+diff --git a/third_party/blink/renderer/platform/scheduler/common/thread.cc b/third_party/blink/renderer/platform/scheduler/common/thread.cc
+index 4e73e8d3a0..ddf3d37f58 100644
+--- a/third_party/blink/renderer/platform/scheduler/common/thread.cc
++++ b/third_party/blink/renderer/platform/scheduler/common/thread.cc
+@@ -74,7 +74,12 @@ ThreadCreationParams& ThreadCreationParams::SetSupportsGC(bool gc_enabled) {
+ }
+ 
+ void Thread::CreateAndSetCompositorThread() {
++#if BUILDFLAG(IS_AROS)
++  if (GetCompositorThread())
++    return;
++#else
+   DCHECK(!GetCompositorThread());
++#endif
+ 
+   ThreadCreationParams params(ThreadType::kCompositorThread);
+   params.base_thread_type = base::ThreadType::kCompositing;
+diff --git a/third_party/blink/renderer/platform/wtf/allocator/partitions.cc b/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
+index 17fa965154..17f8b538a5 100644
+--- a/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
++++ b/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
+@@ -209,6 +209,10 @@ bool Partitions::InitializeOnce() {
+ // static
+ void Partitions::InitializeArrayBufferPartition() {
+   CHECK(initialized_);
++#if BUILDFLAG(IS_AROS)
++  if (ArrayBufferPartitionInitialized())
++    return;
++#endif
+   CHECK(!ArrayBufferPartitionInitialized());
+ 
+   // BackupRefPtr disallowed because it will prevent allocations from being 16B
+diff --git a/third_party/blink/renderer/platform/wtf/text/string_impl.cc b/third_party/blink/renderer/platform/wtf/text/string_impl.cc
+index a2d73f97eb..e1a4564b51 100644
+--- a/third_party/blink/renderer/platform/wtf/text/string_impl.cc
++++ b/third_party/blink/renderer/platform/wtf/text/string_impl.cc
+@@ -30,6 +30,7 @@
+ 
+ #include "base/functional/callback.h"
+ #include "base/numerics/safe_conversions.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
+ #include "third_party/blink/renderer/platform/wtf/dynamic_annotations.h"
+ #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
+@@ -154,7 +155,7 @@ static StaticStringsTable& StaticStrings() {
+   return static_strings;
+ }
+ 
+-#if DCHECK_IS_ON()
++#if DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+ static bool g_allow_creation_of_static_strings = true;
+ #endif
+ 
+@@ -165,7 +166,7 @@ const StaticStringsTable& StringImpl::AllStaticStrings() {
+ void StringImpl::FreezeStaticStrings() {
+   DCHECK(IsMainThread());
+ 
+-#if DCHECK_IS_ON()
++#if DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+   g_allow_creation_of_static_strings = false;
+ #endif
+ }
+@@ -192,7 +193,7 @@ void StringImpl::InitStatics() {
+ StringImpl* StringImpl::CreateStatic(const char* string,
+                                      wtf_size_t length,
+                                      wtf_size_t hash) {
+-#if DCHECK_IS_ON()
++#if DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+   DCHECK(g_allow_creation_of_static_strings);
+ #endif
+   DCHECK(string);
+@@ -235,7 +236,7 @@ StringImpl* StringImpl::CreateStatic(const char* string,
+ }
+ 
+ void StringImpl::ReserveStaticStringsCapacityForSize(wtf_size_t size) {
+-#if DCHECK_IS_ON()
++#if DCHECK_IS_ON() && !BUILDFLAG(IS_AROS)
+   DCHECK(g_allow_creation_of_static_strings);
+ #endif
+   StaticStrings().ReserveCapacityForSize(size);
+diff --git a/third_party/blink/renderer/platform/wtf/wtf.cc b/third_party/blink/renderer/platform/wtf/wtf.cc
+index e72fbf4293..b4666762d6 100644
+--- a/third_party/blink/renderer/platform/wtf/wtf.cc
++++ b/third_party/blink/renderer/platform/wtf/wtf.cc
+@@ -30,6 +30,11 @@
+ 
+ #include "third_party/blink/renderer/platform/wtf/wtf.h"
+ 
++#include <map>
++
++#include "base/command_line.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
+@@ -49,6 +54,41 @@ namespace {
+ 
+ bool g_initialized = false;
+ 
++#if BUILDFLAG(IS_AROS)
++struct ProcessState {
++  bool initialized = false;
++  base::PlatformThreadId main_thread_identifier = base::kInvalidThreadId;
++};
++
++struct ProcessStateRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, ProcessState> states;
++};
++
++ProcessStateRegistry& GetProcessStateRegistry() {
++  static base::NoDestructor<ProcessStateRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++bool MarkCurrentProcessInitialized(base::PlatformThreadId main_thread_id) {
++  auto& registry = GetProcessStateRegistry();
++  base::AutoLock lock(registry.lock);
++  ProcessState& state = registry.states[GetCurrentProcessIdentity()];
++  if (state.initialized) {
++    return false;
++  }
++  state.initialized = true;
++  state.main_thread_identifier = main_thread_id;
++  return true;
++}
++#endif
++
+ #if defined(COMPONENT_BUILD) && BUILDFLAG(IS_WIN)
+ ABSL_CONST_INIT thread_local bool g_is_main_thread = false;
+ #endif
+@@ -71,14 +111,28 @@ ABSL_CONST_INIT thread_local bool g_is_main_thread = false;
+ #endif
+ 
+ void Initialize() {
++  const base::PlatformThreadId main_thread_id = CurrentThread();
++#if BUILDFLAG(IS_AROS)
++  CHECK(MarkCurrentProcessInitialized(main_thread_id));
++#else
+   // WTF, and Blink in general, cannot handle being re-initialized.
+   // Make that explicit here.
+   CHECK(!g_initialized);
+-  g_initialized = true;
++#endif
+ #if !BUILDFLAG(IS_ANDROID)
+   g_is_main_thread = true;
+ #endif
+-  g_main_thread_identifier = CurrentThread();
++  g_main_thread_identifier = main_thread_id;
++
++#if BUILDFLAG(IS_AROS)
++  // Hosted AROS runs Chromium pseudo-processes in one address space. The first
++  // one performs WTF's true global initialization; later identities get their
++  // own initialization guard above but must not reconstruct global string atoms.
++  if (g_initialized) {
++    return;
++  }
++#endif
++  g_initialized = true;
+ 
+   Threading::Initialize();
+ 

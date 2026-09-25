@@ -1,0 +1,165 @@
+From 5f230d5eb8114d62537cca4c9f7f440fd22da6fe Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 14:09:27 -0500
+Subject: [PATCH 2/3] ports: provide read-backed file mappings on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: SkOSFile_posix unconditionally included sys/mman.h and used mmap, munmap, and pread. AROS exposes none of those contracts, while returning null from sk_fmmap would make SkData::MakeFromFILE fail rather than fall back.
+
+FIX_REASON: Materialize file mappings into owned heap buffers on AROS, release them through sk_fmunmap, and emulate offset-independent reads with a FILE lock plus seek/read/restore. This preserves Skia's data and duplicate-stream semantics without claiming MMU mapping.
+
+SCOPE: src/ports/SkOSFile_posix.cpp AROS branches only.
+
+VALIDATION: obj/skia/skia/SkOSFile_posix.o compiles after the change; full headless integration continues.
+
+RISK: medium; file mapping becomes an eager copy and fd-only mapping serializes offset restoration only by caller discipline, so large assets cost additional memory until native VM mapping exists.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/ports/SkOSFile_posix.cpp | 88 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 88 insertions(+)
+
+diff --git a/src/ports/SkOSFile_posix.cpp b/src/ports/SkOSFile_posix.cpp
+index 1be1330..c4e2e96 100644
+--- a/src/ports/SkOSFile_posix.cpp
++++ b/src/ports/SkOSFile_posix.cpp
+@@ -12,10 +12,14 @@
+ #include "src/core/SkOSFile.h"
+ 
+ #include <dirent.h>
++#include <errno.h>
+ #include <new>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
++#if !defined(__AROS__)
+ #include <sys/mman.h>
++#endif
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -78,7 +82,12 @@ bool sk_fidentical(FILE* a, FILE* b) {
+ }
+ 
+ void sk_fmunmap(const void* addr, size_t length) {
++#if defined(__AROS__)
++    (void)length;
++    free(const_cast<void*>(addr));
++#else
+     munmap(const_cast<void*>(addr), length);
++#endif
+ }
+ 
+ void* sk_fdmmap(int fd, size_t* size) {
+@@ -94,10 +103,45 @@ void* sk_fdmmap(int fd, size_t* size) {
+     }
+     size_t fileSize = static_cast<size_t>(status.st_size);
+ 
++#if defined(__AROS__)
++    void* addr = malloc(fileSize);
++    if (!addr) {
++        return nullptr;
++    }
++
++    off_t original = lseek(fd, 0, SEEK_CUR);
++    if (original < 0 || lseek(fd, 0, SEEK_SET) < 0) {
++        free(addr);
++        return nullptr;
++    }
++
++    size_t total = 0;
++    bool readOK = true;
++    while (total < fileSize) {
++        ssize_t bytesRead = read(fd, static_cast<char*>(addr) + total, fileSize - total);
++        if (bytesRead < 0 && errno == EINTR) {
++            continue;
++        }
++        if (bytesRead <= 0) {
++            readOK = false;
++            break;
++        }
++        total += static_cast<size_t>(bytesRead);
++    }
++
++    if (lseek(fd, original, SEEK_SET) < 0) {
++        readOK = false;
++    }
++    if (!readOK) {
++        free(addr);
++        return nullptr;
++    }
++#else
+     void* addr = mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+     if (MAP_FAILED == addr) {
+         return nullptr;
+     }
++#endif
+ 
+     *size = fileSize;
+     return addr;
+@@ -113,10 +157,53 @@ void* sk_fmmap(FILE* f, size_t* size) {
+         return nullptr;
+     }
+ 
++#if defined(__AROS__)
++    struct stat status = {};
++    if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
++        !SkTFitsIn<size_t>(status.st_size)) {
++        return nullptr;
++    }
++
++    size_t fileSize = static_cast<size_t>(status.st_size);
++    void* addr = malloc(fileSize);
++    if (!addr) {
++        return nullptr;
++    }
++    if (sk_qread(f, addr, fileSize, 0) != fileSize) {
++        free(addr);
++        return nullptr;
++    }
++
++    *size = fileSize;
++    return addr;
++#else
+     return sk_fdmmap(fd, size);
++#endif
+ }
+ 
+ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
++#if defined(__AROS__)
++    if (!SkTFitsIn<off_t>(offset)) {
++        return SIZE_MAX;
++    }
++
++    fpos_t original;
++    size_t bytesRead = SIZE_MAX;
++    flockfile(file);
++    if (fgetpos(file, &original) == 0) {
++        if (fseeko(file, static_cast<off_t>(offset), SEEK_SET) == 0) {
++            bytesRead = fread(buffer, 1, count, file);
++            if (bytesRead < count && ferror(file)) {
++                bytesRead = SIZE_MAX;
++            }
++        }
++        if (fsetpos(file, &original) != 0) {
++            bytesRead = SIZE_MAX;
++        }
++    }
++    funlockfile(file);
++    return bytesRead;
++#else
+     int fd = sk_fileno(file);
+     if (fd < 0) {
+         return SIZE_MAX;
+@@ -126,6 +213,7 @@ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
+         return SIZE_MAX;
+     }
+     return bytesRead;
++#endif
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////

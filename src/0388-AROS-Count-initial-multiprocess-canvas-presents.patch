@@ -1,0 +1,79 @@
+From 9644c42d04d68376b7ceaf807d496303e880f0b1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 00:11:19 -0500
+Subject: [PATCH 388/638] [AROS] Count initial multiprocess canvas presents
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+OBSERVED: Runtime 28 completed one browser-Viz canvas round trip and the renderer later committed the document, but the visible surface stayed on the initial Loading frame.
+
+FIX_REASON: Log the first eight browser receives/paints and matching Viz returns with sequence and damage. This distinguishes missing post-commit frames from failed repeat transport without changing scheduling or presentation semantics.
+
+SCOPE: AROS Ozone window manager only; no generic Chromium, loader, relocation, or graphics policy changes.
+
+VALIDATION: clang-format and cached diff check pass; runtime 29 follows.
+
+AI_DECISION_CHAIN: runtime 28
+---
+ ui/ozone/platform/aros/aros_window_manager.cc | 18 ++++++++++++++----
+ ui/ozone/platform/aros/aros_window_manager.h  |  2 ++
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 5d83c93eca..40e5b61b44 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -188,6 +188,7 @@ void ArosWindowManager::ProcessNativeEvents() {
+       const gfx::AcceleratedWidget widget = request->widget;
+       {
+         base::AutoLock lock(lock_);
++        const uint32_t sequence = ++received_present_count_;
+         first_request = !logged_received_present_;
+         if (first_request) {
+           logged_received_present_ = true;
+@@ -204,10 +205,12 @@ void ArosWindowManager::ProcessNativeEvents() {
+                 gfx::Size(request->width, request->height),
+                 gfx::Rect(request->damage_x, request->damage_y,
+                           request->damage_width, request->damage_height));
+-        if (first_request) {
+-          LOG(INFO) << "[Chromium:Ozone:AROS] completed first cross-Process "
+-                       "canvas paint widget="
+-                    << request->widget << " result=" << request->result;
++        if (sequence <= 8) {
++          LOG(INFO) << "[Chromium:Ozone:AROS] browser canvas paint sequence="
++                    << sequence << " widget=" << request->widget
++                    << " damage=" << request->damage_x << ","
++                    << request->damage_y << " " << request->damage_width << "x"
++                    << request->damage_height << " result=" << request->result;
+         }
+       }
+       ReplyMsg(&request->message);
+@@ -274,6 +277,13 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+   }
+   WaitPort(presentation_reply_port_);
+   CHECK_EQ(GetMsg(presentation_reply_port_), &request.message);
++  const uint32_t sequence = ++forwarded_present_count_;
++  if (sequence <= 8) {
++    LOG(INFO) << "[Chromium:Ozone:AROS] Viz canvas present sequence="
++              << sequence << " widget=" << widget
++              << " damage=" << damage.ToString()
++              << " result=" << request.result;
++  }
+   if (!logged_forwarded_present_) {
+     logged_forwarded_present_ = true;
+     LOG(INFO) << "[Chromium:Ozone:AROS] first cross-Process canvas present "
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index c6d41b5bac..83a4345a65 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -66,6 +66,8 @@ class ArosWindowManager {
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
+   bool owns_presentation_port_ = false;
++  uint32_t received_present_count_ GUARDED_BY(lock_) = 0;
++  uint32_t forwarded_present_count_ GUARDED_BY(lock_) = 0;
+   bool logged_received_present_ GUARDED_BY(lock_) = false;
+   bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;

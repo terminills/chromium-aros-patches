@@ -1,0 +1,155 @@
+From 41d850630858e370e5ad881edbf246a2b9f1f5ff Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 08:36:06 -0500
+Subject: [PATCH 355/638] [AROS] Preserve assign roots through FilePath
+ operations
+
+AI_PHASE: chromium-cef-shared-library
+AI_STATUS: in-progress
+ROOT_CAUSE: FilePath recognized ENVARC:Chromium as absolute but DirName, BaseName, and Append still applied POSIX semantics. CreateDirectory therefore recursed through dot, AROS stat rejected it, and CEF never registered the user-data PathService key.
+FIX_REASON: Treat the first AmigaDOS colon as a root delimiter throughout parent, basename, append, and component operations so native assignments remain absolute and composable.
+SCOPE: base/files/file_path.cc; base/files/file_path_unittest.cc
+VALIDATION: exact file_path_unittest.o cross-compiled; full cef:libcef closure passed 46840/46840; archive retains 0 true V8 engine members; broad base_unittests failure on Unix .so helper packaging preserved as evidence.
+RISK: Colon-bearing AROS paths now keep the root component during decomposition; non-AROS behavior is compile-time unchanged.
+AI_DECISION_CHAIN: CEF PathService key 1001 fatal -> stat dot EINVAL -> CreateDirectory parent recursion -> incomplete AROS FilePath assign semantics
+Evidence:-aros-filepath-assign-semantics-20260725
+Job:
+---
+ base/files/file_path.cc          | 53 +++++++++++++++++++++++++++++---
+ base/files/file_path_unittest.cc | 31 +++++++++++++++++++
+ 2 files changed, 79 insertions(+), 5 deletions(-)
+
+diff --git a/base/files/file_path.cc b/base/files/file_path.cc
+index 62b26754e5..cc00af195e 100644
+--- a/base/files/file_path.cc
++++ b/base/files/file_path.cc
+@@ -83,6 +83,13 @@ bool EqualDriveLetterCaseInsensitive(StringPieceType a, StringPieceType b) {
+ }
+ #endif  // defined(FILE_PATH_USES_DRIVE_LETTERS)
+ 
++#if BUILDFLAG(IS_AROS)
++StringType::size_type FindArosRoot(StringPieceType path) {
++  const StringType::size_type colon = path.find(FILE_PATH_LITERAL(':'));
++  return colon == 0 ? StringType::npos : colon;
++}
++#endif
++
+ bool IsPathAbsolute(StringPieceType path) {
+ #if defined(FILE_PATH_USES_DRIVE_LETTERS)
+   StringType::size_type letter = FindDriveLetter(path);
+@@ -99,8 +106,7 @@ bool IsPathAbsolute(StringPieceType path) {
+   // delimiter (for example SYS:, PROGDIR:, and T:Chromium). A leading slash
+   // remains absolute for paths entering through the POSIX compatibility API.
+   return (!path.empty() && FilePath::IsSeparator(path[0])) ||
+-         (path.find(FILE_PATH_LITERAL(':')) != StringType::npos &&
+-          path.front() != FILE_PATH_LITERAL(':'));
++         FindArosRoot(path) != StringType::npos;
+ #else  // FILE_PATH_USES_DRIVE_LETTERS
+   // Look for a separator in the first position.
+   return path.length() > 0 && FilePath::IsSeparator(path[0]);
+@@ -325,6 +331,26 @@ FilePath FilePath::DirName() const {
+   FilePath new_path(path_);
+   new_path.StripTrailingSeparatorsInternal();
+ 
++#if BUILDFLAG(IS_AROS)
++  // AmigaDOS roots end at the first colon and do not require a following
++  // separator. Keep the assign/volume itself as the root while walking
++  // parents (ENVARC:Chromium -> ENVARC:).
++  const StringType::size_type aros_root = FindArosRoot(new_path.path_);
++  if (aros_root != StringType::npos) {
++    const StringType::size_type last_separator =
++        new_path.path_.find_last_of(kSeparators, StringType::npos,
++                                    kSeparatorsLength - 1);
++    if (last_separator == StringType::npos ||
++        last_separator <= aros_root + 1) {
++      new_path.path_.resize(aros_root + 1);
++    } else {
++      new_path.path_.resize(last_separator);
++      new_path.StripTrailingSeparatorsInternal();
++    }
++    return new_path;
++  }
++#endif
++
+   // The drive letter, if any, always needs to remain in the output.  If there
+   // is no drive letter, as will always be the case on platforms which do not
+   // support drive letters, letter will be npos, or -1, so the comparisons and
+@@ -375,6 +401,17 @@ FilePath FilePath::BaseName() const {
+   FilePath new_path(path_);
+   new_path.StripTrailingSeparatorsInternal();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Strip the AmigaDOS root from non-root paths. The root itself remains a
++  // component so GetComponents() can preserve volume/assign identity.
++  const StringType::size_type aros_root = FindArosRoot(new_path.path_);
++  if (aros_root != StringType::npos) {
++    if (new_path.path_.length() == aros_root + 1)
++      return new_path;
++    new_path.path_.erase(0, aros_root + 1);
++  }
++#endif
++
+   // The drive letter, if any, is always stripped.
+   StringType::size_type letter = FindDriveLetter(new_path.path_);
+   if (letter != StringType::npos) {
+@@ -554,9 +591,15 @@ FilePath FilePath::Append(StringPieceType component) const {
+     // Don't append a separator if the path still ends with a trailing
+     // separator after stripping (indicating the root directory).
+     if (!IsSeparator(new_path.path_.back())) {
+-      // Don't append a separator if the path is just a drive letter.
+-      if (FindDriveLetter(new_path.path_) + 1 != new_path.path_.length()) {
+-        new_path.path_.append(1, kSeparators[0]);
++#if BUILDFLAG(IS_AROS)
++      // AROS volume and assign roots use ':' itself as the root delimiter.
++      if (new_path.path_.back() != FILE_PATH_LITERAL(':'))
++#endif
++      {
++        // Don't append a separator if the path is just a drive letter.
++        if (FindDriveLetter(new_path.path_) + 1 != new_path.path_.length()) {
++          new_path.path_.append(1, kSeparators[0]);
++        }
+       }
+     }
+   }
+diff --git a/base/files/file_path_unittest.cc b/base/files/file_path_unittest.cc
+index a2fe5936c4..627a1bf2ef 100644
+--- a/base/files/file_path_unittest.cc
++++ b/base/files/file_path_unittest.cc
+@@ -69,6 +69,37 @@ struct UTF8TestData {
+ // to be a PlatformTest
+ typedef PlatformTest FilePathTest;
+ 
++#if BUILDFLAG(IS_AROS)
++TEST_F(FilePathTest, ArosAssignPathSemantics) {
++  const FilePath root(FPL("ENVARC:"));
++  const FilePath profile(FPL("ENVARC:Chromium"));
++  const FilePath dictionary(FPL("ENVARC:Chromium/Dictionaries"));
++
++  EXPECT_TRUE(root.IsAbsolute());
++  EXPECT_TRUE(profile.IsAbsolute());
++  EXPECT_TRUE(dictionary.IsAbsolute());
++
++  EXPECT_EQ(FPL("ENVARC:"), root.DirName().value());
++  EXPECT_EQ(FPL("ENVARC:"), profile.DirName().value());
++  EXPECT_EQ(FPL("ENVARC:Chromium"), dictionary.DirName().value());
++
++  EXPECT_EQ(FPL("ENVARC:"), root.BaseName().value());
++  EXPECT_EQ(FPL("Chromium"), profile.BaseName().value());
++  EXPECT_EQ(FPL("Dictionaries"), dictionary.BaseName().value());
++
++  EXPECT_EQ(FPL("ENVARC:Chromium"), root.Append(FPL("Chromium")).value());
++  EXPECT_EQ(FPL("ENVARC:Chromium/Dictionaries"),
++            profile.Append(FPL("Dictionaries")).value());
++
++  const std::vector<FilePath::StringType> components =
++      dictionary.GetComponents();
++  ASSERT_EQ(3U, components.size());
++  EXPECT_EQ(FPL("ENVARC:"), components[0]);
++  EXPECT_EQ(FPL("Chromium"), components[1]);
++  EXPECT_EQ(FPL("Dictionaries"), components[2]);
++}
++#endif
++
+ TEST_F(FilePathTest, DirName) {
+   const struct UnaryTestData cases[] = {
+     {FPL(""), FPL(".")},

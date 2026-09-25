@@ -1,0 +1,78 @@
+From aa68073ebb7353adb0d430f2aedd651368d91499 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 26 Jul 2026 03:35:43 -0500
+Subject: [PATCH 30/43] AROS: tear down extensions on renderer sequence
+
+AI_PHASE: cef-osr-browser
+
+AI_STATUS: archive-clean-runtime-pending
+
+ROOT_CAUSE: CefExtensionsRendererClient retained its Dispatcher until AlloyMainDelegate destruction on the UI sequence, after the renderer message loop exited. Dispatcher then destroyed Mojo endpoints on the wrong sequence.
+
+FIX_REASON: Remove the Dispatcher observer and release renderer-owned extension objects from WillDestroyCurrentMessageLoop while their owning renderer sequence is still active.
+
+SCOPE: CEF renderer extension lifecycle only; no extension feature behavior changes
+
+VALIDATION: complete capped -j31 obj/cef/libcef.a rebuild passed (47063/47063); archive SHA256 0f52463ebc63f3db05a97f605d12738c85e38ab9a1cd43d0f71ab4946cd09841.
+
+AI_LIMITATIONS: native cef.library relink and hosted shutdown replay remain pending.
+
+AI_DECISION_CHAIN:; painted-and-closed PASS; global request-context ownership fixed; Mojo InterfaceEndpointClient wrong-sequence fatal isolated
+
+Job:
+---
+ libcef/renderer/alloy/alloy_content_renderer_client.cc   | 6 ++++++
+ libcef/renderer/extensions/extensions_renderer_client.cc | 8 ++++++++
+ libcef/renderer/extensions/extensions_renderer_client.h  | 3 +++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index 8fde9b09..5bc44917 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -546,6 +546,12 @@ void AlloyContentRendererClient::GetInterface(
+ }
+ 
+ void AlloyContentRendererClient::WillDestroyCurrentMessageLoop() {
++  if (extensions_renderer_client_) {
++    extensions_renderer_client_->Shutdown();
++    extensions::ExtensionsRendererClient::Set(nullptr);
++    extensions_renderer_client_.reset();
++  }
++
+   base::AutoLock lock_scope(single_process_cleanup_lock_);
+   single_process_cleanup_complete_ = true;
+ }
+diff --git a/libcef/renderer/extensions/extensions_renderer_client.cc b/libcef/renderer/extensions/extensions_renderer_client.cc
+index ca18cbd2..e6afe4bd 100644
+--- a/libcef/renderer/extensions/extensions_renderer_client.cc
++++ b/libcef/renderer/extensions/extensions_renderer_client.cc
+@@ -51,6 +51,14 @@ CefExtensionsRendererClient::CefExtensionsRendererClient(
+ 
+ CefExtensionsRendererClient::~CefExtensionsRendererClient() = default;
+ 
++void CefExtensionsRendererClient::Shutdown() {
++  if (extension_dispatcher_) {
++    content::RenderThread::Get()->RemoveObserver(extension_dispatcher_.get());
++  }
++  resource_request_policy_.reset();
++  extension_dispatcher_.reset();
++}
++
+ bool CefExtensionsRendererClient::IsIncognitoProcess() const {
+   return alloy_content_renderer_client_->GetAlloyObserver()
+       ->IsIncognitoProcess();
+diff --git a/libcef/renderer/extensions/extensions_renderer_client.h b/libcef/renderer/extensions/extensions_renderer_client.h
+index f21e372e..1e688ae6 100644
+--- a/libcef/renderer/extensions/extensions_renderer_client.h
++++ b/libcef/renderer/extensions/extensions_renderer_client.h
+@@ -64,6 +64,9 @@ class CefExtensionsRendererClient : public ExtensionsRendererClient {
+       const GURL& scope,
+       const GURL& script_url) const override;
+ 
++  // Release renderer-sequence objects before the render message loop exits.
++  void Shutdown();
++
+   // See AlloyContentRendererClient methods with the same names.
+   void RenderFrameCreated(content::RenderFrame* render_frame,
+                           service_manager::BinderRegistry* registry);

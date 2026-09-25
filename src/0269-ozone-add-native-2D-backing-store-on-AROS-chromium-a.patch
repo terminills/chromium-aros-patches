@@ -1,0 +1,190 @@
+From 42c4e33fd649c5ae6b873d3a899933e45805ffda Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 15:33:46 -0500
+Subject: [PATCH 269/638] ozone: add native 2D backing store on AROS [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_ROOT_CAUSE: The software compositor wrote every damage rectangle directly into the visible Intuition RastPort, leaving no persistent native frame for refresh recovery and bypassing the native 2D blit path.
+AI_FIX_REASON: Keep a screen-friend AROS bitmap per window, seed it from the Skia raster canvas, and ClipBlit damaged regions into the window; replay the stored frame synchronously on Intuition refresh and retain direct WritePixelArray as the allocation fallback.
+AI_SCOPE: ArosWindow software presentation and native backing-store lifecycle only; EGL/GPU selection and synthetic vsync policy remain unchanged.
+AI_VALIDATION: buildtools clang-format and git diff --check pass; focused AROS Ozone target and complete chrome link succeed in out/aros-chrome.
+AI_RISK: Medium; runtime validation must confirm screen-friend bitmap allocation, refresh behavior, and performance on hosted and native display drivers.
+AI_CHAIN:
+---
+ ui/ozone/platform/aros/aros_window.cc | 101 ++++++++++++++++++++++++--
+ ui/ozone/platform/aros/aros_window.h  |   8 ++
+ 2 files changed, 103 insertions(+), 6 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index c40abe70bd..7f30e3b4ce 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -414,6 +414,7 @@ ArosWindow::~ArosWindow() {
+   if (window_) {
+     DisableNativeEvents();
+     ResetNativeCursor();
++    ReleaseNativeBackingStore();
+     manager_->DetachNativeWindow(widget_, this, window_);
+     CloseWindow(window_);
+     window_ = nullptr;
+@@ -684,7 +685,9 @@ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+       if (window_) {
+         BeginRefresh(window_);
+       }
+-      delegate_->OnDamageRect(gfx::Rect(bounds_.size()));
++      if (!BlitNativeBackingStore(gfx::Rect(bounds_.size()))) {
++        delegate_->OnDamageRect(gfx::Rect(bounds_.size()));
++      }
+       if (window_) {
+         EndRefresh(window_, TRUE);
+       }
+@@ -872,17 +875,103 @@ bool ArosWindow::PresentPixels(const void* pixels,
+     return true;
+   }
+ 
+-  SetDrMd(window_->RPort, JAM1);
++  const bool allocated_backing_store =
++      backing_size_ != pixel_size || !backing_rast_port_;
++  if (!EnsureNativeBackingStore(pixel_size)) {
++    SetDrMd(window_->RPort, JAM1);
++    const LONG written = WritePixelArray(
++        const_cast<void*>(pixels), clipped.x(), clipped.y(), row_bytes,
++        window_->RPort, window_->BorderLeft + clipped.x(),
++        window_->BorderTop + clipped.y(), clipped.width(), clipped.height(),
++        RECTFMT_BGRA32);
++    if (written <= 0) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS] direct WritePixelArray failed "
++                    "widget="
++                 << widget_ << " damage=" << clipped.ToString();
++      return false;
++    }
++    return true;
++  }
++
++  // A newly allocated store has no prior frame to preserve. Seed the complete
++  // visible canvas even if Chromium supplied a smaller damage rectangle.
++  if (allocated_backing_store) {
++    clipped = gfx::Rect(pixel_size);
++    clipped.Intersect(gfx::Rect(client_width, client_height));
++  }
++
++  SetDrMd(backing_rast_port_.get(), JAM1);
+   const LONG written = WritePixelArray(
+       const_cast<void*>(pixels), clipped.x(), clipped.y(), row_bytes,
+-      window_->RPort, window_->BorderLeft + clipped.x(),
+-      window_->BorderTop + clipped.y(), clipped.width(), clipped.height(),
+-      RECTFMT_BGRA32);
++      backing_rast_port_.get(), clipped.x(), clipped.y(), clipped.width(),
++      clipped.height(), RECTFMT_BGRA32);
+   if (written <= 0) {
+-    LOG(ERROR) << "[Chromium:Ozone:AROS] WritePixelArray failed widget="
++    LOG(ERROR) << "[Chromium:Ozone:AROS] backing WritePixelArray failed widget="
+                << widget_ << " damage=" << clipped.ToString();
+     return false;
+   }
++  return BlitNativeBackingStore(clipped);
++}
++
++bool ArosWindow::EnsureNativeBackingStore(const gfx::Size& size) {
++  if (!window_ || !window_->RPort || size.IsEmpty()) {
++    return false;
++  }
++  if (backing_bitmap_ && backing_rast_port_ && backing_size_ == size) {
++    return true;
++  }
++
++  ReleaseNativeBackingStore();
++  const ULONG depth = GetBitMapAttr(window_->RPort->BitMap, BMA_DEPTH);
++  backing_bitmap_ = AllocBitMap(size.width(), size.height(), depth,
++                                BMF_CLEAR | BMF_DISPLAYABLE | BMF_MINPLANES,
++                                window_->RPort->BitMap);
++  if (!backing_bitmap_) {
++    LOG(WARNING) << "[Chromium:Ozone:AROS] native backing allocation failed "
++                    "widget="
++                 << widget_ << " size=" << size.ToString()
++                 << "; using direct raster presentation";
++    return false;
++  }
++
++  backing_rast_port_ = std::make_unique<RastPort>();
++  InitRastPort(backing_rast_port_.get());
++  backing_rast_port_->BitMap = backing_bitmap_;
++  backing_size_ = size;
++  LOG(INFO) << "[Chromium:Ozone:AROS] allocated screen-friend native backing "
++               "store widget="
++            << widget_ << " size=" << size.ToString() << " depth=" << depth;
++  return true;
++}
++
++void ArosWindow::ReleaseNativeBackingStore() {
++  backing_rast_port_.reset();
++  if (backing_bitmap_) {
++    FreeBitMap(backing_bitmap_);
++    backing_bitmap_ = nullptr;
++  }
++  backing_size_ = gfx::Size();
++}
++
++bool ArosWindow::BlitNativeBackingStore(const gfx::Rect& damage) {
++  if (!window_ || !window_->RPort || !backing_rast_port_ || !backing_bitmap_) {
++    return false;
++  }
++
++  const int client_width =
++      window_->Width - window_->BorderLeft - window_->BorderRight;
++  const int client_height =
++      window_->Height - window_->BorderTop - window_->BorderBottom;
++  gfx::Rect clipped = damage;
++  clipped.Intersect(gfx::Rect(backing_size_));
++  clipped.Intersect(gfx::Rect(client_width, client_height));
++  if (clipped.IsEmpty()) {
++    return true;
++  }
++
++  ClipBlit(backing_rast_port_.get(), clipped.x(), clipped.y(), window_->RPort,
++           window_->BorderLeft + clipped.x(), window_->BorderTop + clipped.y(),
++           clipped.width(), clipped.height(), 0xC0);
+   return true;
+ }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index cbf93b58ed..b8be465795 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -8,6 +8,7 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ 
++#include <memory>
+ #include <optional>
+ #include <string>
+ 
+@@ -25,6 +26,7 @@
+ 
+ struct Window;
+ struct BitMap;
++struct RastPort;
+ 
+ namespace ui {
+ 
+@@ -85,6 +87,9 @@ class ArosWindow : public PlatformWindow {
+ 
+   void UpdateBoundsFromNative(bool notify_delegate);
+   void UpdateWindowState(PlatformWindowState state);
++  bool EnsureNativeBackingStore(const gfx::Size& size);
++  void ReleaseNativeBackingStore();
++  bool BlitNativeBackingStore(const gfx::Rect& damage);
+   void ResetNativeCursor();
+   void DisableNativeEvents();
+   void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
+@@ -104,6 +109,9 @@ class ArosWindow : public PlatformWindow {
+   RAW_PTR_EXCLUSION struct Window* window_ = nullptr;
+   RAW_PTR_EXCLUSION struct BitMap* cursor_bitmap_ = nullptr;
+   RAW_PTR_EXCLUSION void* cursor_object_ = nullptr;
++  RAW_PTR_EXCLUSION struct BitMap* backing_bitmap_ = nullptr;
++  std::unique_ptr<struct RastPort> backing_rast_port_;
++  gfx::Size backing_size_;
+   scoped_refptr<PlatformCursor> cursor_;
+   gfx::Rect bounds_;
+   std::optional<gfx::Rect> restored_bounds_;

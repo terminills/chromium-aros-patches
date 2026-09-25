@@ -1,0 +1,37 @@
+From 7034fe1fdc8f4505f30cc3f67b3b5ff4ba661368 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:47:11 -0500
+Subject: [PATCH 06/43] cef: contain AROS GetNodeName macro
+
+Undefine exec/nodes.h's function-like GetNodeName macro before CEF declares blink_glue::GetNodeName. This mirrors the existing GetHead containment at the public CEF boundary.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-getnodename-macro-contained
+
+AI_ASSUMPTION: CEF owns this header namespace and does not require the Exec convenience macro
+
+AI_VALIDATION: libcef_static build 17 failed at blink_glue.h:46 with macro expansion to struct Node
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 4847a2da; AROS exec/nodes.h:83
+---
+ libcef/renderer/blink_glue.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/libcef/renderer/blink_glue.h b/libcef/renderer/blink_glue.h
+index 8aae6186..eb04140d 100644
+--- a/libcef/renderer/blink_glue.h
++++ b/libcef/renderer/blink_glue.h
+@@ -13,6 +13,10 @@
+ 
+ #include "include/internal/cef_types.h"
+ 
++#if defined(OS_AROS) && defined(GetNodeName)
++#undef GetNodeName
++#endif
++
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink-forward.h"
+ #include "third_party/blink/public/platform/web_common.h"
+ #include "v8/include/v8.h"

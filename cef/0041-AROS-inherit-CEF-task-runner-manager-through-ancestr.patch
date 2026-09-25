@@ -1,0 +1,74 @@
+From a27ff8f297c5bd75bb3dc1556378fb88183882a1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 19:37:05 -0500
+Subject: [PATCH 41/43] AROS: inherit CEF task runner manager through ancestry
+
+Bind CefTaskRunnerManager to its exact constructing task and resolve it from descendant renderer workers through the ETask parent chain. This closes the final manager-ownership fault before first paint.
+
+
+
+---
+ libcef/common/task_runner_manager.cc | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/libcef/common/task_runner_manager.cc b/libcef/common/task_runner_manager.cc
+index 04df7e39..56c3bb10 100644
+--- a/libcef/common/task_runner_manager.cc
++++ b/libcef/common/task_runner_manager.cc
+@@ -31,12 +31,14 @@ CefTaskRunnerManagerRegistry& GetManagerRegistry() {
+   return *registry;
+ }
+ 
+-struct Task* GetCurrentProcessTask() {
++// Construction registers an exact native process owner. Worker tasks inherit
++// its manager through the ETask parent chain; a launched child process creates
++// a distinct owner before it performs normal lookups.
++struct Task* FindManagerOwner(const CefTaskRunnerManagerRegistry& registry) {
+   struct Task* task = FindTask(nullptr);
+-  struct Task* const current = task;
+ 
+   for (size_t depth = 0; task && depth < 64; ++depth) {
+-    if (task->tc_Node.ln_Type == NT_PROCESS) {
++    if (registry.managers.find(task) != registry.managers.end()) {
+       return task;
+     }
+ 
+@@ -44,7 +46,7 @@ struct Task* GetCurrentProcessTask() {
+     task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
+   }
+ 
+-  return current;
++  return nullptr;
+ }
+ 
+ #else
+@@ -60,7 +62,8 @@ CefTaskRunnerManager* CefTaskRunnerManager::Get() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  const auto it = registry.managers.find(GetCurrentProcessTask());
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
+   return it == registry.managers.end() ? nullptr : it->second;
+ #else
+   return g_manager;
+@@ -72,8 +75,7 @@ CefTaskRunnerManager::CefTaskRunnerManager() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  auto [it, inserted] =
+-      registry.managers.emplace(GetCurrentProcessTask(), this);
++  auto [it, inserted] = registry.managers.emplace(FindTask(nullptr), this);
+   DCHECK(inserted);
+   if (!inserted) {
+     it->second = this;
+@@ -88,7 +90,8 @@ CefTaskRunnerManager::~CefTaskRunnerManager() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetManagerRegistry();
+   base::AutoLock lock(registry.lock);
+-  const auto it = registry.managers.find(GetCurrentProcessTask());
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
+   if (it != registry.managers.end() && it->second == this) {
+     registry.managers.erase(it);
+   }

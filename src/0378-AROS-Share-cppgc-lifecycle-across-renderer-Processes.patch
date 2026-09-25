@@ -1,0 +1,34 @@
+From 956044fb745d1501da0afb7a6504c0358f98cf80 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:30:58 -0500
+Subject: [PATCH 378/638] [AROS] Share cppgc lifecycle across renderer
+ Processes
+
+Advance the pinned V8 checkout to bda916d so real Chromium renderer Processes sharing v8.library serialize cppgc initialization, accept the same resident page allocator, and cannot clear it while peers remain alive.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: cppgc-shared-process-lifecycle-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-10 valid static page stayed blank because the second renderer hit cppgc InitializeProcess CHECK(!g_page_allocator)
+
+AI_VALIDATION: V8 exact-file diff check passes; monolith rebuild and hosted static-page replay pending
+
+AI_LIMITATIONS: other V8 globals may still encode split-address-space assumptions and will be handled only when observed
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-10-static-control.log; runtime-10-static-control.png; runtime-10-static-control-verdict.md
+
+AI_DECISION_CHAIN:; Chromium 8e2c325311; V8 bda916d
+
+Job:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index d1f9493f69..bda916da1a 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit d1f9493f698fbda3b65f5701dcd40e49b4871d81
++Subproject commit bda916da1a0bc98ba7c812e6e0398caebc585285

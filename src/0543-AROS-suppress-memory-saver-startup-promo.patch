@@ -1,0 +1,37 @@
+From 193b80dc24193d48b268b136d6a5b23f53d49311 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 09:09:06 -0500
+Subject: [PATCH 543/638] AROS: suppress memory saver startup promo
+
+---
+ .../memory_saver_opt_in_iph_controller.cc                    | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.cc b/chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.cc
+index 11d2c14958..74a9ccc106 100644
+--- a/chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.cc
++++ b/chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.h"
+ 
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
+ #include "chrome/browser/ui/browser.h"
+@@ -35,6 +36,9 @@ void MemorySaverOptInIPHController::OnJankThresholdReached() {
+ }
+ 
+ void MemorySaverOptInIPHController::MaybeTriggerPromo() {
++#if BUILDFLAG(IS_AROS)
++  return;
++#else
+   BrowserWindow* const browser_window = browser_->window();
+   auto* const manager = performance_manager::user_tuning::
+       UserPerformanceTuningManager::GetInstance();
+@@ -43,4 +47,5 @@ void MemorySaverOptInIPHController::MaybeTriggerPromo() {
+     browser_window->MaybeShowStartupFeaturePromo(
+         feature_engagement::kIPHMemorySaverModeFeature);
+   }
++#endif
+ }

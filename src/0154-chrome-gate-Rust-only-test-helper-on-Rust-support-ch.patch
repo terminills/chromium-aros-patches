@@ -1,0 +1,47 @@
+From 6d8c7ed14e37799b74906f398ab436d990c0c0c5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:04:06 -0500
+Subject: [PATCH 154/638] chrome: gate Rust-only test helper on Rust support
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+ROOT_CAUSE: The full Chrome graph eagerly loads a cloud-authenticator test service implemented in Rust even when the AROS target disables Rust.
+FIX_REASON: Keep runtime WebAuthn and Chrome extensions enabled while omitting only the unit-test data helper when enable_rust is false.
+VALIDATION: gn gen out/aros-chrome --root-target=//chrome:chrome completed with full extensions enabled; 18079 targets from 3015 files.
+RISK: The enclave-manager test helper remains unavailable until AROS gains a Rust target runtime.
+---
+ chrome/test/BUILD.gn | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 3b670b8f27..eb950a4cba 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -9,6 +9,7 @@ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//build/config/features.gni")
+ import("//build/config/ozone.gni")
++import("//build/config/rust.gni")
+ import("//build/config/ui.gni")
+ import("//build/toolchain/toolchain.gni")
+ import("//chrome/browser/buildflags.gni")
+@@ -8352,11 +8353,13 @@ test("unit_tests") {
+ 
+     data += [ "//ash/components/arc/test/data/icons/" ]
+ 
+-    data_deps += [
+-      # enclave_manager_unittest.cc runs this binary as part of its testing
+-      # process.
+-      "//third_party/cloud_authenticator/test/local_service:cloud_authenticator_test_service",
+-    ]
++    if (enable_rust) {
++      data_deps += [
++        # enclave_manager_unittest.cc runs this binary as part of its testing
++        # process.
++        "//third_party/cloud_authenticator/test/local_service:cloud_authenticator_test_service",
++      ]
++    }
+ 
+     if (include_js2gtest_tests && is_chromeos_ash) {
+       data += js2gtest_js_libraries

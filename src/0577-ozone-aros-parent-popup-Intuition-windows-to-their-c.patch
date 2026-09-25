@@ -1,0 +1,52 @@
+From 24dc874cb99ca1bc9b5e693cc66d47907131e16c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 15:31:44 -0500
+Subject: [PATCH 577/638] ozone/aros: parent popup Intuition windows to their
+ context owner
+
+DesktopNativeWidgetTopLevelHandler hosts menus and other non-activatable
+popups in their own top-level widget and only passes the owner as the
+init context.  Opt into set_parent_for_non_top_level_windows so views
+turns that context into parent_widget; without it ArosWindow saw
+parent=0 for every menu and could not hand Intuition activation back to
+the browser window, so the owner's INACTIVEWINDOW cancelled the menu
+before the click was handled.
+---
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index e0f278e6be..9e85e84d52 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -12,6 +12,7 @@
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/logging.h"
++#include "base/no_destructor.h"
+ #include "base/task/current_thread.h"
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+@@ -139,6 +140,22 @@ class OzonePlatformAros : public OzonePlatform,
+            !command_line.HasSwitch(kDisableGpuCompositing);
+   }
+ 
++  const PlatformProperties& GetPlatformProperties() override {
++    static base::NoDestructor<OzonePlatform::PlatformProperties> properties;
++    static bool initialised = false;
++    if (!initialised) {
++      // Menus, tooltips and other non-activatable popups are hosted in their
++      // own Intuition windows by DesktopNativeWidgetTopLevelHandler, which
++      // only hands us the owning window as |context|.  Asking views to turn
++      // that context into |parent_widget| is what lets ArosWindow route
++      // Intuition activation back to the owner instead of letting the popup's
++      // activation cancel the very menu the click was meant for.
++      properties->set_parent_for_non_top_level_windows = true;
++      initialised = true;
++    }
++    return *properties;
++  }
++
+   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
+       override {
+     return nullptr;

@@ -1,0 +1,210 @@
+From 0ff6668097f3e8f63d04af95e4aa899f409b234a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 12:22:33 -0500
+Subject: [PATCH 572/638] partition_alloc: return trimmed exec slack by
+ re-allocating the kept block
+
+The previous change freed the head and tail slack as sub-ranges of the
+exec allocation. That is legal for the classic Deallocate() but the
+hosted MemHeader is TLSF, whose FreeMem() only takes whole blocks: the
+first trim at startup faulted in tlsf_freevec (twitch-2, trap 1).
+
+Use exec's own aligned-allocation idiom (LibAllocAligned): free the
+whole block and AllocAbs() the wanted part back under Forbid(). Slack
+under a page stays with the block; the record keeps whatever AllocAbs
+actually handed back for the final free. Protection is restored on the
+exposed range before the free and re-applied to the trimmed block.
+---
+ .../page_allocator_internals_aros.h           | 152 +++++++++++-------
+ 1 file changed, 97 insertions(+), 55 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 46cf63a2e4..26f5ac6393 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -186,15 +186,97 @@ PageAllocationRelease PreparePageAllocationRelease(uintptr_t address,
+   return release;
+ }
+ 
++void LogTrimmedExecSlack(uintptr_t result,
++                         size_t trim_length,
++                         size_t released,
++                         void* allocation_base,
++                         size_t allocation_length) {
++  char line[224];
++  std::snprintf(
++      line, sizeof(line),
++      "[Chromium:PA] trim-exec address=%p len=%llu released=%llu "
++      "allocation=%p+%llu\n",
++      reinterpret_cast<void*>(result),
++      static_cast<unsigned long long>(trim_length),
++      static_cast<unsigned long long>(released), allocation_base,
++      static_cast<unsigned long long>(allocation_length));
++  ArosKPutStr(line);
++}
++
++// Exec memory is physically backed, and an aligned pool reservation
++// over-allocates by its alignment (the 2 GiB regular pool costs 4 GiB before
++// trimming), so a trimmed reservation must give its slack back or the machine
++// runs out of memory before the first isolate. Exec's FreeMem() releases only
++// whole blocks (the hosted MemHeader is TLSF, and its block headers live in
++// the slack), so the slack is returned the way exec's own LibAllocAligned()
++// does it: free the whole block and AllocAbs() the wanted part back. Slack
++// smaller than a page stays with the block so TLSF never has to carve a free
++// block too small to carry its header.
++void ReleaseTrimmedExecSlack(PageAllocationRecord* record,
++                             uintptr_t base_address,
++                             size_t base_length,
++                             uintptr_t result,
++                             size_t trim_length,
++                             PageAccessibilityConfiguration accessibility) {
++  const size_t granularity = PageAllocationGranularity();
++  const uintptr_t alloc_base =
++      reinterpret_cast<uintptr_t>(record->allocation_base);
++  const uintptr_t alloc_end = alloc_base + record->allocation_length;
++  const uintptr_t trim_end = result + trim_length;
++  uintptr_t keep_base = (result - alloc_base >= granularity) ? result
++                                                             : alloc_base;
++  uintptr_t keep_end = (alloc_end - trim_end >= granularity) ? trim_end
++                                                             : alloc_end;
++  if (keep_base == alloc_base && keep_end == alloc_end) {
++    return;
++  }
++
++  APTR KernelBase = OpenKernelResource();
++  PA_CHECK(KernelBase);
++  constexpr KRN_MapAttr kDefault = static_cast<KRN_MapAttr>(
++      MAP_Readable | MAP_Writable | MAP_Executable);
++  // The reservation was mapped with the caller's (usually inaccessible)
++  // protection over its whole length; the allocator writes block headers
++  // into what it gets back, and the pool is executable by default (see
++  // FreePagesInternal).
++  SetProtection(KernelBase, base_address, base_length, kDefault);
++
++  // AllocAbs() may hand back a block starting before the requested address;
++  // the final free must cover what was actually allocated.
++  Forbid();
++  FreeMem(record->allocation_base, record->allocation_length);
++  void* got =
++      AllocAbs(keep_end - keep_base, reinterpret_cast<void*>(keep_base));
++  if (!got) {
++    // Some other task took the slack first (a window only on SMP, where
++    // Forbid() does not stop the other CPUs): take the whole block back.
++    keep_base = alloc_base;
++    keep_end = alloc_end;
++    got = AllocAbs(keep_end - keep_base, reinterpret_cast<void*>(keep_base));
++  }
++  Permit();
++  PA_CHECK(got);
++  const uintptr_t got_base = reinterpret_cast<uintptr_t>(got);
++  PA_CHECK(got_base <= keep_base);
++
++  record->allocation_base = got;
++  record->allocation_length = keep_end - got_base;
++  record->protected_base = result;
++  record->protected_length = trim_length;
++
++  SetProtection(KernelBase, result, trim_length,
++                GetAccessFlags(accessibility));
++  LogTrimmedExecSlack(result, trim_length,
++                      (alloc_end - alloc_base) - record->allocation_length,
++                      got, record->allocation_length);
++}
++
+ bool RetainTrimmedPageAllocation(uintptr_t base_address,
+                                  size_t base_length,
+                                  uintptr_t result,
+-                                 size_t trim_length) {
+-  bool found = false;
+-  void* free_head = nullptr;
+-  size_t free_head_length = 0;
+-  void* free_tail = nullptr;
+-  size_t free_tail_length = 0;
++                                 size_t trim_length,
++                                 PageAccessibilityConfiguration accessibility) {
++  PageAllocationRecord* found = nullptr;
+ 
+   LockPageAllocations();
+   for (PageAllocationRecord* record = s_pageAllocations; record;
+@@ -203,59 +285,19 @@ bool RetainTrimmedPageAllocation(uintptr_t base_address,
+         record->exposed_length == base_length) {
+       record->exposed_base = result;
+       record->exposed_length = trim_length;
+-      if (record->exec_owned) {
+-        // Exec memory is physically backed, and an aligned pool reservation
+-        // over-allocates by its alignment (the 2 GiB regular pool costs
+-        // 4 GiB before trimming). Exec's FreeMem() is Deallocate(): any
+-        // sub-range of an allocation may go back, so hand the slack on both
+-        // sides of the aligned block back to the system and keep only the
+-        // trimmed block for the final free.
+-        const uintptr_t alloc_base =
+-            reinterpret_cast<uintptr_t>(record->allocation_base);
+-        const uintptr_t alloc_end = alloc_base + record->allocation_length;
+-        const uintptr_t trim_end = result + trim_length;
+-        if (result > alloc_base) {
+-          free_head = record->allocation_base;
+-          free_head_length = result - alloc_base;
+-        }
+-        if (alloc_end > trim_end) {
+-          free_tail = reinterpret_cast<void*>(trim_end);
+-          free_tail_length = alloc_end - trim_end;
+-        }
+-        record->allocation_base = reinterpret_cast<void*>(result);
+-        record->allocation_length = trim_length;
+-        record->protected_base = result;
+-        record->protected_length = trim_length;
+-      }
+-      found = true;
++      found = record;
+       break;
+     }
+   }
+   UnlockPageAllocations();
+ 
+-  // The reservation was mapped with the caller's (usually inaccessible)
+-  // protection over its whole length; the pool the slack goes back to is
+-  // executable by default (see FreePagesInternal).
+-  if (free_head || free_tail) {
+-    APTR KernelBase = OpenKernelResource();
+-    PA_CHECK(KernelBase);
+-    constexpr KRN_MapAttr kDefault = static_cast<KRN_MapAttr>(
+-        MAP_Readable | MAP_Writable | MAP_Executable);
+-    // Only [base_address, base_address + base_length) was ever protected;
+-    // the Exec allocation's own head/tail padding sits outside it, in pages
+-    // this record does not own.
+-    if (free_head) {
+-      SetProtection(KernelBase, base_address, result - base_address, kDefault);
+-      FreeMem(free_head, free_head_length);
+-    }
+-    if (free_tail) {
+-      SetProtection(KernelBase, result + trim_length,
+-                    base_address + base_length - (result + trim_length),
+-                    kDefault);
+-      FreeMem(free_tail, free_tail_length);
+-    }
++  // The record belongs to the caller's reservation alone, so its backing can
++  // be reshaped outside the list lock.
++  if (found && found->exec_owned) {
++    ReleaseTrimmedExecSlack(found, base_address, base_length, result,
++                            trim_length, accessibility);
+   }
+-  return found;
++  return found != nullptr;
+ }
+ 
+ void* AllocateExecPages(size_t length,
+@@ -523,12 +565,12 @@ void FreePagesInternal(uintptr_t address, size_t length) {
+ uintptr_t TrimMappingInternal(uintptr_t base_address,
+                               size_t base_length,
+                               size_t trim_length,
+-                              PageAccessibilityConfiguration,
++                              PageAccessibilityConfiguration accessibility,
+                               size_t pre_slack,
+                               size_t) {
+   const uintptr_t result = base_address + pre_slack;
+   PA_CHECK(RetainTrimmedPageAllocation(base_address, base_length, result,
+-                                       trim_length));
++                                       trim_length, accessibility));
+   return result;
+ }
+ 

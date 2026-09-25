@@ -1,0 +1,79 @@
+From 2409ee2adca913f1c8a78350e0d283c066677c3b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:45:16 -0500
+Subject: [PATCH 10/28] base: define AROS platform service fallbacks
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: V8 selected its shared POSIX base on AROS but no OS-specific translation unit defined timezone, profiler, scheduler, shared-library, or free-address-range services.
+
+FIX_REASON: Add an explicit AROS platform file that uses the portable POSIX timezone cache and fails closed for inventories and notifications the current OS cannot provide truthfully.
+
+SCOPE: BUILD.gn; src/base/platform/platform-aros.cc
+
+VALIDATION: filtered GN regeneration; ninja obj/v8/v8_libbase/platform-aros.o obj/v8/libv8_libbase.a; x86_64-aros-nm confirms all five residual symbols are defined.
+
+RISK: low; timezone conversion is functional, while profiler module discovery and address-gap optimization remain unavailable until native services exist.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ BUILD.gn                           |  4 +++-
+ src/base/platform/platform-aros.cc | 32 ++++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+ create mode 100644 src/base/platform/platform-aros.cc
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 6030e18..67af209 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -6451,7 +6451,9 @@ v8_component("v8_libbase") {
+     }
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_aros) {
++    sources += [ "src/base/platform/platform-aros.cc" ]
++  } else if (is_linux || is_chromeos) {
+     sources += [
+       "src/base/debug/stack_trace_posix.cc",
+       "src/base/platform/platform-linux.cc",
+diff --git a/src/base/platform/platform-aros.cc b/src/base/platform/platform-aros.cc
+new file mode 100644
+index 0000000..0f437cd
+--- /dev/null
++++ b/src/base/platform/platform-aros.cc
+@@ -0,0 +1,32 @@
++// Copyright 2026 the V8 project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Platform services that are not part of V8's shared POSIX implementation.
++
++#include "src/base/platform/platform-posix-time.h"
++#include "src/base/platform/platform.h"
++
++namespace v8 {
++namespace base {
++
++TimezoneCache* OS::CreateTimezoneCache() {
++  return new PosixDefaultTimezoneCache();
++}
++
++std::vector<OS::SharedLibraryAddress> OS::GetSharedLibraryAddresses() {
++  return {};
++}
++
++void OS::SignalCodeMovingGC() {}
++
++void OS::AdjustSchedulingParams() {}
++
++std::vector<OS::MemoryRange> OS::GetFreeMemoryRangesWithin(
++    OS::Address boundary_start, OS::Address boundary_end, size_t minimum_size,
++    size_t alignment) {
++  return {};
++}
++
++}  // namespace base
++}  // namespace v8

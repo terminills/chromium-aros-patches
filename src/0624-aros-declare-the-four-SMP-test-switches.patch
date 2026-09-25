@@ -1,0 +1,115 @@
+From e7311c0faa054c646f50c5616c6d0a0fe1e114bb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:08:30 -0500
+Subject: [PATCH 624/638] aros: declare the four SMP test switches
+
+--aros-cpu-limit=N, --aros-pin-workers, --aros-native-threadpool and
+--aros-multi-process. Declarations only; each consumer lands in its own
+commit so a bisect can tell them apart. All four are off by default so
+one binary is every configuration and this build is never worse than
+the last.
+
+The pin-workers comment records why it stays off: with threads really on
+CPUs 1-3 (first possible 2026-09-20, after 12856aa052 made the affinity
+attribute reach exec) the guest wedges in KrnSpinLock's priority-
+inheritance branch - Wait() holds the task's own tc_SpinLock while
+contending the TaskWait list lock, and SetTaskPri(self) re-takes it.
+Handed to codex as.
+
+
+---
+ base/base_switches.cc | 64 +++++++++++++++++++++++++++++++++++++++++++
+ base/base_switches.h  |  7 +++++
+ 2 files changed, 71 insertions(+)
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index caf961ccf2..ee1e78763d 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -185,4 +185,68 @@ const char kPackageVersionCode[] = "package-version-code";
+ const char kSchedulerBoostUrgent[] = "scheduler-boost-urgent";
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++// Cap the CPU count SysInfo::NumberOfProcessors() reports, and with it every
++// thread pool and worker count derived from it. "--aros-cpu-limit=2" makes the
++// browser behave as though the machine had two cores.
++//
++// This is a test instrument, not a tuning knob: it lets one binary be run at 1,
++// 2, 4 ... N cores with no rebuild and no config edit, which is what comparing
++// SMP behaviour across runs needs. It only ever lowers the number - a value at
++// or above the real count, or a value that does not parse, is ignored - so it
++// cannot be used to claim more cores than exist.
++const char kArosCpuLimit[] = "aros-cpu-limit";
++
++// Pin each thread Chromium creates to a specific CPU, round-robin.
++//
++// AROS does not balance tasks: a new task inherits an affinity mask holding
++// only the CPU that created it and is never migrated, so without this every
++// thread Chromium creates runs on whichever core created it - the browser
++// sizes its pools correctly from KrnGetCPUCount() and then executes them all
++// on one core. Placement is the whole difference (see
++// aros-adt-src/CHROMIUM-SMP-ROADMAP.md).
++//
++// OFF BY DEFAULT, deliberately. The first run whose threads really landed on
++// CPUs 1-3 (2026-09-20, after the libpthread link fix in base/BUILD.gn made
++// the affinity attribute reach exec at all) wedged the guest within a minute:
++// exec's Wait() holds the task's own tc_SpinLock while it contends the
++// TaskWait list lock, and KrnSpinLock's priority-inheritance branch answers
++// contention with SetTaskPri(self), which takes that same non-recursive lock
++// (arch/all-pc/kernel/spinlock.c:68, rom/exec/settaskpri.c:79). Until that is
++// fixed in the kernel, switching this on trades a working single-core browser
++// for a hung multi-core one. Keeping it a flag means this build is never
++// worse than the last one, and multicore can be exercised the moment the
++// kernel side lands - without another rebuild.
++const char kArosPinWorkers[] = "aros-pin-workers";
++
++// Let the thread pool choose WHICH worker to wake by the load on that worker's
++// core, instead of taking whichever idle worker is at the front of the set.
++//
++// Rationale: a single-bit affinity mask binds a thread to one core for life,
++// work queues behind whatever else is on that core, and rom/exec/signal.c:
++// 190-199 picks the first set bit rather than the least-loaded core - so with
++// static round-robin pinning the frame-time tail is exposed to head-of-line
++// blocking. Placing at dispatch instead of binding at creation is what this
++// switch tests. UNMEASURED so far: every run before 2026-09-20 had all threads
++// on CPU 0 (see kArosPinWorkers), so the earlier pin-vs-pool numbers compared
++// nothing. Measure again once pinned runs survive.
++//
++// OFF BY DEFAULT, like kArosPinWorkers, so one binary is both configurations.
++const char kArosNativeThreadPool[] = "aros-native-threadpool";
++
++// Opt out of the single-process default that ApplyArosProcessModelDefaults()
++// applies in content/app/content_main.cc, so renderers run as real child
++// processes.
++//
++// This is the largest available multicore lever and the one that was being
++// missed: single-process means every tab shares ONE renderer main thread, and
++// frame-time measurements show the main thread - not the thread pool - is the
++// bottleneck. Per-tab parallelism is zero until this is on. Pairs with
++// per-process placement in base/process/launch_aros.cc, since a child process
++// inherits its launcher's core exactly as a thread does.
++//
++// OFF BY DEFAULT: multi-process on AROS is untested.
++const char kArosMultiProcess[] = "aros-multi-process";
++#endif
++
+ }  // namespace switches
+diff --git a/base/base_switches.h b/base/base_switches.h
+index 8e617b5960..07ef2062a8 100644
+--- a/base/base_switches.h
++++ b/base/base_switches.h
+@@ -65,6 +65,13 @@ extern const char kPackageVersionCode[];
+ extern const char kSchedulerBoostUrgent[];
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++extern const char kArosCpuLimit[];
++extern const char kArosPinWorkers[];
++extern const char kArosNativeThreadPool[];
++extern const char kArosMultiProcess[];
++#endif
++
+ }  // namespace switches
+ 
+ #endif  // BASE_BASE_SWITCHES_H_

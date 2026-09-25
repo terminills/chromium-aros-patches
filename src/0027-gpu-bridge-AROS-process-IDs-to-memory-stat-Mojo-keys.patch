@@ -1,0 +1,49 @@
+From 2a384c32eb60a6361e898f802c795dffa6c0c66b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:47:22 -0500
+Subject: [PATCH 027/638] gpu: bridge AROS process IDs to memory-stat Mojo keys
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: GPU memory statistics serialize AROS process-map keys through the existing int32 Mojo contract.
+
+ROOT_CAUSE: AROS pid_t is pointer-width, so std::map<base::ProcessId,...> cannot bind directly to a Mojo map<int32,...>, even though the actual Exec process identity is ETask::et_UniqueID (ULONG).
+
+FIX_REASON: Explicitly convert AROS process-map containers in both serialization directions, matching Chromium's established Windows/Fuchsia trait path while documenting the 32-bit Exec identity invariant.
+
+SCOPE: gpu/ipc/common/memory_stats_mojom_traits.h
+
+VALIDATION: ninja compiled generated memory_stats.mojom.o in out/aros-headless.
+
+RISK: This relies on AROS getpid continuing to expose the 32-bit ETask unique ID; a future wider Exec process namespace must version the Mojo field.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/ipc/common/memory_stats_mojom_traits.h | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/gpu/ipc/common/memory_stats_mojom_traits.h b/gpu/ipc/common/memory_stats_mojom_traits.h
+index 01735b1599..309e029206 100644
+--- a/gpu/ipc/common/memory_stats_mojom_traits.h
++++ b/gpu/ipc/common/memory_stats_mojom_traits.h
+@@ -38,7 +38,10 @@ struct GPU_EXPORT StructTraits<gpu::mojom::VideoMemoryUsageStatsDataView,
+                                gpu::VideoMemoryUsageStats> {
+   static std::map<int32_t, gpu::VideoMemoryUsageStats::ProcessStats>
+   process_map(const gpu::VideoMemoryUsageStats& stats) {
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    // AROS pid_t follows pointer width, but getpid() exposes the 32-bit
++    // ETask::et_UniqueID. Convert the container key type explicitly while
++    // preserving the existing Mojo wire contract.
+     std::map<int32_t, gpu::VideoMemoryUsageStats::ProcessStats> map;
+     for (const auto& pair : stats.process_map)
+       map[static_cast<int32_t>(pair.first)] = pair.second;
+@@ -54,7 +57,7 @@ struct GPU_EXPORT StructTraits<gpu::mojom::VideoMemoryUsageStatsDataView,
+ 
+   static bool Read(gpu::mojom::VideoMemoryUsageStatsDataView data,
+                    gpu::VideoMemoryUsageStats* out) {
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+     std::map<int32_t, gpu::VideoMemoryUsageStats::ProcessStats> process_map;
+     if (!data.ReadProcessMap(&process_map))
+       return false;

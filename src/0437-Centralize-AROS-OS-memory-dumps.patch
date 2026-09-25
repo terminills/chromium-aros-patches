@@ -1,0 +1,58 @@
+From ec79bb25f2bd7296721dc2ee9263afb2aaa826dd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 10:48:04 -0500
+Subject: [PATCH 437/638] [AROS] Centralize AROS OS memory dumps
+
+AROS logical processes share one Exec address space, so dispatch one browser-side OS metric request for all registered clients. This avoids redundant child callbacks while preserving per-client response entries and truthful system-wide footprint accounting.
+
+
+
+---
+ .../queued_request_dispatcher.cc                 | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+index 998ea3d1bd..44419f28ec 100644
+--- a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
++++ b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+@@ -217,14 +217,18 @@ void QueuedRequestDispatcher::SetUpAndDispatch(
+           base::BindOnce(chrome_callback, client_info.pid));
+     }
+ 
+-// On most platforms each process can dump data about their own process
+-// so ask each process to do so Linux is special see below.
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
++// On most platforms each process can dump data about its own process, so ask
++// each process to do so. Linux and ChromeOS need a privileged central
++// collector. AROS also uses the central path because all logical processes
++// share one Exec address space; asking every client for the same system-wide
++// footprint is redundant and can leave OS dump callbacks queued behind child
++// process work.
++#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+     request->pending_responses.insert({client_info.pid, ResponseType::kOSDump});
+     client->RequestOSMemoryDump(request->memory_map_option(),
+                                 {base::kNullProcessId},
+                                 base::BindOnce(os_callback, client_info.pid));
+-#endif  // !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
++#endif  // !IS_LINUX && !IS_CHROMEOS && !IS_AROS
+ 
+     // If we are in the single pid case, then we've already found the only
+     // process we're looking for.
+@@ -234,7 +238,7 @@ void QueuedRequestDispatcher::SetUpAndDispatch(
+ 
+ // In some cases, OS stats can only be dumped from a privileged process to
+ // get around to sandboxing/selinux restrictions (see crbug.com/461788).
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   std::vector<base::ProcessId> pids;
+   mojom::ClientProcess* browser_client = nullptr;
+   base::ProcessId browser_client_pid = base::kNullProcessId;
+@@ -259,7 +263,7 @@ void QueuedRequestDispatcher::SetUpAndDispatch(
+     browser_client->RequestOSMemoryDump(request->memory_map_option(), pids,
+                                         std::move(callback));
+   }
+-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#endif  // IS_LINUX || IS_CHROMEOS || IS_AROS
+ 
+   // In this case, we have not found the pid we are looking for so increment
+   // the failed dump count and exit.

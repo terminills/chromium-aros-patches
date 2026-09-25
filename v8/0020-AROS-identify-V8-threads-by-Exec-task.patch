@@ -1,0 +1,87 @@
+From 884d405c267fedd87fb72ae42666ef1bb76f4a5a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 00:09:57 -0500
+Subject: [PATCH 20/28] AROS: identify V8 threads by Exec task
+
+Use Exec's live ETask identifier for V8 thread identity and avoid compiler-emulated thread_local storage on AROS. Hosted execution contexts can schedule multiple AROS tasks, so host TLS incorrectly made main and background compilation tasks appear identical.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: runtime-thread-identity-correction
+
+AI_ASSUMPTION: GetETaskID is unique for every live AROS task participating in V8
+
+AI_VALIDATION: shared-v8 Chromium loaded YouTube and committed the renderer navigation before repeated BackgroundCompileTask DCHECK_NE failures proved main and worker ThreadId values collided
+
+AI_LIMITATIONS: correction committed before monolith, library, and runtime revalidation; ETask ID reuse after task teardown follows normal V8 thread-lifetime cleanup
+
+AI_DECISION_CHAIN:
+---
+ src/base/platform/platform-posix.cc |  3 ++-
+ src/execution/thread-id.cc          | 14 ++++++++++++++
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 2a0f3c1..05cade2 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #if V8_OS_AROS
+ #include <exec/memory.h>
++#include <exec/tasks.h>
+ #include <proto/arossupport.h>
+ #include <proto/exec.h>
+ #undef Allocate
+@@ -1049,7 +1050,7 @@ int OS::GetCurrentThreadId() {
+ #elif V8_OS_SOLARIS
+   return static_cast<int>(pthread_self());
+ #elif V8_OS_AROS
+-  return static_cast<int>(pthread_self());
++  return static_cast<int>(GetETaskID(FindTask(nullptr)));
+ #else
+   return static_cast<int>(reinterpret_cast<intptr_t>(pthread_self()));
+ #endif
+diff --git a/src/execution/thread-id.cc b/src/execution/thread-id.cc
+index ec4e95a..8c0009c 100644
+--- a/src/execution/thread-id.cc
++++ b/src/execution/thread-id.cc
+@@ -11,24 +11,38 @@ namespace internal {
+ 
+ namespace {
+ 
++#if !V8_OS_AROS
+ thread_local int thread_id = 0;
+ 
+ std::atomic<int> next_thread_id{1};
++#endif
+ 
+ }  // namespace
+ 
+ // static
+ ThreadId ThreadId::TryGetCurrent() {
++#if V8_OS_AROS
++  return ThreadId(base::OS::GetCurrentThreadId());
++#else
+   return thread_id == 0 ? Invalid() : ThreadId(thread_id);
++#endif
+ }
+ 
+ // static
+ int ThreadId::GetCurrentThreadId() {
++#if V8_OS_AROS
++  // Compiler-emulated TLS follows the hosted execution context, not the AROS
++  // Exec task scheduled through it. Exec assigns every live ETask a unique
++  // identifier, which is the identity V8 needs for isolate and background
++  // compilation ownership checks.
++  return base::OS::GetCurrentThreadId();
++#else
+   if (thread_id == 0) {
+     thread_id = next_thread_id.fetch_add(1);
+     CHECK_LE(1, thread_id);
+   }
+   return thread_id;
++#endif
+ }
+ 
+ }  // namespace internal

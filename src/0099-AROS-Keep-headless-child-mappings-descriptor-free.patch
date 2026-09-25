@@ -1,0 +1,49 @@
+From 7d2a4fe3ef8b319e2febd376d64538973a79d08e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:46:48 -0500
+Subject: [PATCH 099/638] [AROS] Keep headless child mappings descriptor-free
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: The AROS headless browser now implements the POSIX child-mapping hook without claiming a Crashpad descriptor channel.
+ROOT_CAUSE: HeadlessContentBrowserClient declared the hook for every non-Mac POSIX target but defined it only for Linux and ChromeOS, where it inherits a Crashpad signal file descriptor.
+FIX_REASON: Compile the hook across its declared POSIX range while keeping Crashpad descriptor sharing inside the Linux/ChromeOS branch; AROS uses debug.resource with optional OPAL context instead.
+SCOPE: Headless content browser child-file mapping hook.
+VALIDATION: headless_content_browser_client.o builds; x86_64-aros-nm confirms GetAdditionalMappedFilesForChildProcess is defined.
+RISK: AROS child tasks do not inherit a Crashpad signal channel; native alert forwarding remains the supported crash-reporting contract.
+AI_DECISION_CHAIN: ACD-chromium-aros-native-crash-reporting
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../lib/browser/headless_content_browser_client.cc   | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/headless/lib/browser/headless_content_browser_client.cc b/headless/lib/browser/headless_content_browser_client.cc
+index fa3257b021..34f74d8ae1 100644
+--- a/headless/lib/browser/headless_content_browser_client.cc
++++ b/headless/lib/browser/headless_content_browser_client.cc
+@@ -164,16 +164,24 @@ HeadlessContentBrowserClient::GetGeneratedCodeCacheSettings(
+   return content::GeneratedCodeCacheSettings(true, 0, context->GetPath());
+ }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ void HeadlessContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
+     const base::CommandLine& command_line,
+     int child_process_id,
+     content::PosixFileDescriptorInfo* mappings) {
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   int crash_signal_fd = GetCrashSignalFD(command_line, *browser_->options());
+   if (crash_signal_fd >= 0)
+     mappings->Share(kCrashDumpSignal, crash_signal_fd);
++#else
++  // Native AROS alerts use debug.resource and optional OPAL context rather
++  // than an inherited Crashpad signal descriptor.
++  static_cast<void>(command_line);
++  static_cast<void>(child_process_id);
++  static_cast<void>(mappings);
++#endif
+ }
+-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ 
+ void HeadlessContentBrowserClient::AppendExtraCommandLineSwitches(
+     base::CommandLine* command_line,

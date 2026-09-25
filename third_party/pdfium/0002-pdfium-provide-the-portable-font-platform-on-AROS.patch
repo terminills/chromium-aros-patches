@@ -1,0 +1,37 @@
+From e3f21aed9b8cf36986462d33063cb8f1dbcf18e7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:54:57 -0500
+Subject: [PATCH 2/3] pdfium: provide the portable font platform on AROS
+
+Reuse PDFium's FreeType/folder-font PlatformIface on AROS so the embedded PDF engine has a concrete graphics-environment module without importing an OS window system.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained exactly one unresolved CFX_GEModule::PlatformIface::Create symbol
+
+AI_ASSUMPTION: missing Unix font directories safely fall back to PDFium's bundled fonts; AROS FONTS: discovery is a later provider improvement
+
+AI_LIMITATIONS: compile, PDF rendering, and native CEF link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ core/fxge/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/core/fxge/BUILD.gn b/core/fxge/BUILD.gn
+index 215a63b..250cf8e 100644
+--- a/core/fxge/BUILD.gn
++++ b/core/fxge/BUILD.gn
+@@ -160,7 +160,7 @@ source_set("fxge") {
+     ]
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_linux || is_chromeos || is_aros) {
+     sources += [ "linux/fx_linux_impl.cpp" ]
+   }
+ 

@@ -1,0 +1,49 @@
+From d2c060ac02296f6159ab455b27f12decf7933e5a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 02:10:55 -0500
+Subject: [PATCH 22/43] cef: treat the AROS RAM download path as safe
+
+AROS provides RAM: as the default download directory and has no Linux desktop/home danger relationship. Avoid querying DIR_USER_DESKTOP, which canonicalizes a POSIX dot path and fatals during CEF initialization.
+
+AI_PHASE: CEF_NATIVE_LIFECYCLE
+
+AI_STATUS: aros-download-safety-fix-under-validation
+
+AI_VALIDATION: cef_execute_process passed; cef_initialize symbolic stack ends at DownloadPathIsDangerous after stat('.') EINVAL and resource_util.cc DCHECK
+
+AI_ASSUMPTION: RAM: is the deliberate volatile safe download target on AROS
+
+AI_LIMITATIONS: CEF archive rebuild, resident relink, and initialization retry remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-lifecycle-runtime-cmodel-fix-20260725/02-runtime.log
+
+AI_DECISION_CHAIN:
+---
+ libcef/common/resource_util.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/libcef/common/resource_util.cc b/libcef/common/resource_util.cc
+index e1b8ac90..6062804f 100644
+--- a/libcef/common/resource_util.cc
++++ b/libcef/common/resource_util.cc
+@@ -126,6 +126,12 @@ base::FilePath GetUserDataPath(CefSettings* settings,
+ // to the desktop on any platform.
+ // From chrome/browser/download/download_prefs.cc.
+ bool DownloadPathIsDangerous(const base::FilePath& download_path) {
++#if BUILDFLAG(IS_AROS)
++  // The AROS provider deliberately uses RAM: for downloads. It has no POSIX
++  // home/desktop relationship to classify, and querying DIR_USER_DESKTOP
++  // attempts to canonicalize "." through stat(), which is not an AROS path.
++  return false;
++#else
+ #if BUILDFLAG(IS_LINUX)
+   base::FilePath home_dir = base::GetHomeDir();
+   if (download_path == home_dir) {
+@@ -139,6 +145,7 @@ bool DownloadPathIsDangerous(const base::FilePath& download_path) {
+     return false;
+   }
+   return (download_path == desktop_dir);
++#endif
+ }
+ 
+ bool GetDefaultDownloadDirectory(base::FilePath* result) {

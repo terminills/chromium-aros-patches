@@ -1,0 +1,38 @@
+From 897c5b8ffb96e4d7aa728b3c2af51da1e4663277 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 07:04:57 -0500
+Subject: [PATCH 459/638] AROS: trace native volume file opens
+
+Log colon-bearing paths immediately before and after Chromium's serialized open boundary. A requester that blocks open now leaves the exact attempted volume path in the durable runtime log.
+
+
+
+---
+ base/files/file_posix.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index c96abfd2c2..815e8ee967 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -105,9 +105,19 @@ struct ArosOpenResult {
+ 
+ ArosOpenResult CallOpen(const char* path, int flags, mode_t mode) {
+   AutoLock lock(ArosFilePositionLock());
++  const bool has_volume_name = path && std::strchr(path, ':');
++  if (has_volume_name) {
++    LOG(ERROR) << "[Chromium:AROS:FileOpen] begin path='" << path
++               << "' flags=" << flags << " mode=" << mode;
++  }
+   errno = 0;
+   const int descriptor = HANDLE_EINTR(open(path, flags, mode));
+-  return {descriptor, descriptor < 0 ? errno : 0};
++  const int error = descriptor < 0 ? errno : 0;
++  if (has_volume_name) {
++    LOG(ERROR) << "[Chromium:AROS:FileOpen] end path='" << path
++               << "' descriptor=" << descriptor << " errno=" << error;
++  }
++  return {descriptor, error};
+ }
+ 
+ ssize_t CallPread(PlatformFile file,

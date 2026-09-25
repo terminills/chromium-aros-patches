@@ -1,0 +1,29 @@
+From d948ea8e81dde200975bf963764ded93b098cc74 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 09:35:32 -0500
+Subject: [PATCH 255/638] files: skip redundant extent realization on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-persistent-histogram-startup\nAI_STATUS: hosted-runtime-validated, native-runtime-pending\n\nROOT_CAUSE: Chromium's generic AllocateFileRegion() sparse-file fallback ran after successful File::SetLength(). AROS ftruncate() already realizes an extension by zero-writing and flushing it, so BrowserMetrics' 4 MiB creation repeated that work through roughly 8,192 serialized DOS read/write operations and stalled at the mapped-file extend marker.\n\nFIX_REASON: Return after successful SetLength() on AROS, retaining the generic realization fallback for platforms whose truncate may leave sparse pages.\n\nSCOPE: base/files/file_util_posix.cc AROS branch only. Normal hosted and native Chromium deployments were not replaced.\n\nHOSTED_NATIVE: Private hosted replay validated. Native SMP runtime validation remains required and is not implied by the hosted result.\n\nVALIDATION: Full ninja -C out/aros-chrome chrome rebuilt and linked 42,156 actions successfully; private hosted 4 MiB BrowserMetrics replay logged extend complete=1, backing allocation/read/map completion, and PersistentHistograms mapped-file init complete. GPU-disabled visual smoke rendered the candidate Chromium modal page and JavaScript confirm dialog.\n\nEVIDENCE: /home/terminills/Documents/GitHub/aros-opal-hosted-clean-egl-probe/AROS/Developer/Chromium/evidence/private-histogram-visual-candidate-modal-20260718.png; Relay notes.\n\nRISK: Low. The AROS branch relies on the existing ftruncate contract of realized zero-filled extension; failure remains handled by SetLength().\n\nAI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ base/files/file_util_posix.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 882914d720..d73975c257 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -1097,6 +1097,13 @@ bool AllocateFileRegion(File* file, int64_t offset, size_t size) {
+     return false;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  // AROS ftruncate() realizes an extension by zero-writing and flushing it,
++  // so the generic sparse-file fallback below would only repeat that work
++  // through thousands of serialized DOS reads and writes.
++  return true;
++#endif
++
+   // Realize the extent of the file so that it can't fail (and crash) later
+   // when trying to write to a memory page that can't be created. This can
+   // fail if the disk is full and the file is sparse.

@@ -1,0 +1,74 @@
+From 75dff0fdeb0f4d5f0b3dbf16a4c419178c3ca75f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 21:54:57 -0500
+Subject: [PATCH 521/638] AROS: enable External ClearKey CDM testing
+
+---
+ media/cdm/library_cdm/cdm_paths.gni                 |  2 ++
+ media/cdm/library_cdm/clear_key_cdm/BUILD.gn        |  5 +++++
+ .../library_cdm/clear_key_cdm/clear_key_cdm_aros.cc | 13 +++++++++++++
+ media/media_options.gni                             |  2 +-
+ 4 files changed, 21 insertions(+), 1 deletion(-)
+ create mode 100644 media/cdm/library_cdm/clear_key_cdm/clear_key_cdm_aros.cc
+
+diff --git a/media/cdm/library_cdm/cdm_paths.gni b/media/cdm/library_cdm/cdm_paths.gni
+index 1dd10660f8..2f40453231 100644
+--- a/media/cdm/library_cdm/cdm_paths.gni
++++ b/media/cdm/library_cdm/cdm_paths.gni
+@@ -23,6 +23,8 @@ if (is_chromeos) {
+   component_os = "mac"
+ } else if (is_fuchsia) {
+   component_os = "fuchsia"
++} else if (is_aros) {
++  component_os = "aros"
+ } else {
+   assert(false, "unsupported_platform")
+ }
+diff --git a/media/cdm/library_cdm/clear_key_cdm/BUILD.gn b/media/cdm/library_cdm/clear_key_cdm/BUILD.gn
+index d8e186e4c6..5a962a0fd4 100644
+--- a/media/cdm/library_cdm/clear_key_cdm/BUILD.gn
++++ b/media/cdm/library_cdm/clear_key_cdm/BUILD.gn
+@@ -47,6 +47,11 @@ loadable_module("clear_key_cdm_bin") {
+     defines += [ "CLEAR_KEY_CDM_USE_FFMPEG_DECODER" ]
+     deps += [ "//third_party/ffmpeg" ]
+   }
++
++  if (is_aros) {
++    sources += [ "clear_key_cdm_aros.cc" ]
++    ldflags = [ "-nostartfiles" ]
++  }
+ }
+ 
+ group("clear_key_cdm") {
+diff --git a/media/cdm/library_cdm/clear_key_cdm/clear_key_cdm_aros.cc b/media/cdm/library_cdm/clear_key_cdm/clear_key_cdm_aros.cc
+new file mode 100644
+index 0000000000..373058053e
+--- /dev/null
++++ b/media/cdm/library_cdm/clear_key_cdm/clear_key_cdm_aros.cc
+@@ -0,0 +1,13 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <aros/symbolsets.h>
++
++// AROS loadable modules do not have a program entry point. Mark the startup
++// symbol sets as handled so linked autoinit objects do not require main().
++THIS_PROGRAM_HANDLES_SYMBOLSET(CTORS)
++THIS_PROGRAM_HANDLES_SYMBOLSET(DTORS)
++THIS_PROGRAM_HANDLES_SYMBOLSET(EXIT)
++THIS_PROGRAM_HANDLES_SYMBOLSET(INIT)
++THIS_PROGRAM_HANDLES_SYMBOLSET(PROGRAM_ENTRIES)
+diff --git a/media/media_options.gni b/media/media_options.gni
+index 65ad9e35c8..e55171c4d1 100644
+--- a/media/media_options.gni
++++ b/media/media_options.gni
+@@ -229,7 +229,7 @@ declare_args() {
+   # media/cdm/api/content_decryption_module.h. If true, the actually library CDM
+   # will be hosted in the mojo CDM service running in the CDM (utility) process.
+   # Used for all desktop platforms.
+-  enable_library_cdms = toolkit_views && !is_castos && !is_aros
++  enable_library_cdms = toolkit_views && !is_castos
+ }
+ 
+ # Use another declare_args() to allow dependence on `enable_library_cdms`.

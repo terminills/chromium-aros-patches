@@ -1,0 +1,124 @@
+From 6ddde23cfa9431e8cbf45ea6076449e01770d7d3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 02:51:08 -0500
+Subject: [PATCH 559/638] aros: build the browser without libnet.a and on
+ egl.library 2.0
+
+- gn_all builds //chrome only on AROS; the generic target list names
+  test/tool targets undefined for this platform.
+- net: drop libnet.a (its SocketBase-bound select()/strerror() stubs and
+  the autoinit abort when no TCP/IP stack is running); define
+  in6addr_any/in6addr_loopback in base/aros/in6addr.cc instead.
+- ozone/aros: eglGetProcAddress is optional; egl.library 2.0 only exports
+  the EGL 1.4 core, so extension lookups report absent.
+---
+ BUILD.gn                                   |  7 +++++++
+ base/BUILD.gn                              |  1 +
+ base/aros/in6addr.cc                       | 18 ++++++++++++++++++
+ net/BUILD.gn                               |  4 +++-
+ ui/ozone/platform/aros/aros_egl_library.cc |  9 +++++++++
+ 5 files changed, 38 insertions(+), 1 deletion(-)
+ create mode 100644 base/aros/in6addr.cc
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 1d92178ba6..5331c30bd8 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -130,6 +130,13 @@ group("gn_all") {
+     assert(v8_monolithic)
+     deps = [ "//v8:v8_monolith" ]
+     deps += root_extra_deps
++  } else if (is_aros) {
++    # AROS builds the browser only.  The generic list below names test and
++    # tool targets (angle tests, media/cast tools, ...) that are gated on
++    # other platforms and are undefined here, so gn gen would fail with
++    # unresolved dependencies.
++    deps = [ "//chrome" ]
++    deps += root_extra_deps
+   } else if (is_cronet_build) {
+     if (is_android) {
+       deps = [ "//components/cronet/android:cronet_package_android" ]
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 70204df4e9..591a67a396 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1709,6 +1709,7 @@ component("base") {
+       }
+       if (is_aros) {
+         sources += [
++          "aros/in6addr.cc",
+           "aros/socket_library.cc",
+           "aros/socket_library.h",
+           "native_library_aros.cc",
+diff --git a/base/aros/in6addr.cc b/base/aros/in6addr.cc
+new file mode 100644
+index 0000000000..bd4bb0e209
+--- /dev/null
++++ b/base/aros/in6addr.cc
+@@ -0,0 +1,18 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The AROS SDK declares in6addr_any / in6addr_loopback in <netinet/in.h>
++// but only defines them in libnet.a, the bsdsocket.library support archive.
++// Linking that archive also replaces select()/strerror() with SocketBase-bound
++// stubs and pulls in an autoinit that refuses to start the program unless a
++// TCP/IP stack is already running.  Chromium opens bsdsocket.library itself
++// (base/aros/socket_library.cc) and must start without a network, so provide
++// the two constants here instead of linking libnet.
++
++#include <netinet/in.h>
++
++// The SDK header declares these without extern "C"; variable names are not
++// mangled, so the definitions still resolve the C references.
++const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT;
++const struct in6_addr in6addr_loopback = IN6ADDR_LOOPBACK_INIT;
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index 2d1472348e..6fadcaa572 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1352,7 +1352,9 @@ component("net") {
+       "base/platform_mime_util_aros.cc",
+       "cert/test_root_certs_builtin.cc",
+     ]
+-    libs = [ "net" ]
++    # Deliberately no libnet.a: its stubs bind select()/strerror() to a
++    # global SocketBase and its autoinit aborts the program when no TCP/IP
++    # stack is running.  in6addr_any/in6addr_loopback come from base/aros.
+   } else if (is_posix && !is_linux && !is_chromeos) {
+     # Use getifaddrs() on other non-Linux POSIX platforms.
+     sources += [
+diff --git a/ui/ozone/platform/aros/aros_egl_library.cc b/ui/ozone/platform/aros/aros_egl_library.cc
+index c083d21f8e..38a7a4fd08 100644
+--- a/ui/ozone/platform/aros/aros_egl_library.cc
++++ b/ui/ozone/platform/aros/aros_egl_library.cc
+@@ -56,7 +56,9 @@ constexpr EglCoreEntry kEglCoreEntries[] = {
+     AROS_EGL_CORE_ENTRY(eglWaitNative),
+     AROS_EGL_CORE_ENTRY(eglSwapBuffers),
+     AROS_EGL_CORE_ENTRY(eglCopyBuffers),
++#ifdef LVOeglGetProcAddress
+     AROS_EGL_CORE_ENTRY(eglGetProcAddress),
++#endif
+ };
+ 
+ #undef AROS_EGL_CORE_ENTRY
+@@ -96,11 +98,18 @@ gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name) {
+     }
+   }
+ 
++#ifdef LVOeglGetProcAddress
+   using GetProcAddressFunction =
+       __eglMustCastToProperFunctionPointerType (*)(const char*);
+   auto get_proc_address = reinterpret_cast<GetProcAddressFunction>(
+       GetEGLVector(egl_base, LVOeglGetProcAddress));
+   return reinterpret_cast<gl::GLFunctionPointerType>(get_proc_address(name));
++#else
++  // egl.library 2.0 (upstream AROS) exports only the EGL 1.4 core through
++  // its jump table; extension entry points cannot be resolved, so the GL
++  // bindings treat them as absent.
++  return nullptr;
++#endif
+ }
+ 
+ }  // namespace ui

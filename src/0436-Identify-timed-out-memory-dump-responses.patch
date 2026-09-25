@@ -1,0 +1,32 @@
+From ee2dfca60b3e26b1cb6e8bb3705e0416e061b599 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 10:41:04 -0500
+Subject: [PATCH 436/638] [AROS] Identify timed-out memory dump responses
+
+When a genuine global dump timeout occurs, retain the aggregate failure and report each pending pid and whether its missing response was the Chromium allocator dump or OS metrics. This keeps the remaining multiprocess failure observable without adding success-path noise.
+
+
+
+---
+ .../memory_instrumentation/coordinator_impl.cc            | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/services/resource_coordinator/memory_instrumentation/coordinator_impl.cc b/services/resource_coordinator/memory_instrumentation/coordinator_impl.cc
+index f82be6a851..2df5ebb1ed 100644
+--- a/services/resource_coordinator/memory_instrumentation/coordinator_impl.cc
++++ b/services/resource_coordinator/memory_instrumentation/coordinator_impl.cc
+@@ -329,6 +329,14 @@ void CoordinatorImpl::OnQueuedRequestTimedOut(uint64_t dump_guid) {
+   if (request->pending_responses.size() > 0) {
+     DLOG(ERROR) << "Global dump request timed out waiting for "
+                 << request->pending_responses.size() << " requests";
++    for (const auto& pending : request->pending_responses) {
++      DLOG(ERROR) << "Timed out memory dump response pid="
++                  << pending.process_id << " type="
++                  << (pending.type ==
++                              QueuedRequest::PendingResponse::kChromeDump
++                          ? "chrome"
++                          : "os");
++    }
+   }
+   request->failed_memory_dump_count += request->pending_responses.size();
+   request->pending_responses.clear();

@@ -1,0 +1,62 @@
+From 305a60d5876215c2fb98a63d90853082790b7c90 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 31 Jul 2026 19:03:03 -0500
+Subject: [PATCH 452/638] net: preserve native AROS volume file URLs
+
+Strip only the synthetic file-URL slash when the decoded path uses an AROS volume or assignment prefix. Keep ordinary absolute paths unchanged and cover the native round trip.
+
+
+
+---
+ net/base/filename_util.cc          | 14 ++++++++++++++
+ net/base/filename_util_unittest.cc | 12 ++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/net/base/filename_util.cc b/net/base/filename_util.cc
+index f16d5dc2f1..da91227b4a 100644
+--- a/net/base/filename_util.cc
++++ b/net/base/filename_util.cc
+@@ -96,6 +96,20 @@ bool FileURLToFilePath(const GURL& url, base::FilePath* file_path) {
+     return false;
+   }
+   std::string path = url.path();
++#if BUILDFLAG(IS_AROS)
++  // File URLs always carry a leading slash, while native AROS volume and
++  // assignment paths begin directly with their root name (for example
++  // "System:" or "PROGDIR:"). Remove only the synthetic URL slash; ordinary
++  // POSIX-style absolute paths retain theirs.
++  if (path.size() > 1 && path.front() == '/') {
++    const size_t colon = path.find(':', 1);
++    const size_t separator = path.find('/', 1);
++    if (colon != std::string::npos &&
++        (separator == std::string::npos || colon < separator)) {
++      path.erase(0, 1);
++    }
++  }
++#endif
+ #endif  // !BUILDFLAG(IS_WIN)
+ 
+   if (path.empty())
+diff --git a/net/base/filename_util_unittest.cc b/net/base/filename_util_unittest.cc
+index 664b8bea79..f298d62c4b 100644
+--- a/net/base/filename_util_unittest.cc
++++ b/net/base/filename_util_unittest.cc
+@@ -233,6 +233,18 @@ TEST(FilenameUtilTest, FileURLConversion) {
+     EXPECT_EQ(test_case.file, FilePathAsWString(output));
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  {
++    const base::FilePath native_volume_path(
++        FILE_PATH_LITERAL("System:Developer/VSCode/workbench.html"));
++    const GURL file_url = FilePathToFileURL(native_volume_path);
++    EXPECT_EQ("file:///System:Developer/VSCode/workbench.html",
++              file_url.spec());
++    EXPECT_TRUE(FileURLToFilePath(file_url, &output));
++    EXPECT_EQ(native_volume_path, output);
++  }
++#endif
++
+   // Test that various file: URLs get decoded into the correct file type
+   FileCase url_cases[] = {
+     {nullptr, "http://foo/bar.txt"},

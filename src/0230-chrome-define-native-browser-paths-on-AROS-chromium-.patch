@@ -1,0 +1,236 @@
+From 6486e3dc0abd29c4d1ef0bc0845e82f0ea286cbd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 05:37:20 -0500
+Subject: [PATCH 230/638] chrome: define native browser paths on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: Upstream Chrome had no AROS implementation for profile, cache, user-media, policy-variable, or initial-preferences paths, leaving the browser unable to establish filesystem identity.
+
+FIX_REASON: Map durable browser state to ENVARC:Chromium, transient cache to T:Chromium, safe user-file defaults to RAM:, preserve profile access for AROS tasks, and resolve first-run/policy paths without Linux passwd or XDG assumptions.
+
+SCOPE: New AROS Chrome path, first-run, and policy parser implementations plus their three GN registrations.
+
+VALIDATION: All three new source files compiled; //chrome:chrome final linker inventory fell from 47 to 36 unresolved contracts; git diff --cached --check passes.
+
+RISK: medium; assignment choices are native and writable on Live CD, but future multi-user AROS support may require a user-specific persistent profile assignment.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/BUILD.gn                       |  1 +
+ .../first_run/first_run_internal_aros.cc      | 23 ++++++
+ chrome/browser/policy/BUILD.gn                |  2 +
+ .../browser/policy/policy_path_parser_aros.cc | 52 ++++++++++++++
+ chrome/common/BUILD.gn                        |  3 +
+ chrome/common/chrome_paths_aros.cc            | 71 +++++++++++++++++++
+ 6 files changed, 152 insertions(+)
+ create mode 100644 chrome/browser/first_run/first_run_internal_aros.cc
+ create mode 100644 chrome/browser/policy/policy_path_parser_aros.cc
+ create mode 100644 chrome/common/chrome_paths_aros.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index fe4c02fe29..a883ae095b 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6565,6 +6565,7 @@ static_library("browser") {
+ 
+   if (is_aros) {
+     sources += [
++      "first_run/first_run_internal_aros.cc",
+       "media/webrtc/window_icon_util_ozone.cc",
+       "obsolete_system/obsolete_system_stub.cc",
+     ]
+diff --git a/chrome/browser/first_run/first_run_internal_aros.cc b/chrome/browser/first_run/first_run_internal_aros.cc
+new file mode 100644
+index 0000000000..84ee279b0d
+--- /dev/null
++++ b/chrome/browser/first_run/first_run_internal_aros.cc
+@@ -0,0 +1,23 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/first_run/first_run_internal.h"
++
++#include "base/base_paths.h"
++#include "base/files/file_path.h"
++#include "base/path_service.h"
++#include "chrome/installer/util/initial_preferences.h"
++
++namespace first_run::internal {
++
++base::FilePath InitialPrefsPath() {
++  base::FilePath executable_directory;
++  if (!base::PathService::Get(base::DIR_EXE, &executable_directory)) {
++    return base::FilePath();
++  }
++
++  return installer::InitialPreferences::Path(executable_directory);
++}
++
++}  // namespace first_run::internal
+diff --git a/chrome/browser/policy/BUILD.gn b/chrome/browser/policy/BUILD.gn
+index 017c8db515..244c09aa40 100644
+--- a/chrome/browser/policy/BUILD.gn
++++ b/chrome/browser/policy/BUILD.gn
+@@ -19,6 +19,8 @@ source_set("path_parser") {
+     sources += [ "policy_path_parser_mac.mm" ]
+   } else if (is_win) {
+     sources += [ "policy_path_parser_win.cc" ]
++  } else if (is_aros) {
++    sources += [ "policy_path_parser_aros.cc" ]
+   }
+ 
+   deps = [
+diff --git a/chrome/browser/policy/policy_path_parser_aros.cc b/chrome/browser/policy/policy_path_parser_aros.cc
+new file mode 100644
+index 0000000000..600d98f2c7
+--- /dev/null
++++ b/chrome/browser/policy/policy_path_parser_aros.cc
+@@ -0,0 +1,52 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/policy/policy_path_parser.h"
++
++#include <memory>
++#include <string>
++
++#include "base/environment.h"
++
++namespace policy::path_parser {
++
++const char kMachineNamePolicyVarName[] = "${machine_name}";
++const char kUserNamePolicyVarName[] = "${user_name}";
++
++namespace {
++
++void ReplaceVariable(base::FilePath::StringType* value,
++                     const char* variable,
++                     const std::string& replacement) {
++  size_t offset = 0;
++  while ((offset = value->find(variable, offset)) != std::string::npos) {
++    value->replace(offset, std::char_traits<char>::length(variable),
++                   replacement);
++    offset += replacement.size();
++  }
++}
++
++}  // namespace
++
++base::FilePath::StringType ExpandPathVariables(
++    const base::FilePath::StringType& untranslated_string) {
++  base::FilePath::StringType result(untranslated_string);
++  if (result.size() > 1 &&
++      ((result.front() == '"' && result.back() == '"') ||
++       (result.front() == '\'' && result.back() == '\''))) {
++    result = result.substr(1, result.size() - 2);
++  }
++
++  std::unique_ptr<base::Environment> environment(base::Environment::Create());
++  std::string user_name = "user";
++  std::string machine_name = "AROS";
++  environment->GetVar("USER", &user_name);
++  environment->GetVar("HOSTNAME", &machine_name);
++
++  ReplaceVariable(&result, kUserNamePolicyVarName, user_name);
++  ReplaceVariable(&result, kMachineNamePolicyVarName, machine_name);
++  return result;
++}
++
++}  // namespace policy::path_parser
+diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
+index eb1d826d7c..c3f33ccade 100644
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -686,6 +686,9 @@ static_library("constants") {
+   if (is_fuchsia) {
+     sources += [ "chrome_paths_fuchsia.cc" ]
+   }
++  if (is_aros) {
++    sources += [ "chrome_paths_aros.cc" ]
++  }
+ 
+   if (enable_widevine && enable_library_cdms) {
+     deps += [
+diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
+new file mode 100644
+index 0000000000..74cb3fdd93
+--- /dev/null
++++ b/chrome/common/chrome_paths_aros.cc
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/common/chrome_paths_internal.h"
++
++#include "base/files/file_path.h"
++#include "base/path_service.h"
++#include "chrome/common/chrome_paths.h"
++
++namespace chrome {
++namespace {
++
++constexpr char kUserDataDirectory[] = "ENVARC:Chromium";
++constexpr char kUserCacheDirectory[] = "T:Chromium";
++constexpr char kVolatileUserDirectory[] = "RAM:";
++
++}  // namespace
++
++bool GetDefaultUserDataDirectory(base::FilePath* result) {
++  *result = base::FilePath(kUserDataDirectory);
++  return true;
++}
++
++void GetUserCacheDirectory(const base::FilePath& profile_dir,
++                           base::FilePath* result) {
++  *result = profile_dir;
++
++  base::FilePath user_data_dir;
++  if (!base::PathService::Get(DIR_USER_DATA, &user_data_dir)) {
++    return;
++  }
++
++  base::FilePath cache_dir(kUserCacheDirectory);
++  if (!user_data_dir.AppendRelativePath(profile_dir, &cache_dir)) {
++    return;
++  }
++
++  *result = cache_dir;
++}
++
++bool GetUserDocumentsDirectory(base::FilePath* result) {
++  *result = base::FilePath(kVolatileUserDirectory).Append("Documents");
++  return true;
++}
++
++bool GetUserDownloadsDirectory(base::FilePath* result) {
++  *result = base::FilePath(kVolatileUserDirectory);
++  return true;
++}
++
++bool GetUserMusicDirectory(base::FilePath* result) {
++  *result = base::FilePath(kVolatileUserDirectory);
++  return true;
++}
++
++bool GetUserPicturesDirectory(base::FilePath* result) {
++  *result = base::FilePath(kVolatileUserDirectory);
++  return true;
++}
++
++bool GetUserVideosDirectory(base::FilePath* result) {
++  *result = base::FilePath(kVolatileUserDirectory);
++  return true;
++}
++
++bool ProcessNeedsProfileDir(const std::string& process_type) {
++  return true;
++}
++
++}  // namespace chrome

@@ -1,0 +1,37 @@
+From c46d80a14f34ebf6003e1e986e8a9f88398bd185 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:37:32 -0500
+Subject: [PATCH 025/638] gpu: use 2D texture targets for AROS software buffers
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: GPU memory-buffer helpers now expose the texture target used by the AROS software/null-ANGLE baseline.
+
+ROOT_CAUSE: GetPlatformSpecificTextureTarget rejected AROS even though earlier boundaries deliberately exclude native pixmap imports.
+
+FIX_REASON: Return GL_TEXTURE_2D for AROS shared-memory/software buffers. Do not claim Linux-style GL_TEXTURE_EXTERNAL_OES support without a native-pixmap import contract.
+
+SCOPE: gpu/command_buffer/common/gpu_memory_buffer_support.cc
+
+VALIDATION: ninja compiled gpu_memory_buffer_support.o in out/aros-headless.
+
+RISK: Future native EGL/Vulkan buffer import must revisit this selector together with native pixmap and synchronization support.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/command_buffer/common/gpu_memory_buffer_support.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gpu/command_buffer/common/gpu_memory_buffer_support.cc b/gpu/command_buffer/common/gpu_memory_buffer_support.cc
+index 9c27b30a1f..10fcc729fe 100644
+--- a/gpu/command_buffer/common/gpu_memory_buffer_support.cc
++++ b/gpu/command_buffer/common/gpu_memory_buffer_support.cc
+@@ -184,7 +184,7 @@ uint32_t GetPlatformSpecificTextureTarget() {
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
+   return GL_TEXTURE_EXTERNAL_OES;
+-#elif BUILDFLAG(IS_IOS)
++#elif BUILDFLAG(IS_AROS) || BUILDFLAG(IS_IOS)
+   return GL_TEXTURE_2D;
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // Fuchsia uses Vulkan.

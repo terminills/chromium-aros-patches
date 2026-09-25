@@ -1,0 +1,38 @@
+From 30b6b85f5261251bcfd9c4c065db0ab6fdc6ff85 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:55:35 -0500
+Subject: [PATCH 010/638] third_party/freetype: use the ANSI system backend on
+ AROS [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium selected FreeType's Unix ftsystem implementation for every POSIX target; that backend requires mmap and Unix file-descriptor behavior not implemented by AROS.
+
+FIX_REASON: Keep FreeType's standard ANSI stdio backend on AROS. Font files remain readable without inventing mmap semantics or weakening the rest of Chromium's VM contracts.
+
+SCOPE: third_party/freetype/BUILD.gn source selection only.
+
+VALIDATION: obj/third_party/freetype/freetype_source/ftsystem.o compiled and the headless graph advanced through Skia font code.
+
+RISK: low; potential performance difference from stdio rather than mmap, with unchanged font data semantics.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/freetype/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/freetype/BUILD.gn b/third_party/freetype/BUILD.gn
+index d2318036b9..faf7273050 100644
+--- a/third_party/freetype/BUILD.gn
++++ b/third_party/freetype/BUILD.gn
+@@ -105,7 +105,7 @@ source_set("freetype_source") {
+   # While Chromium itself avoids using this code, any build of Chromium which
+   # depends on //third_party/fontconfig:fontconfig with use_bundled_fontconfig
+   # will make heavy use of these implementations, so use the best available.
+-  if (is_posix || is_fuchsia) {
++  if ((is_posix && !is_aros) || is_fuchsia) {
+     sources += [ "src/builds/unix/ftsystem.c" ]
+ 
+     # builds/unix/ftsystem.c directly includes <ftconfig.h> instead of using

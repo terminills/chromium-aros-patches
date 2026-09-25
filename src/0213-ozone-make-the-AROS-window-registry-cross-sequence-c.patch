@@ -1,0 +1,114 @@
+From e50009fa8b8009d974c590cf564474e2df1c0334 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:58:26 -0500
+Subject: [PATCH 213/638] ozone: make the AROS window registry cross-sequence
+ [chromium] [aros]
+
+Statement:
+The first software frame reached ArosWindowManager::PresentCanvas on Viz's compositor sequence. The registry was protected by a lock but implemented with base::IDMap, whose sequence checker remained bound to the UI sequence and terminated Chromium before any pixels could be presented.
+
+Decision:
+Use a lock-protected std::map with manager-assigned nonzero widget IDs. Holding the same lock across lookup and PresentPixels preserves window lifetime while permitting the UI and compositor sequences to share the registry.
+
+Evidence:
+Hosted debug.resource captured widget 1 and a 300x194 software canvas before the sequence-check fatal; addr2line resolves the failing lookup to aros_window_manager.cc:112. The corrected AROS window-manager object compiles.
+
+Chain:
+Follows the construction-time bounds fix b97474ee92 and advances the first native window in.
+---
+ ui/ozone/platform/aros/aros_window_manager.cc | 26 +++++++++++++------
+ ui/ozone/platform/aros/aros_window_manager.h  |  5 ++--
+ 2 files changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 4541272584..c7dec31683 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -29,7 +29,7 @@ ArosWindowManager::~ArosWindowManager() {
+   {
+     base::AutoLock lock(lock_);
+     DCHECK(native_windows_.empty());
+-    DCHECK(windows_.IsEmpty());
++    DCHECK(windows_.empty());
+   }
+   if (event_port_) {
+     DeleteMsgPort(event_port_);
+@@ -38,21 +38,28 @@ ArosWindowManager::~ArosWindowManager() {
+ 
+ gfx::AcceleratedWidget ArosWindowManager::AddWindow(ArosWindow* window) {
+   base::AutoLock lock(lock_);
+-  return windows_.Add(window);
++  const gfx::AcceleratedWidget widget = next_widget_++;
++  CHECK_NE(widget, gfx::kNullAcceleratedWidget);
++  CHECK(windows_.emplace(widget, window).second);
++  return widget;
+ }
+ 
+ void ArosWindowManager::RemoveWindow(gfx::AcceleratedWidget widget,
+                                      ArosWindow* window) {
+   base::AutoLock lock(lock_);
+-  DCHECK_EQ(window, windows_.Lookup(widget));
+-  windows_.Remove(widget);
++  const auto it = windows_.find(widget);
++  CHECK(it != windows_.end());
++  CHECK_EQ(window, it->second);
++  windows_.erase(it);
+ }
+ 
+ void ArosWindowManager::AttachNativeWindow(gfx::AcceleratedWidget widget,
+                                            ArosWindow* window,
+                                            struct Window* native_window) {
+   base::AutoLock lock(lock_);
+-  DCHECK_EQ(window, windows_.Lookup(widget));
++  const auto window_it = windows_.find(widget);
++  DCHECK(window_it != windows_.end());
++  DCHECK_EQ(window, window_it->second);
+   DCHECK(native_window);
+   const bool inserted = native_windows_.emplace(native_window, window).second;
+   DCHECK(inserted);
+@@ -62,7 +69,9 @@ void ArosWindowManager::DetachNativeWindow(gfx::AcceleratedWidget widget,
+                                            ArosWindow* window,
+                                            struct Window* native_window) {
+   base::AutoLock lock(lock_);
+-  DCHECK_EQ(window, windows_.Lookup(widget));
++  const auto window_it = windows_.find(widget);
++  DCHECK(window_it != windows_.end());
++  DCHECK_EQ(window, window_it->second);
+   auto it = native_windows_.find(native_window);
+   DCHECK(it != native_windows_.end());
+   DCHECK_EQ(window, it->second);
+@@ -109,8 +118,9 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+                                       const gfx::Size& pixel_size,
+                                       const gfx::Rect& damage) {
+   base::AutoLock lock(lock_);
+-  ArosWindow* const window = windows_.Lookup(widget);
+-  return window && window->PresentPixels(pixels, row_bytes, pixel_size, damage);
++  const auto it = windows_.find(widget);
++  return it != windows_.end() &&
++         it->second->PresentPixels(pixels, row_bytes, pixel_size, damage);
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 3e53a5752c..1532d1f73e 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -10,7 +10,6 @@
+ 
+ #include <map>
+ 
+-#include "base/containers/id_map.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "base/synchronization/lock.h"
+@@ -56,7 +55,9 @@ class ArosWindowManager {
+ 
+  private:
+   base::Lock lock_;
+-  base::IDMap<ArosWindow*> windows_ GUARDED_BY(lock_);
++  gfx::AcceleratedWidget next_widget_ GUARDED_BY(lock_) = 1;
++  std::map<gfx::AcceleratedWidget, raw_ptr<ArosWindow>> windows_
++      GUARDED_BY(lock_);
+   std::map<struct Window*, raw_ptr<ArosWindow>> native_windows_
+       GUARDED_BY(lock_);
+   RAW_PTR_EXCLUSION struct MsgPort* event_port_ = nullptr;

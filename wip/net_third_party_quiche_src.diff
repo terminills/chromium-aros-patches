@@ -1,0 +1,324 @@
+diff --git a/quiche/common/quiche_ip_address.cc b/quiche/common/quiche_ip_address.cc
+index 342597b..5b54bf1 100644
+--- a/quiche/common/quiche_ip_address.cc
++++ b/quiche/common/quiche_ip_address.cc
+@@ -5,6 +5,7 @@
+ #include "quiche/common/quiche_ip_address.h"
+ 
+ #include <algorithm>
++#include <cstdio>
+ #include <cstdint>
+ #include <cstring>
+ #include <string>
+@@ -14,6 +15,237 @@
+ #include "quiche/common/platform/api/quiche_logging.h"
+ #include "quiche/common/quiche_ip_address_family.h"
+ 
++#if defined(__AROS__)
++namespace {
++
++constexpr size_t kIPv4AddressSize = 4;
++constexpr size_t kIPv6AddressSize = 16;
++
++int ArosInetPton4(const char* src, uint8_t* dst) {
++  uint8_t tmp[kIPv4AddressSize] = {};
++  uint8_t* out = tmp;
++  int octets = 0;
++  bool saw_digit = false;
++
++  for (int ch = *src++; ch != '\0'; ch = *src++) {
++    if (ch >= '0' && ch <= '9') {
++      const unsigned int value = *out * 10 + (ch - '0');
++      if (value > 255) {
++        return 0;
++      }
++      *out = value;
++      if (!saw_digit) {
++        if (++octets > 4) {
++          return 0;
++        }
++        saw_digit = true;
++      }
++    } else if (ch == '.' && saw_digit) {
++      if (octets == 4) {
++        return 0;
++      }
++      *++out = 0;
++      saw_digit = false;
++    } else {
++      return 0;
++    }
++  }
++
++  if (octets != 4 || !saw_digit) {
++    return 0;
++  }
++  memcpy(dst, tmp, sizeof(tmp));
++  return 1;
++}
++
++int ArosInetPton6(const char* src, uint8_t* dst) {
++  static constexpr char kLowerHex[] = "0123456789abcdef";
++  static constexpr char kUpperHex[] = "0123456789ABCDEF";
++  uint8_t tmp[kIPv6AddressSize] = {};
++  uint8_t* out = tmp;
++  uint8_t* const end = tmp + sizeof(tmp);
++  uint8_t* colon = nullptr;
++  const char* token = src;
++  bool saw_hex = false;
++  unsigned int value = 0;
++
++  if (*src == ':' && *++src != ':') {
++    return 0;
++  }
++  token = src;
++  for (int ch = *src++; ch != '\0'; ch = *src++) {
++    const char* digit = strchr(kLowerHex, ch);
++    const char* digits = kLowerHex;
++    if (!digit) {
++      digit = strchr(kUpperHex, ch);
++      digits = kUpperHex;
++    }
++    if (digit) {
++      value = (value << 4) | static_cast<unsigned int>(digit - digits);
++      if (value > 0xffff) {
++        return 0;
++      }
++      saw_hex = true;
++      continue;
++    }
++    if (ch == ':') {
++      token = src;
++      if (!saw_hex) {
++        if (colon) {
++          return 0;
++        }
++        colon = out;
++        continue;
++      }
++      if (out + 2 > end) {
++        return 0;
++      }
++      *out++ = static_cast<uint8_t>(value >> 8);
++      *out++ = static_cast<uint8_t>(value);
++      saw_hex = false;
++      value = 0;
++      continue;
++    }
++    if (ch == '.' && out + kIPv4AddressSize <= end &&
++        ArosInetPton4(token, out) == 1) {
++      out += kIPv4AddressSize;
++      saw_hex = false;
++      break;
++    }
++    return 0;
++  }
++
++  if (saw_hex) {
++    if (out + 2 > end) {
++      return 0;
++    }
++    *out++ = static_cast<uint8_t>(value >> 8);
++    *out++ = static_cast<uint8_t>(value);
++  }
++  if (colon) {
++    const size_t count = out - colon;
++    if (out == end) {
++      return 0;
++    }
++    memmove(end - count, colon, count);
++    memset(colon, 0, end - count - colon);
++    out = end;
++  }
++  if (out != end) {
++    return 0;
++  }
++  memcpy(dst, tmp, sizeof(tmp));
++  return 1;
++}
++
++int ArosInetPton(int family, const char* src, void* dst) {
++  if (family == AF_INET) {
++    return ArosInetPton4(src, static_cast<uint8_t*>(dst));
++  }
++  if (family == AF_INET6) {
++    return ArosInetPton6(src, static_cast<uint8_t*>(dst));
++  }
++  return -1;
++}
++
++const char* ArosInetNtop4(const uint8_t* src, char* dst, size_t size) {
++  const int length = snprintf(dst, size, "%u.%u.%u.%u", src[0], src[1],
++                              src[2], src[3]);
++  return length >= 0 && static_cast<size_t>(length) < size ? dst : nullptr;
++}
++
++const char* ArosInetNtop6(const uint8_t* src, char* dst, size_t size) {
++  char tmp[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")];
++  unsigned int words[kIPv6AddressSize / 2] = {};
++  struct ZeroRun {
++    int base = -1;
++    int length = 0;
++  } best, current;
++
++  for (size_t i = 0; i < kIPv6AddressSize; ++i) {
++    words[i / 2] |= src[i] << ((1 - (i % 2)) * 8);
++  }
++  for (int i = 0; i < static_cast<int>(kIPv6AddressSize / 2); ++i) {
++    if (words[i] == 0) {
++      if (current.base == -1) {
++        current.base = i;
++        current.length = 1;
++      } else {
++        ++current.length;
++      }
++    } else if (current.base != -1) {
++      if (best.base == -1 || current.length > best.length) {
++        best = current;
++      }
++      current = {};
++    }
++  }
++  if (current.base != -1 &&
++      (best.base == -1 || current.length > best.length)) {
++    best = current;
++  }
++  if (best.length < 2) {
++    best.base = -1;
++  }
++
++  char* out = tmp;
++  for (int i = 0; i < static_cast<int>(kIPv6AddressSize / 2); ++i) {
++    if (best.base != -1 && i >= best.base &&
++        i < best.base + best.length) {
++      if (i == best.base) {
++        *out++ = ':';
++      }
++      continue;
++    }
++    if (i != 0) {
++      *out++ = ':';
++    }
++    if (i == 6 && best.base == 0 &&
++        (best.length == 6 || (best.length == 5 && words[5] == 0xffff))) {
++      if (!ArosInetNtop4(src + 12, out, sizeof(tmp) - (out - tmp))) {
++        return nullptr;
++      }
++      out += strlen(out);
++      break;
++    }
++    const int written = snprintf(out, sizeof(tmp) - (out - tmp), "%x",
++                                 words[i]);
++    if (written < 0 || static_cast<size_t>(written) >=
++                           sizeof(tmp) - static_cast<size_t>(out - tmp)) {
++      return nullptr;
++    }
++    out += written;
++  }
++  if (best.base != -1 && best.base + best.length ==
++                             static_cast<int>(kIPv6AddressSize / 2)) {
++    *out++ = ':';
++  }
++  *out++ = '\0';
++
++  const size_t length = out - tmp;
++  if (length > size) {
++    return nullptr;
++  }
++  memcpy(dst, tmp, length);
++  return dst;
++}
++
++const char* ArosInetNtop(int family,
++                         const void* src,
++                         char* dst,
++                         size_t size) {
++  if (family == AF_INET) {
++    return ArosInetNtop4(static_cast<const uint8_t*>(src), dst, size);
++  }
++  if (family == AF_INET6) {
++    return ArosInetNtop6(static_cast<const uint8_t*>(src), dst, size);
++  }
++  return nullptr;
++}
++
++}  // namespace
++#endif  // defined(__AROS__)
++
+ namespace quiche {
+ 
+ QuicheIpAddress QuicheIpAddress::Loopback4() {
+@@ -114,7 +346,12 @@ std::string QuicheIpAddress::ToString() const {
+ 
+   char buffer[INET6_ADDRSTRLEN] = {0};
+   const char* result =
++#if defined(__AROS__)
++      ArosInetNtop(AddressFamilyToInt(), address_.bytes, buffer,
++                   sizeof(buffer));
++#else
+       inet_ntop(AddressFamilyToInt(), address_.bytes, buffer, sizeof(buffer));
++#endif
+   QUICHE_BUG_IF(quiche_bug_10126_4, result == nullptr)
+       << "Failed to convert an IP address to string";
+   return buffer;
+@@ -170,7 +407,12 @@ bool QuicheIpAddress::FromString(std::string str) {
+   for (IpAddressFamily family :
+        {IpAddressFamily::IP_V6, IpAddressFamily::IP_V4}) {
+     int result =
++#if defined(__AROS__)
++        ArosInetPton(ToPlatformAddressFamily(family), str.c_str(),
++                     address_.bytes);
++#else
+         inet_pton(ToPlatformAddressFamily(family), str.c_str(), address_.bytes);
++#endif
+     if (result > 0) {
+       family_ = family;
+       return true;
+diff --git a/quiche/quic/core/quic_interval_deque.h b/quiche/quic/core/quic_interval_deque.h
+index 0aa4543..5ca3cc9 100644
+--- a/quiche/quic/core/quic_interval_deque.h
++++ b/quiche/quic/core/quic_interval_deque.h
+@@ -198,12 +198,12 @@ class QUICHE_NO_EXPORT QuicIntervalDeque {
+     Iterator operator+(difference_type amount) const {
+       Iterator copy = *this;
+       copy.index_ += amount;
+-      QUICHE_DCHECK(copy.index_ < copy.deque_->size());
++      QUICHE_DCHECK(copy.index_ < copy.deque_->Size());
+       return copy;
+     }
+     Iterator& operator+=(difference_type amount) {
+       index_ += amount;
+-      QUICHE_DCHECK(index_ < deque_->size());
++      QUICHE_DCHECK(index_ < deque_->Size());
+       return *this;
+     }
+     difference_type operator-(const Iterator& rhs) const {
+diff --git a/quiche/quic/platform/api/quic_socket_address.cc b/quiche/quic/platform/api/quic_socket_address.cc
+index f14faea..1be9a1b 100644
+--- a/quiche/quic/platform/api/quic_socket_address.cc
++++ b/quiche/quic/platform/api/quic_socket_address.cc
+@@ -9,6 +9,9 @@
+ #include <string>
+ 
+ #include "absl/strings/str_cat.h"
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ #include "quiche/quic/platform/api/quic_bug_tracker.h"
+ #include "quiche/quic/platform/api/quic_ip_address.h"
+ #include "quiche/quic/platform/api/quic_ip_address_family.h"
+@@ -97,7 +100,13 @@ std::string QuicSocketAddress::ToString() const {
+ int QuicSocketAddress::FromSocket(int fd) {
+   sockaddr_storage addr;
+   socklen_t addr_len = sizeof(addr);
+-  int result = getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
++  int result =
++#if defined(__AROS__)
++      base::aros::GetSocketName(fd, reinterpret_cast<sockaddr*>(&addr),
++                               &addr_len);
++#else
++      getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
++#endif
+ 
+   bool success = result == 0 && addr_len > 0 &&
+                  static_cast<size_t>(addr_len) <= sizeof(addr);

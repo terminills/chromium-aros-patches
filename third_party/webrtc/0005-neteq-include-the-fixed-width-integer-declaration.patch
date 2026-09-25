@@ -1,0 +1,36 @@
+From cf753d88c6516c341a844f403f770733a9cd2b6e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:58:40 -0500
+Subject: [PATCH 5/7] neteq: include the fixed-width integer declaration
+
+AI_PHASE: chromium-aros-phase1
+
+AI_STATUS: complete
+
+ROOT_CAUSE: reorder_optimizer.cc uses int64_t directly but depended on an incidental transitive declaration absent from the AROS GCC C++20 include graph.
+
+FIX_REASON: Include the owning C++ standard header in the translation unit instead of adding platform typedefs or toolchain feature leakage.
+
+SCOPE: modules/audio_coding/neteq/reorder_optimizer.cc
+
+VALIDATION: Ninja rebuilt reorder_optimizer.o successfully for //build/toolchain/aros:x64.
+
+RISK: minimal; declaration-only portable include.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ modules/audio_coding/neteq/reorder_optimizer.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/modules/audio_coding/neteq/reorder_optimizer.cc b/modules/audio_coding/neteq/reorder_optimizer.cc
+index f6e073f..172f603 100644
+--- a/modules/audio_coding/neteq/reorder_optimizer.cc
++++ b/modules/audio_coding/neteq/reorder_optimizer.cc
+@@ -11,6 +11,7 @@
+ #include "modules/audio_coding/neteq/reorder_optimizer.h"
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <limits>
+ #include <vector>
+ 

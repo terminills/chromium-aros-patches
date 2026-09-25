@@ -1,0 +1,86 @@
+From 8760f5b6b23ca32743397225b4ca67c563acdfab Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 18:10:53 -0500
+Subject: [PATCH 477/638] AROS: scope pooled single-thread manager state
+
+Keep the manager lifetime flag and utility-thread-group policy keyed by the inherited native-process CommandLine identity. This lets browser, GPU, renderer, and utility processes construct independent managers while their worker tasks retain the owning process state.
+
+
+
+---
+ ...ooled_single_thread_task_runner_manager.cc | 39 ++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc b/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
+index 2dd617d659..23e022e2b6 100644
+--- a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
++++ b/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
+@@ -4,20 +4,24 @@
+ 
+ #include "base/task/thread_pool/pooled_single_thread_task_runner_manager.h"
+ 
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <utility>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/debug/leak_annotations.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/message_loop/message_pump.h"
+ #include "base/ranges/algorithm.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/synchronization/atomic_flag.h"
++#include "base/synchronization/lock.h"
+ #include "base/task/default_delayed_task_handle_delegate.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/task/task_traits.h"
+@@ -57,9 +61,42 @@ namespace {
+ // equivalent to |!ThreadPoolInstance::Get()| but has the advantage of being
+ // valid in thread_pool unit tests that don't instantiate a full
+ // thread pool.
+-bool g_manager_is_alive = false;
++#if BUILDFLAG(IS_AROS)
++struct PooledSingleThreadManagerProcessState {
++  bool manager_is_alive = false;
++  bool use_utility_thread_group = false;
++};
++
++struct PooledSingleThreadManagerProcessRegistry {
++  Lock lock;
++  std::map<const CommandLine*, PooledSingleThreadManagerProcessState> states;
++};
+ 
++PooledSingleThreadManagerProcessState& GetManagerProcessState() {
++  const CommandLine* const process_identity =
++      CommandLine::InitializedForCurrentProcess()
++          ? CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const CommandLine* cached_identity = nullptr;
++  thread_local PooledSingleThreadManagerProcessState* cached_state = nullptr;
++  if (cached_state && cached_identity == process_identity) {
++    return *cached_state;
++  }
++
++  static NoDestructor<PooledSingleThreadManagerProcessRegistry> registry;
++  AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  cached_state = &registry->states[process_identity];
++  return *cached_state;
++}
++
++#define g_manager_is_alive (GetManagerProcessState().manager_is_alive)
++#define g_use_utility_thread_group \
++  (GetManagerProcessState().use_utility_thread_group)
++#else
++bool g_manager_is_alive = false;
+ bool g_use_utility_thread_group = false;
++#endif
+ 
+ size_t GetEnvironmentIndexForTraits(const TaskTraits& traits) {
+   const bool is_background =

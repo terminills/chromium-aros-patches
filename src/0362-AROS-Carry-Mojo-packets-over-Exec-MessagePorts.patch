@@ -1,0 +1,548 @@
+From ab7211328ec0763cd369746a012497b852425aed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:46:49 -0500
+Subject: [PATCH 362/638] [AROS] Carry Mojo packets over Exec MessagePorts
+
+AI_PHASE: chromium-process-model
+AI_STATUS: duplex-messageport-transport-runtime-pass
+ROOT_CAUSE: AROS Mojo endpoints had transferable identity but no byte or handle transport; ChannelPosix cannot operate on task-owned Exec MsgPorts.
+FIX_REASON: Add MEMF_PUBLIC packets, per-side pending queues, task-owned receive ports, transferable platform handles, explicit stop/peer-close packets, and a focused hosted probe.
+SCOPE: mojo/public/cpp/platform/BUILD.gn; mojo/public/cpp/platform/aros_channel.{cc,h}; mojo/public/cpp/platform/aros_channel_probe.cc
+VALIDATION: Focused target linked at -j32; hosted 16 GiB run reported PASS queued=1 duplex=1 handles=1 peer_close=1 and exited in 4.80 seconds.
+RISK: The spin lock is intentionally minimal for bring-up; full Mojo invitation and browser/renderer traffic remain the next gates.
+AI_DECISION_CHAIN: transferable endpoint identity -> task-owned MsgPorts -> early-send queue -> attached-handle transfer -> peer-close semantics -> focused hosted PASS.
+Evidence:-channel-aros-20260728
+Job:
+---
+ mojo/public/cpp/platform/BUILD.gn             |  11 +
+ mojo/public/cpp/platform/aros_channel.cc      | 215 +++++++++++++++++-
+ mojo/public/cpp/platform/aros_channel.h       |  39 ++++
+ .../public/cpp/platform/aros_channel_probe.cc | 168 ++++++++++++++
+ 4 files changed, 428 insertions(+), 5 deletions(-)
+ create mode 100644 mojo/public/cpp/platform/aros_channel_probe.cc
+
+diff --git a/mojo/public/cpp/platform/BUILD.gn b/mojo/public/cpp/platform/BUILD.gn
+index 76af3dc026..3136283205 100644
+--- a/mojo/public/cpp/platform/BUILD.gn
++++ b/mojo/public/cpp/platform/BUILD.gn
+@@ -95,3 +95,14 @@ component("platform") {
+ 
+   defines = [ "IS_MOJO_CPP_PLATFORM_IMPL" ]
+ }
++
++if (is_aros) {
++  executable("aros_channel_probe") {
++    testonly = true
++    sources = [ "aros_channel_probe.cc" ]
++    deps = [
++      ":platform",
++      "//base",
++    ]
++  }
++}
+diff --git a/mojo/public/cpp/platform/aros_channel.cc b/mojo/public/cpp/platform/aros_channel.cc
+index 59dd6172df..0c3d394351 100644
+--- a/mojo/public/cpp/platform/aros_channel.cc
++++ b/mojo/public/cpp/platform/aros_channel.cc
+@@ -5,30 +5,132 @@
+ #include "mojo/public/cpp/platform/aros_channel.h"
+ 
+ #include <atomic>
++#include <cstring>
++#include <limits>
+ #include <new>
+ 
+ #include <exec/memory.h>
++#include <exec/ports.h>
+ #include <proto/exec.h>
+ 
+ #include "base/check.h"
+ #include "base/check_op.h"
++#include "mojo/public/cpp/platform/platform_handle.h"
+ 
+ namespace mojo {
+-namespace {
+ 
+ struct ArosChannelState {
+   static constexpr uint64_t kMagic = 0x41524f534d4f4a4fULL;
+ 
+   uint64_t magic = kMagic;
+   std::atomic_size_t references{2};
++  std::atomic_size_t side_references[2] = {1, 1};
++  std::atomic_flag lock = ATOMIC_FLAG_INIT;
++  MsgPort* ports[2] = {};
++  ArosChannelPacket* pending_head[2] = {};
++  ArosChannelPacket* pending_tail[2] = {};
++};
++
++struct ArosChannelPacket {
++  ::Message message;
++  ArosChannelPacket* pending_next = nullptr;
++  ArosChannelPacketType type = ArosChannelPacketType::kData;
++  size_t allocation_size = 0;
++  size_t data_size = 0;
++  size_t handle_count = 0;
+ };
+ 
++namespace {
++
+ ArosChannelState* StateFor(ArosChannelHandle handle) {
+   return static_cast<ArosChannelState*>(handle.state);
+ }
+ 
+-bool IsValid(const ArosChannelState* state) {
+-  return state && state->magic == ArosChannelState::kMagic;
++bool IsValid(ArosChannelHandle handle) {
++  ArosChannelState* state = StateFor(handle);
++  return state && handle.side < 2 &&
++         state->magic == ArosChannelState::kMagic;
++}
++
++void Lock(ArosChannelState* state) {
++  while (state->lock.test_and_set(std::memory_order_acquire)) {
++  }
++}
++
++void Unlock(ArosChannelState* state) {
++  state->lock.clear(std::memory_order_release);
++}
++
++MojoPlatformHandle* PacketHandles(ArosChannelPacket* packet) {
++  return reinterpret_cast<MojoPlatformHandle*>(packet + 1);
++}
++
++void* PacketData(ArosChannelPacket* packet) {
++  return PacketHandles(packet) + packet->handle_count;
++}
++
++ArosChannelPacket* CreatePacket(ArosChannelPacketType type,
++                                const void* data,
++                                size_t data_size,
++                                const MojoPlatformHandle* handles,
++                                size_t handle_count) {
++  if (handle_count >
++      (std::numeric_limits<size_t>::max() - sizeof(ArosChannelPacket)) /
++          sizeof(MojoPlatformHandle)) {
++    return nullptr;
++  }
++  const size_t handle_bytes = handle_count * sizeof(MojoPlatformHandle);
++  if (data_size > std::numeric_limits<size_t>::max() -
++                      sizeof(ArosChannelPacket) - handle_bytes) {
++    return nullptr;
++  }
++  const size_t allocation_size =
++      sizeof(ArosChannelPacket) + handle_bytes + data_size;
++  void* storage = AllocMem(allocation_size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (!storage)
++    return nullptr;
++  auto* packet = new (storage) ArosChannelPacket;
++  packet->message.mn_Length = sizeof(ArosChannelPacket);
++  packet->type = type;
++  packet->allocation_size = allocation_size;
++  packet->data_size = data_size;
++  packet->handle_count = handle_count;
++  if (handle_count)
++    std::memcpy(PacketHandles(packet), handles, handle_bytes);
++  if (data_size)
++    std::memcpy(PacketData(packet), data, data_size);
++  return packet;
++}
++
++bool QueueOrDeliver(ArosChannelState* state,
++                    uint8_t target,
++                    ArosChannelPacket* packet,
++                    bool require_live_target = false) {
++  Lock(state);
++  if (require_live_target &&
++      state->side_references[target].load(std::memory_order_relaxed) == 0) {
++    Unlock(state);
++    DestroyArosChannelPacket(packet);
++    return false;
++  }
++  if (state->ports[target]) {
++    PutMsg(state->ports[target], &packet->message);
++  } else {
++    if (state->pending_tail[target])
++      state->pending_tail[target]->pending_next = packet;
++    else
++      state->pending_head[target] = packet;
++    state->pending_tail[target] = packet;
++  }
++  Unlock(state);
++  return true;
++}
++
++void ReleaseEncodedHandles(ArosChannelPacket* packet) {
++  for (size_t i = 0; i < packet->handle_count; ++i) {
++    PlatformHandle handle =
++        PlatformHandle::FromMojoPlatformHandle(&PacketHandles(packet)[i]);
++  }
+ }
+ 
+ }  // namespace
+@@ -43,7 +145,8 @@ std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair() {
+ 
+ void RetainArosChannelHandle(ArosChannelHandle handle) {
+   ArosChannelState* state = StateFor(handle);
+-  CHECK(IsValid(state));
++  CHECK(IsValid(handle));
++  state->side_references[handle.side].fetch_add(1, std::memory_order_relaxed);
+   state->references.fetch_add(1, std::memory_order_relaxed);
+ }
+ 
+@@ -51,15 +154,117 @@ void ReleaseArosChannelHandle(ArosChannelHandle handle) {
+   ArosChannelState* state = StateFor(handle);
+   if (!state)
+     return;
+-  CHECK(IsValid(state));
++  CHECK(IsValid(handle));
++  const size_t previous_side =
++      state->side_references[handle.side].fetch_sub(1, std::memory_order_acq_rel);
++  CHECK_GT(previous_side, 0u);
++  if (previous_side == 1) {
++    if (ArosChannelPacket* packet =
++            CreatePacket(ArosChannelPacketType::kPeerClosed, nullptr, 0,
++                         nullptr, 0)) {
++      QueueOrDeliver(state, handle.side ^ 1, packet);
++    }
++  }
+   const size_t previous =
+       state->references.fetch_sub(1, std::memory_order_acq_rel);
+   CHECK_GT(previous, 0u);
+   if (previous != 1)
+     return;
++  for (size_t side = 0; side < 2; ++side) {
++    ArosChannelPacket* packet = state->pending_head[side];
++    while (packet) {
++      ArosChannelPacket* next = packet->pending_next;
++      DestroyArosChannelPacket(packet);
++      packet = next;
++    }
++  }
+   state->magic = 0;
+   state->~ArosChannelState();
+   FreeMem(state, sizeof(ArosChannelState));
+ }
+ 
++MsgPort* StartReceivingArosChannel(ArosChannelHandle handle) {
++  if (!IsValid(handle))
++    return nullptr;
++  MsgPort* port = CreateMsgPort();
++  if (!port)
++    return nullptr;
++
++  ArosChannelState* state = StateFor(handle);
++  Lock(state);
++  CHECK(!state->ports[handle.side]);
++  state->ports[handle.side] = port;
++  ArosChannelPacket* packet = state->pending_head[handle.side];
++  state->pending_head[handle.side] = nullptr;
++  state->pending_tail[handle.side] = nullptr;
++  while (packet) {
++    ArosChannelPacket* next = packet->pending_next;
++    packet->pending_next = nullptr;
++    PutMsg(port, &packet->message);
++    packet = next;
++  }
++  Unlock(state);
++  return port;
++}
++
++void StopReceivingArosChannel(ArosChannelHandle handle, MsgPort* port) {
++  if (!port)
++    return;
++  ArosChannelState* state = StateFor(handle);
++  CHECK(IsValid(handle));
++  Lock(state);
++  CHECK_EQ(state->ports[handle.side], port);
++  state->ports[handle.side] = nullptr;
++  Unlock(state);
++
++  while (auto* message = GetMsg(port))
++    DestroyArosChannelPacket(reinterpret_cast<ArosChannelPacket*>(message));
++  DeleteMsgPort(port);
++}
++
++ArosChannelPacket* WaitForArosChannelPacket(MsgPort* port) {
++  CHECK(port);
++  WaitPort(port);
++  return reinterpret_cast<ArosChannelPacket*>(GetMsg(port));
++}
++
++ArosChannelPacketView GetArosChannelPacketView(ArosChannelPacket* packet) {
++  CHECK(packet);
++  return {packet->type, PacketData(packet), packet->data_size,
++          PacketHandles(packet), packet->handle_count};
++}
++
++void MarkArosChannelPacketHandlesConsumed(ArosChannelPacket* packet) {
++  CHECK(packet);
++  packet->handle_count = 0;
++}
++
++void DestroyArosChannelPacket(ArosChannelPacket* packet) {
++  if (!packet)
++    return;
++  ReleaseEncodedHandles(packet);
++  const size_t allocation_size = packet->allocation_size;
++  packet->~ArosChannelPacket();
++  FreeMem(packet, allocation_size);
++}
++
++bool SendArosChannelPacket(ArosChannelHandle handle,
++                           ArosChannelPacketType type,
++                           const void* data,
++                           size_t data_size,
++                           const MojoPlatformHandle* handles,
++                           size_t handle_count) {
++  if (!IsValid(handle))
++    return false;
++  ArosChannelState* state = StateFor(handle);
++  ArosChannelPacket* packet =
++      CreatePacket(type, data, data_size, handles, handle_count);
++  if (!packet)
++    return false;
++  const uint8_t target =
++      type == ArosChannelPacketType::kStop ? handle.side : handle.side ^ 1;
++  return QueueOrDeliver(state, target, packet,
++                        type == ArosChannelPacketType::kData);
++}
++
+ }  // namespace mojo
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+index 84cb58eaff..442d7e0522 100644
+--- a/mojo/public/cpp/platform/aros_channel.h
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -6,12 +6,32 @@
+ #define MOJO_PUBLIC_CPP_PLATFORM_AROS_CHANNEL_H_
+ 
+ #include <cstdint>
++#include <cstddef>
+ #include <utility>
+ 
+ #include "base/component_export.h"
++#include "mojo/public/c/system/platform_handle.h"
++
++struct MsgPort;
+ 
+ namespace mojo {
+ 
++enum class ArosChannelPacketType : uint8_t {
++  kData,
++  kStop,
++  kPeerClosed,
++};
++
++struct ArosChannelPacket;
++
++struct ArosChannelPacketView {
++  ArosChannelPacketType type = ArosChannelPacketType::kData;
++  const void* data = nullptr;
++  size_t data_size = 0;
++  const MojoPlatformHandle* handles = nullptr;
++  size_t handle_count = 0;
++};
++
+ struct ArosChannelHandle {
+   void* state = nullptr;
+   uint8_t side = 0;
+@@ -25,6 +45,25 @@ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ void RetainArosChannelHandle(ArosChannelHandle handle);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ void ReleaseArosChannelHandle(ArosChannelHandle handle);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++MsgPort* StartReceivingArosChannel(ArosChannelHandle handle);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void StopReceivingArosChannel(ArosChannelHandle handle, MsgPort* port);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++ArosChannelPacket* WaitForArosChannelPacket(MsgPort* port);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++ArosChannelPacketView GetArosChannelPacketView(ArosChannelPacket* packet);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void MarkArosChannelPacketHandlesConsumed(ArosChannelPacket* packet);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void DestroyArosChannelPacket(ArosChannelPacket* packet);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++bool SendArosChannelPacket(ArosChannelHandle handle,
++                           ArosChannelPacketType type,
++                           const void* data,
++                           size_t data_size,
++                           const MojoPlatformHandle* handles,
++                           size_t handle_count);
+ 
+ }  // namespace mojo
+ 
+diff --git a/mojo/public/cpp/platform/aros_channel_probe.cc b/mojo/public/cpp/platform/aros_channel_probe.cc
+new file mode 100644
+index 0000000000..10da074022
+--- /dev/null
++++ b/mojo/public/cpp/platform/aros_channel_probe.cc
+@@ -0,0 +1,168 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <atomic>
++#include <cstring>
++#include <utility>
++
++#include <aros/debug.h>
++
++#include "base/at_exit.h"
++#include "base/threading/platform_thread.h"
++#include "mojo/public/cpp/platform/aros_channel.h"
++#include "mojo/public/cpp/platform/platform_handle.h"
++
++namespace {
++
++constexpr char kEarlyPayload[] = "queued-before-receiver";
++constexpr char kReplyPayload[] = "duplex-reply";
++constexpr char kHandlePayload[] = "transferred-handle";
++
++bool PayloadEquals(const mojo::ArosChannelPacketView& view,
++                   const char* expected,
++                   size_t expected_size) {
++  return view.type == mojo::ArosChannelPacketType::kData &&
++         view.data_size == expected_size &&
++         std::memcmp(view.data, expected, expected_size) == 0;
++}
++
++class Receiver final : public base::PlatformThread::Delegate {
++ public:
++  explicit Receiver(mojo::ArosChannelHandle channel) : channel_(channel) {}
++
++  void ThreadMain() override {
++    MsgPort* port = mojo::StartReceivingArosChannel(channel_);
++    if (!port) {
++      result_.store(10, std::memory_order_release);
++      return;
++    }
++
++    mojo::ArosChannelPacket* packet =
++        mojo::WaitForArosChannelPacket(port);
++    mojo::ArosChannelPacketView view =
++        mojo::GetArosChannelPacketView(packet);
++    if (!PayloadEquals(view, kEarlyPayload, sizeof(kEarlyPayload)) ||
++        view.handle_count != 1) {
++      mojo::DestroyArosChannelPacket(packet);
++      result_.store(11, std::memory_order_release);
++      return;
++    }
++
++    mojo::PlatformHandle transferred =
++        mojo::PlatformHandle::FromMojoPlatformHandle(&view.handles[0]);
++    mojo::MarkArosChannelPacketHandlesConsumed(packet);
++    mojo::DestroyArosChannelPacket(packet);
++    if (!transferred.is_aros_channel()) {
++      result_.store(12, std::memory_order_release);
++      return;
++    }
++
++    mojo::ArosChannelHandle transferred_channel =
++        transferred.TakeArosChannel();
++    if (!mojo::SendArosChannelPacket(
++            transferred_channel, mojo::ArosChannelPacketType::kData,
++            kHandlePayload, sizeof(kHandlePayload), nullptr, 0)) {
++      mojo::ReleaseArosChannelHandle(transferred_channel);
++      result_.store(13, std::memory_order_release);
++      return;
++    }
++    mojo::ReleaseArosChannelHandle(transferred_channel);
++
++    if (!mojo::SendArosChannelPacket(
++            channel_, mojo::ArosChannelPacketType::kData, kReplyPayload,
++            sizeof(kReplyPayload), nullptr, 0)) {
++      result_.store(14, std::memory_order_release);
++      return;
++    }
++
++    packet = mojo::WaitForArosChannelPacket(port);
++    view = mojo::GetArosChannelPacketView(packet);
++    const bool peer_closed =
++        view.type == mojo::ArosChannelPacketType::kPeerClosed;
++    mojo::DestroyArosChannelPacket(packet);
++    mojo::StopReceivingArosChannel(channel_, port);
++    mojo::ReleaseArosChannelHandle(std::exchange(channel_, {}));
++    result_.store(peer_closed ? 0 : 15, std::memory_order_release);
++  }
++
++  int result() const { return result_.load(std::memory_order_acquire); }
++
++ private:
++  mojo::ArosChannelHandle channel_;
++  std::atomic_int result_{99};
++};
++
++}  // namespace
++
++int main() {
++  base::AtExitManager at_exit_manager;
++
++  auto channel = mojo::CreateArosChannelPair();
++  auto transferred = mojo::CreateArosChannelPair();
++  if (!channel.first.is_valid() || !channel.second.is_valid() ||
++      !transferred.first.is_valid() || !transferred.second.is_valid()) {
++    bug("[Mojo:AROS:ChannelProbe] FAIL allocation\n");
++    return 20;
++  }
++
++  MsgPort* local_port = mojo::StartReceivingArosChannel(channel.first);
++  MsgPort* transferred_port =
++      mojo::StartReceivingArosChannel(transferred.second);
++  if (!local_port || !transferred_port) {
++    bug("[Mojo:AROS:ChannelProbe] FAIL receiver setup\n");
++    return 21;
++  }
++
++  mojo::PlatformHandle attached(transferred.first);
++  transferred.first = {};
++  MojoPlatformHandle encoded = {};
++  mojo::PlatformHandle::ToMojoPlatformHandle(std::move(attached), &encoded);
++  if (!mojo::SendArosChannelPacket(
++          channel.first, mojo::ArosChannelPacketType::kData, kEarlyPayload,
++          sizeof(kEarlyPayload), &encoded, 1)) {
++    bug("[Mojo:AROS:ChannelProbe] FAIL early send\n");
++    return 22;
++  }
++
++  Receiver receiver(channel.second);
++  channel.second = {};
++  base::PlatformThreadHandle receiver_thread;
++  if (!base::PlatformThread::Create(0, &receiver, &receiver_thread)) {
++    bug("[Mojo:AROS:ChannelProbe] FAIL thread create\n");
++    return 23;
++  }
++
++  mojo::ArosChannelPacket* packet =
++      mojo::WaitForArosChannelPacket(transferred_port);
++  mojo::ArosChannelPacketView view =
++      mojo::GetArosChannelPacketView(packet);
++  const bool transferred_ok =
++      PayloadEquals(view, kHandlePayload, sizeof(kHandlePayload));
++  mojo::DestroyArosChannelPacket(packet);
++
++  packet = mojo::WaitForArosChannelPacket(local_port);
++  view = mojo::GetArosChannelPacketView(packet);
++  const bool duplex_ok =
++      PayloadEquals(view, kReplyPayload, sizeof(kReplyPayload));
++  mojo::DestroyArosChannelPacket(packet);
++
++  mojo::StopReceivingArosChannel(transferred.second, transferred_port);
++  mojo::ReleaseArosChannelHandle(std::exchange(transferred.second, {}));
++  mojo::StopReceivingArosChannel(channel.first, local_port);
++  mojo::ReleaseArosChannelHandle(std::exchange(channel.first, {}));
++
++  base::PlatformThread::Join(receiver_thread);
++  const int receiver_result = receiver.result();
++  if (!transferred_ok || !duplex_ok || receiver_result != 0) {
++    bug(
++        "[Mojo:AROS:ChannelProbe] FAIL transferred=%d duplex=%d receiver=%d\n",
++        transferred_ok, duplex_ok, receiver_result);
++    return 24;
++  }
++
++  bug(
++      "[Mojo:AROS:ChannelProbe] PASS queued=1 duplex=1 handles=1 "
++      "peer_close=1\n");
++  return 0;
++}

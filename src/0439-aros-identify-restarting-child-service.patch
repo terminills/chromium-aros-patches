@@ -1,0 +1,73 @@
+From d01a06658e138d0a0925beee15ee0be444f94bdb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 12:35:00 -0500
+Subject: [PATCH 439/638] aros: identify restarting child service
+
+Record the utility subtype or renderer client identifier alongside child launch memory telemetry so repeated native child images can be attributed to the responsible Chromium service.
+
+
+
+---
+ base/process/launch_aros.cc | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index 9a96f21bce..a7e4dcf9a4 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -8,6 +8,7 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
++#include <cstring>
+ #include <limits>
+ #include <string>
+ 
+@@ -131,6 +132,21 @@ std::string ProcessTypeForArguments(const std::vector<std::string>& argv) {
+   return "browser";
+ }
+ 
++std::string ProcessDetailForArguments(const std::vector<std::string>& argv) {
++  constexpr const char* kDetailPrefixes[] = {
++      "--utility-sub-type=",
++      "--renderer-client-id=",
++  };
++  for (const char* prefix : kDetailPrefixes) {
++    const size_t prefix_length = strlen(prefix);
++    for (const std::string& argument : argv) {
++      if (argument.rfind(prefix, 0) == 0)
++        return argument.substr(prefix_length);
++    }
++  }
++  return "-";
++}
++
+ const char* UnsupportedOption(const LaunchOptions& options) {
+   if (!options.fds_to_remap.empty())
+     return "file descriptor remapping requires native MessagePort handles";
+@@ -169,6 +185,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+   if (!BuildArguments(argv, &arguments))
+     return UnsupportedLaunch("argument contains an embedded NUL", EINVAL);
+   const std::string process_type = ProcessTypeForArguments(argv);
++  const std::string process_detail = ProcessDetailForArguments(argv);
+ 
+   BPTR current_directory = BNULL;
+   if (!options.current_directory.empty()) {
+@@ -193,6 +210,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+     errno = IoErrToErrno(io_error);
+     LOG(ERROR) << "[Chromium:AROS:Launch] LoadSeg failed for '"
+                << dos_executable << "' type=" << process_type
++               << " detail=" << process_detail
+                << " IoErr=" << io_error
+                << " free-before=" << available_before
+                << " free-after=" << available_after;
+@@ -247,7 +265,8 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+ 
+   LOG(INFO) << "[Chromium:AROS:Launch] spawned pid=" << child_id
+             << " program='" << dos_executable << "' argc=" << argv.size()
+-            << " type=" << process_type << " stack=" << kChromiumChildStackSize
++            << " type=" << process_type << " detail=" << process_detail
++            << " stack=" << kChromiumChildStackSize
+             << " free-before=" << available_before
+             << " free-after=" << available_after;
+ 

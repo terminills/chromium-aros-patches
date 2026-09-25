@@ -1,0 +1,37 @@
+From 9565275d9316ee7d6d60ba31759cb9f482a1b5e7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 13:21:50 -0500
+Subject: [PATCH 04/43] cef: contain AROS GetHead macro
+
+Undefine exec/lists.h's function-like GetHead macro at the CEF public-header boundary before CefDOMDocument declares its method of the same name.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: focused-objects-passed
+
+AI_VALIDATION: domvisitor_cpptoc.o and domdocument_ctocpp.o compiled successfully
+
+AI_LIMITATIONS: CEF consumers including exec/lists.h before cef_base.h must call the AROS list helper before the CEF boundary or use the underlying list operation
+
+AI_DECISION_CHAIN:
+---
+ include/cef_base.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/include/cef_base.h b/include/cef_base.h
+index 877b5089..8ea50a56 100644
+--- a/include/cef_base.h
++++ b/include/cef_base.h
+@@ -47,6 +47,12 @@
+ #include "include/internal/cef_linux.h"
+ #endif
+ 
++#if defined(OS_AROS) && defined(GetHead)
++// exec/lists.h exposes GetHead as a function-like macro. CEF owns the public
++// header namespace from this point and declares CefDOMDocument::GetHead().
++#undef GetHead
++#endif
++
+ ///
+ /// All ref-counted framework classes must extend this class.
+ ///

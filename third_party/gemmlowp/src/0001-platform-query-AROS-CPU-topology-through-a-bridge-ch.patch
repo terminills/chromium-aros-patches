@@ -1,0 +1,61 @@
+From 4d7315d147ed264695a2af3f87d91cd382476d11 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:41:51 -0500
+Subject: [PATCH] platform: query AROS CPU topology through a bridge [chromium]
+ [aros]
+
+Statement:
+AROS does not publish _SC_NPROCESSORS_CONF or _SC_NPROCESSORS_ONLN, so gemmlowp could not compile its Unix hardware-concurrency path.
+
+Decision:
+Select a private Chromium AROS CPU-count bridge and retain the existing Unix sysconf path everywhere else. Clamp unavailable topology to one worker.
+
+Evidence:
+The TFLite add.o object advances past the processor-count failure without importing Exec macros into Ruy headers.
+
+Chain:
+
+ACD-openmp-as-system-library
+---
+ internal/platform.h | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/internal/platform.h b/internal/platform.h
+index ab71414..e348223 100644
+--- a/internal/platform.h
++++ b/internal/platform.h
+@@ -30,6 +30,10 @@
+ #include <sys/time.h>
+ #endif
+ 
++#ifdef __AROS__
++#include "third_party/gemmlowp/aros_cpu_count.h"
++#endif
++
+ #if defined ANDROID || defined __ANDROID__
+ #include <malloc.h>
+ #include <android/api-level.h>
+@@ -47,7 +51,7 @@
+ #endif
+ 
+ // Needed by chrome native builds
+-#ifndef _SC_NPROCESSORS_CONF
++#if !defined(__AROS__) && !defined(_SC_NPROCESSORS_CONF)
+ #define _SC_NPROCESSORS_CONF _SC_NPROCESSORS_ONLN
+ #endif
+ 
+@@ -91,9 +95,13 @@ inline void *aligned_alloc(size_t alignment, size_t size) {
+ 
+ inline int GetHardwareConcurrency(int max_threads) {
+   if (max_threads == 0) {
++#ifdef __AROS__
++    static const int hardware_threads_count = GetArosCpuCount();
++#else
+     static const int hardware_threads_count =
+         static_cast<int>(sysconf(_SC_NPROCESSORS_CONF));
+-    return hardware_threads_count;
++#endif
++    return hardware_threads_count > 0 ? hardware_threads_count : 1;
+   }
+   return max_threads;
+ }

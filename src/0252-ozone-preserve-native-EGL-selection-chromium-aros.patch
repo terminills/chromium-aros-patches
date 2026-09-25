@@ -1,0 +1,47 @@
+From 9f6240c270b98deecece850336211a9bcf8fefcb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 23:08:22 -0500
+Subject: [PATCH 252/638] ozone: preserve native EGL selection [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-5-gpu-bridge
+
+AI_STATUS: build-validated, hosted-runtime-pending
+
+ROOT_CAUSE: Generic Ozone EGL initialization accepted advertised ANGLE display paths after AROS had already selected native EGL/GLES2. GLDisplayEGL then rewrote the global implementation to EGLANGLE, for which AROS intentionally exposes no GLOzone, and gl_factory_ozone aborted Chrome_InProcGpuThread with Expected Mock or Stub, actual:9.
+
+FIX_REASON: When native EGL/GLES2 is already selected, keep the default native display path and suppress ANGLE display probing. Explicit ANGLE and SwiftShader selections remain unchanged because they enter as EGLANGLE rather than native EGL/GLES2.
+
+SCOPE: ui/ozone/common/gl_ozone_egl.cc only. No Mesa, Gallium, VirGL, Venus, or AROS renderer policy is bypassed; the hosted replay must identify the renderer reached after native EGL remains selected.
+
+HOSTED_NATIVE: Shared generic Ozone behavior. Built with the native x86_64 AROS toolchain; hosted runtime validation is next and native SMP replay remains pending.
+
+VALIDATION: git diff --check; 47,583-edge full chrome build passed in 1:02:38 with exit 0 and 85,565,008 KiB peak RSS; immediate ninja no-work verification passed.
+
+RISK: Low to medium. Native EGL selection now has precedence over advertised ANGLE paths; explicit ANGLE selections retain their prior behavior.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ ui/ozone/common/gl_ozone_egl.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ui/ozone/common/gl_ozone_egl.cc b/ui/ozone/common/gl_ozone_egl.cc
+index ec1493e50f..f52ebf1565 100644
+--- a/ui/ozone/common/gl_ozone_egl.cc
++++ b/ui/ozone/common/gl_ozone_egl.cc
+@@ -21,6 +21,15 @@ gl::GLDisplay* GLOzoneEGL::InitializeGLOneOffPlatform(
+     bool supports_angle,
+     std::vector<gl::DisplayType> init_displays,
+     gl::GpuPreference gpu_preference) {
++  if (gl::GetGLImplementation() == gl::kGLImplementationEGLGLES2) {
++    if (supports_angle) {
++      DVLOG(1) << "Native EGL selected; ignoring advertised ANGLE display "
++                  "paths.";
++    }
++    supports_angle = false;
++    init_displays = {gl::DEFAULT};
++  }
++
+   gl::GLDisplayEGL* display = gl::GetDisplayEGL(gpu_preference);
+   if (!display->Initialize(supports_angle, init_displays, GetNativeDisplay())) {
+     LOG(ERROR) << "GLDisplayEGL::Initialize failed.";

@@ -1,0 +1,33 @@
+From 37006423e6cd22a68e88e381a3a8794aae4c8d20 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 13:02:21 -0500
+Subject: [PATCH 371/638] cef: guard DevTools opener propagation
+
+AI_PHASE: chromium-process-model
+AI_STATUS: clean-chrome-cef-devtools-boundary
+ROOT_CAUSE: The CEF DevTools patch assigned Browser::CreateParams::opener in enable_cef=false builds even though that member is intentionally CEF-only.
+FIX_REASON: Keep opener propagation inside the same ENABLE_CEF buildflag boundary as the field and delegate path.
+SCOPE: chrome/browser/devtools/devtools_window.cc
+VALIDATION: The previously failing AROS devtools_window.o rebuilt successfully in the full Chrome tree.
+RISK: Additional incomplete CEF integration guards may surface as the clean Chrome build continues.
+AI_DECISION_CHAIN: full Chrome compile -> missing opener member -> inspect CEF patch and Browser definition -> align assignment guard -> focused object PASS.
+Evidence:-chromium-browser-renderer-20260728/build-09-full-resume.log;-chromium-browser-renderer-20260728/build-10-devtools-cef-opener.log
+Job:
+---
+ chrome/browser/devtools/devtools_window.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/chrome/browser/devtools/devtools_window.cc b/chrome/browser/devtools/devtools_window.cc
+index d102fff3e9..df3811517f 100644
+--- a/chrome/browser/devtools/devtools_window.cc
++++ b/chrome/browser/devtools/devtools_window.cc
+@@ -1868,7 +1868,9 @@ void DevToolsWindow::CreateDevToolsBrowser() {
+ 
+   if (!browser_) {
+     auto create_params = Browser::CreateParams::CreateForDevTools(profile_);
++#if BUILDFLAG(ENABLE_CEF)
+     create_params.opener = opener;
++#endif
+ 
+     browser_ = Browser::Create(std::move(create_params));
+     browser_->tab_strip_model()->AddWebContents(

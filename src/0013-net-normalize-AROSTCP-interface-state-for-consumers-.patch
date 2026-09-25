@@ -1,0 +1,72 @@
+From be4480b8d866a9a76ec095c50c23272dbf00b644 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:09:48 -0500
+Subject: [PATCH 013/638] net: normalize AROSTCP interface state for consumers
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Native interface enumeration exposed raw AROSTCP flags but downstream WebRTC needs stable up/running/loopback state and IPv6 scope identity without importing AROS ifreq headers. AROSTCP also lacks the optional IFF_RUNNING bit.
+
+FIX_REASON: Extend the adapter snapshot with normalized booleans and scope_id, deriving running from IFF_UP when the native stack cannot report a distinct carrier state.
+
+SCOPE: base/aros/socket_library NetworkInterfaceInfo and SIOCGIFCONF conversion.
+
+VALIDATION: focused Chromium socket_library.o and WebRTC network.o compile with the normalized record.
+
+RISK: low; carrier-down cannot be distinguished from administratively-up on stacks without IFF_RUNNING, and that limitation is represented explicitly.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/aros/socket_library.cc | 8 ++++++++
+ base/aros/socket_library.h  | 4 ++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/base/aros/socket_library.cc b/base/aros/socket_library.cc
+index a08f0c5ec0..4499d638d5 100644
+--- a/base/aros/socket_library.cc
++++ b/base/aros/socket_library.cc
+@@ -503,6 +503,13 @@ bool GetNetworkInterfaces(std::vector<NetworkInterfaceInfo>* result) {
+     std::copy_n(native->ifr_name, sizeof(query.ifr_name), query.ifr_name);
+     if (SocketIoctl(descriptor, SIOCGIFFLAGS, &query) == 0) {
+       info.flags = static_cast<uint16_t>(query.ifr_flags);
++      info.is_up = (query.ifr_flags & IFF_UP) != 0;
++#ifdef IFF_RUNNING
++      info.is_running = (query.ifr_flags & IFF_RUNNING) != 0;
++#else
++      info.is_running = info.is_up;
++#endif
++      info.is_loopback = (query.ifr_flags & IFF_LOOPBACK) != 0;
+     }
+ 
+     query = {};
+@@ -533,6 +540,7 @@ bool GetNetworkInterfaces(std::vector<NetworkInterfaceInfo>* result) {
+       const auto* address =
+           reinterpret_cast<const struct sockaddr_in6*>(native_address);
+       info.address_length = sizeof(address->sin6_addr);
++      info.scope_id = address->sin6_scope_id;
+       memcpy(info.address.data(), &address->sin6_addr, info.address_length);
+ 
+       struct in6_ifreq mask_query = {};
+diff --git a/base/aros/socket_library.h b/base/aros/socket_library.h
+index c1482e0c5a..83a8a7eba5 100644
+--- a/base/aros/socket_library.h
++++ b/base/aros/socket_library.h
+@@ -24,11 +24,15 @@ struct BASE_EXPORT NetworkInterfaceInfo {
+   std::string name;
+   uint32_t index = 0;
+   uint32_t flags = 0;
++  uint32_t scope_id = 0;
+   int family = 0;
+   size_t address_length = 0;
+   std::array<uint8_t, 16> address = {};
+   bool has_netmask = false;
+   std::array<uint8_t, 16> netmask = {};
++  bool is_up = false;
++  bool is_running = false;
++  bool is_loopback = false;
+ };
+ 
+ // AROSTCP library bases belong to the Exec task that opened them. These

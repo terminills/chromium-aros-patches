@@ -1,0 +1,102 @@
+From 7489203be93884b304168431c91bd6c6779807d2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 9 Sep 2026 16:09:50 -0500
+Subject: [PATCH 602/638] Make Chromium start from read-only media
+
+Two things stopped it booting from a Live CD.
+
+The profile: GetDefaultUserDataDirectory() returned PROGDIR:Profiles
+unconditionally, and on a Live CD PROGDIR: is the CD. DIR_USER_DATA could not
+be created and startup aborted in PostEarlyInitialization with
+"path_service.cc: Failed to get the path for 1001" before a window was drawn.
+Probe by creating the directory - which succeeds when it already exists - and
+fall back to RAM:, the one volatile location every AROS system has. An
+installed system still uses PROGDIR:Profiles and still persists. T: is not
+probed: it is a normal assign to RAM:T, but probing an assign that is missing
+puts a "Please insert volume T" requester on screen mid-startup.
+
+This policy belongs in an AROS launcher that prepares the profile and passes
+--user-data-dir=, not in the browser; it is here for now by decision so the
+test ISO is not churned. See ACD-chromium-aros-profile-location.
+
+The pool: a pool must be aligned to its own size and PartitionAlloc gets that
+by reserving twice the pool and trimming, so kPoolMaxSize = 2 GiB asked the
+machine for 4 GiB of physically backed memory in one contiguous piece. A
+tester on 8 GB reported 7.99 GB free with a largest block of 4.137 GB - short
+by about 157 MB - dying in PartitionAddressSpace::Init. 1 GiB keeps the
+reservation at 2 GiB and fits.
+---
+ .../partition_alloc_constants.h               | 10 +++++-
+ chrome/common/chrome_paths_aros.cc            | 31 +++++++++++++++++--
+ 2 files changed, 38 insertions(+), 3 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+index ffa2fa7393..022617e03c 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+@@ -318,7 +318,15 @@ constexpr size_t kNumPools = kMaxPoolHandle - 1;
+ // reserve and commit address space independently. The regular pool also
+ // carries malloc() when the allocator shim is in use, so it gets the maximum;
+ // the smaller pools size themselves in partition_address_space.h.
+-constexpr size_t kPoolMaxSize = 2 * kGiB;
++//
++// The pool must be aligned to its own size, and PartitionAlloc gets that by
++// reserving twice the pool and trimming - so the machine has to hand over one
++// contiguous block of 2 * kPoolMaxSize, physically. At 2 GiB that is a 4 GiB
++// block, which an installed system can find but a Live CD cannot: booting the
++// ISO on a 12 GB machine leaves a largest free block of 3.57 GB and Chromium
++// dies in PostEarlyInitialization before it ever draws a window. 1 GiB keeps
++// the reservation at 2 GiB and fits.
++constexpr size_t kPoolMaxSize = 1 * kGiB;
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || \
+     BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+ constexpr size_t kPoolMaxSize = 8 * kGiB;
+diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
+index 9d10b55af4..03eb895154 100644
+--- a/chrome/common/chrome_paths_aros.cc
++++ b/chrome/common/chrome_paths_aros.cc
+@@ -17,6 +17,7 @@ constexpr char kProfileUserDataDirectory[] =
+     "PROFILE:Applications/Chromium";
+ constexpr char kProfileCacheDirectory[] = "PROFILE:Cache/Chromium";
+ constexpr char kLegacyUserDataDirectory[] = "PROGDIR:Profiles";
++constexpr char kVolatileUserDataDirectory[] = "RAM:Chromium";
+ constexpr char kVolatileUserDirectory[] = "RAM:";
+ 
+ bool HasUserProfile() {
+@@ -33,8 +34,34 @@ base::FilePath GetUserDirectory(const char* name) {
+ }  // namespace
+ 
+ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+-  *result = base::FilePath(HasUserProfile() ? kProfileUserDataDirectory
+-                                           : kLegacyUserDataDirectory);
++  if (HasUserProfile()) {
++    *result = base::FilePath(kProfileUserDataDirectory);
++    return true;
++  }
++
++  // NOTE: this policy - writable PROGDIR: wins, otherwise somewhere volatile -
++  // is meant to live in an AROS launcher that prepares the profile and passes
++  // --user-data-dir=, not inside the browser. It sits here because it is what
++  // made the Live CD boot work; moving it out is a refactor with no
++  // user-visible change. See .acd/decisions/ACD-chromium-aros-profile-location.
++  //
++  // PROGDIR: is the boot medium, and on a Live CD that medium is read-only:
++  // the profile cannot be created there, DIR_USER_DATA fails outright, and
++  // startup dies in PostEarlyInitialization with
++  // "path_service.cc: Failed to get the path for 1001" before a window is
++  // ever drawn. Probe by creating the directory - it succeeds when it already
++  // exists - and fall back to RAM:, which is the one volatile location every
++  // AROS system has. T: is NOT usable here: a Live CD boot does not assign it,
++  // and merely probing a missing assign pops a "Please insert volume T"
++  // requester in the middle of startup. An installed (writable) system keeps
++  // using PROGDIR:Profiles, so a real profile still persists there.
++  base::FilePath legacy(kLegacyUserDataDirectory);
++  if (base::CreateDirectory(legacy)) {
++    *result = legacy;
++    return true;
++  }
++
++  *result = base::FilePath(kVolatileUserDataDirectory);
+   return true;
+ }
+ 

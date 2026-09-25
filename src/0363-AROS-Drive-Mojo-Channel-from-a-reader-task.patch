@@ -1,0 +1,417 @@
+From a47721ad3ef046b651e85015834128333220281c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:47:00 -0500
+Subject: [PATCH 363/638] [AROS] Drive Mojo Channel from a reader task
+
+AI_PHASE: chromium-process-model
+AI_STATUS: channel-aros-core-compile-pass
+ROOT_CAUSE: Mojo core still selected ChannelPosix on AROS, binding browser IPC to unavailable socket watcher and fd-passing semantics.
+FIX_REASON: Select ChannelAros, receive Exec packets on a dedicated scheduled reader task, marshal packets onto the Mojo IO runner, and serialize platform handles through the proven AROS substrate.
+SCOPE: mojo/core/BUILD.gn; mojo/core/channel_aros.{cc,h}
+VALIDATION: mojo/core:impl_for_embedder compiles at -j32 with channel_aros.o; the underlying packet/handle transport passes focused hosted validation.
+RISK: ChannelAros has not yet passed an end-to-end Mojo invitation; upgrade offers are rejected and POSIX writev tuning is intentionally inert.
+AI_DECISION_CHAIN: compiled POSIX dependency rejected -> dedicated AROS reader task -> IO-runner dispatch -> Channel managed read buffer -> clean core object/stamp build.
+Evidence:-channel-aros-20260728
+Job:
+---
+ mojo/core/BUILD.gn        |  17 ++-
+ mojo/core/channel_aros.cc | 276 ++++++++++++++++++++++++++++++++++++++
+ mojo/core/channel_aros.h  |  78 +++++++++++
+ 3 files changed, 366 insertions(+), 5 deletions(-)
+ create mode 100644 mojo/core/channel_aros.cc
+ create mode 100644 mojo/core/channel_aros.h
+
+diff --git a/mojo/core/BUILD.gn b/mojo/core/BUILD.gn
+index 7147b3fb92..9e6d2d7d69 100644
+--- a/mojo/core/BUILD.gn
++++ b/mojo/core/BUILD.gn
+@@ -159,11 +159,18 @@ template("core_impl_source_set") {
+ 
+     if (is_posix && !mojo_use_apple_channel) {
+       if (!is_nacl) {
+-        sources += [
+-          "broker_posix.cc",
+-          "channel_posix.cc",
+-          "channel_posix.h",
+-        ]
++        sources += [ "broker_posix.cc" ]
++        if (is_aros) {
++          sources += [
++            "channel_aros.cc",
++            "channel_aros.h",
++          ]
++        } else {
++          sources += [
++            "channel_posix.cc",
++            "channel_posix.h",
++          ]
++        }
+       }
+ 
+       if ((is_linux || is_chromeos || is_android) && !is_nacl) {
+diff --git a/mojo/core/channel_aros.cc b/mojo/core/channel_aros.cc
+new file mode 100644
+index 0000000000..a073d13807
+--- /dev/null
++++ b/mojo/core/channel_aros.cc
+@@ -0,0 +1,276 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "mojo/core/channel_aros.h"
++
++#include <algorithm>
++#include <cstring>
++#include <limits>
++#include <utility>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/metrics/histogram_macros.h"
++#include "base/task/single_thread_task_runner.h"
++#include "mojo/core/platform_handle_in_transit.h"
++#include "mojo/public/cpp/platform/platform_channel_endpoint.h"
++#include "mojo/public/cpp/platform/platform_handle.h"
++
++namespace mojo::core {
++
++ChannelAros::ChannelAros(
++    Channel::Delegate* delegate,
++    ConnectionParams connection_params,
++    HandlePolicy handle_policy,
++    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
++    : Channel(delegate, handle_policy),
++      self_(this),
++      io_task_runner_(std::move(io_task_runner)) {
++  channel_ = connection_params.TakeEndpoint()
++                 .TakePlatformHandle()
++                 .TakeArosChannel();
++  CHECK(channel_.is_valid());
++}
++
++ChannelAros::~ChannelAros() {
++  CHECK(reader_thread_.is_null());
++  CHECK(!channel_.is_valid() || leak_handle_);
++}
++
++void ChannelAros::Start() {
++  io_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&ChannelAros::StartOnIOThread, this));
++}
++
++void ChannelAros::StartOnIOThread() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (shutdown_started_)
++    return;
++  reader_started_ =
++      base::PlatformThread::Create(0, this, &reader_thread_);
++  if (!reader_started_) {
++    OnError(Error::kConnectionFailed);
++    FinishShutdown();
++  }
++}
++
++void ChannelAros::ShutDownImpl() {
++  io_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&ChannelAros::ShutDownOnIOThread, this));
++}
++
++void ChannelAros::ShutDownOnIOThread() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (shutdown_started_)
++    return;
++  shutdown_started_ = true;
++  {
++    base::AutoLock lock(write_lock_);
++    reject_writes_ = true;
++  }
++  if (!reader_started_) {
++    FinishShutdown();
++    return;
++  }
++  if (!SendArosChannelPacket(channel_, ArosChannelPacketType::kStop, nullptr,
++                             0, nullptr, 0)) {
++    // A live endpoint always accepts a self-directed stop packet.
++    CHECK(false);
++  }
++}
++
++void ChannelAros::ThreadMain() {
++  base::PlatformThread::SetName("MojoAROSReader");
++  MsgPort* port = StartReceivingArosChannel(channel_);
++  if (!port) {
++    io_task_runner_->PostTask(
++        FROM_HERE,
++        base::BindOnce(&ChannelAros::ReaderStopped, this, false));
++    return;
++  }
++
++  bool peer_closed = false;
++  for (;;) {
++    ArosChannelPacket* packet = WaitForArosChannelPacket(port);
++    if (!packet)
++      continue;
++    const ArosChannelPacketView view = GetArosChannelPacketView(packet);
++    if (view.type == ArosChannelPacketType::kStop) {
++      DestroyArosChannelPacket(packet);
++      break;
++    }
++    if (view.type == ArosChannelPacketType::kPeerClosed) {
++      DestroyArosChannelPacket(packet);
++      peer_closed = true;
++      break;
++    }
++    io_task_runner_->PostTask(
++        FROM_HERE, base::BindOnce(&ChannelAros::ProcessPacket, this, packet));
++  }
++
++  StopReceivingArosChannel(channel_, port);
++  io_task_runner_->PostTask(
++      FROM_HERE,
++      base::BindOnce(&ChannelAros::ReaderStopped, this, peer_closed));
++}
++
++void ChannelAros::Write(MessagePtr message) {
++  if (ShouldRecordSubsampledHistograms()) {
++    UMA_HISTOGRAM_COUNTS_100000("Mojo.Channel.WriteMessageSize",
++                                message->data_num_bytes());
++    LogHistogramForIPCMetrics(MessageType::kSent);
++  }
++
++  {
++    base::AutoLock lock(write_lock_);
++    if (reject_writes_)
++      return;
++  }
++
++  std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
++  std::vector<MojoPlatformHandle> encoded_handles(handles.size());
++  for (size_t i = 0; i < handles.size(); ++i) {
++    PlatformHandle::ToMojoPlatformHandle(handles[i].TakeHandle(),
++                                         &encoded_handles[i]);
++  }
++
++  if (SendArosChannelPacket(channel_, ArosChannelPacketType::kData,
++                            message->data(), message->data_num_bytes(),
++                            encoded_handles.data(), encoded_handles.size())) {
++    return;
++  }
++
++  // Encoding relinquished the PlatformHandle wrappers. Reconstitute ownership
++  // when the packet could not be allocated or the peer was already closed.
++  for (const MojoPlatformHandle& encoded : encoded_handles) {
++    PlatformHandle handle =
++        PlatformHandle::FromMojoPlatformHandle(&encoded);
++  }
++  {
++    base::AutoLock lock(write_lock_);
++    reject_writes_ = true;
++  }
++  io_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&ChannelAros::ReportWriteError, this));
++}
++
++void ChannelAros::ReportWriteError() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  OnError(Error::kDisconnected);
++}
++
++void ChannelAros::ProcessPacket(ArosChannelPacket* packet) {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  const ArosChannelPacketView view = GetArosChannelPacketView(packet);
++
++  for (size_t i = 0; i < view.handle_count; ++i) {
++    incoming_handles_.push_back(
++        PlatformHandle::FromMojoPlatformHandle(&view.handles[i]));
++  }
++  MarkArosChannelPacketHandlesConsumed(packet);
++
++  size_t offset = 0;
++  bool valid = true;
++  while (offset < view.data_size) {
++    size_t capacity = view.data_size - offset;
++    char* buffer = GetReadBuffer(&capacity);
++    CHECK_GT(capacity, 0u);
++    const size_t chunk = std::min(capacity, view.data_size - offset);
++    std::memcpy(buffer, static_cast<const char*>(view.data) + offset, chunk);
++    offset += chunk;
++    size_t next_read_size = 0;
++    if (!OnReadComplete(chunk, &next_read_size)) {
++      valid = false;
++      break;
++    }
++  }
++  DestroyArosChannelPacket(packet);
++  if (!valid)
++    OnError(Error::kReceivedMalformedData);
++}
++
++void ChannelAros::ReaderStopped(bool peer_closed) {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (peer_closed && !shutdown_started_)
++    OnError(Error::kDisconnected);
++  if (!shutdown_started_) {
++    shutdown_started_ = true;
++    base::AutoLock lock(write_lock_);
++    reject_writes_ = true;
++  }
++  FinishShutdown();
++}
++
++void ChannelAros::FinishShutdown() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (!reader_thread_.is_null()) {
++    base::PlatformThread::Join(reader_thread_);
++    reader_thread_ = base::PlatformThreadHandle();
++  }
++  if (channel_.is_valid() && !leak_handle_) {
++    ReleaseArosChannelHandle(channel_);
++    channel_ = {};
++  }
++  self_ = nullptr;
++}
++
++void ChannelAros::LeakHandle() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  leak_handle_ = true;
++}
++
++bool ChannelAros::GetReadPlatformHandles(
++    const void* payload,
++    size_t payload_size,
++    size_t num_handles,
++    const void* extra_header,
++    size_t extra_header_size,
++    std::vector<PlatformHandle>* handles,
++    bool* deferred) {
++  if (num_handles > std::numeric_limits<uint16_t>::max())
++    return false;
++  return GetReadPlatformHandlesForIpcz(num_handles, *handles);
++}
++
++bool ChannelAros::GetReadPlatformHandlesForIpcz(
++    size_t num_handles,
++    std::vector<PlatformHandle>& handles) {
++  if (incoming_handles_.size() < num_handles)
++    return true;
++  DCHECK(handles.empty());
++  handles.reserve(num_handles);
++  while (num_handles--) {
++    handles.push_back(std::move(incoming_handles_.front()));
++    incoming_handles_.pop_front();
++  }
++  return true;
++}
++
++bool ChannelAros::OnControlMessage(
++    Message::MessageType message_type,
++    const void* payload,
++    size_t payload_size,
++    std::vector<PlatformHandle> handles) {
++  if (message_type != Message::MessageType::UPGRADE_OFFER)
++    return false;
++  Write(Message::CreateMessage(0, 0, Message::MessageType::UPGRADE_REJECT));
++  return true;
++}
++
++// AROS is POSIX-shaped for Chromium source selection, but its Mojo transport is
++// an Exec MessagePort channel and does not have a writev tuning mode.
++void Channel::set_posix_use_writev(bool use_writev) {}
++
++// static
++scoped_refptr<Channel> Channel::Create(
++    Delegate* delegate,
++    ConnectionParams connection_params,
++    HandlePolicy handle_policy,
++    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
++  return new ChannelAros(delegate, std::move(connection_params), handle_policy,
++                         std::move(io_task_runner));
++}
++
++}  // namespace mojo::core
+diff --git a/mojo/core/channel_aros.h b/mojo/core/channel_aros.h
+new file mode 100644
+index 0000000000..5195383345
+--- /dev/null
++++ b/mojo/core/channel_aros.h
+@@ -0,0 +1,78 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MOJO_CORE_CHANNEL_AROS_H_
++#define MOJO_CORE_CHANNEL_AROS_H_
++
++#include <vector>
++
++#include "base/containers/circular_deque.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/synchronization/lock.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/threading/platform_thread.h"
++#include "mojo/core/channel.h"
++#include "mojo/public/cpp/platform/aros_channel.h"
++
++namespace mojo::core {
++
++class ChannelAros final : public Channel,
++                          public base::PlatformThread::Delegate {
++ public:
++  ChannelAros(Channel::Delegate* delegate,
++              ConnectionParams connection_params,
++              HandlePolicy handle_policy,
++              scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
++
++  ChannelAros(const ChannelAros&) = delete;
++  ChannelAros& operator=(const ChannelAros&) = delete;
++
++  void Start() override;
++  void ShutDownImpl() override;
++  void Write(MessagePtr message) override;
++  void LeakHandle() override;
++  bool GetReadPlatformHandles(const void* payload,
++                              size_t payload_size,
++                              size_t num_handles,
++                              const void* extra_header,
++                              size_t extra_header_size,
++                              std::vector<PlatformHandle>* handles,
++                              bool* deferred) override;
++  bool GetReadPlatformHandlesForIpcz(
++      size_t num_handles,
++      std::vector<PlatformHandle>& handles) override;
++  bool OnControlMessage(Message::MessageType message_type,
++                        const void* payload,
++                        size_t payload_size,
++                        std::vector<PlatformHandle> handles) override;
++
++ private:
++  ~ChannelAros() override;
++
++  // base::PlatformThread::Delegate:
++  void ThreadMain() override;
++
++  void StartOnIOThread();
++  void ShutDownOnIOThread();
++  void ProcessPacket(ArosChannelPacket* packet);
++  void ReaderStopped(bool peer_closed);
++  void FinishShutdown();
++  void ReportWriteError();
++
++  scoped_refptr<Channel> self_;
++  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
++  ArosChannelHandle channel_;
++  base::PlatformThreadHandle reader_thread_;
++
++  base::Lock write_lock_;
++  bool reject_writes_ GUARDED_BY(write_lock_) = false;
++  bool shutdown_started_ = false;
++  bool leak_handle_ = false;
++  bool reader_started_ = false;
++  base::circular_deque<PlatformHandle> incoming_handles_;
++};
++
++}  // namespace mojo::core
++
++#endif  // MOJO_CORE_CHANNEL_AROS_H_

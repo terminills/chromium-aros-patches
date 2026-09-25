@@ -1,0 +1,55 @@
+From e97fa9d35fa0eae98adbf674cfd79671848908f7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:02:42 -0500
+Subject: [PATCH 5/7] [AROS] Separate in-process tracing from daemon IPC
+
+AI_PHASE: Chromium Phase 3 link closure
+AI_STATUS: Perfetto provides its pthread-backed default platform on AROS while omitting unsupported system-daemon IPC.
+ROOT_CAUSE: AROS needs the in-process tracing platform, but Perfetto enabled its Unix-domain producer/service backend solely from Chromium POSIX classification.
+FIX_REASON: Include AROS in PlatformPosix and disable enable_perfetto_ipc until a native service transport exists.
+SCOPE: Perfetto platform implementation and IPC capability selection.
+VALIDATION: Filtered GN generation removes producer/default-socket targets; platform_posix.o builds and exports Platform::GetDefaultPlatform.
+RISK: Cross-process/system Perfetto sessions remain unavailable; in-process tracing is retained.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-aros-native-crash-reporting
+---
+ gn/perfetto.gni               | 5 +++--
+ src/tracing/platform_posix.cc | 5 +++--
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/gn/perfetto.gni b/gn/perfetto.gni
+index 8cd9b08..19f738b 100644
+--- a/gn/perfetto.gni
++++ b/gn/perfetto.gni
+@@ -147,8 +147,9 @@ declare_args() {
+   # For now the IPC layer is conservatively not enabled on Chromium+Windows
+   # builds.
+   enable_perfetto_ipc =
+-      !is_nacl && (perfetto_build_standalone || perfetto_build_with_android ||
+-                   (build_with_chromium && !is_win) || is_fuchsia)
++      !is_nacl && !is_aros &&
++      (perfetto_build_standalone || perfetto_build_with_android ||
++       (build_with_chromium && !is_win) || is_fuchsia)
+ 
+   # Makes the heap profiling daemon target reachable. It works only on Android,
+   # but is built on Linux as well for test/compiler coverage.
+diff --git a/src/tracing/platform_posix.cc b/src/tracing/platform_posix.cc
+index e2e8e95..e922e96 100644
+--- a/src/tracing/platform_posix.cc
++++ b/src/tracing/platform_posix.cc
+@@ -19,7 +19,8 @@
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
++    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ 
+ #include "perfetto/ext/base/file_utils.h"
+ #include "perfetto/ext/base/thread_task_runner.h"
+@@ -131,4 +132,4 @@ Platform* Platform::GetDefaultPlatform() {
+ }
+ 
+ }  // namespace perfetto
+-#endif  // OS_LINUX || OS_ANDROID || OS_APPLE || OS_FUCHSIA
++#endif  // OS_LINUX || OS_ANDROID || OS_APPLE || OS_FUCHSIA || OS_AROS

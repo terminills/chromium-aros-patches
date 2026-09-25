@@ -1,0 +1,132 @@
+From 27ffa6d02e053b567331944b0d7545ffbf964c71 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 17:18:13 -0500
+Subject: [PATCH 079/638] [AROS] Contain Exec macros in generated DevTools API
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Generated headless DevTools sources retain their canonical protocol identifiers on AROS.
+ROOT_CAUSE: base::Value reaches AROS pthread and Exec headers, whose GLOBAL, IMPORT, and list-helper macros rewrote generated enums and C++ methods.
+FIX_REASON: Release only the colliding legacy macros after system types are available, at every generated DevTools template boundary, so generated code and callers share one usable API.
+SCOPE: Headless DevTools generator templates and action inputs only.
+VALIDATION: Generated debugger, DOM, DOM snapshot, heap profiler, page, and DOM client objects compile under the AROS GCC toolchain.
+RISK: Chromium code including these generated APIs cannot subsequently rely on the five legacy Exec macros; native adapters should use typed Exec operations instead.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ headless/BUILD.gn                                      |  1 +
+ .../browser/devtools_api/aros_macro_hygiene.template   | 10 ++++++++++
+ headless/lib/browser/devtools_api/domain_cc.template   |  2 ++
+ headless/lib/browser/devtools_api/domain_h.template    |  2 ++
+ .../devtools_api/domain_type_conversions_h.template    |  2 ++
+ .../lib/browser/devtools_api/domain_types_cc.template  |  2 ++
+ .../domain_types_forward_declarations_h.template       |  2 ++
+ .../lib/browser/devtools_api/domain_types_h.template   |  2 ++
+ 8 files changed, 23 insertions(+)
+ create mode 100644 headless/lib/browser/devtools_api/aros_macro_hygiene.template
+
+diff --git a/headless/BUILD.gn b/headless/BUILD.gn
+index ebac7d7121..2bea1fbb81 100644
+--- a/headless/BUILD.gn
++++ b/headless/BUILD.gn
+@@ -232,6 +232,7 @@ action("gen_devtools_client_api") {
+ 
+   outputs = generated_devtools_api_headers + generated_devtools_api_sources
+   sources = [
++    "lib/browser/devtools_api/aros_macro_hygiene.template",
+     "lib/browser/devtools_api/domain_cc.template",
+     "lib/browser/devtools_api/domain_h.template",
+     "lib/browser/devtools_api/domain_type_conversions_h.template",
+diff --git a/headless/lib/browser/devtools_api/aros_macro_hygiene.template b/headless/lib/browser/devtools_api/aros_macro_hygiene.template
+new file mode 100644
+index 0000000000..377fe3f494
+--- /dev/null
++++ b/headless/lib/browser/devtools_api/aros_macro_hygiene.template
+@@ -0,0 +1,10 @@
++// AROS Exec exposes legacy qualifiers and list helpers as macros. Generated
++// DevTools declarations own these C++ identifiers after system headers have
++// supplied their types, so keep the macros out of both the API and its users.
++#if defined(__AROS__)
++#undef GLOBAL
++#undef IMPORT
++#undef GetHead
++#undef GetNodeName
++#undef SetNodeName
++#endif
+diff --git a/headless/lib/browser/devtools_api/domain_cc.template b/headless/lib/browser/devtools_api/domain_cc.template
+index 10c397dd03..6597e2abb3 100644
+--- a/headless/lib/browser/devtools_api/domain_cc.template
++++ b/headless/lib/browser/devtools_api/domain_cc.template
+@@ -9,6 +9,8 @@
+ #include "base/functional/bind.h"
+ #include "headless/public/util/error_reporter.h"
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ namespace headless {
+ 
+ namespace {{domain.domain | camelcase_to_hacker_style}} {
+diff --git a/headless/lib/browser/devtools_api/domain_h.template b/headless/lib/browser/devtools_api/domain_h.template
+index 43a759a49c..a91a90fe1f 100644
+--- a/headless/lib/browser/devtools_api/domain_h.template
++++ b/headless/lib/browser/devtools_api/domain_h.template
+@@ -16,6 +16,8 @@
+ #include "headless/public/headless_export.h"
+ #include "headless/public/internal/message_dispatcher.h"
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ {# Macro for defining a member function for a given command. #}
+ {% macro command_decl(command) %}
+   {% set method_name = command.name | sanitize_literal | to_title_case %}
+diff --git a/headless/lib/browser/devtools_api/domain_type_conversions_h.template b/headless/lib/browser/devtools_api/domain_type_conversions_h.template
+index 5975afc590..1b3b34baae 100644
+--- a/headless/lib/browser/devtools_api/domain_type_conversions_h.template
++++ b/headless/lib/browser/devtools_api/domain_type_conversions_h.template
+@@ -12,6 +12,8 @@
+ #include "headless/public/devtools/domains/types_{{domain.domain | camelcase_to_hacker_style}}.h"
+ #include "headless/public/internal/value_conversions.h"
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ namespace headless {
+ namespace internal {
+ 
+diff --git a/headless/lib/browser/devtools_api/domain_types_cc.template b/headless/lib/browser/devtools_api/domain_types_cc.template
+index c6a2f78740..f115b7d7f0 100644
+--- a/headless/lib/browser/devtools_api/domain_types_cc.template
++++ b/headless/lib/browser/devtools_api/domain_types_cc.template
+@@ -13,6 +13,8 @@
+ #include "headless/public/devtools/internal/type_conversions_{{dep | camelcase_to_hacker_style}}.h"
+ {% endfor %}
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ namespace headless {
+ 
+ namespace {{domain.domain | camelcase_to_hacker_style}} {
+diff --git a/headless/lib/browser/devtools_api/domain_types_forward_declarations_h.template b/headless/lib/browser/devtools_api/domain_types_forward_declarations_h.template
+index 51b8faccd9..dc9b9153da 100644
+--- a/headless/lib/browser/devtools_api/domain_types_forward_declarations_h.template
++++ b/headless/lib/browser/devtools_api/domain_types_forward_declarations_h.template
+@@ -9,6 +9,8 @@
+ 
+ #include "base/values.h"
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ namespace headless {
+ 
+ namespace {{domain.domain | camelcase_to_hacker_style}} {
+diff --git a/headless/lib/browser/devtools_api/domain_types_h.template b/headless/lib/browser/devtools_api/domain_types_h.template
+index a2381b5d0f..2ba9f1d3b1 100644
+--- a/headless/lib/browser/devtools_api/domain_types_h.template
++++ b/headless/lib/browser/devtools_api/domain_types_h.template
+@@ -16,6 +16,8 @@
+ {% endfor %}
+ #include "headless/public/headless_export.h"
+ 
++{% include "aros_macro_hygiene.template" %}
++
+ namespace headless {
+ namespace protocol {
+ using Binary = crdtp::Binary;

@@ -1,0 +1,120 @@
+From 1f6c0d31005164f5ba397a6afda2161fd843ec34 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 08:41:12 -0500
+Subject: [PATCH 406/638] [AROS] Measure Blink input queue batches
+
+AI_PHASE: chromium-process-model
+AI_STATUS: bounded-runtime-telemetry
+AI_OBSERVED: Runtime49 measured MainThreadEventQueue::DispatchEvents monopolizing the renderer main thread for 44.525 seconds and delaying BeginMainFrame consumption by the same interval.
+AI_FIX_REASON: Record the initial queue depth and dispatched input, closure, and raw-update mix before changing batch or yield semantics.
+AI_SCOPE: AROS-only bounded telemetry in MainThreadEventQueue::DispatchEvents; no queue behavior change.
+AI_VALIDATION: git diff --check passes; Chromium build and hosted runtime replay follow as separate evidence checkpoints.
+
+---
+ .../widget/input/main_thread_event_queue.cc   | 55 ++++++++++++++++++-
+ 1 file changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+index 58b4e0b7c7..fd2cf81add 100644
+--- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
++++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+@@ -8,9 +8,11 @@
+ 
+ #include "base/containers/circular_deque.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "cc/base/features.h"
+ #include "cc/metrics/event_metrics.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -481,6 +483,14 @@ void MainThreadEventQueue::PossiblyScheduleMainFrame() {
+ void MainThreadEventQueue::DispatchEvents() {
+   size_t events_to_process;
+   size_t queue_size;
++#if BUILDFLAG(IS_AROS)
++  const base::TimeTicks aros_dispatch_start = base::TimeTicks::Now();
++  size_t aros_queue_size_at_start = 0;
++  size_t aros_events_dispatched = 0;
++  size_t aros_input_events_dispatched = 0;
++  size_t aros_closures_dispatched = 0;
++  size_t aros_raw_updates_dispatched = 0;
++#endif
+ 
+   // Record the queue size so that we only process
+   // that maximum number of events.
+@@ -488,6 +498,9 @@ void MainThreadEventQueue::DispatchEvents() {
+     base::AutoLock lock(shared_state_lock_);
+     shared_state_.sent_post_task_ = false;
+     events_to_process = shared_state_.events_.size();
++#if BUILDFLAG(IS_AROS)
++    aros_queue_size_at_start = events_to_process;
++#endif
+ 
+     // Don't process rAF aligned events at tail of queue.
+     while (events_to_process > 0 &&
+@@ -505,6 +518,16 @@ void MainThreadEventQueue::DispatchEvents() {
+       task = shared_state_.events_.Pop();
+     }
+ 
++#if BUILDFLAG(IS_AROS)
++    ++aros_events_dispatched;
++    if (task->IsWebInputEvent()) {
++      ++aros_input_events_dispatched;
++      if (IsRawUpdateEvent(task))
++        ++aros_raw_updates_dispatched;
++    } else {
++      ++aros_closures_dispatched;
++    }
++#endif
+     HandleEventResampling(task, base::TimeTicks::Now());
+     // Dispatching the event is outside of critical section.
+     task->Dispatch(this);
+@@ -544,14 +567,44 @@ void MainThreadEventQueue::DispatchEvents() {
+     }
+ 
+     // Dispatching the event is outside of critical section.
+-    if (task)
++    if (task) {
++#if BUILDFLAG(IS_AROS)
++      ++aros_events_dispatched;
++      ++aros_input_events_dispatched;
++      ++aros_raw_updates_dispatched;
++#endif
+       task->Dispatch(this);
++    }
+   }
+ 
+   PossiblyScheduleMainFrame();
+ 
+   if (client_)
+     client_->InputEventsDispatched(/*raf_aligned=*/false);
++
++#if BUILDFLAG(IS_AROS)
++  size_t aros_queue_size_remaining;
++  {
++    base::AutoLock lock(shared_state_lock_);
++    aros_queue_size_remaining = shared_state_.events_.size();
++  }
++  const base::TimeDelta aros_dispatch_duration =
++      base::TimeTicks::Now() - aros_dispatch_start;
++  static thread_local uint32_t aros_dispatch_reports = 0;
++  if (aros_dispatch_reports < 16 &&
++      (aros_dispatch_duration >= base::Milliseconds(250) ||
++       aros_queue_size_at_start >= 16)) {
++    LOG(ERROR) << "[AROS_INPUT_QUEUE] dispatch duration_us="
++               << aros_dispatch_duration.InMicroseconds()
++               << " initial=" << aros_queue_size_at_start
++               << " dispatched=" << aros_events_dispatched
++               << " input=" << aros_input_events_dispatched
++               << " closures=" << aros_closures_dispatched
++               << " raw_updates=" << aros_raw_updates_dispatched
++               << " remaining=" << aros_queue_size_remaining;
++    ++aros_dispatch_reports;
++  }
++#endif
+ }
+ 
+ static bool IsAsyncTouchMove(

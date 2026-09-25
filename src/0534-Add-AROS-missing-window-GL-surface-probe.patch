@@ -1,0 +1,81 @@
+From 9dc02277013ec8f33921c684dde37f6b1f23424e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 05:07:14 -0500
+Subject: [PATCH 534/638] Add AROS missing-window GL surface probe
+
+---
+ content/browser/gpu/gpu_process_host.cc     |  3 +++
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc | 25 ++++++++++++++++++++-
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
+index 512b9d937e..d5f7839d4d 100644
+--- a/content/browser/gpu/gpu_process_host.cc
++++ b/content/browser/gpu/gpu_process_host.cc
+@@ -290,6 +290,9 @@ static const char* const kSwitchNames[] = {
+     switches::kDisableExplicitDmaFences,
+     switches::kOzoneDumpFile,
+ #endif
++#if BUILDFLAG(IS_AROS)
++    "aros-missing-window-gl-surface",
++#endif
+ #if BUILDFLAG(IS_LINUX)
+     switches::kX11Display,
+     switches::kNoXshm,
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index 72346f73f6..4264e1f5f9 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -8,6 +8,7 @@
+ 
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+@@ -23,6 +24,10 @@
+ namespace ui {
+ namespace {
+ 
++constexpr char kArosMissingWindowGLSurface[] = "aros-missing-window-gl-surface";
++constexpr char kArosMissingWindowGLSurfacePbuffer[] = "pbuffer";
++constexpr char kArosMissingWindowGLSurfaceSurfaceless[] = "surfaceless";
++
+ class ArosViewGLSurfaceEGL final : public gl::NativeViewGLSurfaceEGL {
+  public:
+   ArosViewGLSurfaceEGL(gl::GLDisplayEGL* display, EGLNativeWindowType window)
+@@ -62,14 +67,32 @@ GLOzoneEGLAros::~GLOzoneEGLAros() = default;
+ scoped_refptr<gl::GLSurface> GLOzoneEGLAros::CreateViewGLSurface(
+     gl::GLDisplay* display,
+     gfx::AcceleratedWidget window) {
++  auto* egl_display = display->GetAs<gl::GLDisplayEGL>();
+   struct Window* native_window = window_manager_->GetNativeWindow(window);
+   if (!native_window) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] no Intuition window for widget="
+                << window;
++    const std::string fallback =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            kArosMissingWindowGLSurface);
++    if (fallback == kArosMissingWindowGLSurfaceSurfaceless) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] using test-only surfaceless "
++                    "fallback for missing widget="
++                 << window;
++      return gl::InitializeGLSurface(
++          base::MakeRefCounted<gl::SurfacelessEGL>(egl_display, gfx::Size(1, 1)));
++    }
++    if (fallback == kArosMissingWindowGLSurfacePbuffer) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] using test-only pbuffer fallback "
++                    "for missing widget="
++                 << window;
++      return gl::InitializeGLSurface(
++          base::MakeRefCounted<gl::PbufferGLSurfaceEGL>(egl_display,
++                                                        gfx::Size(1, 1)));
++    }
+     return nullptr;
+   }
+ 
+-  auto* egl_display = display->GetAs<gl::GLDisplayEGL>();
+   const EGLNativeWindowType egl_window = static_cast<EGLNativeWindowType>(
+       reinterpret_cast<intptr_t>(native_window));
+   LOG(INFO) << "[Chromium:Ozone:AROS:EGL] creating window surface widget="

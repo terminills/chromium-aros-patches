@@ -1,0 +1,31 @@
+From a52f99efb29f15b7355eef41445d11f927fd3220 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:36:23 -0500
+Subject: [PATCH 076/638] [AROS] Omit unsupported renderer malloc extensions
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: The renderer thread compiles without a nonstandard allocator header.
+ROOT_CAUSE: render_thread_impl included <malloc.h> on every non-Apple platform even though AROS does not provide that extension header and the file consumes none of its declarations.
+FIX_REASON: Apply Chromium's existing AROS allocator-header policy and omit an unused platform extension.
+SCOPE: content/renderer/render_thread_impl.cc include selection only.
+VALIDATION: render_thread_impl.o compiled with the AROS headless toolchain.
+RISK: None; the translation unit has no malloc-extension references.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ content/renderer/render_thread_impl.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 3594bc7a25..f61213d979 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -203,7 +203,7 @@
+ 
+ #if BUILDFLAG(IS_APPLE)
+ #include <malloc/malloc.h>
+-#else
++#elif !BUILDFLAG(IS_AROS)
+ #include <malloc.h>
+ #endif
+ 

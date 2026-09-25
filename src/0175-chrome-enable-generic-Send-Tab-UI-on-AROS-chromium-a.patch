@@ -1,0 +1,41 @@
+From c16c3a5ea1086fbb29e453be05029f2991cc9872 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:21:06 -0500
+Subject: [PATCH 175/638] chrome: enable generic Send Tab UI on AROS [chromium]
+ [aros]
+
+Statement: AROS builds the desktop Views browser, but Send Tab's toolbar-controller path omitted it from the otherwise portable desktop platform set.
+
+Decision: Include AROS in the existing desktop notification and toolbar-controller branch.
+
+Evidence: The registry object is unconditional in the real browser graph and its AROS path lacked a receiving UI controller.
+
+Validation: receiving_ui_handler_registry.o compiles in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ .../browser/send_tab_to_self/receiving_ui_handler_registry.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/send_tab_to_self/receiving_ui_handler_registry.cc b/chrome/browser/send_tab_to_self/receiving_ui_handler_registry.cc
+index 8c12131bf8..da994b7d17 100644
+--- a/chrome/browser/send_tab_to_self/receiving_ui_handler_registry.cc
++++ b/chrome/browser/send_tab_to_self/receiving_ui_handler_registry.cc
+@@ -15,7 +15,7 @@
+ #include "components/send_tab_to_self/features.h"
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/send_tab_to_self/desktop_notification_handler.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_toolbar_icon_controller.h"
+ #endif
+@@ -47,7 +47,7 @@ SendTabToSelfToolbarIconController*
+ ReceivingUiHandlerRegistry::GetToolbarButtonControllerForProfile(
+     Profile* profile) {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   for (const std::unique_ptr<ReceivingUiHandler>& handler :
+        applicable_handlers_) {
+     auto* button_controller =

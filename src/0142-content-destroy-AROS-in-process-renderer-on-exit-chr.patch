@@ -1,0 +1,51 @@
+From 4b5fd588675c7c57284b82d1a25e6cd1e661a0a6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 14:28:22 -0500
+Subject: [PATCH 142/638] content: destroy AROS in-process renderer on exit
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium deliberately leaks RenderThreadImpl in single-process mode because conventional operating systems terminate renderer-owned tasks with the process. AROS does not provide that atomic process kill at executable unload; OPAL artifact 50 showed the leaked renderer still owned Compositor and GpuMemoryThread tasks.
+
+FIX_REASON: Let AROS destroy the in-process RenderThreadImpl after ChildProcess shutdown so normal member destruction stops its compositor scheduler and GPU memory helper before executable code can unload.
+
+SCOPE: AROS single-process renderer final teardown only; upstream leak and AtExit suppression remain unchanged on every other platform.
+
+VALIDATION: render_thread_impl.o compiled successfully for the AROS headless target; surviving task ownership was matched from artifact 50 to RenderThreadImpl members before the change.
+
+RISK: medium; upstream labels graceful single-process renderer destruction unsupported, but AROS must replace process-kill semantics explicitly and OPAL/unattended alerts will capture any ordering violation during hosted validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/renderer/render_thread_impl.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index f61213d979..4cb27130ee 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -676,6 +676,13 @@ void RenderThreadImpl::Shutdown() {
+ 
+ bool RenderThreadImpl::ShouldBeDestroyed() {
+   DCHECK(IsSingleProcess());
++#if BUILDFLAG(IS_AROS)
++  // AROS does not terminate every task atomically when the main task returns.
++  // Destroy the in-process renderer so its compositor and GPU helper threads
++  // stop before pthread's process-exit hook permits executable code to unload.
++  LOG(INFO) << "[Chromium:shutdown] destroying AROS in-process renderer";
++  return true;
++#else
+   // In a single-process mode, it is unsafe to destruct this renderer thread
+   // because we haven't run the shutdown sequence. Hence we leak the render
+   // thread.
+@@ -685,6 +692,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+   // has been destructed.
+   base::AtExitManager::DisableAllAtExitManagers();
+   return false;
++#endif
+ }
+ 
+ IPC::SyncChannel* RenderThreadImpl::GetChannel() {

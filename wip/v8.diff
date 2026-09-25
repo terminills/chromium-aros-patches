@@ -1,0 +1,107 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index d07704e..bece259 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1439,6 +1439,14 @@ config("toolchain") {
+   if (target_os == "aros") {
+     defines += [ "V8_HAVE_TARGET_OS" ]
+     defines += [ "V8_TARGET_OS_AROS" ]
++    if (v8_monolithic && current_toolchain != host_toolchain) {
++      # libv8_monolith.a becomes the resident v8.library, whose writable
++      # image is shared by every process, so the current platform must live
++      # in per-process task storage (provided by the library's engine glue).
++      # An in-process V8 keeps the ordinary static -- and so do the host
++      # mksnapshot/torque binaries, which link no engine glue.
++      defines += [ "V8_AROS_RESIDENT_PLATFORM" ]
++    }
+   } else if (target_os == "android") {
+     defines += [ "V8_HAVE_TARGET_OS" ]
+     defines += [ "V8_TARGET_OS_ANDROID" ]
+diff --git a/src/heap/cppgc-js/cpp-heap.cc b/src/heap/cppgc-js/cpp-heap.cc
+index d659eec..313ec67 100644
+--- a/src/heap/cppgc-js/cpp-heap.cc
++++ b/src/heap/cppgc-js/cpp-heap.cc
+@@ -14,6 +14,7 @@
+ #include "include/v8-local-handle.h"
+ #include "include/v8-platform.h"
+ #include "src/base/logging.h"
++#include "src/base/build_config.h"
+ #include "src/base/macros.h"
+ #include "src/base/optional.h"
+ #include "src/base/platform/time.h"
+@@ -564,6 +565,10 @@ class MoveListenerImpl final : public HeapProfilerNativeMoveListener,
+ 
+ void CppHeap::AttachIsolate(Isolate* isolate) {
+   CHECK(!in_detached_testing_mode_);
++#if defined(V8_OS_AROS)
++  if (isolate_ && isolate_ != isolate)
++    DetachIsolate();
++#endif
+   CHECK_NULL(isolate_);
+   isolate_ = isolate;
+   heap_ = isolate->heap();
+diff --git a/src/heap/cppgc/persistent-node.cc b/src/heap/cppgc/persistent-node.cc
+index 3926748..a3ea20b 100644
+--- a/src/heap/cppgc/persistent-node.cc
++++ b/src/heap/cppgc/persistent-node.cc
+@@ -118,7 +118,11 @@ PersistentRegion::PersistentRegion(const FatalOutOfMemoryHandler& oom_handler)
+ }
+ 
+ bool PersistentRegion::IsCreationThread() {
++#if V8_OS_AROS
++  return true;
++#else
+   return creation_thread_id_ == v8::base::OS::GetCurrentThreadId();
++#endif
+ }
+ 
+ PersistentRegionLock::PersistentRegionLock() {
+diff --git a/src/init/v8.cc b/src/init/v8.cc
+index 0afca32..ca6e2d0 100644
+--- a/src/init/v8.cc
++++ b/src/init/v8.cc
+@@ -39,7 +39,7 @@
+ #include "src/diagnostics/etw-jit-win.h"
+ #endif
+ 
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+ extern "C" void __aros_v8_set_current_platform(v8::Platform* platform);
+ extern "C" v8::Platform* __aros_v8_get_current_platform();
+ #endif
+@@ -102,7 +102,7 @@ V8_DECLARE_ONCE(init_snapshot_once);
+ 
+ // static
+ void V8::InitializePlatform(v8::Platform* platform) {
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+   CHECK_NOT_NULL(platform);
+   __aros_v8_set_current_platform(platform);
+ 
+@@ -124,7 +124,7 @@ void V8::InitializePlatform(v8::Platform* platform) {
+   AdvanceStartupState(V8StartupState::kPlatformInitializing);
+ #endif
+   CHECK(!platform_);
+-#if !defined(__AROS__)
++#if !defined(V8_AROS_RESIDENT_PLATFORM)
+   CHECK_NOT_NULL(platform);
+ #endif
+   platform_ = platform;
+@@ -163,7 +163,7 @@ void V8::InitializePlatformForTesting(v8::Platform* platform) {
+   }
+ 
+ void V8::Initialize() {
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+   if (v8_startup_state_.load(std::memory_order_acquire) ==
+       V8StartupState::kV8Initialized) {
+     return;
+@@ -382,7 +382,7 @@ void V8::DisposePlatform() {
+ }
+ 
+ v8::Platform* V8::GetCurrentPlatform() {
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+   if (v8::Platform* platform = __aros_v8_get_current_platform()) {
+     return platform;
+   }

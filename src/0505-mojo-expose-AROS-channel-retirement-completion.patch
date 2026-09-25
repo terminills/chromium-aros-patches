@@ -1,0 +1,623 @@
+From 10e78f8cd87fd39bced18c4abc192e1c6e97271c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 5 Aug 2026 06:08:14 -0500
+Subject: [PATCH 505/638] mojo: expose AROS channel retirement completion
+
+Track endpoint references, reader activity, and MessagePort teardown in a move-only retirement observer. A child is now considered transport-retired only after both endpoint sides are closed, reader tasks are joined, and ports are gone, giving the browser an independent lifecycle barrier before replacement.
+
+
+
+---
+ mojo/core/channel_aros.cc                | 129 +++++++++++++----
+ mojo/core/channel_aros.h                 |   7 +
+ mojo/public/cpp/platform/aros_channel.cc | 175 +++++++++++++++++++----
+ mojo/public/cpp/platform/aros_channel.h  |  33 +++++
+ 4 files changed, 294 insertions(+), 50 deletions(-)
+
+diff --git a/mojo/core/channel_aros.cc b/mojo/core/channel_aros.cc
+index a073d13807..d5b74c0dbd 100644
+--- a/mojo/core/channel_aros.cc
++++ b/mojo/core/channel_aros.cc
+@@ -5,6 +5,7 @@
+ #include "mojo/core/channel_aros.h"
+ 
+ #include <algorithm>
++#include <cstdio>
+ #include <cstring>
+ #include <limits>
+ #include <utility>
+@@ -20,6 +21,36 @@
+ 
+ namespace mojo::core {
+ 
++namespace {
++
++bool IsTargetName6Data(const void* raw_data, size_t size) {
++  constexpr uint32_t kTargetInterface = 2147483662u;
++  constexpr uint32_t kTargetName = 6u;
++  const auto* data = static_cast<const uint8_t*>(raw_data);
++  for (size_t offset = 0; offset + 2 * sizeof(uint32_t) <= size; ++offset) {
++    uint32_t interface_id = 0;
++    uint32_t name = 0;
++    std::memcpy(&interface_id, data + offset, sizeof(interface_id));
++    std::memcpy(&name, data + offset + sizeof(interface_id), sizeof(name));
++    if (interface_id == kTargetInterface && name == kTargetName)
++      return true;
++  }
++  return false;
++}
++
++bool IsTargetName6Message(const Channel::Message& message) {
++  return IsTargetName6Data(message.data(), message.data_num_bytes());
++}
++
++void LogTargetName6(const char* stage, const ChannelAros* channel) {
++  if (FILE* file = std::fopen("Developer:Debug/mojo-name6-native.log", "a")) {
++    std::fprintf(file, "%s channel=%p\n", stage, channel);
++    std::fclose(file);
++  }
++}
++
++}  // namespace
++
+ ChannelAros::ChannelAros(
+     Channel::Delegate* delegate,
+     ConnectionParams connection_params,
+@@ -48,9 +79,13 @@ void ChannelAros::StartOnIOThread() {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+   if (shutdown_started_)
+     return;
++  base::CurrentThread::Get()->AddDestructionObserver(this);
++  observing_io_loop_ = true;
+   reader_started_ =
+       base::PlatformThread::Create(0, this, &reader_thread_);
+   if (!reader_started_) {
++    base::CurrentThread::Get()->RemoveDestructionObserver(this);
++    observing_io_loop_ = false;
+     OnError(Error::kConnectionFailed);
+     FinishShutdown();
+   }
+@@ -81,6 +116,21 @@ void ChannelAros::ShutDownOnIOThread() {
+   }
+ }
+ 
++void ChannelAros::WillDestroyCurrentMessageLoop() {
++  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (!self_)
++    return;
++
++  // ShutDown() is deliberately asynchronous. If it is queued behind message
++  // loop destruction, however, the reader would otherwise remain blocked on
++  // its MsgPort forever and retain the channel through self_. Wake and join it
++  // while the owning I/O sequence is still valid. This mirrors ChannelPosix's
++  // destruction fallback, with the additional join required by AROS's native
++  // reader task.
++  ShutDownOnIOThread();
++  FinishShutdown();
++}
++
+ void ChannelAros::ThreadMain() {
+   base::PlatformThread::SetName("MojoAROSReader");
+   MsgPort* port = StartReceivingArosChannel(channel_);
+@@ -123,37 +173,45 @@ void ChannelAros::Write(MessagePtr message) {
+     LogHistogramForIPCMetrics(MessageType::kSent);
+   }
+ 
++  const bool trace_target_name6 = IsTargetName6Message(*message);
++  if (trace_target_name6)
++    LogTargetName6("channel-write-enter", this);
++  bool write_error = false;
+   {
+     base::AutoLock lock(write_lock_);
+     if (reject_writes_)
+       return;
+-  }
+-
+-  std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
+-  std::vector<MojoPlatformHandle> encoded_handles(handles.size());
+-  for (size_t i = 0; i < handles.size(); ++i) {
+-    PlatformHandle::ToMojoPlatformHandle(handles[i].TakeHandle(),
+-                                         &encoded_handles[i]);
+-  }
+ 
+-  if (SendArosChannelPacket(channel_, ArosChannelPacketType::kData,
+-                            message->data(), message->data_num_bytes(),
+-                            encoded_handles.data(), encoded_handles.size())) {
+-    return;
+-  }
++    // Mojo permits concurrent callers, but packets on one channel must retain
++    // their call order. Keep handle encoding and delivery under the same lock,
++    // matching ChannelPosix's write serialization contract.
++    std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
++    std::vector<MojoPlatformHandle> encoded_handles(handles.size());
++    for (size_t i = 0; i < handles.size(); ++i) {
++      PlatformHandle::ToMojoPlatformHandle(handles[i].TakeHandle(),
++                                           &encoded_handles[i]);
++    }
++    if (SendArosChannelPacket(channel_, ArosChannelPacketType::kData,
++                              message->data(), message->data_num_bytes(),
++                              encoded_handles.data(), encoded_handles.size())) {
++      if (trace_target_name6)
++        LogTargetName6("channel-write-return-ok", this);
++      return;
++    }
+ 
+-  // Encoding relinquished the PlatformHandle wrappers. Reconstitute ownership
+-  // when the packet could not be allocated or the peer was already closed.
+-  for (const MojoPlatformHandle& encoded : encoded_handles) {
+-    PlatformHandle handle =
+-        PlatformHandle::FromMojoPlatformHandle(&encoded);
+-  }
+-  {
+-    base::AutoLock lock(write_lock_);
++    // Encoding relinquished the PlatformHandle wrappers. Reconstitute
++    // ownership when allocation failed or the peer was already closed.
++    for (const MojoPlatformHandle& encoded : encoded_handles) {
++      PlatformHandle handle =
++          PlatformHandle::FromMojoPlatformHandle(&encoded);
++    }
+     reject_writes_ = true;
++    write_error = true;
++  }
++  if (write_error) {
++    io_task_runner_->PostTask(
++        FROM_HERE, base::BindOnce(&ChannelAros::ReportWriteError, this));
+   }
+-  io_task_runner_->PostTask(
+-      FROM_HERE, base::BindOnce(&ChannelAros::ReportWriteError, this));
+ }
+ 
+ void ChannelAros::ReportWriteError() {
+@@ -164,7 +222,17 @@ void ChannelAros::ReportWriteError() {
+ void ChannelAros::ProcessPacket(ArosChannelPacket* packet) {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+   const ArosChannelPacketView view = GetArosChannelPacketView(packet);
+-
++  if (IsTargetName6Data(view.data, view.data_size))
++    LogTargetName6("process-packet-enter", this);
++  if (view.sequence != next_read_sequence_) {
++    if (FILE* file = std::fopen("Developer:Debug/mojo-packet-gap.log", "a")) {
++      std::fprintf(file, "expected=%llu received=%llu channel=%p\n",
++                   static_cast<unsigned long long>(next_read_sequence_),
++                   static_cast<unsigned long long>(view.sequence), this);
++      std::fclose(file);
++    }
++  }
++  next_read_sequence_ = view.sequence + 1;
+   for (size_t i = 0; i < view.handle_count; ++i) {
+     incoming_handles_.push_back(
+         PlatformHandle::FromMojoPlatformHandle(&view.handles[i]));
+@@ -193,6 +261,10 @@ void ChannelAros::ProcessPacket(ArosChannelPacket* packet) {
+ 
+ void ChannelAros::ReaderStopped(bool peer_closed) {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  if (observing_io_loop_) {
++    base::CurrentThread::Get()->RemoveDestructionObserver(this);
++    observing_io_loop_ = false;
++  }
+   if (peer_closed && !shutdown_started_)
+     OnError(Error::kDisconnected);
+   if (!shutdown_started_) {
+@@ -205,9 +277,18 @@ void ChannelAros::ReaderStopped(bool peer_closed) {
+ 
+ void ChannelAros::FinishShutdown() {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
++  // Keep observing until the reader has actually been joined.  Removing the
++  // observer when shutdown is merely requested leaves a race where the I/O
++  // loop can be destroyed before ReaderStopped() runs, stranding the native
++  // reader task in WaitPort() and consequently blocking AROS CRT autojoin.
++  if (observing_io_loop_) {
++    base::CurrentThread::Get()->RemoveDestructionObserver(this);
++    observing_io_loop_ = false;
++  }
+   if (!reader_thread_.is_null()) {
+     base::PlatformThread::Join(reader_thread_);
+     reader_thread_ = base::PlatformThreadHandle();
++    MarkArosChannelReaderJoined(channel_);
+   }
+   if (channel_.is_valid() && !leak_handle_) {
+     ReleaseArosChannelHandle(channel_);
+diff --git a/mojo/core/channel_aros.h b/mojo/core/channel_aros.h
+index 5195383345..4318bf71d8 100644
+--- a/mojo/core/channel_aros.h
++++ b/mojo/core/channel_aros.h
+@@ -10,6 +10,7 @@
+ #include "base/containers/circular_deque.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/synchronization/lock.h"
++#include "base/task/current_thread.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/platform_thread.h"
+ #include "mojo/core/channel.h"
+@@ -18,6 +19,7 @@
+ namespace mojo::core {
+ 
+ class ChannelAros final : public Channel,
++                          public base::CurrentThread::DestructionObserver,
+                           public base::PlatformThread::Delegate {
+  public:
+   ChannelAros(Channel::Delegate* delegate,
+@@ -53,6 +55,9 @@ class ChannelAros final : public Channel,
+   // base::PlatformThread::Delegate:
+   void ThreadMain() override;
+ 
++  // base::CurrentThread::DestructionObserver:
++  void WillDestroyCurrentMessageLoop() override;
++
+   void StartOnIOThread();
+   void ShutDownOnIOThread();
+   void ProcessPacket(ArosChannelPacket* packet);
+@@ -68,9 +73,11 @@ class ChannelAros final : public Channel,
+   base::Lock write_lock_;
+   bool reject_writes_ GUARDED_BY(write_lock_) = false;
+   bool shutdown_started_ = false;
++  bool observing_io_loop_ = false;
+   bool leak_handle_ = false;
+   bool reader_started_ = false;
+   base::circular_deque<PlatformHandle> incoming_handles_;
++  uint64_t next_read_sequence_ = 1;
+ };
+ 
+ }  // namespace mojo::core
+diff --git a/mojo/public/cpp/platform/aros_channel.cc b/mojo/public/cpp/platform/aros_channel.cc
+index 0c3d394351..52ff48b094 100644
+--- a/mojo/public/cpp/platform/aros_channel.cc
++++ b/mojo/public/cpp/platform/aros_channel.cc
+@@ -5,12 +5,14 @@
+ #include "mojo/public/cpp/platform/aros_channel.h"
+ 
+ #include <atomic>
++#include <cstdio>
+ #include <cstring>
+ #include <limits>
+ #include <new>
+ 
+ #include <exec/memory.h>
+ #include <exec/ports.h>
++#include <exec/semaphores.h>
+ #include <proto/exec.h>
+ 
+ #include "base/check.h"
+@@ -25,8 +27,10 @@ struct ArosChannelState {
+   uint64_t magic = kMagic;
+   std::atomic_size_t references{2};
+   std::atomic_size_t side_references[2] = {1, 1};
+-  std::atomic_flag lock = ATOMIC_FLAG_INIT;
++  SignalSemaphore lock;
+   MsgPort* ports[2] = {};
++  bool reader_active[2] = {};
++  uint64_t next_sequence[2] = {};
+   ArosChannelPacket* pending_head[2] = {};
+   ArosChannelPacket* pending_tail[2] = {};
+ };
+@@ -35,6 +39,8 @@ struct ArosChannelPacket {
+   ::Message message;
+   ArosChannelPacket* pending_next = nullptr;
+   ArosChannelPacketType type = ArosChannelPacketType::kData;
++  uint64_t sequence = 0;
++  bool trace_target_name6 = false;
+   size_t allocation_size = 0;
+   size_t data_size = 0;
+   size_t handle_count = 0;
+@@ -42,6 +48,38 @@ struct ArosChannelPacket {
+ 
+ namespace {
+ 
++void LogTargetName6Packet(const char* stage,
++                          const ArosChannelState* state,
++                          uint8_t side,
++                          const void* packet,
++                          ArosChannelPacketType type,
++                          uint64_t sequence,
++                          const MsgPort* port) {
++  if (FILE* file = std::fopen("Developer:Debug/mojo-name6-native.log", "a")) {
++    std::fprintf(file,
++                 "%s state=%p side=%u packet=%p type=%u sequence=%llu port=%p\n",
++                 stage, state, static_cast<unsigned>(side), packet,
++                 static_cast<unsigned>(type),
++                 static_cast<unsigned long long>(sequence), port);
++    std::fclose(file);
++  }
++}
++
++bool IsTargetName6Data(const void* data, size_t size) {
++  constexpr uint32_t kTargetInterface = 2147483662u;
++  constexpr uint32_t kTargetName = 6u;
++  const auto* bytes = static_cast<const uint8_t*>(data);
++  for (size_t offset = 0; offset + 2 * sizeof(uint32_t) <= size; ++offset) {
++    uint32_t interface_id = 0;
++    uint32_t name = 0;
++    std::memcpy(&interface_id, bytes + offset, sizeof(interface_id));
++    std::memcpy(&name, bytes + offset + sizeof(interface_id), sizeof(name));
++    if (interface_id == kTargetInterface && name == kTargetName)
++      return true;
++  }
++  return false;
++}
++
+ ArosChannelState* StateFor(ArosChannelHandle handle) {
+   return static_cast<ArosChannelState*>(handle.state);
+ }
+@@ -53,12 +91,30 @@ bool IsValid(ArosChannelHandle handle) {
+ }
+ 
+ void Lock(ArosChannelState* state) {
+-  while (state->lock.test_and_set(std::memory_order_acquire)) {
+-  }
++  ObtainSemaphore(&state->lock);
+ }
+ 
+ void Unlock(ArosChannelState* state) {
+-  state->lock.clear(std::memory_order_release);
++  ReleaseSemaphore(&state->lock);
++}
++
++void ReleaseStateReference(ArosChannelState* state) {
++  const size_t previous =
++      state->references.fetch_sub(1, std::memory_order_acq_rel);
++  CHECK_GT(previous, 0u);
++  if (previous != 1)
++    return;
++  for (size_t side = 0; side < 2; ++side) {
++    ArosChannelPacket* packet = state->pending_head[side];
++    while (packet) {
++      ArosChannelPacket* next = packet->pending_next;
++      DestroyArosChannelPacket(packet);
++      packet = next;
++    }
++  }
++  state->magic = 0;
++  state->~ArosChannelState();
++  FreeMem(state, sizeof(ArosChannelState));
+ }
+ 
+ MojoPlatformHandle* PacketHandles(ArosChannelPacket* packet) {
+@@ -73,7 +129,8 @@ ArosChannelPacket* CreatePacket(ArosChannelPacketType type,
+                                 const void* data,
+                                 size_t data_size,
+                                 const MojoPlatformHandle* handles,
+-                                size_t handle_count) {
++                                size_t handle_count,
++                                bool trace_target_name6 = false) {
+   if (handle_count >
+       (std::numeric_limits<size_t>::max() - sizeof(ArosChannelPacket)) /
+           sizeof(MojoPlatformHandle)) {
+@@ -92,6 +149,7 @@ ArosChannelPacket* CreatePacket(ArosChannelPacketType type,
+   auto* packet = new (storage) ArosChannelPacket;
+   packet->message.mn_Length = sizeof(ArosChannelPacket);
+   packet->type = type;
++  packet->trace_target_name6 = trace_target_name6;
+   packet->allocation_size = allocation_size;
+   packet->data_size = data_size;
+   packet->handle_count = handle_count;
+@@ -107,14 +165,24 @@ bool QueueOrDeliver(ArosChannelState* state,
+                     ArosChannelPacket* packet,
+                     bool require_live_target = false) {
+   Lock(state);
++  packet->sequence = ++state->next_sequence[target];
+   if (require_live_target &&
+       state->side_references[target].load(std::memory_order_relaxed) == 0) {
+     Unlock(state);
++    if (packet->trace_target_name6) {
++      LogTargetName6Packet("queue-reject", state, target, packet, packet->type,
++                           packet->sequence, nullptr);
++    }
+     DestroyArosChannelPacket(packet);
+     return false;
+   }
+-  if (state->ports[target]) {
+-    PutMsg(state->ports[target], &packet->message);
++  const bool trace_target_name6 = packet->trace_target_name6;
++  const ArosChannelPacketType packet_type = packet->type;
++  const uint64_t packet_sequence = packet->sequence;
++  const void* const packet_address = packet;
++  MsgPort* const port = state->ports[target];
++  if (port) {
++    PutMsg(port, &packet->message);
+   } else {
+     if (state->pending_tail[target])
+       state->pending_tail[target]->pending_next = packet;
+@@ -123,6 +191,11 @@ bool QueueOrDeliver(ArosChannelState* state,
+     state->pending_tail[target] = packet;
+   }
+   Unlock(state);
++  if (trace_target_name6) {
++    LogTargetName6Packet(port ? "queue-deliver" : "queue-pending", state,
++                         target, packet_address, packet_type, packet_sequence,
++                         port);
++  }
+   return true;
+ }
+ 
+@@ -140,6 +213,7 @@ std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair() {
+   if (!storage)
+     return {};
+   auto* state = new (storage) ArosChannelState;
++  InitSemaphore(&state->lock);
+   return {{state, 0}, {state, 1}};
+ }
+ 
+@@ -165,22 +239,54 @@ void ReleaseArosChannelHandle(ArosChannelHandle handle) {
+       QueueOrDeliver(state, handle.side ^ 1, packet);
+     }
+   }
+-  const size_t previous =
+-      state->references.fetch_sub(1, std::memory_order_acq_rel);
+-  CHECK_GT(previous, 0u);
+-  if (previous != 1)
+-    return;
+-  for (size_t side = 0; side < 2; ++side) {
+-    ArosChannelPacket* packet = state->pending_head[side];
+-    while (packet) {
+-      ArosChannelPacket* next = packet->pending_next;
+-      DestroyArosChannelPacket(packet);
+-      packet = next;
+-    }
+-  }
+-  state->magic = 0;
+-  state->~ArosChannelState();
+-  FreeMem(state, sizeof(ArosChannelState));
++  ReleaseStateReference(state);
++}
++
++ArosChannelRetirementObserver::ArosChannelRetirementObserver() = default;
++
++ArosChannelRetirementObserver::ArosChannelRetirementObserver(void* state)
++    : state_(state) {}
++
++ArosChannelRetirementObserver::ArosChannelRetirementObserver(
++    ArosChannelRetirementObserver&& other)
++    : state_(std::exchange(other.state_, nullptr)) {}
++
++ArosChannelRetirementObserver& ArosChannelRetirementObserver::operator=(
++    ArosChannelRetirementObserver&& other) {
++  if (this == &other)
++    return *this;
++  if (state_)
++    ReleaseStateReference(static_cast<ArosChannelState*>(state_));
++  state_ = std::exchange(other.state_, nullptr);
++  return *this;
++}
++
++ArosChannelRetirementObserver::~ArosChannelRetirementObserver() {
++  if (state_)
++    ReleaseStateReference(static_cast<ArosChannelState*>(state_));
++}
++
++bool ArosChannelRetirementObserver::IsRetired() const {
++  if (!state_)
++    return true;
++  auto* state = static_cast<ArosChannelState*>(state_);
++  Lock(state);
++  const bool retired =
++      state->side_references[0].load(std::memory_order_relaxed) == 0 &&
++      state->side_references[1].load(std::memory_order_relaxed) == 0 &&
++      !state->reader_active[0] && !state->reader_active[1] &&
++      !state->ports[0] && !state->ports[1];
++  Unlock(state);
++  return retired;
++}
++
++ArosChannelRetirementObserver CreateArosChannelRetirementObserver(
++    ArosChannelHandle handle) {
++  if (!IsValid(handle))
++    return {};
++  ArosChannelState* state = StateFor(handle);
++  state->references.fetch_add(1, std::memory_order_relaxed);
++  return ArosChannelRetirementObserver(state);
+ }
+ 
+ MsgPort* StartReceivingArosChannel(ArosChannelHandle handle) {
+@@ -194,6 +300,7 @@ MsgPort* StartReceivingArosChannel(ArosChannelHandle handle) {
+   Lock(state);
+   CHECK(!state->ports[handle.side]);
+   state->ports[handle.side] = port;
++  state->reader_active[handle.side] = true;
+   ArosChannelPacket* packet = state->pending_head[handle.side];
+   state->pending_head[handle.side] = nullptr;
+   state->pending_tail[handle.side] = nullptr;
+@@ -222,15 +329,29 @@ void StopReceivingArosChannel(ArosChannelHandle handle, MsgPort* port) {
+   DeleteMsgPort(port);
+ }
+ 
++void MarkArosChannelReaderJoined(ArosChannelHandle handle) {
++  if (!IsValid(handle))
++    return;
++  ArosChannelState* state = StateFor(handle);
++  Lock(state);
++  state->reader_active[handle.side] = false;
++  Unlock(state);
++}
++
+ ArosChannelPacket* WaitForArosChannelPacket(MsgPort* port) {
+   CHECK(port);
+   WaitPort(port);
+-  return reinterpret_cast<ArosChannelPacket*>(GetMsg(port));
++  auto* packet = reinterpret_cast<ArosChannelPacket*>(GetMsg(port));
++  if (packet && packet->trace_target_name6) {
++    LogTargetName6Packet("reader-dequeue", nullptr, 0, packet, packet->type,
++                         packet->sequence, port);
++  }
++  return packet;
+ }
+ 
+ ArosChannelPacketView GetArosChannelPacketView(ArosChannelPacket* packet) {
+   CHECK(packet);
+-  return {packet->type, PacketData(packet), packet->data_size,
++  return {packet->type, packet->sequence, PacketData(packet), packet->data_size,
+           PacketHandles(packet), packet->handle_count};
+ }
+ 
+@@ -258,7 +379,9 @@ bool SendArosChannelPacket(ArosChannelHandle handle,
+     return false;
+   ArosChannelState* state = StateFor(handle);
+   ArosChannelPacket* packet =
+-      CreatePacket(type, data, data_size, handles, handle_count);
++      CreatePacket(type, data, data_size, handles, handle_count,
++                   type == ArosChannelPacketType::kData &&
++                       IsTargetName6Data(data, data_size));
+   if (!packet)
+     return false;
+   const uint8_t target =
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+index 442d7e0522..02e3b72fe6 100644
+--- a/mojo/public/cpp/platform/aros_channel.h
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -26,6 +26,7 @@ struct ArosChannelPacket;
+ 
+ struct ArosChannelPacketView {
+   ArosChannelPacketType type = ArosChannelPacketType::kData;
++  uint64_t sequence = 0;
+   const void* data = nullptr;
+   size_t data_size = 0;
+   const MojoPlatformHandle* handles = nullptr;
+@@ -39,6 +40,33 @@ struct ArosChannelHandle {
+   bool is_valid() const { return state != nullptr; }
+ };
+ 
++// Keeps the native channel state observable after both endpoint handles have
++// begun teardown.  This does not retain either endpoint side and therefore
++// cannot keep a peer artificially alive.
++class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) ArosChannelRetirementObserver {
++ public:
++  ArosChannelRetirementObserver();
++  ArosChannelRetirementObserver(ArosChannelRetirementObserver&& other);
++  ArosChannelRetirementObserver& operator=(
++      ArosChannelRetirementObserver&& other);
++  ~ArosChannelRetirementObserver();
++
++  ArosChannelRetirementObserver(const ArosChannelRetirementObserver&) = delete;
++  ArosChannelRetirementObserver& operator=(
++      const ArosChannelRetirementObserver&) = delete;
++
++  bool is_valid() const { return state_ != nullptr; }
++  bool IsRetired() const;
++
++ private:
++  explicit ArosChannelRetirementObserver(void* state);
++
++  void* state_ = nullptr;
++
++  friend ArosChannelRetirementObserver
++  CreateArosChannelRetirementObserver(ArosChannelHandle handle);
++};
++
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair();
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+@@ -46,10 +74,15 @@ void RetainArosChannelHandle(ArosChannelHandle handle);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ void ReleaseArosChannelHandle(ArosChannelHandle handle);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++ArosChannelRetirementObserver CreateArosChannelRetirementObserver(
++    ArosChannelHandle handle);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ MsgPort* StartReceivingArosChannel(ArosChannelHandle handle);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ void StopReceivingArosChannel(ArosChannelHandle handle, MsgPort* port);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void MarkArosChannelReaderJoined(ArosChannelHandle handle);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ ArosChannelPacket* WaitForArosChannelPacket(MsgPort* port);
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ ArosChannelPacketView GetArosChannelPacketView(ArosChannelPacket* packet);

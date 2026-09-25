@@ -1,0 +1,132 @@
+From c9e24926b74f23a38badfc03cafa3cc6679d32ed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:16:27 -0500
+Subject: [PATCH 048/638] base: indirect over-aligned AROS pthread mutexes
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Chromium Lock remains normally aligned on AROS while its native pthread mutex keeps the 128-byte alignment required by the SMP Exec semaphore ABI.
+
+ROOT_CAUSE: AROS pthread_mutex_t embeds SignalSemaphore, whose SMP spinlock has 128-byte cache-line alignment. Inline LockImpl storage propagated that alignment into Blink garbage-collected objects, exceeding cppgc's supported 16-byte object alignment.
+
+FIX_REASON: Allocate only the AROS native mutex storage with posix_memalign and keep a pointer in LockImpl; continue using pthread init, lock, condition-variable, unlock, and destroy APIs without weakening cppgc or changing the AROS pthread ABI.
+
+SCOPE: base POSIX LockImpl native storage and accessors
+
+VALIDATION: AROS libbase.a rebuilt; the original memory_pressure_listener.o cppgc failure now compiles unchanged; host base tools also rebuilt; git diff --check passed. Runtime validation remains part of the eventual headless_shell QEMU gate.
+
+RISK: Each AROS base::Lock now owns one aligned heap allocation; allocation failure is fatal and lifecycle correctness still requires native runtime validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/synchronization/lock_impl.h        | 18 +++++++++++++++---
+ base/synchronization/lock_impl_posix.cc | 20 ++++++++++++++++----
+ 2 files changed, 31 insertions(+), 7 deletions(-)
+
+diff --git a/base/synchronization/lock_impl.h b/base/synchronization/lock_impl.h
+index 0e68223ca1..a7c9995ef4 100644
+--- a/base/synchronization/lock_impl.h
++++ b/base/synchronization/lock_impl.h
+@@ -71,7 +71,13 @@ class BASE_EXPORT LockImpl {
+   // Return the native underlying lock.
+   // TODO(awalker): refactor lock and condition variables so that this is
+   // unnecessary.
+-  NativeHandle* native_handle() { return &native_handle_; }
++  NativeHandle* native_handle() {
++#if BUILDFLAG(IS_AROS)
++    return native_handle_;
++#else
++    return &native_handle_;
++#endif
++  }
+ 
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   // Whether this lock will attempt to use priority inheritance.
+@@ -79,7 +85,13 @@ class BASE_EXPORT LockImpl {
+ #endif
+ 
+   void LockInternal();
++#if BUILDFLAG(IS_AROS)
++  // AROS pthread_mutex_t embeds a cache-line-aligned Exec semaphore. Keep that
++  // storage out of line so Lock remains embeddable in normally aligned types.
++  NativeHandle* native_handle_ = nullptr;
++#else
+   NativeHandle native_handle_;
++#endif
+ };
+ 
+ void LockImpl::Lock() {
+@@ -114,7 +126,7 @@ BASE_EXPORT void dcheck_unlock_result(int rv);
+ #endif
+ 
+ bool LockImpl::Try() {
+-  int rv = pthread_mutex_trylock(&native_handle_);
++  int rv = pthread_mutex_trylock(native_handle());
+ #if DCHECK_IS_ON()
+   dcheck_trylock_result(rv);
+ #endif
+@@ -122,7 +134,7 @@ bool LockImpl::Try() {
+ }
+ 
+ void LockImpl::Unlock() {
+-  [[maybe_unused]] int rv = pthread_mutex_unlock(&native_handle_);
++  [[maybe_unused]] int rv = pthread_mutex_unlock(native_handle());
+ #if DCHECK_IS_ON()
+   dcheck_unlock_result(rv);
+ #endif
+diff --git a/base/synchronization/lock_impl_posix.cc b/base/synchronization/lock_impl_posix.cc
+index 29d1f179b2..668c8d0799 100644
+--- a/base/synchronization/lock_impl_posix.cc
++++ b/base/synchronization/lock_impl_posix.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "base/synchronization/lock_impl.h"
+ 
++#include <cstdlib>
+ #include <ostream>
+ #include <string>
+ 
+@@ -67,8 +68,15 @@ void dcheck_unlock_result(int rv) {
+ #endif
+ 
+ LockImpl::LockImpl() {
++  int rv;
++#if BUILDFLAG(IS_AROS)
++  void* storage = nullptr;
++  rv = posix_memalign(&storage, alignof(NativeHandle), sizeof(NativeHandle));
++  CHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
++  native_handle_ = static_cast<NativeHandle*>(storage);
++#endif
+   pthread_mutexattr_t mta;
+-  int rv = pthread_mutexattr_init(&mta);
++  rv = pthread_mutexattr_init(&mta);
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
+ #if PRIORITY_INHERITANCE_LOCKS_POSSIBLE()
+   if (PriorityInheritanceAvailable()) {
+@@ -81,19 +89,23 @@ LockImpl::LockImpl() {
+   rv = pthread_mutexattr_settype(&mta, PTHREAD_MUTEX_ERRORCHECK);
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
+ #endif
+-  rv = pthread_mutex_init(&native_handle_, &mta);
++  rv = pthread_mutex_init(native_handle(), &mta);
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
+   rv = pthread_mutexattr_destroy(&mta);
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
+ }
+ 
+ LockImpl::~LockImpl() {
+-  int rv = pthread_mutex_destroy(&native_handle_);
++  int rv = pthread_mutex_destroy(native_handle());
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
++#if BUILDFLAG(IS_AROS)
++  free(native_handle_);
++  native_handle_ = nullptr;
++#endif
+ }
+ 
+ void LockImpl::LockInternal() {
+-  int rv = pthread_mutex_lock(&native_handle_);
++  int rv = pthread_mutex_lock(native_handle());
+   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
+ }
+ 

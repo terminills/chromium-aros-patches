@@ -1,0 +1,80 @@
+From 8a377c538acd6d4460a59f548da8c6657938548a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 09:46:43 -0500
+Subject: [PATCH 484/638] AROS: scope work id TLS per process
+
+Give each native AROS child process its own WorkIdProvider TLS slot owner. This prevents a GPU helper from inheriting the browser process provider and failing the message-loop thread checker on its first work item.
+
+
+
+---
+ base/message_loop/work_id_provider.cc | 45 +++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/base/message_loop/work_id_provider.cc b/base/message_loop/work_id_provider.cc
+index 5298b84997..6540af9e7d 100644
+--- a/base/message_loop/work_id_provider.cc
++++ b/base/message_loop/work_id_provider.cc
+@@ -4,17 +4,62 @@
+ 
+ #include "base/message_loop/work_id_provider.h"
+ 
++#include <map>
+ #include <memory>
+ 
++#include "base/command_line.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/threading/thread_local.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ 
++namespace {
++
++#if BUILDFLAG(IS_AROS)
++struct WorkIdProviderTLSRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*,
++           base::ThreadLocalOwnedPointer<WorkIdProvider>*>
++      instances;
++};
++
++base::ThreadLocalOwnedPointer<WorkIdProvider>*
++GetWorkIdProviderTLSForCurrentProcess() {
++  const base::CommandLine* const process_identity =
++      base::CommandLine::InitializedForCurrentProcess()
++          ? base::CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local base::ThreadLocalOwnedPointer<WorkIdProvider>* cached_instance =
++      nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return cached_instance;
++
++  static base::NoDestructor<WorkIdProviderTLSRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  base::ThreadLocalOwnedPointer<WorkIdProvider>*& instance =
++      registry->instances[process_identity];
++  if (!instance)
++    instance = new base::ThreadLocalOwnedPointer<WorkIdProvider>();
++  cached_instance = instance;
++  return cached_instance;
++}
++#endif
++
++}  // namespace
++
+ // static
+ WorkIdProvider* WorkIdProvider::GetForCurrentThread() {
++#if BUILDFLAG(IS_AROS)
++  ThreadLocalOwnedPointer<WorkIdProvider>* instance =
++      GetWorkIdProviderTLSForCurrentProcess();
++#else
+   static NoDestructor<ThreadLocalOwnedPointer<WorkIdProvider>> instance;
++#endif
+   if (!instance->Get())
+     instance->Set(WrapUnique(new WorkIdProvider));
+   return instance->Get();

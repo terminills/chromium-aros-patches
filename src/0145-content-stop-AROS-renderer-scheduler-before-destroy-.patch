@@ -1,0 +1,43 @@
+From b53cbfa18368137a8b4a528b398816ce443ce272 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 15:26:54 -0500
+Subject: [PATCH 145/638] content: stop AROS renderer scheduler before destroy
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Checkpoint 0146 proved the AROS in-process renderer can be destroyed, but RenderThreadImpl::ShouldBeDestroyed returned true without supplying Blink scheduler shutdown. MainThreadSchedulerImpl therefore reached its destructor with was_shutdown_ false and deliberately trapped after the page screenshot completed.
+
+FIX_REASON: ChildProcess already invokes RenderThreadImpl::Shutdown before ShouldBeDestroyed and ownership reset. Shut down the owned WebThreadScheduler from that lifecycle hook so it drops queued work and clears scheduler state before member destruction.
+
+SCOPE: AROS single-process renderer shutdown only; multi-process termination and every other platform retain upstream behavior.
+
+VALIDATION: render_thread_impl.o rebuilt successfully; artifact 51 captures the exact was_shutdown_ fatal and confirms screenshot output completed first.
+
+RISK: medium; scheduler shutdown is final and intentionally drops pending Blink work, but runs only after browser teardown has initiated renderer shutdown.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/renderer/render_thread_impl.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 4cb27130ee..8359259fff 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -668,6 +668,13 @@ void RenderThreadImpl::Shutdown() {
+ 
+   blink::LogStatsDuringShutdown();
+ 
++#if BUILDFLAG(IS_AROS)
++  if (IsSingleProcess() && main_thread_scheduler_) {
++    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
++    main_thread_scheduler_->Shutdown();
++  }
++#endif
++
+   // In a single-process mode, we cannot call _exit(0) in Shutdown() because
+   // it will exit the process before the browser side is ready to exit.
+   if (!IsSingleProcess())

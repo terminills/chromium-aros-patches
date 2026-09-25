@@ -1,0 +1,32 @@
+From a06ef8e7627b90d8a8a30260e53c0d2ccd521975 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 09:22:50 -0500
+Subject: [PATCH 464/638] AROS: preserve native file URL paths for MIME lookup
+
+Keep an already-validated native assign or volume path when realpath cannot express it. This retains the filename extension for MIME classification and avoids rendering HTML file URLs as plain source.
+
+
+
+---
+ content/browser/loader/file_url_loader_factory.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/content/browser/loader/file_url_loader_factory.cc b/content/browser/loader/file_url_loader_factory.cc
+index 1ec296460a..619394a366 100644
+--- a/content/browser/loader/file_url_loader_factory.cc
++++ b/content/browser/loader/file_url_loader_factory.cc
+@@ -527,6 +527,14 @@ class FileURLLoader : public network::mojom::URLLoader {
+ 
+     // Full file path with all symbolic links resolved.
+     base::FilePath full_path = base::MakeAbsoluteFilePath(path);
++#if BUILDFLAG(IS_AROS)
++    // Native assign and volume paths are already absolute to AmigaDOS, but
++    // realpath() may not return a POSIX spelling for them.  The file was
++    // successfully statted above, so preserve the native absolute path rather
++    // than discarding its extension and MIME type with an empty result.
++    if (full_path.empty())
++      full_path = path;
++#endif
+     if (file_access_policy == FileAccessPolicy::kRestricted &&
+         !GetContentClient()->browser()->IsFileAccessAllowed(path, full_path,
+                                                             profile_path)) {

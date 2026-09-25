@@ -1,0 +1,36 @@
+From 129bb051cab83a0f78a28b3a7ce37732b72fc535 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 15:38:02 -0500
+Subject: [PATCH 376/638] [AROS] Make V8 import thunks large-address safe
+
+AI_PHASE: chromium-process-model
+AI_STATUS: repeated-child-v8-slot-range-failure-fixed
+ROOT_CAUSE: Generated V8 import thunks used RIP-relative jumps to g_v8_import_slots. A later child placed Chrome text and writable data more than 2 GiB apart, so LoadSeg rejected relocation 1518937 in section 2.
+FIX_REASON: Materialize each slot address with an R_X86_64_64 movabs into caller-saved r11, then jump through the slot. This matches the existing -mcmodel=large contract without embedding V8 or adding a GOT.
+SCOPE: build/config/aros/v8_library/generate_v8_imports.py
+VALIDATION: ninja -C out/aros-chrome -j32 chrome regenerated, assembled, and linked in three steps. Import object now emits R_X86_64_64 for g_v8_import_slots; full Chrome remains a 34-section ET_REL.
+RISK: Runtime must prove a later utility can load at an arbitrary placement; DOM-storage scoped_file EBADF failures remain separate.
+AI_DECISION_CHAIN: coalesced child launches PASS -> later utility LoadSeg PC32 to g_v8_import_slots -> inspect generated thunk -> replace small-model RIP jump with large-model absolute slot address.
+Evidence:-chromium-browser-renderer-20260728/runtime-05-coalesced-guest.log,-chromium-browser-renderer-20260728/build-20-v8-import-large-address.log
+Job:
+---
+ build/config/aros/v8_library/generate_v8_imports.py | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/build/config/aros/v8_library/generate_v8_imports.py b/build/config/aros/v8_library/generate_v8_imports.py
+index 06f9ceeddc..2f1e6e77a3 100644
+--- a/build/config/aros/v8_library/generate_v8_imports.py
++++ b/build/config/aros/v8_library/generate_v8_imports.py
+@@ -122,7 +122,11 @@ def _emit(symbols: list[str]) -> str:
+                 f"        .globl {symbol}",
+                 f"        .type {symbol}, @function",
+                 f"{symbol}:",
+-                f"        jmp *g_v8_import_slots+{index * 8}(%rip)",
++                # Chrome's AX and WA LoadSeg hunks may be more than 2 GiB
++                # apart. Materialize the slot address with the large-model
++                # relocation instead of encoding a signed RIP displacement.
++                f"        movabs $g_v8_import_slots+{index * 8}, %r11",
++                "        jmp *(%r11)",
+                 f"        .size {symbol}, .-{symbol}",
+                 f".Lslow_{index}:",
+                 f"        pushq ${index}",

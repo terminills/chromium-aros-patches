@@ -1,0 +1,95 @@
+From 8ea32f67d0904a2657c6b8863f8f86f6b0e226d9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 06:29:40 -0500
+Subject: [PATCH 235/638] chrome: define AROS browser OS capabilities
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chrome linked against WebApp and Image Writer interfaces whose platform implementations were absent on AROS.
+
+FIX_REASON: Reuse Chromium's explicit unsupported WebApp registration contract and add an AROS-specific removable-storage provider that returns no unsafe image-writer targets until the OS exposes adequate enumeration metadata.
+
+SCOPE: chrome/browser/web_applications; chrome/browser/extensions/api/image_writer_private
+
+VALIDATION: Rebuilt //chrome/browser:browser; the AROS removable provider and WebApp stubs compiled into the browser archives.
+
+RISK: AROS web apps cannot yet register shortcuts, file handlers, or login launch entries; Image Writer intentionally exposes no removable devices.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/extensions/BUILD.gn              |  4 ++++
+ .../removable_storage_provider_aros.cc          | 17 +++++++++++++++++
+ chrome/browser/web_applications/BUILD.gn        |  2 +-
+ .../os_integration/web_app_stubs.cc             |  4 ++--
+ 4 files changed, 24 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/browser/extensions/api/image_writer_private/removable_storage_provider_aros.cc
+
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index e488b14ebd..ef1b09f440 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -1371,6 +1371,10 @@ static_library("extensions") {
+     ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "api/image_writer_private/removable_storage_provider_aros.cc" ]
++  }
++
+   if (enable_plugins) {
+     sources += [
+       "plugin_manager.cc",
+diff --git a/chrome/browser/extensions/api/image_writer_private/removable_storage_provider_aros.cc b/chrome/browser/extensions/api/image_writer_private/removable_storage_provider_aros.cc
+new file mode 100644
+index 0000000000..49428f1009
+--- /dev/null
++++ b/chrome/browser/extensions/api/image_writer_private/removable_storage_provider_aros.cc
+@@ -0,0 +1,17 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/extensions/api/image_writer_private/removable_storage_provider.h"
++
++namespace extensions {
++
++// static
++scoped_refptr<StorageDeviceList>
++RemovableStorageProvider::PopulateDeviceList() {
++  // AROS does not currently expose a removable block-device enumeration API
++  // with the identity and capacity guarantees required by Image Writer.
++  return {};
++}
++
++}  // namespace extensions
+diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
+index c6c0594f41..26ffc1296d 100644
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -378,7 +378,7 @@ source_set("web_applications") {
+     ]
+   }
+ 
+-  if (is_fuchsia) {
++  if (is_fuchsia || is_aros) {
+     sources += [ "os_integration/web_app_stubs.cc" ]
+   }
+ 
+diff --git a/chrome/browser/web_applications/os_integration/web_app_stubs.cc b/chrome/browser/web_applications/os_integration/web_app_stubs.cc
+index 9d12477ba3..e7451e7ca1 100644
+--- a/chrome/browser/web_applications/os_integration/web_app_stubs.cc
++++ b/chrome/browser/web_applications/os_integration/web_app_stubs.cc
+@@ -2,8 +2,8 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-// TODO(crbug.com/1231621): Implement some/all of these once Fuchsia supports
+-// them.
++// TODO(crbug.com/1231621): Implement some/all of these once the target OS
++// supports native web app registration.
+ 
+ #include <utility>
+ 

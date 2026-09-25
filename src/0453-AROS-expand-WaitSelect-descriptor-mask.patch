@@ -1,0 +1,32 @@
+From 652a6a9bedf6ef49abb5d92164f889042517289e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 31 Jul 2026 23:03:38 -0500
+Subject: [PATCH 453/638] AROS: expand WaitSelect descriptor mask
+
+Chromium normally exceeds AROSTCP public fd_set default of 64 descriptors. Select a 1024-entry variable-size mask before including sys/select.h so the AROS message pump can watch Fast.com sockets above descriptor 100.
+
+
+
+---
+ base/message_loop/message_pump_aros.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 56816439d8..2b3a7af0cd 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -5,6 +5,14 @@
+ #include "base/message_loop/message_pump_aros.h"
+ 
+ #include <errno.h>
++#if defined(__AROS__)
++// AROSTCP's WaitSelect() accepts variable-sized descriptor masks.  Its public
++// fd_set defaults to the historical 64 sockets unless the application selects
++// a larger mask before including <sys/select.h>.  Chromium regularly exceeds
++// that during normal browsing (Fast.com reaches descriptors above 100).
++#undef FD_SETSIZE
++#define FD_SETSIZE 1024
++#endif
+ #include <sys/select.h>
+ 
+ #include <algorithm>

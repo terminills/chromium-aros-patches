@@ -1,0 +1,67 @@
+From 95615c40ff117f01b59563dd1214d81b57d9becb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 21:13:31 -0500
+Subject: [PATCH 339/638] blink: add diagnostic Modules archive
+
+Expose the complete existing Blink Modules closure as an AROS archive without changing consumers. The first build intentionally retains Core so callable and data crossings can be measured from the monolithic baseline.
+
+AI_PHASE: chromium-blink-library-extraction
+
+AI_STATUS: modules-boundary-scaffold
+
+AI_ASSUMPTION: the existing full Chromium output can reuse compiled Modules and Core objects, making the first archive an inexpensive diagnostic
+
+AI_VALIDATION: GN source diff check passed; normal builds retain the false default and unchanged modules component
+
+AI_LIMITATIONS: archive has not yet been generated or audited; Core remains intentionally embedded
+
+AI_DECISION_CHAIN:; 25f8673327; 0d431e7e1d
+---
+ build/config/aros/blink_library/blink_library.gni |  5 +++++
+ third_party/blink/renderer/modules/BUILD.gn       | 12 ++++++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/build/config/aros/blink_library/blink_library.gni b/build/config/aros/blink_library/blink_library.gni
+index d7ddcfb7d1..879cefc20d 100644
+--- a/build/config/aros/blink_library/blink_library.gni
++++ b/build/config/aros/blink_library/blink_library.gni
+@@ -22,4 +22,9 @@ declare_args() {
+   # to hundreds of Platform/WTF data objects, so this is the ABI-safe mode for
+   # native extraction until those ownership boundaries are refactored.
+   aros_blink_core_embed_platform = false
++
++  # Generate a complete Blink Modules archive for boundary analysis and native
++  # extraction. The first archive deliberately retains its Core closure so the
++  # exact callable and data crossings can be measured before replacement.
++  aros_blink_modules_library_only = false
+ }
+diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
+index bf979c82a9..9346367b19 100644
+--- a/third_party/blink/renderer/modules/BUILD.gn
++++ b/third_party/blink/renderer/modules/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+ 
+ import("//build/config/cast.gni")
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/python.gni")
+ import("//media/media_options.gni")
+ import("//testing/libfuzzer/fuzzer_test.gni")
+@@ -216,6 +217,17 @@ component("modules") {
+   configs += blink_symbols_config
+ }
+ 
++if (is_aros && aros_blink_modules_library_only) {
++  # Diagnostic first boundary: retain the current Modules closure, including
++  # Core, and audit its exact ownership before introducing any native import
++  # bridge. This preserves the monolithic implementation as the baseline.
++  static_library("aros_blink_modules_archive") {
++    complete_static_lib = true
++    visibility += [ "//:gn_all" ]
++    deps = [ ":modules" ]
++  }
++}
++
+ source_set("modules_testing") {
+   testonly = true
+ 

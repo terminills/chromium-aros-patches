@@ -1,0 +1,29 @@
+From 2a691e60e1af165b95d25fb384ad32c9bf220003 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:04:16 -0500
+Subject: [PATCH 155/638] tools: use native AROS crash reporting in telemetry
+ builds [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+ROOT_CAUSE: Telemetry requests Breakpad host symbol tools on every non-Windows, non-Fuchsia target, but AROS uses debug.resource plus OPAL and has no Breakpad target graph.
+FIX_REASON: Exclude only the unsupported Breakpad test-data dependency on AROS; native crash reporting remains the runtime baseline.
+VALIDATION: gn gen out/aros-chrome --root-target=//chrome:chrome completed with 18079 targets from 3015 files.
+RISK: Breakpad-specific Telemetry symbolization is unavailable; debug.resource and OPAL artifacts remain authoritative.
+---
+ tools/perf/chrome_telemetry_build/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/perf/chrome_telemetry_build/BUILD.gn b/tools/perf/chrome_telemetry_build/BUILD.gn
+index 8a33f5dc96..a8bb1d1c4a 100644
+--- a/tools/perf/chrome_telemetry_build/BUILD.gn
++++ b/tools/perf/chrome_telemetry_build/BUILD.gn
+@@ -178,7 +178,7 @@ group("telemetry_chrome_test_without_chrome") {
+   ]
+ 
+   # Cr-Fuchsia doesn't support breakpad.
+-  if (!is_win && !is_fuchsia) {
++  if (!is_win && !is_fuchsia && !is_aros) {
+     data_deps += [
+       # This is defined for Windows, but is unused by Telemetry on
+       # Windows, and including it can have issues when cross-compiling

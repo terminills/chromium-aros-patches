@@ -1,0 +1,115 @@
+From bb94177856a26364367a0741412061e9e08397b2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 13:30:16 -0500
+Subject: [PATCH 37/43] AROS: scope CEF task runner manager per native process
+
+AROS processes share an address space, so the upstream C++ global aliases browser and child processes. Resolve CefTaskRunnerManager through a registry keyed by the nearest NT_PROCESS ancestor, while worker tasks inherit their owning process state.
+
+Validation: run 56 removed the task_runner_manager.cc !g_manager fatal; the GPU child advanced to ContentMainInitialize and exposed the next process-global collision.
+
+
+
+---
+ libcef/common/task_runner_manager.cc | 70 ++++++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/libcef/common/task_runner_manager.cc b/libcef/common/task_runner_manager.cc
+index 2318e58a..04df7e39 100644
+--- a/libcef/common/task_runner_manager.cc
++++ b/libcef/common/task_runner_manager.cc
+@@ -4,25 +4,95 @@
+ 
+ #include "libcef/common/task_runner_manager.h"
+ 
++#include "build/build_config.h"
+ #include "base/logging.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <map>
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#endif
++
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++struct CefTaskRunnerManagerRegistry {
++  base::Lock lock;
++  std::map<struct Task*, CefTaskRunnerManager*> managers;
++};
++
++CefTaskRunnerManagerRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefTaskRunnerManagerRegistry> registry;
++  return *registry;
++}
++
++struct Task* GetCurrentProcessTask() {
++  struct Task* task = FindTask(nullptr);
++  struct Task* const current = task;
++
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (task->tc_Node.ln_Type == NT_PROCESS) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return current;
++}
++
++#else
++
+ CefTaskRunnerManager* g_manager = nullptr;
+ 
++#endif
++
+ }  // namespace
+ 
+ // static
+ CefTaskRunnerManager* CefTaskRunnerManager::Get() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessTask());
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ CefTaskRunnerManager::CefTaskRunnerManager() {
+   // Only a single instance should exist.
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] =
++      registry.managers.emplace(GetCurrentProcessTask(), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefTaskRunnerManager::~CefTaskRunnerManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessTask());
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }

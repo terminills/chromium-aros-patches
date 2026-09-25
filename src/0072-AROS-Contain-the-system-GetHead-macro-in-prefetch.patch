@@ -1,0 +1,52 @@
+From de2a7e593c6785c365bef8e60a47867f2e747bc3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:00:34 -0500
+Subject: [PATCH 072/638] [AROS] Contain the system GetHead macro in prefetch
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Browser prefetch interfaces compile after AROS pthread headers introduce Exec list macros.
+ROOT_CAUSE: Exec exposes GetHead as a function-like list macro, which rewrote two Chromium prefetch method declarations and their call sites.
+FIX_REASON: Undefine the system macro at both headers that own GetHead as a C++ method, containing the collision at the semantic interface boundary.
+SCOPE: PrefetchContainer and PrefetchResponseReader headers.
+VALIDATION: browser_context_impl.o, client_hints.o, prefetch_container.o, and prefetch_response_reader.o compile.
+RISK: Minimal; Chromium code after these interfaces cannot invoke Exec's GetHead macro implicitly.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/browser/preloading/prefetch/prefetch_container.h    | 6 ++++++
+ .../browser/preloading/prefetch/prefetch_response_reader.h  | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/content/browser/preloading/prefetch/prefetch_container.h b/content/browser/preloading/prefetch/prefetch_container.h
+index 4d1c5e36c9..a04f21fcd4 100644
+--- a/content/browser/preloading/prefetch/prefetch_container.h
++++ b/content/browser/preloading/prefetch/prefetch_container.h
+@@ -25,6 +25,12 @@
+ #include "third_party/blink/public/common/tokens/tokens.h"
+ #include "url/gurl.h"
+ 
++// Some system headers expose this identifier as a function-like list macro.
++// Prefetch owns it as a method name throughout this interface.
++#ifdef GetHead
++#undef GetHead
++#endif
++
+ namespace network {
+ namespace mojom {
+ class CookieManager;
+diff --git a/content/browser/preloading/prefetch/prefetch_response_reader.h b/content/browser/preloading/prefetch/prefetch_response_reader.h
+index 9d2b35fd62..a4ec2ecd5b 100644
+--- a/content/browser/preloading/prefetch/prefetch_response_reader.h
++++ b/content/browser/preloading/prefetch/prefetch_response_reader.h
+@@ -16,6 +16,12 @@
+ #include "services/network/public/mojom/url_loader.mojom.h"
+ #include "services/network/public/mojom/url_response_head.mojom-forward.h"
+ 
++// Some system headers expose this identifier as a function-like list macro.
++// Prefetch owns it as a method name throughout this interface.
++#ifdef GetHead
++#undef GetHead
++#endif
++
+ namespace content {
+ 
+ class PrefetchStreamingURLLoader;

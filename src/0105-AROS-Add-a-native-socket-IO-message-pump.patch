@@ -1,0 +1,499 @@
+From f089213479dc30ecc0ea70eec723a611ddb78dbb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 23:42:30 -0500
+Subject: [PATCH 105/638] [AROS] Add a native socket IO message pump
+
+AI_PHASE: chromium-phase-2-3
+AI_STATUS: in-progress
+ROOT_CAUSE: AROS posixc select() is a return-0 stub, and PIPE: does not implement the F_SETFL nonblocking contract required by libevent wakeup pipes.
+FIX_REASON: Use AROSTCP WaitSelect() for socket readiness and an Exec signal for cross-task scheduler wakeups, keeping both waits native and atomic.
+SCOPE: base/BUILD.gn; base/message_loop/message_pump_aros.{cc,h}; base/message_loop/message_pump_for_io.h
+VALIDATION: GN regeneration passed; message_pump_aros.o, message_pump.o, and current_thread.o cross-compiled for pc-x86_64-smp AROS.
+RISK: The initial AROS IO pump intentionally watches AROSTCP socket descriptors only; non-socket descriptors require a future native handler/message-port adapter.
+AI_DECISION_CHAIN: libevent pipe wakeup -> PIPE: nonblocking rejection -> posixc select stub -> native WaitSelect plus Exec signal pump
+Continues: def84d9cb5
+---
+ base/BUILD.gn                           |   9 +-
+ base/message_loop/message_pump_aros.cc  | 313 ++++++++++++++++++++++++
+ base/message_loop/message_pump_aros.h   | 102 ++++++++
+ base/message_loop/message_pump_for_io.h |   4 +
+ 4 files changed, 427 insertions(+), 1 deletion(-)
+ create mode 100644 base/message_loop/message_pump_aros.cc
+ create mode 100644 base/message_loop/message_pump_aros.h
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 69f1a63117..f290ec33ba 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -103,7 +103,7 @@ use_nodebug_assertion =
+     use_custom_libcxx && is_official_build && !is_debug && !dcheck_always_on
+ 
+ # Determines whether libevent should be dep.
+-dep_libevent = !is_fuchsia && !is_win && !is_mac && !is_nacl
++dep_libevent = !is_aros && !is_fuchsia && !is_win && !is_mac && !is_nacl
+ 
+ # Determines whether message_pump_libevent should be used.
+ use_libevent = dep_libevent && !is_ios
+@@ -2321,6 +2321,13 @@ component("base") {
+     ]
+   }
+ 
++  if (is_aros) {
++    sources += [
++      "message_loop/message_pump_aros.cc",
++      "message_loop/message_pump_aros.h",
++    ]
++  }
++
+   if (enable_message_pump_epoll) {
+     sources += [
+       "message_loop/message_pump_epoll.cc",
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+new file mode 100644
+index 0000000000..2dc682cf5d
+--- /dev/null
++++ b/base/message_loop/message_pump_aros.cc
+@@ -0,0 +1,313 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/message_loop/message_pump_aros.h"
++
++#include <errno.h>
++#include <sys/select.h>
++
++#include <algorithm>
++#include <utility>
++
++#include "base/aros/socket_library.h"
++#include "base/auto_reset.h"
++#include "base/check.h"
++#include "base/logging.h"
++#include "base/trace_event/trace_event.h"
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++namespace base {
++
++MessagePumpAROS::FdWatchController::FdWatchController(const Location& from_here)
++    : FdWatchControllerInterface(from_here) {}
++
++MessagePumpAROS::FdWatchController::~FdWatchController() {
++  CHECK(StopWatchingFileDescriptor());
++  if (was_destroyed_) {
++    DCHECK(!*was_destroyed_);
++    *was_destroyed_ = true;
++  }
++}
++
++bool MessagePumpAROS::FdWatchController::StopWatchingFileDescriptor() {
++  watcher_ = nullptr;
++  if (pump_) {
++    pump_->UnregisterController(this);
++  }
++  fd_ = -1;
++  mode_ = 0;
++  persistent_ = false;
++  generation_ = 0;
++  return true;
++}
++
++MessagePumpAROS::MessagePumpAROS()
++    : idle_event_(WaitableEvent::ResetPolicy::AUTOMATIC,
++                  WaitableEvent::InitialState::NOT_SIGNALED) {
++  pump_task_ = FindTask(nullptr);
++  CHECK(pump_task_);
++
++  wakeup_signal_ = AllocSignal(-1);
++  CHECK_GE(wakeup_signal_, 0);
++  wakeup_mask_ = uint32_t{1} << wakeup_signal_;
++
++  LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec message pump task="
++            << pump_task_ << " signal=" << wakeup_signal_;
++}
++
++MessagePumpAROS::~MessagePumpAROS() {
++  while (!controllers_.empty()) {
++    controllers_.back()->StopWatchingFileDescriptor();
++  }
++  if (wakeup_signal_ >= 0) {
++    FreeSignal(wakeup_signal_);
++  }
++}
++
++bool MessagePumpAROS::WatchFileDescriptor(int fd,
++                                          bool persistent,
++                                          int mode,
++                                          FdWatchController* controller,
++                                          FdWatcher* delegate) {
++  TRACE_EVENT("base", "MessagePumpAROS::WatchFileDescriptor", "fd", fd,
++              "persistent", persistent, "mode", mode);
++  DCHECK_GE(fd, 0);
++  DCHECK(controller);
++  DCHECK(delegate);
++  DCHECK(mode == WATCH_READ || mode == WATCH_WRITE || mode == WATCH_READ_WRITE);
++  DCHECK(watch_file_descriptor_caller_checker_.CalledOnValidThread());
++
++  if (fd < 0 || fd >= FD_SETSIZE || !controller || !delegate ||
++      (mode != WATCH_READ && mode != WATCH_WRITE && mode != WATCH_READ_WRITE)) {
++    if (controller) {
++      controller->StopWatchingFileDescriptor();
++    }
++    LOG(ERROR) << "[Chromium:IO] invalid AROS socket watch fd=" << fd
++               << " mode=" << mode << " FD_SETSIZE=" << FD_SETSIZE;
++    return false;
++  }
++
++  if (controller->pump_ && controller->pump_ != this) {
++    controller->StopWatchingFileDescriptor();
++  }
++
++  if (controller->pump_ == this) {
++    if (controller->fd_ != fd) {
++      controller->StopWatchingFileDescriptor();
++      return false;
++    }
++    controller->mode_ |= mode;
++    controller->persistent_ = controller->persistent_ || persistent;
++    controller->watcher_ = delegate;
++    controller->generation_ = next_generation_++;
++    return true;
++  }
++
++  controller->pump_ = this;
++  controller->watcher_ = delegate;
++  controller->fd_ = fd;
++  controller->mode_ = mode;
++  controller->persistent_ = persistent;
++  controller->generation_ = next_generation_++;
++  controllers_.push_back(controller);
++  return true;
++}
++
++void MessagePumpAROS::Run(Delegate* delegate) {
++  RunState run_state(delegate);
++  AutoReset<raw_ptr<RunState>> auto_reset_run_state(&run_state_, &run_state);
++
++  for (;;) {
++    Delegate::NextWorkInfo next_work_info = delegate->DoWork();
++    const bool immediate_work_available = next_work_info.is_immediate();
++
++    if (run_state.should_quit) {
++      break;
++    }
++
++    const bool processed_io =
++        !controllers_.empty() && WaitForSocketEvents(TimeDelta(), false);
++    if (run_state.should_quit) {
++      break;
++    }
++    if (immediate_work_available || processed_io) {
++      continue;
++    }
++
++    if (delegate->DoIdleWork()) {
++      continue;
++    }
++    if (run_state.should_quit) {
++      break;
++    }
++
++    delegate->BeforeWait();
++    if (controllers_.empty()) {
++      if (next_work_info.delayed_run_time.is_max()) {
++        (idle_event_.Wait)();
++      } else {
++        idle_event_.TimedWait(next_work_info.remaining_delay());
++      }
++    } else if (next_work_info.delayed_run_time.is_max()) {
++      WaitForSocketEvents(TimeDelta(), true);
++    } else {
++      WaitForSocketEvents(next_work_info.remaining_delay(), false);
++    }
++  }
++}
++
++void MessagePumpAROS::Quit() {
++  DCHECK(run_state_) << "Quit was called outside of Run!";
++  run_state_->should_quit = true;
++  ScheduleWork();
++}
++
++void MessagePumpAROS::ScheduleWork() {
++  (idle_event_.Signal)();
++  Signal(pump_task_, wakeup_mask_);
++}
++
++void MessagePumpAROS::ScheduleDelayedWork(
++    const Delegate::NextWorkInfo& next_work_info) {}
++
++bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
++                                          bool wait_indefinitely) {
++  fd_set read_fds;
++  fd_set write_fds;
++  FD_ZERO(&read_fds);
++  FD_ZERO(&write_fds);
++
++  bool watch_read = false;
++  bool watch_write = false;
++  int max_fd = -1;
++  for (const auto& controller : controllers_) {
++    DCHECK(controller->pump_ == this);
++    DCHECK_GE(controller->fd_, 0);
++    if (controller->mode_ & WATCH_READ) {
++      FD_SET(controller->fd_, &read_fds);
++      watch_read = true;
++    }
++    if (controller->mode_ & WATCH_WRITE) {
++      FD_SET(controller->fd_, &write_fds);
++      watch_write = true;
++    }
++    max_fd = std::max(max_fd, controller->fd_);
++  }
++
++  struct timeval timeout_value = {};
++  struct timeval* timeout_pointer = nullptr;
++  if (!wait_indefinitely) {
++    timeout = std::max(timeout, TimeDelta());
++    const int64_t seconds = std::min<int64_t>(timeout.InSeconds(), 100000000);
++    timeout_value.tv_sec = static_cast<time_t>(seconds);
++    timeout_value.tv_usec = (timeout - Seconds(seconds)).InMicroseconds() %
++                            Time::kMicrosecondsPerSecond;
++    timeout_pointer = &timeout_value;
++  }
++
++  uint32_t signal_mask = wakeup_mask_;
++  const int result =
++      aros::SocketWaitSelect(max_fd + 1, watch_read ? &read_fds : nullptr,
++                             watch_write ? &write_fds : nullptr, nullptr,
++                             timeout_pointer, &signal_mask);
++  if (result < 0) {
++    if (errno != EINTR) {
++      LOG(ERROR) << "[Chromium:IO] WaitSelect failed errno=" << errno;
++      idle_event_.TimedWait(Milliseconds(10));
++    }
++    return false;
++  }
++  if (result == 0) {
++    return false;
++  }
++
++  std::vector<ReadyRegistration> ready;
++  ready.reserve(controllers_.size());
++  for (const auto& controller : controllers_) {
++    int ready_mode = 0;
++    if ((controller->mode_ & WATCH_READ) &&
++        FD_ISSET(controller->fd_, &read_fds)) {
++      ready_mode |= WATCH_READ;
++    }
++    if ((controller->mode_ & WATCH_WRITE) &&
++        FD_ISSET(controller->fd_, &write_fds)) {
++      ready_mode |= WATCH_WRITE;
++    }
++    if (ready_mode) {
++      ready.push_back({controller.get(), controller->generation_, ready_mode});
++    }
++  }
++
++  bool processed_io = false;
++  for (const ReadyRegistration& registration : ready) {
++    const auto current = std::find(controllers_.begin(), controllers_.end(),
++                                   registration.controller);
++    if (current == controllers_.end() ||
++        registration.controller->generation_ != registration.generation) {
++      continue;
++    }
++    processed_io = true;
++    DispatchController(registration);
++  }
++  return processed_io;
++}
++
++void MessagePumpAROS::DispatchController(const ReadyRegistration& ready) {
++  FdWatchController* const controller = ready.controller;
++  const int fd = controller->fd_;
++  const bool persistent = controller->persistent_;
++
++  bool controller_was_destroyed = false;
++  DCHECK(!controller->was_destroyed_);
++  controller->was_destroyed_ = &controller_was_destroyed;
++
++  if (!persistent) {
++    const auto current =
++        std::find(controllers_.begin(), controllers_.end(), controller);
++    DCHECK(current != controllers_.end());
++    controllers_.erase(current);
++    controller->pump_ = nullptr;
++    controller->fd_ = -1;
++    controller->mode_ = 0;
++    controller->persistent_ = false;
++    controller->generation_ = 0;
++  }
++
++  Delegate::ScopedDoWorkItem scoped_do_work_item;
++  if (run_state_) {
++    scoped_do_work_item = run_state_->delegate->BeginWorkItem();
++  }
++  TRACE_EVENT("toplevel", "MessagePumpAROS::OnSocketReady", "fd", fd, "mode",
++              ready.ready_mode, "controller",
++              reinterpret_cast<uintptr_t>(controller));
++
++  if ((ready.ready_mode & WATCH_WRITE) && controller->watcher_) {
++    controller->watcher_->OnFileCanWriteWithoutBlocking(fd);
++  }
++  if (!controller_was_destroyed && (ready.ready_mode & WATCH_READ) &&
++      controller->watcher_) {
++    controller->watcher_->OnFileCanReadWithoutBlocking(fd);
++  }
++
++  if (!controller_was_destroyed) {
++    controller->was_destroyed_ = nullptr;
++    if (!persistent && !controller->pump_) {
++      controller->watcher_ = nullptr;
++    }
++  }
++}
++
++void MessagePumpAROS::UnregisterController(FdWatchController* controller) {
++  DCHECK(watch_file_descriptor_caller_checker_.CalledOnValidThread());
++  const auto current =
++      std::find(controllers_.begin(), controllers_.end(), controller);
++  if (current != controllers_.end()) {
++    controllers_.erase(current);
++  }
++  controller->pump_ = nullptr;
++}
++
++}  // namespace base
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+new file mode 100644
+index 0000000000..3a8b53a3f7
+--- /dev/null
++++ b/base/message_loop/message_pump_aros.h
+@@ -0,0 +1,102 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef BASE_MESSAGE_LOOP_MESSAGE_PUMP_AROS_H_
++#define BASE_MESSAGE_LOOP_MESSAGE_PUMP_AROS_H_
++
++#include <stdint.h>
++
++#include <vector>
++
++#include "base/base_export.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/raw_ptr_exclusion.h"
++#include "base/message_loop/message_pump.h"
++#include "base/message_loop/watchable_io_message_pump_posix.h"
++#include "base/synchronization/waitable_event.h"
++#include "base/threading/thread_checker.h"
++
++struct Task;
++
++namespace base {
++
++// AROS does not expose POSIX fd readiness through posixc select(). AROSTCP's
++// WaitSelect() is the native socket readiness primitive and can atomically wait
++// for an Exec signal, which supplies the cross-task scheduler wakeup.
++class BASE_EXPORT MessagePumpAROS : public MessagePump,
++                                    public WatchableIOMessagePumpPosix {
++ public:
++  class FdWatchController : public FdWatchControllerInterface {
++   public:
++    explicit FdWatchController(const Location& from_here);
++
++    FdWatchController(const FdWatchController&) = delete;
++    FdWatchController& operator=(const FdWatchController&) = delete;
++
++    ~FdWatchController() override;
++
++    bool StopWatchingFileDescriptor() override;
++
++   private:
++    friend class MessagePumpAROS;
++
++    raw_ptr<MessagePumpAROS, DisableDanglingPtrDetection> pump_ = nullptr;
++    raw_ptr<FdWatcher> watcher_ = nullptr;
++    raw_ptr<bool> was_destroyed_ = nullptr;
++    int fd_ = -1;
++    int mode_ = 0;
++    bool persistent_ = false;
++    uint64_t generation_ = 0;
++  };
++
++  MessagePumpAROS();
++
++  MessagePumpAROS(const MessagePumpAROS&) = delete;
++  MessagePumpAROS& operator=(const MessagePumpAROS&) = delete;
++
++  ~MessagePumpAROS() override;
++
++  bool WatchFileDescriptor(int fd,
++                           bool persistent,
++                           int mode,
++                           FdWatchController* controller,
++                           FdWatcher* delegate);
++
++  void Run(Delegate* delegate) override;
++  void Quit() override;
++  void ScheduleWork() override;
++  void ScheduleDelayedWork(
++      const Delegate::NextWorkInfo& next_work_info) override;
++
++ private:
++  struct RunState {
++    explicit RunState(Delegate* delegate_in) : delegate(delegate_in) {}
++
++    RAW_PTR_EXCLUSION Delegate* const delegate;
++    bool should_quit = false;
++  };
++
++  struct ReadyRegistration {
++    FdWatchController* controller;
++    uint64_t generation;
++    int ready_mode;
++  };
++
++  bool WaitForSocketEvents(TimeDelta timeout, bool wait_indefinitely);
++  void DispatchController(const ReadyRegistration& ready);
++  void UnregisterController(FdWatchController* controller);
++
++  raw_ptr<RunState> run_state_ = nullptr;
++  RAW_PTR_EXCLUSION Task* pump_task_ = nullptr;
++  int wakeup_signal_ = -1;
++  uint32_t wakeup_mask_ = 0;
++  WaitableEvent idle_event_;
++  std::vector<raw_ptr<FdWatchController>> controllers_;
++  uint64_t next_generation_ = 1;
++  ThreadChecker watch_file_descriptor_caller_checker_;
++};
++
++}  // namespace base
++
++#endif  // BASE_MESSAGE_LOOP_MESSAGE_PUMP_AROS_H_
+diff --git a/base/message_loop/message_pump_for_io.h b/base/message_loop/message_pump_for_io.h
+index a1080754f6..1993e5d7ce 100644
+--- a/base/message_loop/message_pump_for_io.h
++++ b/base/message_loop/message_pump_for_io.h
+@@ -21,6 +21,8 @@
+ #include "base/message_loop/message_pump_default.h"
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #include "base/message_loop/message_pump_fuchsia.h"
++#elif BUILDFLAG(IS_AROS)
++#include "base/message_loop/message_pump_aros.h"
+ #elif BUILDFLAG(IS_POSIX)
+ #include "base/message_loop/message_pump_libevent.h"
+ #endif
+@@ -38,6 +40,8 @@ using MessagePumpForIO = MessagePumpKqueue;
+ using MessagePumpForIO = MessagePumpDefault;
+ #elif BUILDFLAG(IS_FUCHSIA)
+ using MessagePumpForIO = MessagePumpFuchsia;
++#elif BUILDFLAG(IS_AROS)
++using MessagePumpForIO = MessagePumpAROS;
+ #elif BUILDFLAG(IS_POSIX)
+ using MessagePumpForIO = MessagePumpLibevent;
+ #else

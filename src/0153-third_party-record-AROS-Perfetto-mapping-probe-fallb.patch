@@ -1,0 +1,23 @@
+From 4374dd16c1f9cefd25056ad12156178a029c8146 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:03:47 -0500
+Subject: [PATCH 153/638] third_party: record AROS Perfetto mapping probe
+ fallback [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: The windowed content graph reaches Perfetto test support, whose mapping probe depends on sys/mman and mincore unavailable on AROS.
+FIX_REASON: Advance the pinned Perfetto port to its granular AROS mapping-introspection fallback commit.
+VALIDATION: Perfetto vm_test_utils object compiles in out/aros-windowed.
+RISK: Test-only IsMapped remains fail-open until AROS exposes an MMU mapping query.
+---
+ third_party/perfetto | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/perfetto b/third_party/perfetto
+index a66020f870..288d79a0e9 160000
+--- a/third_party/perfetto
++++ b/third_party/perfetto
+@@ -1 +1 @@
+-Subproject commit a66020f87046d8934c22e20acb2bb8a91901ce8e
++Subproject commit 288d79a0e9b6bacc523004dfea3278c0e01f96f4

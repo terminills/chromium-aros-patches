@@ -1,0 +1,90 @@
+From 53bce9af16419c9c30c4396ecf1ae562ce3da58e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 07:59:04 -0500
+Subject: [PATCH 280/638] blink: add focused AROS platform extraction graph
+
+Describe Chromium's existing blink_platform component without traversing browser or test aggregates. Keep the visibility exception gated to the exact AROS extraction mode so normal builds retain Blink's boundary.
+
+AI_PHASE: chromium-blink-platform-library
+
+AI_STATUS: focused-extraction-graph-generated
+
+AI_ASSUMPTION: Chromium's existing blink_platform component is the correct first Blink dependency boundary
+
+AI_VALIDATION: gn gen out/aros-blink-platform --fail-on-unused-args produced 18240 targets from 3043 files
+
+AI_LIMITATIONS: archive build, dependency closure, native AROS library, consumer switch, and runtime proof remain pending
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn                                          |  8 +++++++-
+ build/config/aros/blink_library/blink_library.gni | 11 +++++++++++
+ third_party/blink/renderer/platform/BUILD.gn      |  4 ++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+ create mode 100644 build/config/aros/blink_library/blink_library.gni
+
+diff --git a/BUILD.gn b/BUILD.gn
+index f0a0c3caf7..2d78b9cfa6 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -8,6 +8,7 @@
+ # you add a new build file, there must be some path of dependencies from this
+ # file to your new one or GN won't know about it.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/cast.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/compiler/compiler.gni")
+@@ -88,7 +89,12 @@ if (is_official_build) {
+ group("gn_all") {
+   testonly = true
+ 
+-  if (is_aros && aros_v8_library_only) {
++  if (is_aros && aros_blink_platform_library_only) {
++    assert(use_blink)
++    assert(!aros_v8_library_only)
++    deps = [ "//third_party/blink/renderer/platform" ]
++    deps += root_extra_deps
++  } else if (is_aros && aros_v8_library_only) {
+     assert(v8_monolithic)
+     deps = [ "//v8:v8_monolith" ]
+     deps += root_extra_deps
+diff --git a/build/config/aros/blink_library/blink_library.gni b/build/config/aros/blink_library/blink_library.gni
+new file mode 100644
+index 0000000000..c6ad43bd73
+--- /dev/null
++++ b/build/config/aros/blink_library/blink_library.gni
+@@ -0,0 +1,11 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Generate only Chromium's existing blink_platform component boundary for
++  # extraction into an AROS native library. Keep this independent of browser
++  # and test aggregates so the library surface can be measured before any
++  # consumer linkage changes.
++  aros_blink_platform_library_only = false
++}
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index f286c565ec..b036bcdedc 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -5,6 +5,7 @@
+ import("//base/trace_event/tracing.gni")
+ import("//build/buildflag_header.gni")
+ import("//build/compiled_action.gni")
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//build/config/features.gni")
+ import("//build/config/ui.gni")
+@@ -317,6 +318,9 @@ component("platform") {
+     "//third_party/blink/*",
+     "//tools/privacy_budget/font_indexer:*",
+   ]
++  if (is_aros && aros_blink_platform_library_only) {
++    visibility += [ "//:gn_all" ]
++  }
+   output_name = "blink_platform"
+ 
+   sources = [

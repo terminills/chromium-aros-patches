@@ -1,0 +1,25 @@
+From c61e37236b6e24bb546bbcbe4a19c279af7b4ff8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 20:19:27 -0500
+Subject: [PATCH 123/638] [AROS] Use uncaged cppgc before sparse MMU
+ reservations
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: complete
+ROOT_CAUSE: Hosted run 0123 exhausted the pre-MMU physical allocator while V8 attempted cppgc's sparse 8-17 GiB cage reservation.
+FIX_REASON: Advance the pinned V8 port to its AROS uncaged-cppgc commit, preserving a replayable boundary between the engine configuration and Chromium integration.
+SCOPE: v8 submodule pointer
+VALIDATION: V8 cppgc_base cross-compiled 105 affected targets without cage, young-generation, or cppgc pointer-compression defines.
+RISK: This intentionally trades cppgc cage-derived optimizations for a functional pre-MMU bring-up; the cage should return once OPAL provides sparse virtual reservations.
+AI_DECISION_CHAIN: run 0123 cage OOM -> V8 91d3ac5a3c -> hosted run 0124
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 35a278897f..91d3ac5a3c 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 35a278897fa08a1be8adc13c72fae8ceca010c01
++Subproject commit 91d3ac5a3cb542a5bdcc54e5af4623a101264c55

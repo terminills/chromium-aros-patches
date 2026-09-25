@@ -1,0 +1,67 @@
+From 2617a1ec4460994e3e0b12ae7c72934c1adf1f08 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 23:38:00 -0500
+Subject: [PATCH 354/638] cdm: make unsupported AROS key systems explicit
+
+Provide the renderer observer seam with an empty capability callback and no live observer. This avoids importing the library-CDM host-verification contract on a platform with no CDM provider.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: failed-generic-provider-assumption-corrected-under-validation
+
+AI_VALIDATION: generic provider compile failed because AROS intentionally has no ENABLE_CDM_HOST_VERIFICATION buildflag contract
+
+AI_ASSUMPTION: capability absence is a first-class non-error state until an AROS CDM provider exists
+
+AI_LIMITATIONS: coherent archive rebuild, native relink, and encrypted-media behavior remain pending
+
+AI_EVIDENCE: out/aros-cef-bootstrap/test-artifacts/-cef-final-two-20260725/02-archive-rebuild.log
+
+AI_DECISION_CHAIN:
+---
+ components/cdm/renderer/BUILD.gn                |  7 ++++++-
+ .../renderer/key_system_support_update_aros.cc  | 17 +++++++++++++++++
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+ create mode 100644 components/cdm/renderer/key_system_support_update_aros.cc
+
+diff --git a/components/cdm/renderer/BUILD.gn b/components/cdm/renderer/BUILD.gn
+index fe7a4e7cf3..38ab86b472 100644
+--- a/components/cdm/renderer/BUILD.gn
++++ b/components/cdm/renderer/BUILD.gn
+@@ -17,7 +17,12 @@ static_library("renderer") {
+     "//third_party/widevine/cdm:buildflags",
+   ]
+ 
+-  if (enable_library_cdms || is_win || is_android || is_aros) {
++  if (is_aros) {
++    sources += [
++      "key_system_support_update_aros.cc",
++      "key_system_support_update.h",
++    ]
++  } else if (enable_library_cdms || is_win || is_android) {
+     sources += [
+       "key_system_support_update.cc",
+       "key_system_support_update.h",
+diff --git a/components/cdm/renderer/key_system_support_update_aros.cc b/components/cdm/renderer/key_system_support_update_aros.cc
+new file mode 100644
+index 0000000000..942827211f
+--- /dev/null
++++ b/components/cdm/renderer/key_system_support_update_aros.cc
+@@ -0,0 +1,17 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/cdm/renderer/key_system_support_update.h"
++
++namespace cdm {
++
++std::unique_ptr<media::KeySystemSupportObserver> GetSupportedKeySystemsUpdates(
++    bool can_persist_data,
++    media::GetSupportedKeySystemsCB cb) {
++  (void)can_persist_data;
++  cb.Run(media::KeySystemInfos());
++  return nullptr;
++}
++
++}  // namespace cdm

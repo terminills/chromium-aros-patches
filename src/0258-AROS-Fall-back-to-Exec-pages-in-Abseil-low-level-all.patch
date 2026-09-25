@@ -1,0 +1,181 @@
+From 9c175fc2f18097290ccf2c14ec1da5d89e1db767 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 22:15:10 -0500
+Subject: [PATCH 258/638] [AROS] Fall back to Exec pages in Abseil low-level
+ allocator
+
+ROOT_CAUSE: Chromium's Compositor task bypassed the existing PartitionAlloc fallback, called KrnAllocPages directly, and aborted when hosted AROS returned NULL.
+
+FIX_REASON: Use page-aligned Exec memory only after KrnAllocPages fails, retain its exact raw backing through split/coalesce, and free it correctly in DeleteArena.
+
+VALIDATION: x86_64-aros-g++ compiled obj/third_party/abseil-cpp/absl/base/malloc_internal/low_level_alloc.o successfully. Full Chrome link and runtime validation remain pending the shared stdc pool rebuild.
+---
+ .../absl/base/internal/low_level_alloc.cc     | 106 +++++++++++++++---
+ 1 file changed, 93 insertions(+), 13 deletions(-)
+
+diff --git a/third_party/abseil-cpp/absl/base/internal/low_level_alloc.cc b/third_party/abseil-cpp/absl/base/internal/low_level_alloc.cc
+index 4be33c7629..9518e428fb 100644
+--- a/third_party/abseil-cpp/absl/base/internal/low_level_alloc.cc
++++ b/third_party/abseil-cpp/absl/base/internal/low_level_alloc.cc
+@@ -93,8 +93,9 @@ struct AllocList {
+     // Pointer to parent arena.
+     LowLevelAlloc::Arena *arena;
+ 
+-    // Aligns regions to 0 mod 2*sizeof(void*).
+-    void *dummy_for_alignment;
++    // Keeps the existing alignment on every platform.  On AROS this points
++    // to the backing record for an Exec-memory page fallback, if any.
++    void *page_backing;
+   } header;
+ 
+   // Next two fields: in unallocated blocks: freelist skiplist data
+@@ -356,6 +357,81 @@ size_t RoundedUpBlockSize() {
+   return round_up;
+ }
+ 
++#if defined(__AROS__)
++// KrnAllocPages() is the preferred backing for LowLevelAlloc.  Hosted AROS
++// does not currently provide it for every allocation context, though, while
++// Exec memory remains safe for normal AROS callers to read and write.  Keep
++// the raw Exec allocation so DeleteArena() can release it correctly.
++struct ArosPageBacking {
++  APTR raw;
++  size_t raw_size;
++  APTR pages;
++  size_t pages_size;
++};
++
++void *AllocateArosPages(size_t size, size_t page_size, void **page_backing) {
++  APTR KernelBase = OpenResource("kernel.resource");
++  ABSL_RAW_CHECK(KernelBase != nullptr,
++                 "LowLevelAlloc: kernel.resource missing");
++
++  void *pages = KrnAllocPages(nullptr, size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (pages != nullptr) {
++    *page_backing = nullptr;
++    return pages;
++  }
++
++  const size_t alignment_slack = page_size - 1;
++  if (size > static_cast<size_t>(-1) - alignment_slack) {
++    return nullptr;
++  }
++
++  const size_t raw_size = size + alignment_slack;
++  APTR raw = AllocMem(raw_size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (raw == nullptr) {
++    return nullptr;
++  }
++
++  const uintptr_t raw_address = reinterpret_cast<uintptr_t>(raw);
++  const uintptr_t page_address = (raw_address + alignment_slack) &
++                                 ~static_cast<uintptr_t>(alignment_slack);
++  pages = reinterpret_cast<APTR>(page_address);
++
++  auto *backing = static_cast<ArosPageBacking *>(
++      AllocMem(sizeof(ArosPageBacking), MEMF_PUBLIC | MEMF_CLEAR));
++  if (backing == nullptr) {
++    FreeMem(raw, raw_size);
++    return nullptr;
++  }
++
++  backing->raw = raw;
++  backing->raw_size = raw_size;
++  backing->pages = pages;
++  backing->pages_size = size;
++  *page_backing = backing;
++  return pages;
++}
++
++void FreeArosPages(void *pages, size_t size, void *page_backing) {
++  auto *backing = static_cast<ArosPageBacking *>(page_backing);
++  if (backing != nullptr) {
++    ABSL_RAW_CHECK(backing->pages == pages,
++                   "LowLevelAlloc: fallback page base mismatch");
++    ABSL_RAW_CHECK(backing->pages_size == size,
++                   "LowLevelAlloc: fallback page size mismatch");
++    APTR raw = backing->raw;
++    const size_t raw_size = backing->raw_size;
++    FreeMem(backing, sizeof(*backing));
++    FreeMem(raw, raw_size);
++    return;
++  }
++
++  APTR KernelBase = OpenResource("kernel.resource");
++  ABSL_RAW_CHECK(KernelBase != nullptr,
++                 "LowLevelAlloc: kernel.resource missing");
++  KrnFreePages(pages, size);
++}
++#endif
++
+ }  // namespace
+ 
+ LowLevelAlloc::Arena::Arena(uint32_t flags_value)
+@@ -369,6 +445,7 @@ LowLevelAlloc::Arena::Arena(uint32_t flags_value)
+   freelist.header.size = 0;
+   freelist.header.magic = Magic(kMagicUnallocated, &freelist.header);
+   freelist.header.arena = this;
++  freelist.header.page_backing = nullptr;
+   freelist.levels = 0;
+   memset(freelist.next, 0, sizeof(freelist.next));
+ }
+@@ -418,10 +495,7 @@ bool LowLevelAlloc::DeleteArena(Arena *arena) {
+     ABSL_RAW_CHECK(munmap_result != 0,
+                    "LowLevelAlloc::DeleteArena: VitualFree failed");
+ #elif defined(__AROS__)
+-    APTR KernelBase = OpenResource("kernel.resource");
+-    ABSL_RAW_CHECK(KernelBase != nullptr,
+-                   "LowLevelAlloc::DeleteArena: kernel.resource missing");
+-    KrnFreePages(region, size);
++    FreeArosPages(region, size, region->header.page_backing);
+     munmap_result = 0;
+ #else
+ #ifndef ABSL_LOW_LEVEL_ALLOC_ASYNC_SIGNAL_SAFE_MISSING
+@@ -487,7 +561,8 @@ static AllocList *Next(int i, AllocList *prev, LowLevelAlloc::Arena *arena) {
+ // Coalesce list item "a" with its successor if they are adjacent.
+ static void Coalesce(AllocList *a) {
+   AllocList *n = a->next[0];
+-  if (n != nullptr && reinterpret_cast<char *>(a) + a->header.size ==
++  if (n != nullptr && a->header.page_backing == n->header.page_backing &&
++      reinterpret_cast<char *>(a) + a->header.size ==
+                           reinterpret_cast<char *>(n)) {
+     LowLevelAlloc::Arena *arena = a->header.arena;
+     a->header.size += n->header.size;
+@@ -570,12 +645,11 @@ static void *DoAllocWithArena(size_t request, LowLevelAlloc::Arena *arena) {
+                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+       ABSL_RAW_CHECK(new_pages != nullptr, "VirtualAlloc failed");
+ #elif defined(__AROS__)
+-      APTR KernelBase = OpenResource("kernel.resource");
+-      ABSL_RAW_CHECK(KernelBase != nullptr,
+-                     "LowLevelAlloc: kernel.resource missing");
+-      new_pages = KrnAllocPages(nullptr, new_pages_size,
+-                                MEMF_PUBLIC | MEMF_CLEAR);
+-      ABSL_RAW_CHECK(new_pages != nullptr, "KrnAllocPages failed");
++      void *page_backing = nullptr;
++      new_pages = AllocateArosPages(new_pages_size, arena->pagesize,
++                                    &page_backing);
++      ABSL_RAW_CHECK(new_pages != nullptr,
++                     "LowLevelAlloc: AROS page allocation failed");
+ #else
+ #ifndef ABSL_LOW_LEVEL_ALLOC_ASYNC_SIGNAL_SAFE_MISSING
+       if ((arena->flags & LowLevelAlloc::kAsyncSignalSafe) != 0) {
+@@ -612,6 +686,11 @@ static void *DoAllocWithArena(size_t request, LowLevelAlloc::Arena *arena) {
+       // Pretend the block is allocated; call AddToFreelist() to free it.
+       s->header.magic = Magic(kMagicAllocated, &s->header);
+       s->header.arena = arena;
++#if defined(__AROS__)
++      s->header.page_backing = page_backing;
++#else
++      s->header.page_backing = nullptr;
++#endif
+       AddToFreelist(&s->levels, arena);  // insert new region into free list
+     }
+     AllocList *prev[kMaxLevel];
+@@ -624,6 +703,7 @@ static void *DoAllocWithArena(size_t request, LowLevelAlloc::Arena *arena) {
+       n->header.size = s->header.size - req_rnd;
+       n->header.magic = Magic(kMagicAllocated, &n->header);
+       n->header.arena = arena;
++      n->header.page_backing = s->header.page_backing;
+       s->header.size = req_rnd;
+       AddToFreelist(&n->levels, arena);
+     }

@@ -1,0 +1,37 @@
+From 4c5d9f82fe9bb3eec1b59c8068478365f8423a9c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:50 -0500
+Subject: [PATCH] build: disable mmap capability on AROS
+
+Make ICU use its non-mmap data path explicitly on AROS.
+
+AI_PHASE: chromium-aros-icu
+
+AI_STATUS: capability-checkpoint
+
+AI_ASSUMPTION: the current AROS Chromium runtime does not provide the mmap contract ICU expects
+
+AI_VALIDATION: focused blink_platform build completed 15781/15781 with U_HAVE_MMAP=0
+
+AI_LIMITATIONS: hosted runtime validation belongs to the full Chromium replay
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 92e4871..f04728d 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -82,6 +82,10 @@ config("icu_code") {
+     "U_CHARSET_IS_UTF8=1",
+   ]
+ 
++  if (is_aros) {
++    defines += [ "U_HAVE_MMAP=0" ]
++  }
++
+   if (is_win) {
+     # Disable some compiler warnings.
+     cflags += [

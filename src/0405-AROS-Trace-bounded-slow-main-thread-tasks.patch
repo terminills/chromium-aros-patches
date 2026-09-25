@@ -1,0 +1,59 @@
+From a28039fa99db33ef7f93a8350993f4e240285c9e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 08:15:22 -0500
+Subject: [PATCH 405/638] [AROS] Trace bounded slow main-thread tasks
+
+AI_PHASE: chromium-process-model
+AI_STATUS: bounded-runtime-telemetry
+AI_OBSERVED: Runtime48 shows a renderer BeginMainFrame task waiting 73.305 seconds between impl-thread post and main-thread consumption.
+AI_FIX_REASON: Identify the long-running task occupying the renderer main thread before changing scheduler or pump behavior.
+AI_SCOPE: AROS-only TaskAnnotator duration telemetry; maximum 32 reports per thread for tasks lasting at least 250 ms.
+AI_VALIDATION: git diff --check passes; compile and hosted runtime replay follow as separate evidence checkpoints.
+---
+ base/task/common/task_annotator.cc | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/base/task/common/task_annotator.cc b/base/task/common/task_annotator.cc
+index 28e046d6c4..d003594b5f 100644
+--- a/base/task/common/task_annotator.cc
++++ b/base/task/common/task_annotator.cc
+@@ -22,6 +22,7 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/base_tracing.h"
+ #include "base/tracing_buildflags.h"
++#include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ 
+ #if BUILDFLAG(ENABLE_BASE_TRACING)
+@@ -153,6 +154,10 @@ void TaskAnnotator::WillQueueTask(perfetto::StaticString trace_event_name,
+ }
+ 
+ void TaskAnnotator::RunTaskImpl(PendingTask& pending_task) {
++#if BUILDFLAG(IS_AROS)
++  const TimeTicks aros_task_start = TimeTicks::Now();
++#endif
++
+   TRACE_HEAP_PROFILER_API_SCOPED_TASK_EXECUTION(
+       pending_task.posted_from.file_name());
+ 
+@@ -203,6 +208,20 @@ void TaskAnnotator::RunTaskImpl(PendingTask& pending_task) {
+     std::move(pending_task.task).Run();
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  const TimeDelta aros_task_duration = TimeTicks::Now() - aros_task_start;
++  static thread_local uint32_t aros_slow_task_reports = 0;
++  if (aros_task_duration >= Milliseconds(250) &&
++      aros_slow_task_reports < 32) {
++    LOG(ERROR) << "[AROS_TASK] slow-run duration_us="
++               << aros_task_duration.InMicroseconds()
++               << " sequence=" << pending_task.sequence_num
++               << " delayed=" << !pending_task.delayed_run_time.is_null()
++               << " posted_from=" << pending_task.posted_from.ToString();
++    ++aros_slow_task_reports;
++  }
++#endif
++
+   // Stomp the markers. Otherwise they can stick around on the unused parts of
+   // stack and cause |task_backtrace| to be associated with an unrelated stack
+   // sample on this thread later in the event of a crash. Alias once again after

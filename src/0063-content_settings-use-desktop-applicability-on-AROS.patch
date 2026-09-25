@@ -1,0 +1,38 @@
+From 115282bfcf6630b8e9d3bf4eb47782d612f18ace Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:11:19 -0500
+Subject: [PATCH 063/638] content_settings: use desktop applicability on AROS
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: AROS now registers the desktop website-settings cohort.
+
+ROOT_CAUSE: WebsiteSettingsRegistry had no AROS platform branch and stopped compilation at an explicit unsupported-platform guard.
+
+FIX_REASON: Chromium 124 has no AROS settings bit; PLATFORM_LINUX is the existing desktop applicability cohort and preserves desktop sync behavior.
+
+SCOPE: components/content_settings/core/browser/website_settings_registry.cc only.
+
+VALIDATION: The previously failing website_settings_registry.o target compiled for AROS.
+
+RISK: AROS inherits desktop Unix setting availability until the registry gains a native platform bit; runtime OS identity remains distinct.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../content_settings/core/browser/website_settings_registry.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/components/content_settings/core/browser/website_settings_registry.cc b/components/content_settings/core/browser/website_settings_registry.cc
+index c6e1d49e2b..ee733b3969 100644
+--- a/components/content_settings/core/browser/website_settings_registry.cc
++++ b/components/content_settings/core/browser/website_settings_registry.cc
+@@ -67,7 +67,8 @@ const WebsiteSettingsInfo* WebsiteSettingsRegistry::Register(
+ #if BUILDFLAG(IS_WIN)
+   if (!(platform & PLATFORM_WINDOWS))
+     return nullptr;
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
++  // PLATFORM_LINUX is the shared desktop applicability cohort.
+   if (!(platform & PLATFORM_LINUX))
+     return nullptr;
+ #elif BUILDFLAG(IS_MAC)

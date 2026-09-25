@@ -1,0 +1,35 @@
+From 8e22aa9ef38d6de0a52e6e5905e4295e8523e520 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:52:57 -0500
+Subject: [PATCH 19/43] cef: include portable POSIX startup utility on AROS
+
+CEF's Alloy and Chrome delegates call util_linux::PreSandboxStartup on every POSIX target. Compile the implementation on AROS without importing the Linux native-window or fontconfig branches.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained the sole unresolved util_linux::PreSandboxStartup symbol
+
+AI_LIMITATIONS: CEF archive rebuild and native link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:; e27cb905-format-failure; 07c0d2b0-revert
+---
+ BUILD.gn | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 18ae43b3..4f6cd5e7 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1154,6 +1154,8 @@ source_set("libcef_static") {
+       "libcef/browser/native/browser_platform_delegate_native_linux.h",
+       "libcef/browser/osr/browser_platform_delegate_osr_linux.cc",
+       "libcef/browser/osr/browser_platform_delegate_osr_linux.h",
++      "libcef/common/util_linux.cc",
++      "libcef/common/util_linux.h",
+     ]
+   }
+ 

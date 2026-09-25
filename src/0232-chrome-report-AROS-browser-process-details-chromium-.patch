@@ -1,0 +1,168 @@
+From 8f054f19fdcfc3bf795353ac73b861b9984eb32d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 05:49:03 -0500
+Subject: [PATCH 232/638] chrome: report AROS browser process details
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chrome memory reporting selected no AROS implementation and generic POSIX code classified processes through the Linux zygote host; the extension CPU API likewise had no AROS per-core time provider.
+
+FIX_REASON: Enumerate the current browser task and Chrome-known child tasks using portable process data, retain Chromium memory-instrumentation footprint collection, exclude the absent Linux zygote, and report per-core time as unavailable until task.resource exposes a stable accounting API.
+
+SCOPE: chrome/browser memory details and extensions system CPU AROS platform sources.
+
+VALIDATION: ninja -C out/aros-chrome -j48 obj/chrome/browser/libbrowser.a extensions/browser/api/system_cpu:system_cpu
+
+RISK: AROS-wide process discovery and cumulative per-core CPU time remain unavailable; reported task identity and browser-child classification are real.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/BUILD.gn                       |  1 +
+ chrome/browser/memory_details.cc              |  6 +-
+ chrome/browser/memory_details_aros.cc         | 56 +++++++++++++++++++
+ extensions/browser/api/system_cpu/BUILD.gn    |  4 ++
+ .../api/system_cpu/cpu_info_provider_aros.cc  | 18 ++++++
+ 5 files changed, 83 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/browser/memory_details_aros.cc
+ create mode 100644 extensions/browser/api/system_cpu/cpu_info_provider_aros.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index c754564255..f3ef1c3123 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6567,6 +6567,7 @@ static_library("browser") {
+     sources += [
+       "first_run/first_run_internal_aros.cc",
+       "first_run/upgrade_util_aros.cc",
++      "memory_details_aros.cc",
+       "media/webrtc/window_icon_util_ozone.cc",
+       "obsolete_system/obsolete_system_stub.cc",
+       "upgrade_detector/get_installed_version_aros.cc",
+diff --git a/chrome/browser/memory_details.cc b/chrome/browser/memory_details.cc
+index 58fe3bd8f6..17ce63f906 100644
+--- a/chrome/browser/memory_details.cc
++++ b/chrome/browser/memory_details.cc
+@@ -38,7 +38,8 @@
+ #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
+ #include "ui/base/l10n/l10n_util.h"
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && \
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #include "content/public/browser/zygote_host/zygote_host_linux.h"
+ #endif
+ 
+@@ -335,7 +336,8 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
+           });
+     }
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && \
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+     if (content::ZygoteHost::GetInstance()->IsZygotePid(process.pid)) {
+       process.process_type = content::PROCESS_TYPE_ZYGOTE;
+     }
+diff --git a/chrome/browser/memory_details_aros.cc b/chrome/browser/memory_details_aros.cc
+new file mode 100644
+index 0000000000..49b774e27a
+--- /dev/null
++++ b/chrome/browser/memory_details_aros.cc
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/memory_details.h"
++
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/process/process_handle.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/grit/branded_strings.h"
++#include "components/version_info/version_info.h"
++#include "content/public/browser/browser_task_traits.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/common/process_type.h"
++#include "ui/base/l10n/l10n_util.h"
++
++MemoryDetails::MemoryDetails() {
++  ProcessData process;
++  process.name = l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_NAME);
++  process.process_name = u"chrome";
++  process_data_.push_back(process);
++}
++
++ProcessData* MemoryDetails::ChromeBrowser() {
++  return &process_data_[0];
++}
++
++void MemoryDetails::CollectProcessData(
++    const std::vector<ProcessMemoryInformation>& child_info) {
++  ProcessMemoryInformationList& processes = process_data_[0].processes;
++  processes.clear();
++
++  ProcessMemoryInformation browser;
++  browser.pid = base::GetCurrentProcId();
++  browser.num_processes = 1;
++  browser.process_type = content::PROCESS_TYPE_BROWSER;
++  browser.product_name =
++      base::ASCIIToUTF16(version_info::GetProductName());
++  browser.version = base::ASCIIToUTF16(version_info::GetVersionNumber());
++  processes.push_back(browser);
++
++  for (ProcessMemoryInformation child : child_info) {
++    if (child.pid == browser.pid) {
++      continue;
++    }
++    child.num_processes = 1;
++    child.product_name = browser.product_name;
++    child.version = browser.version;
++    processes.push_back(child);
++  }
++
++  content::GetUIThreadTaskRunner({})->PostTask(
++      FROM_HERE,
++      base::BindOnce(&MemoryDetails::CollectChildInfoOnUIThread, this));
++}
+diff --git a/extensions/browser/api/system_cpu/BUILD.gn b/extensions/browser/api/system_cpu/BUILD.gn
+index 2f39c29f7f..3aedb2b3c6 100644
+--- a/extensions/browser/api/system_cpu/BUILD.gn
++++ b/extensions/browser/api/system_cpu/BUILD.gn
+@@ -28,6 +28,10 @@ source_set("system_cpu") {
+     sources += [ "cpu_info_provider_fuchsia.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "cpu_info_provider_aros.cc" ]
++  }
++
+   if (is_mac) {
+     sources += [ "cpu_info_provider_mac.cc" ]
+   }
+diff --git a/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc b/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc
+new file mode 100644
+index 0000000000..f48bc1cdef
+--- /dev/null
++++ b/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc
+@@ -0,0 +1,18 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "extensions/browser/api/system_cpu/cpu_info_provider.h"
++
++namespace extensions {
++
++bool CpuInfoProvider::QueryCpuTimePerProcessor(
++    std::vector<api::system_cpu::ProcessorInfo>* infos) {
++  DCHECK(infos);
++  // AROS exposes processor identity but not cumulative per-core time through
++  // a stable public API yet. task.resource accounting can supply this later.
++  NOTIMPLEMENTED_LOG_ONCE();
++  return false;
++}
++
++}  // namespace extensions

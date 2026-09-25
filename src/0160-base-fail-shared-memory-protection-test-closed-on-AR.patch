@@ -1,0 +1,58 @@
+From 47f9ec66cc5f0b2688df02cb09da317e455317fa Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:58:02 -0500
+Subject: [PATCH 160/638] base: fail shared-memory protection test closed on
+ AROS [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: Base test support treated all POSIX targets as mmap/fd shared-memory systems, but the current AROS backend is pointer-backed and has no sys/mman permission query.
+FIX_REASON: Exclude AROS from the fd/mmap helper and return an explicit failed protection check until OPAL/MMU-backed region permissions can enforce read-only mappings.
+VALIDATION: ninja -C out/aros-windowed -j1 obj/base/test/test_support/test_shared_memory_util.o
+RISK: AROS shared-memory read-only tests intentionally fail rather than claim isolation that the pre-MMU backend cannot provide.
+---
+ base/test/test_shared_memory_util.cc | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/base/test/test_shared_memory_util.cc b/base/test/test_shared_memory_util.cc
+index c6fb5d445e..27176477bd 100644
+--- a/base/test/test_shared_memory_util.cc
++++ b/base/test/test_shared_memory_util.cc
+@@ -12,7 +12,7 @@
+ #include "base/logging.h"
+ #include "build/build_config.h"
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL) && !BUILDFLAG(IS_AROS)
+ #include <errno.h>
+ #include <string.h>
+ #include <sys/mman.h>
+@@ -41,7 +41,7 @@ static const size_t kDataSize = 1024;
+ // Common routine used with Posix file descriptors. Check that shared memory
+ // file descriptor |fd| does not allow writable mappings. Return true on
+ // success, false otherwise.
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+ static bool CheckReadOnlySharedMemoryFdPosix(int fd) {
+ // Note that the error on Android is EPERM, unlike other platforms where
+ // it will be EACCES.
+@@ -66,7 +66,7 @@ static bool CheckReadOnlySharedMemoryFdPosix(int fd) {
+   }
+   return true;
+ }
+-#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
++#endif  // POSIX file-descriptor shared memory
+ 
+ #if BUILDFLAG(IS_FUCHSIA)
+ // Fuchsia specific implementation.
+@@ -132,6 +132,10 @@ bool CheckReadOnlyPlatformSharedMemoryRegionForTesting(
+   return CheckReadOnlySharedMemoryFuchsiaHandle(region.GetPlatformHandle());
+ #elif BUILDFLAG(IS_WIN)
+   return CheckReadOnlySharedMemoryWindowsHandle(region.GetPlatformHandle());
++#elif BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "AROS cannot verify read-only shared-memory mappings before "
++                "MMU-backed region permissions are available";
++  return false;
+ #elif BUILDFLAG(IS_ANDROID)
+   return CheckReadOnlySharedMemoryFdPosix(region.GetPlatformHandle());
+ #else

@@ -1,0 +1,34 @@
+From fb86c8f2332786188e989477083ce926333ff952 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:51:36 -0500
+Subject: [PATCH 184/638] update_client: identify AROS in component requests
+ [chromium] [aros]
+
+Statement:
+The portable component update query requires a target OS token and rejected AROS as unknown during the full Chrome build.
+
+Decision:
+Report the native platform as aros. Runtime update enablement remains a separate policy decision.
+
+Evidence:
+The previously failing update_query_params.o target compiles with x64 architecture and the explicit AROS OS identity.
+
+Chain:
+
+---
+ components/update_client/update_query_params.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/components/update_client/update_query_params.cc b/components/update_client/update_query_params.cc
+index 790fc9e5c1..125f455404 100644
+--- a/components/update_client/update_query_params.cc
++++ b/components/update_client/update_query_params.cc
+@@ -36,6 +36,8 @@ const char kOs[] =
+     "android";
+ #elif BUILDFLAG(IS_CHROMEOS)
+     "cros";
++#elif BUILDFLAG(IS_AROS)
++    "aros";
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+     "linux";
+ #elif BUILDFLAG(IS_FUCHSIA)

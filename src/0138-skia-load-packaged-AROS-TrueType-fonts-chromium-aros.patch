@@ -1,0 +1,74 @@
+From 444d98eb181e2a8c69ce37603e7c4a840658dccd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 02:15:37 -0500
+Subject: [PATCH 138/638] skia: load packaged AROS TrueType fonts [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium selected SkFontMgr_New_Custom_Empty on AROS, so Blink reached real layout for the scripted page but had no typeface for its last-resort fallback and stopped in FontCache::GetLastResortFallbackFont.
+
+FIX_REASON: Compile Skia's existing FreeType directory manager on AROS and initialize it from the native FONTS:TrueType assignment. Report the directory and discovered family count through debug.resource so font discovery is visible in unattended logs.
+
+SCOPE: Chromium Skia source selection and default font-manager factory only; no Blink fallback relaxation and no host filesystem path.
+
+VALIDATION: ninja -C out/aros-headless skia regenerated the graph, compiled SkFontMgr_custom_directory.o and font_utils.o, and rebuilt libskia.a successfully.
+
+RISK: low; startup now scans the packaged TrueType directory once per process, while other platforms retain their existing font-manager branches.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ skia/BUILD.gn          |  4 ++++
+ skia/ext/font_utils.cc | 15 ++++++++++++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/skia/BUILD.gn b/skia/BUILD.gn
+index 54d900d14f..c06436d4cc 100644
+--- a/skia/BUILD.gn
++++ b/skia/BUILD.gn
+@@ -404,6 +404,10 @@ component("skia") {
+       "//third_party/skia/src/ports/SkFontMgr_custom.cpp",
+       "//third_party/skia/src/ports/SkFontMgr_custom_empty.cpp",
+     ]
++    if (is_aros) {
++      sources +=
++          [ "//third_party/skia/src/ports/SkFontMgr_custom_directory.cpp" ]
++    }
+   }
+ 
+   if (use_typeface_fontations) {
+diff --git a/skia/ext/font_utils.cc b/skia/ext/font_utils.cc
+index 83717873d6..e7ecf6db36 100644
+--- a/skia/ext/font_utils.cc
++++ b/skia/ext/font_utils.cc
+@@ -11,6 +11,12 @@
+ #include "third_party/skia/include/core/SkRefCnt.h"
+ #include "third_party/skia/include/core/SkTypeface.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <aros/debug.h>
++
++#include "third_party/skia/include/ports/SkFontMgr_directory.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "third_party/skia/include/ports/SkFontMgr_android.h"
+ #endif
+@@ -56,7 +62,14 @@ static sk_sp<SkFontMgr> fontmgr_factory() {
+   if (g_fontmgr_override) {
+     return sk_ref_sp(g_fontmgr_override);
+   }
+-#if BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_AROS)
++  constexpr char kSystemFontDirectory[] = "FONTS:TrueType";
++  sk_sp<SkFontMgr> manager =
++      SkFontMgr_New_Custom_Directory(kSystemFontDirectory);
++  bug("[AROS:SkiaFont] directory=%s families=%d\n", kSystemFontDirectory,
++      manager ? manager->countFamilies() : 0);
++  return manager;
++#elif BUILDFLAG(IS_ANDROID)
+   return SkFontMgr_New_Android(nullptr);
+ #elif BUILDFLAG(IS_APPLE)
+   return SkFontMgr_New_CoreText(nullptr);

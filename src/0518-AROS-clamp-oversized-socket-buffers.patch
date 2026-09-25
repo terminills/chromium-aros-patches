@@ -1,0 +1,61 @@
+From 0df5a484d248341853ab679b03c56b6904cced0a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 20:33:59 -0500
+Subject: [PATCH 518/638] AROS: clamp oversized socket buffers
+
+---
+ net/socket/socket_options.cc | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/net/socket/socket_options.cc b/net/socket/socket_options.cc
+index a27ea37344..610d7f6cda 100644
+--- a/net/socket/socket_options.cc
++++ b/net/socket/socket_options.cc
+@@ -25,6 +25,17 @@
+ namespace net {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++constexpr int32_t kMaxAROSSocketBufferSize = 1024 * 1024;
++
++int32_t ClampAROSSocketBufferSize(int32_t size) {
++  if (size <= 0 || size <= kMaxAROSSocketBufferSize) {
++    return size;
++  }
++  return kMaxAROSSocketBufferSize;
++}
++#endif
++
+ int SetPlatformSocketOption(SocketDescriptor fd,
+                             int level,
+                             int option,
+@@ -77,6 +88,14 @@ int SetReuseAddr(SocketDescriptor fd, bool reuse) {
+ }
+ 
+ int SetSocketReceiveBufferSize(SocketDescriptor fd, int32_t size) {
++#if BUILDFLAG(IS_AROS)
++  int32_t requested_size = size;
++  size = ClampAROSSocketBufferSize(size);
++  if (size != requested_size) {
++    DLOG(INFO) << "Clamped AROS socket receive buffer size from "
++               << requested_size << " to " << size;
++  }
++#endif
+   int rv = SetPlatformSocketOption(fd, SOL_SOCKET, SO_RCVBUF, &size,
+                                    sizeof(size));
+ #if BUILDFLAG(IS_WIN)
+@@ -92,6 +111,14 @@ int SetSocketReceiveBufferSize(SocketDescriptor fd, int32_t size) {
+ }
+ 
+ int SetSocketSendBufferSize(SocketDescriptor fd, int32_t size) {
++#if BUILDFLAG(IS_AROS)
++  int32_t requested_size = size;
++  size = ClampAROSSocketBufferSize(size);
++  if (size != requested_size) {
++    DLOG(INFO) << "Clamped AROS socket send buffer size from " << requested_size
++               << " to " << size;
++  }
++#endif
+   int rv = SetPlatformSocketOption(fd, SOL_SOCKET, SO_SNDBUF, &size,
+                                    sizeof(size));
+ #if BUILDFLAG(IS_WIN)

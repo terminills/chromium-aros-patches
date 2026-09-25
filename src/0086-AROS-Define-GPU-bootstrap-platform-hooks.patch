@@ -1,0 +1,135 @@
+From cfb0bf81d500e2f89c4d3b5f59d06e8b4cda2d6d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:16:48 -0500
+Subject: [PATCH 086/638] [AROS] Define GPU bootstrap platform hooks
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: GPU metadata and image-transport hooks are defined for AROS.
+ROOT_CAUSE: Chromium selected these entry points only for established desktop/mobile kernels, leaving ANGLE/Ozone bootstrap unresolved on AROS.
+FIX_REASON: Collect available ANGLE system/GL data, preserve Ozone presenter creation for real handles, and support mock/stub or native view surfaces without declaring hardware acceleration absent.
+SCOPE: GPU config and IPC service AROS source selection and adapters.
+VALIDATION: Both affected objects build and define all four first-link GPU entries.
+RISK: The current build still uses null ANGLE and headless Ozone by policy; native Vulkan/HIDD acceleration remains a later backend selection.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ gpu/config/BUILD.gn                           |  4 ++
+ gpu/config/gpu_info_collector_aros.cc         | 30 ++++++++++++++
+ gpu/ipc/service/BUILD.gn                      |  3 ++
+ .../service/image_transport_surface_aros.cc   | 41 +++++++++++++++++++
+ 4 files changed, 78 insertions(+)
+ create mode 100644 gpu/config/gpu_info_collector_aros.cc
+ create mode 100644 gpu/ipc/service/image_transport_surface_aros.cc
+
+diff --git a/gpu/config/BUILD.gn b/gpu/config/BUILD.gn
+index e9833d8f70..f7738b29a8 100644
+--- a/gpu/config/BUILD.gn
++++ b/gpu/config/BUILD.gn
+@@ -176,6 +176,10 @@ source_set("config_sources") {
+     sources += [ "gpu_info_collector_fuchsia.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "gpu_info_collector_aros.cc" ]
++  }
++
+   sources += process_json_outputs
+ 
+   configs += [ "//gpu:gpu_implementation" ]
+diff --git a/gpu/config/gpu_info_collector_aros.cc b/gpu/config/gpu_info_collector_aros.cc
+new file mode 100644
+index 0000000000..63c6df2a57
+--- /dev/null
++++ b/gpu/config/gpu_info_collector_aros.cc
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "gpu/config/gpu_info_collector.h"
++
++#include "base/trace_event/trace_event.h"
++#include "third_party/angle/src/gpu_info_util/SystemInfo.h"
++#include "ui/gl/gl_display.h"
++#include "ui/gl/gl_utils.h"
++
++namespace gpu {
++
++bool CollectContextGraphicsInfo(GPUInfo* gpu_info) {
++  DCHECK(gpu_info);
++
++  TRACE_EVENT0("gpu", "gpu_info_collector::CollectGraphicsInfo");
++  return CollectGraphicsInfoGL(gpu_info, gl::GetDefaultDisplay());
++}
++
++bool CollectBasicGraphicsInfo(GPUInfo* gpu_info) {
++  DCHECK(gpu_info);
++
++  angle::SystemInfo system_info;
++  bool success = angle::GetSystemInfo(&system_info);
++  FillGPUInfoFromSystemInfo(gpu_info, &system_info);
++  return success;
++}
++
++}  // namespace gpu
+diff --git a/gpu/ipc/service/BUILD.gn b/gpu/ipc/service/BUILD.gn
+index 4d2e83de5e..8c35ecf944 100644
+--- a/gpu/ipc/service/BUILD.gn
++++ b/gpu/ipc/service/BUILD.gn
+@@ -163,6 +163,9 @@ component("service") {
+   if (is_fuchsia) {
+     sources += [ "image_transport_surface_fuchsia.cc" ]
+   }
++  if (is_aros) {
++    sources += [ "image_transport_surface_aros.cc" ]
++  }
+   if (enable_vulkan) {
+     deps += [ "//gpu/vulkan/init" ]
+   }
+diff --git a/gpu/ipc/service/image_transport_surface_aros.cc b/gpu/ipc/service/image_transport_surface_aros.cc
+new file mode 100644
+index 0000000000..ba878e62c2
+--- /dev/null
++++ b/gpu/ipc/service/image_transport_surface_aros.cc
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "gpu/ipc/service/image_transport_surface.h"
++
++#include "build/build_config.h"
++#include "ui/gl/gl_surface.h"
++#include "ui/gl/gl_surface_stub.h"
++#include "ui/gl/init/gl_factory.h"
++
++namespace gpu {
++
++// static
++scoped_refptr<gl::Presenter> ImageTransportSurface::CreatePresenter(
++    gl::GLDisplay* display,
++    const GpuDriverBugWorkarounds& workarounds,
++    const GpuFeatureInfo& gpu_feature_info,
++    SurfaceHandle surface_handle) {
++#if BUILDFLAG(IS_OZONE)
++  if (surface_handle != kNullSurfaceHandle) {
++    return gl::init::CreateSurfacelessViewGLSurface(display, surface_handle);
++  }
++#endif
++  return nullptr;
++}
++
++// static
++scoped_refptr<gl::GLSurface> ImageTransportSurface::CreateNativeGLSurface(
++    gl::GLDisplay* display,
++    SurfaceHandle surface_handle,
++    gl::GLSurfaceFormat format) {
++  if (gl::GetGLImplementation() == gl::kGLImplementationMockGL ||
++      gl::GetGLImplementation() == gl::kGLImplementationStubGL) {
++    return new gl::GLSurfaceStub;
++  }
++
++  return gl::init::CreateViewGLSurface(display, surface_handle);
++}
++
++}  // namespace gpu

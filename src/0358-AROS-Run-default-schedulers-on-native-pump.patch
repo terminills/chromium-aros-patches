@@ -1,0 +1,34 @@
+From bad85b5bf262c400b7ab42d56a2b151d9bebe4bc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 27 Jul 2026 22:21:43 -0500
+Subject: [PATCH 358/638] [AROS] Run default schedulers on native pump
+
+AI_PHASE: electron-event-loop-coexistence
+AI_STATUS: renderer-default-native-delayed-waits
+ROOT_CAUSE: Blink's renderer context task uses MessagePumpType::DEFAULT, so routing only UI and IO pumps to the AROS Exec/timer.device implementation left its delayed timer re-arm on unreliable condition-variable waits.
+FIX_REASON: Route AROS default scheduler threads through MessagePumpAROS so the exact renderer task owns a native timer and wake signal.
+SCOPE: base/message_loop/message_pump.cc
+VALIDATION: Shared CEF rebuild and hosted 64-pump Electron replay follows; commit 0e7d6523e0 advanced the same test from zero to eight pumps but constructor logs proved the renderer task still used a non-native default pump.
+RISK: More Chromium worker threads allocate an Exec signal and timer request; focused validation checks construction, delayed cadence, Node lifecycle, and shutdown.
+AI_DECISION_CHAIN: UI-native change produced eight callbacks -> 30,000-tick timeout stalled thereafter -> correlate exact renderer task against native pump logs -> renderer bypasses UI alias via DEFAULT -> route DEFAULT natively.
+Job:
+---
+ base/message_loop/message_pump.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/base/message_loop/message_pump.cc b/base/message_loop/message_pump.cc
+index 78fde73512..0a2a87e43e 100644
+--- a/base/message_loop/message_pump.cc
++++ b/base/message_loop/message_pump.cc
+@@ -103,6 +103,11 @@ std::unique_ptr<MessagePump> MessagePump::Create(MessagePumpType type) {
+ #if BUILDFLAG(IS_IOS)
+       // On iOS, a native runloop is always required to pump system work.
+       return std::make_unique<MessagePumpCFRunLoop>();
++#elif BUILDFLAG(IS_AROS)
++      // AROS condition-variable timed waits do not reliably re-arm delayed
++      // Blink work. Use the native Exec/timer.device pump for default
++      // scheduler threads as well as UI and IO threads.
++      return std::make_unique<MessagePumpAROS>();
+ #else
+       return std::make_unique<MessagePumpDefault>();
+ #endif

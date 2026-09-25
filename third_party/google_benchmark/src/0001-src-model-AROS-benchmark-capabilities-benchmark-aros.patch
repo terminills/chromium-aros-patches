@@ -1,0 +1,125 @@
+From 91f00654189b650378daa82ee981c5a9e2b52912 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:55:25 -0500
+Subject: [PATCH] src: model AROS benchmark capabilities [benchmark] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: Google Benchmark treated every unknown non-Windows target as full POSIX, but AROS deliberately marks rusage/getrusage unimplemented and exposes gethostname through bsdsocket.library rather than unistd.
+FIX_REASON: Give AROS an explicit platform identity, use monotonic wall time where CPU accounting is unavailable, and report conservative system topology without probing Linux filesystems or unavailable socket APIs.
+VALIDATION: ninja -C ../../../out/aros-windowed -j2 obj/third_party/google_benchmark/google_benchmark/timers.o obj/third_party/google_benchmark/google_benchmark/sysinfo.o
+RISK: Benchmark CPU-time results are wall-time approximations and CPU metadata reports one processor until AROS exposes portable accounting and topology queries.
+---
+ src/internal_macros.h |  2 ++
+ src/sysinfo.cc        | 12 +++++++++---
+ src/timers.cc         | 12 ++++++++++--
+ 3 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/src/internal_macros.h b/src/internal_macros.h
+index 8dd7d0c..0578cde 100644
+--- a/src/internal_macros.h
++++ b/src/internal_macros.h
+@@ -75,6 +75,8 @@
+   #define BENCHMARK_OS_OPENBSD 1
+ #elif defined(__DragonFly__)
+   #define BENCHMARK_OS_DRAGONFLY 1
++#elif defined(__AROS__)
++  #define BENCHMARK_OS_AROS 1
+ #elif defined(__linux__)
+   #define BENCHMARK_OS_LINUX 1
+ #elif defined(__native_client__)
+diff --git a/src/sysinfo.cc b/src/sysinfo.cc
+index 922e83a..b56c652 100644
+--- a/src/sysinfo.cc
++++ b/src/sysinfo.cc
+@@ -23,7 +23,8 @@
+ #include <codecvt>
+ #else
+ #include <fcntl.h>
+-#if !defined(BENCHMARK_OS_FUCHSIA) && !defined(BENCHMARK_OS_QURT)
++#if !defined(BENCHMARK_OS_AROS) && !defined(BENCHMARK_OS_FUCHSIA) && \
++    !defined(BENCHMARK_OS_QURT)
+ #include <sys/resource.h>
+ #endif
+ #include <sys/time.h>
+@@ -216,7 +217,7 @@ bool ReadFromFile(std::string const& fname, ArgT* arg) {
+ CPUInfo::Scaling CpuScaling(int num_cpus) {
+   // We don't have a valid CPU count, so don't even bother.
+   if (num_cpus <= 0) return CPUInfo::Scaling::UNKNOWN;
+-#if defined(BENCHMARK_OS_QNX)
++#if defined(BENCHMARK_OS_AROS) || defined(BENCHMARK_OS_QNX)
+   return CPUInfo::Scaling::UNKNOWN;
+ #elif !defined(BENCHMARK_OS_WINDOWS)
+   // On Linux, the CPUfreq subsystem exposes CPU information as files on the
+@@ -411,7 +412,7 @@ std::vector<CPUInfo::CacheInfo> GetCacheSizes() {
+   return GetCacheSizesWindows();
+ #elif defined(BENCHMARK_OS_QNX)
+   return GetCacheSizesQNX();
+-#elif defined(BENCHMARK_OS_QURT)
++#elif defined(BENCHMARK_OS_AROS) || defined(BENCHMARK_OS_QURT)
+   return std::vector<CPUInfo::CacheInfo>();
+ #else
+   return GetCacheSizesFromKVFS();
+@@ -436,6 +437,8 @@ std::string GetSystemName() {
+                       str.size(), NULL, NULL);
+ #endif
+   return str;
++#elif defined(BENCHMARK_OS_AROS)
++  return "AROS";
+ #elif defined(BENCHMARK_OS_QURT)
+   std::string str = "Hexagon DSP";
+   qurt_arch_version_t arch_version_struct;
+@@ -483,6 +486,9 @@ int GetNumCPUs() {
+   return sysinfo.dwNumberOfProcessors;  // number of logical
+                                         // processors in the current
+                                         // group
++#elif defined(BENCHMARK_OS_AROS)
++  // sysconf(_SC_NPROCESSORS_ONLN) is not part of AROS's current POSIX ABI.
++  return 1;
+ #elif defined(BENCHMARK_OS_SOLARIS)
+   // Returns -1 in case of a failure.
+   long num_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+diff --git a/src/timers.cc b/src/timers.cc
+index b23feea..fcc3c77 100644
+--- a/src/timers.cc
++++ b/src/timers.cc
+@@ -23,7 +23,8 @@
+ #include <windows.h>
+ #else
+ #include <fcntl.h>
+-#if !defined(BENCHMARK_OS_FUCHSIA) && !defined(BENCHMARK_OS_QURT)
++#if !defined(BENCHMARK_OS_AROS) && !defined(BENCHMARK_OS_FUCHSIA) && \
++    !defined(BENCHMARK_OS_QURT)
+ #include <sys/resource.h>
+ #endif
+ #include <sys/time.h>
+@@ -84,7 +85,8 @@ double MakeTime(FILETIME const& kernel_time, FILETIME const& user_time) {
+           static_cast<double>(user.QuadPart)) *
+          1e-7;
+ }
+-#elif !defined(BENCHMARK_OS_FUCHSIA) && !defined(BENCHMARK_OS_QURT)
++#elif !defined(BENCHMARK_OS_AROS) && !defined(BENCHMARK_OS_FUCHSIA) && \
++    !defined(BENCHMARK_OS_QURT)
+ double MakeTime(struct rusage const& ru) {
+   return (static_cast<double>(ru.ru_utime.tv_sec) +
+           static_cast<double>(ru.ru_utime.tv_usec) * 1e-6 +
+@@ -134,6 +136,10 @@ double ProcessCPUUsage() {
+   // same as total time, but this is ok because there aren't long-latency
+   // synchronous system calls in Emscripten.
+   return emscripten_get_now() * 1e-3;
++#elif defined(BENCHMARK_OS_AROS)
++  // AROS does not expose process CPU accounting yet. Keep benchmark timing
++  // usable without pretending that the unimplemented getrusage() exists.
++  return ChronoClockNow();
+ #elif defined(CLOCK_PROCESS_CPUTIME_ID) && !defined(BENCHMARK_OS_MACOSX)
+   // FIXME We want to use clock_gettime, but its not available in MacOS 10.11.
+   // See https://github.com/google/benchmark/pull/292
+@@ -181,6 +187,8 @@ double ThreadCPUUsage() {
+   // RTEMS doesn't support CLOCK_THREAD_CPUTIME_ID. See
+   // https://github.com/RTEMS/rtems/blob/master/cpukit/posix/src/clockgettime.c
+   return ProcessCPUUsage();
++#elif defined(BENCHMARK_OS_AROS)
++  return ProcessCPUUsage();
+ #elif defined(BENCHMARK_OS_SOLARIS)
+   struct rusage ru;
+   if (getrusage(RUSAGE_LWP, &ru) == 0) return MakeTime(ru);

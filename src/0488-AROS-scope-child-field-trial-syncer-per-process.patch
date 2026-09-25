@@ -1,0 +1,131 @@
+From 115d0bc507e521ab7896a819ad707d79e2e5c97a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 14:19:07 -0500
+Subject: [PATCH 488/638] AROS: scope child field-trial syncer per process
+
+AROS child processes share an address space, so a single static syncer pointer collides when additional renderers start. Store one instance per current process CommandLine identity with locked access.
+
+
+---
+ .../child_process_field_trial_syncer.cc       | 75 ++++++++++++++++---
+ 1 file changed, 64 insertions(+), 11 deletions(-)
+
+diff --git a/components/variations/child_process_field_trial_syncer.cc b/components/variations/child_process_field_trial_syncer.cc
+index 375d3f9f6d..afcd1fcae3 100644
+--- a/components/variations/child_process_field_trial_syncer.cc
++++ b/components/variations/child_process_field_trial_syncer.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/variations/child_process_field_trial_syncer.h"
+ 
++#include <map>
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
+@@ -11,6 +12,9 @@
+ #include "base/command_line.h"
+ #include "base/containers/contains.h"
+ #include "base/metrics/field_trial_list_including_low_anonymity.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "components/variations/variations_crash_keys.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ 
+@@ -18,7 +22,51 @@ namespace variations {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ChildProcessFieldTrialSyncerRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, ChildProcessFieldTrialSyncer*> instances;
++};
++
++ChildProcessFieldTrialSyncerRegistry& GetSyncerRegistry() {
++  static base::NoDestructor<ChildProcessFieldTrialSyncerRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++ChildProcessFieldTrialSyncer* GetCurrentProcessInstance() {
++  auto& registry = GetSyncerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.instances.find(GetCurrentProcessIdentity());
++  return it == registry.instances.end() ? nullptr : it->second;
++}
++
++void SetCurrentProcessInstance(ChildProcessFieldTrialSyncer* instance) {
++  auto& registry = GetSyncerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto identity = GetCurrentProcessIdentity();
++  if (instance) {
++    registry.instances[identity] = instance;
++  } else {
++    registry.instances.erase(identity);
++  }
++}
++#else
+ ChildProcessFieldTrialSyncer* g_instance = nullptr;
++
++ChildProcessFieldTrialSyncer* GetCurrentProcessInstance() {
++  return g_instance;
++}
++
++void SetCurrentProcessInstance(ChildProcessFieldTrialSyncer* instance) {
++  g_instance = instance;
++}
++#endif
+ ABSL_CONST_INIT thread_local bool in_set_field_trial_group_from_browser = false;
+ 
+ }  // namespace
+@@ -26,10 +74,12 @@ ABSL_CONST_INIT thread_local bool in_set_field_trial_group_from_browser = false;
+ // static
+ ChildProcessFieldTrialSyncer* ChildProcessFieldTrialSyncer::CreateInstance(
+     FieldTrialActivatedCallback activated_callback) {
+-  CHECK(!g_instance);
+-  g_instance = new ChildProcessFieldTrialSyncer(std::move(activated_callback));
+-  g_instance->Init(base::FieldTrialList::GetActiveTrialsOfParentProcess());
+-  return g_instance;
++  CHECK(!GetCurrentProcessInstance());
++  auto* instance =
++      new ChildProcessFieldTrialSyncer(std::move(activated_callback));
++  SetCurrentProcessInstance(instance);
++  instance->Init(base::FieldTrialList::GetActiveTrialsOfParentProcess());
++  return instance;
+ }
+ 
+ // static
+@@ -37,17 +87,20 @@ ChildProcessFieldTrialSyncer*
+ ChildProcessFieldTrialSyncer::CreateInstanceForTesting(
+     const std::set<std::string>& initially_active_trials,
+     FieldTrialActivatedCallback activated_callback) {
+-  CHECK(!g_instance);
+-  g_instance = new ChildProcessFieldTrialSyncer(std::move(activated_callback));
+-  g_instance->Init(initially_active_trials);
+-  return g_instance;
++  CHECK(!GetCurrentProcessInstance());
++  auto* instance =
++      new ChildProcessFieldTrialSyncer(std::move(activated_callback));
++  SetCurrentProcessInstance(instance);
++  instance->Init(initially_active_trials);
++  return instance;
+ }
+ 
+ // static
+ void ChildProcessFieldTrialSyncer::DeleteInstanceForTesting() {
+-  CHECK(g_instance);
+-  delete g_instance;
+-  g_instance = nullptr;
++  auto* instance = GetCurrentProcessInstance();
++  CHECK(instance);
++  delete instance;
++  SetCurrentProcessInstance(nullptr);
+   // Revert the effect of calling variations::InitCrashKeys() in Init().
+   ClearCrashKeysInstanceForTesting();  // IN-TEST
+ }

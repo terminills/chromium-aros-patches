@@ -1,0 +1,47 @@
+From 7a25020c49be1958c7ecdabd6f9a4e6360ed4659 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:23:51 -0500
+Subject: [PATCH 219/638] chrome: expose guest mode on AROS [chromium] [aros]
+
+Statement:
+The desktop lifecycle code removes --guest during an automatic restart, but the portable switch constant was not declared or defined for AROS. Guest profile behavior itself is not OS-specific.
+
+Decision:
+Include AROS in the existing desktop guest-mode switch boundary rather than special-casing restart behavior.
+
+Evidence:
+chrome_switches.o and switch_utils.o compile in out/aros-chrome.
+
+Chain:
+Advances full browser lifecycle compilation in.
+---
+ chrome/common/chrome_switches.cc | 2 +-
+ chrome/common/chrome_switches.h  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/common/chrome_switches.cc b/chrome/common/chrome_switches.cc
+index b82d425ba1..435bc37aee 100644
+--- a/chrome/common/chrome_switches.cc
++++ b/chrome/common/chrome_switches.cc
+@@ -881,7 +881,7 @@ const char kAllowNaClSocketAPI[] = "allow-nacl-socket-api";
+ #endif
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ const char kEnableNewAppMenuIcon[] = "enable-new-app-menu-icon";
+ 
+ // Causes the browser to launch directly in guest mode.
+diff --git a/chrome/common/chrome_switches.h b/chrome/common/chrome_switches.h
+index 2d73a5d2c8..c0ee1729c7 100644
+--- a/chrome/common/chrome_switches.h
++++ b/chrome/common/chrome_switches.h
+@@ -277,7 +277,7 @@ extern const char kAllowNaClSocketAPI[];
+ #endif
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ extern const char kEnableNewAppMenuIcon[];
+ extern const char kGuest[];
+ #endif

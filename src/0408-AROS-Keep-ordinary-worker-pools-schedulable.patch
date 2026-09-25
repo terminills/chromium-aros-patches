@@ -1,0 +1,71 @@
+From 7cee0fe5d39c08427e6bd47e456767349948462e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 11:22:28 -0500
+Subject: [PATCH 408/638] [AROS] Keep ordinary worker pools schedulable
+
+Map background, utility, resource-efficient, and default Chromium workers to Exec priority zero. AROS does not age lower-priority runnable tasks, so Chromium's internal queues must classify ordinary work without using an OS priority that can be starved.
+
+Enable the background worker group normally because its workers now share the same Exec priority as other ordinary roles. Preserve positive Exec priority only for short-burst compositor, display, and realtime audio roles.
+
+AI_PHASE: chromium-process-model
+AI_STATUS: built-awaiting-runtime
+AI_VALIDATION: ninja -C out/aros-chrome chrome -j32 completed 736/736; v8_use_aros_library=true
+AI_LIMITATIONS: hosted multiprocess regression pending
+AI_DECISION_CHAIN:; ACD-native-priority-inheritance
+---
+ base/task/thread_pool/environment_config.cc |  8 ++++++++
+ base/threading/platform_thread_aros.cc      | 18 ++++++++++++------
+ 2 files changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/base/task/thread_pool/environment_config.cc b/base/task/thread_pool/environment_config.cc
+index cf497f4fcb..91b0c0aa91 100644
+--- a/base/task/thread_pool/environment_config.cc
++++ b/base/task/thread_pool/environment_config.cc
+@@ -24,6 +24,14 @@ bool CanUseBackgroundThreadTypeForWorkerThreadImpl() {
+     return true;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  // AROS maps background, utility, resource-efficient, and default worker
++  // roles to the same Exec priority. Chromium's queues still separate and
++  // classify their work, but the OS scheduler cannot starve an ordinary pool
++  // solely because it was assigned a lower task priority.
++  return true;
++#endif
++
+   // When Lock doesn't handle multiple thread priorities, run all
+   // WorkerThread with a normal priority to avoid priority inversion when a
+   // thread running with a normal priority tries to acquire a lock held by a
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 8f40ebd8ad..283b0c3d5e 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -20,16 +20,22 @@ const ThreadPriorityToNiceValuePairForTest
+         {ThreadPriorityForTest::kDisplay, -8},
+         {ThreadPriorityForTest::kCompositing, -1},
+         {ThreadPriorityForTest::kNormal, 0},
+-        {ThreadPriorityForTest::kResourceEfficient, 1},
+-        {ThreadPriorityForTest::kUtility, 2},
+-        {ThreadPriorityForTest::kBackground, 10},
++        {ThreadPriorityForTest::kResourceEfficient, 0},
++        {ThreadPriorityForTest::kUtility, 0},
++        {ThreadPriorityForTest::kBackground, 0},
+ };
+ 
+ const ThreadTypeToNiceValuePair kThreadTypeToNiceValueMap[7] = {
+-    {ThreadType::kBackground, 10},
+-    {ThreadType::kUtility, 2},
+-    {ThreadType::kResourceEfficient, 1},
++    // Exec round-robins runnable peers at one priority, but does not
++    // guarantee service to a lower-priority task while higher-priority work
++    // remains ready. Keep ordinary Chromium pool roles at priority 0 and let
++    // Chromium's task queues classify their work.
++    {ThreadType::kBackground, 0},
++    {ThreadType::kUtility, 0},
++    {ThreadType::kResourceEfficient, 0},
+     {ThreadType::kDefault, 0},
++    // Latency-critical roles are normally blocked between short bursts and
++    // may retain explicit Exec priority.
+     {ThreadType::kCompositing, -1},
+     {ThreadType::kDisplayCritical, -8},
+     {ThreadType::kRealtimeAudio, -10},

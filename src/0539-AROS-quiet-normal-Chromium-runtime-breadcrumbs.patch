@@ -1,0 +1,490 @@
+From 428f5b4832e5a40046cc9ab02dd92c6942f1cef9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 07:55:14 -0500
+Subject: [PATCH 539/638] AROS: quiet normal Chromium runtime breadcrumbs
+
+---
+ base/files/memory_mapped_file_aros.cc   | 42 -------------------------
+ cc/trees/proxy_impl.cc                  |  8 ++---
+ cc/trees/proxy_main.cc                  | 12 +++----
+ chrome/app/chrome_exe_main_aura.cc      |  4 +--
+ chrome/app/chrome_main.cc               |  2 +-
+ content/app/content_main.cc             |  6 ++--
+ content/app/content_main_runner_impl.cc |  4 +--
+ content/child/child_process.cc          | 24 +++++++-------
+ content/child/child_thread_impl.cc      |  4 +--
+ content/renderer/render_thread_impl.cc  |  4 +--
+ content/utility/utility_main.cc         |  4 +--
+ content/utility/utility_thread_impl.cc  | 10 +++---
+ 12 files changed, 41 insertions(+), 83 deletions(-)
+
+diff --git a/base/files/memory_mapped_file_aros.cc b/base/files/memory_mapped_file_aros.cc
+index 0162b0cc03..03f265e61a 100644
+--- a/base/files/memory_mapped_file_aros.cc
++++ b/base/files/memory_mapped_file_aros.cc
+@@ -36,19 +36,10 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     Access access) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] map enter access="
+-               << static_cast<int>(access) << " region_offset="
+-               << region.offset << " region_size=" << region.size;
+-#endif
+-
+   int64_t file_offset = 0;
+   size_t data_size = 0;
+   if (region == MemoryMappedFile::Region::kWholeFile) {
+     const int64_t file_length = file_.GetLength();
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:MMAP] whole-file length=" << file_length;
+-#endif
+     if (file_length <= 0 ||
+         !IsValueInRangeForNumericType<size_t>(file_length)) {
+       return false;
+@@ -66,14 +57,7 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+       return false;
+ 
+     if (access == READ_WRITE_EXTEND) {
+-#if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:MMAP] extend begin offset="
+-                   << file_offset << " bytes=" << data_size;
+-#endif
+       const bool extended = AllocateFileRegion(&file_, file_offset, data_size);
+-#if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:MMAP] extend complete=" << extended;
+-#endif
+       if (!extended)
+         return false;
+     } else if (file_.GetLength() < region_end.ValueOrDie()) {
+@@ -91,15 +75,6 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     return false;
+ 
+   const size_t rounded_size = allocation_size.ValueOrDie();
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] backing allocation begin bytes="
+-               << rounded_size;
+-#endif
+-  bug("[AROS:MMAP] plan offset=%lld bytes=%llu page=%llu rounded=%llu\n",
+-      static_cast<long long>(file_offset),
+-      static_cast<unsigned long long>(data_size),
+-      static_cast<unsigned long long>(granularity),
+-      static_cast<unsigned long long>(rounded_size));
+   APTR KernelBase = OpenResource("kernel.resource");
+   void* allocation =
+       KernelBase
+@@ -132,24 +107,10 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     const uintptr_t aligned_address =
+         (raw_address + granularity - 1) & ~(granularity - 1);
+     allocation = reinterpret_cast<void*>(aligned_address);
+-    bug("[AROS:MMAP] backing=exec base=%p data=%p bytes=%llu\n",
+-        allocation_base, allocation,
+-        static_cast<unsigned long long>(backing_size));
+   }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] backing allocation complete kernel_pages="
+-               << uses_kernel_pages << " bytes=" << backing_size;
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] read begin offset=" << file_offset
+-               << " bytes=" << data_size;
+-#endif
+-
+   span<uint8_t> contents(static_cast<uint8_t*>(allocation), data_size);
+   const std::optional<size_t> bytes_read = file_.Read(file_offset, contents);
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] read complete bytes="
+-               << (bytes_read ? static_cast<int64_t>(*bytes_read) : -1);
+-#endif
+   if (!bytes_read || *bytes_read != data_size) {
+     bug("[AROS:MMAP] read failed requested=%llu actual=%lld errno=%d\n",
+         static_cast<unsigned long long>(data_size),
+@@ -168,9 +129,6 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+   length_ = data_size;
+   file_offset_ = file_offset;
+   access_ = access;
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:MMAP] map complete bytes=" << data_size;
+-#endif
+   return true;
+ }
+ #endif
+diff --git a/cc/trees/proxy_impl.cc b/cc/trees/proxy_impl.cc
+index 0805098f74..f057f56e16 100644
+--- a/cc/trees/proxy_impl.cc
++++ b/cc/trees/proxy_impl.cc
+@@ -337,7 +337,7 @@ void ProxyImpl::NotifyReadyToCommitOnImpl(
+ #if BUILDFLAG(IS_AROS)
+   ++aros_ready_commit_probe_count_;
+   if (aros_ready_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] impl-ready-to-commit proxy=" << this
++    VLOG(1) << "[AROS_BMF] impl-ready-to-commit proxy=" << this
+                << " seq=" << aros_ready_commit_probe_count_
+                << " source_frame=" << commit_state->source_frame_number
+                << " commit_args_sequence="
+@@ -704,7 +704,7 @@ void ProxyImpl::ScheduledActionSendBeginMainFrame(
+ #if BUILDFLAG(IS_AROS)
+   ++aros_begin_main_frame_probe_count_;
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] impl-send proxy=" << this
++    VLOG(1) << "[AROS_BMF] impl-send proxy=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_
+                << " frame_source=" << args.frame_id.source_id
+                << " frame_sequence=" << args.frame_id.sequence_number
+@@ -754,7 +754,7 @@ void ProxyImpl::ScheduledActionSendBeginMainFrame(
+                      std::move(begin_main_frame_state)));
+ #if BUILDFLAG(IS_AROS)
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] impl-posted proxy=" << this
++    VLOG(1) << "[AROS_BMF] impl-posted proxy=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_;
+   }
+ #endif
+@@ -784,7 +784,7 @@ void ProxyImpl::ScheduledActionCommit() {
+ #if BUILDFLAG(IS_AROS)
+   if (aros_ready_commit_probe_count_ > 0 &&
+       aros_ready_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] impl-scheduled-commit proxy=" << this
++    VLOG(1) << "[AROS_BMF] impl-scheduled-commit proxy=" << this
+                << " seq=" << aros_ready_commit_probe_count_
+                << " data_for_commit=" << data_for_commit_.get();
+   }
+diff --git a/cc/trees/proxy_main.cc b/cc/trees/proxy_main.cc
+index 7f195b626b..ff561f3f8f 100644
+--- a/cc/trees/proxy_main.cc
++++ b/cc/trees/proxy_main.cc
+@@ -133,7 +133,7 @@ void ProxyMain::BeginMainFrame(
+ #if BUILDFLAG(IS_AROS)
+   ++aros_begin_main_frame_probe_count_;
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] main-receive proxy_main=" << this
++    VLOG(1) << "[AROS_BMF] main-receive proxy_main=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_
+                << " frame_source="
+                << begin_main_frame_state->begin_frame_args.frame_id.source_id
+@@ -277,7 +277,7 @@ void ProxyMain::BeginMainFrame(
+   layer_tree_host_->BeginMainFrame(frame_args);
+ #if BUILDFLAG(IS_AROS)
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] main-after-client-begin proxy_main=" << this
++    VLOG(1) << "[AROS_BMF] main-after-client-begin proxy_main=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_;
+   }
+ #endif
+@@ -302,7 +302,7 @@ void ProxyMain::BeginMainFrame(
+   layer_tree_host_->RequestMainFrameUpdate(true /* report_cc_metrics */);
+ #if BUILDFLAG(IS_AROS)
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] main-after-update proxy_main=" << this
++    VLOG(1) << "[AROS_BMF] main-after-update proxy_main=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_
+                << " final_stage=" << final_pipeline_stage_;
+   }
+@@ -395,7 +395,7 @@ void ProxyMain::BeginMainFrame(
+   auto& unsafe_state = layer_tree_host_->GetUnsafeStateForCommit();
+ #if BUILDFLAG(IS_AROS)
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] main-before-will-commit proxy_main=" << this
++    VLOG(1) << "[AROS_BMF] main-before-will-commit proxy_main=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_
+                << " has_updates=" << has_updates;
+   }
+@@ -404,7 +404,7 @@ void ProxyMain::BeginMainFrame(
+       std::move(completion_event_ptr), has_updates);
+ #if BUILDFLAG(IS_AROS)
+   if (aros_begin_main_frame_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_BMF] main-after-will-commit proxy_main=" << this
++    VLOG(1) << "[AROS_BMF] main-after-will-commit proxy_main=" << this
+                << " seq=" << aros_begin_main_frame_probe_count_
+                << " commit_state=" << commit_state.get();
+   }
+@@ -502,7 +502,7 @@ void ProxyMain::BeginMainFrame(
+             blocking ? &commit_timestamps : nullptr, commit_timeout));
+ #if BUILDFLAG(IS_AROS)
+     if (aros_begin_main_frame_probe_count_ <= 16) {
+-      LOG(ERROR) << "[AROS_BMF] main-posted-ready proxy_main=" << this
++      VLOG(1) << "[AROS_BMF] main-posted-ready proxy_main=" << this
+                  << " seq=" << aros_begin_main_frame_probe_count_
+                  << " blocking=" << blocking;
+     }
+diff --git a/chrome/app/chrome_exe_main_aura.cc b/chrome/app/chrome_exe_main_aura.cc
+index f9419482a0..e03add9187 100644
+--- a/chrome/app/chrome_exe_main_aura.cc
++++ b/chrome/app/chrome_exe_main_aura.cc
+@@ -51,14 +51,14 @@ int main(int argc, const char** argv) {
+     arguments.push_back(nullptr);
+     int exit_code = ChromeMain(static_cast<int>(argument_storage.size()),
+                                arguments.data());
+-    LOG(ERROR) << "[Chromium:AROS:ChildReturn] ChromeMain returned to WB main"
++    VLOG(1) << "[Chromium:AROS:ChildReturn] ChromeMain returned to WB main"
+                << " exit_code=" << exit_code;
+     return exit_code;
+   }
+ #endif
+   int exit_code = ChromeMain(argc, argv);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ChromeMain returned to CLI main"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] ChromeMain returned to CLI main"
+              << " exit_code=" << exit_code;
+ #endif
+   return exit_code;
+diff --git a/chrome/app/chrome_main.cc b/chrome/app/chrome_main.cc
+index 73956861b8..9657f7f251 100644
+--- a/chrome/app/chrome_main.cc
++++ b/chrome/app/chrome_main.cc
+@@ -193,7 +193,7 @@ int ChromeMain(int argc, const char** argv) {
+   int rv = content::ContentMain(std::move(params));
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] content::ContentMain returned"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] content::ContentMain returned"
+              << " exit_code=" << rv;
+ #endif
+ 
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 64e53b1ddf..8de89ae9cc 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -416,12 +416,12 @@ RunContentProcess(ContentMainParams params,
+   exit_code = ContentMainRun(content_main_runner);
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainRun returned"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] ContentMainRun returned"
+              << " exit_code=" << exit_code;
+ #endif
+   ContentMainShutdown(content_main_runner);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainShutdown returned"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] ContentMainShutdown returned"
+              << " exit_code=" << exit_code;
+ #endif
+   return exit_code;
+@@ -433,7 +433,7 @@ int NO_STACK_PROTECTOR ContentMain(ContentMainParams params) {
+   auto runner = ContentMainRunner::Create();
+   int exit_code = RunContentProcess(std::move(params), runner.get());
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] RunContentProcess returned"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] RunContentProcess returned"
+              << " exit_code=" << exit_code;
+ #endif
+   return exit_code;
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index ad0959a1a8..739e6e1458 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -772,7 +772,7 @@ RunOtherNamedProcessTypeMain(const std::string& process_type,
+       int main_exit_code = kMainFunctions[i].function(
+           std::move(absl::get<MainFunctionParams>(exit_code)));
+ #if BUILDFLAG(IS_AROS)
+-      LOG(ERROR) << "[Chromium:AROS:ChildReturn] named process main returned"
++      VLOG(1) << "[Chromium:AROS:ChildReturn] named process main returned"
+                  << " type=" << process_type
+                  << " exit_code=" << main_exit_code;
+ #endif
+@@ -1162,7 +1162,7 @@ int NO_STACK_PROTECTOR ContentMainRunnerImpl::Run() {
+   int exit_code = RunOtherNamedProcessTypeMain(
+       process_type, std::move(main_params), delegate_);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildReturn] ContentMainRunner::Run returned"
++  VLOG(1) << "[Chromium:AROS:ChildReturn] ContentMainRunner::Run returned"
+              << " type=" << process_type << " exit_code=" << exit_code;
+ #endif
+   return exit_code;
+diff --git a/content/child/child_process.cc b/content/child/child_process.cc
+index cadb9a5c72..2e15099721 100644
+--- a/content/child/child_process.cc
++++ b/content/child/child_process.cc
+@@ -148,7 +148,7 @@ ChildProcess::~ChildProcess() {
+   DCHECK_EQ(child_process, this);
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor begin";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor begin";
+ #endif
+ 
+   // Signal this event before destroying the child process.  That way all
+@@ -159,19 +159,19 @@ ChildProcess::~ChildProcess() {
+ 
+   if (main_thread_) {  // null in unittests.
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main Shutdown begin";
++    VLOG(1) << "[Chromium:AROS:ChildTeardown] main Shutdown begin";
+ #endif
+     main_thread_->Shutdown();
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main Shutdown end";
++    VLOG(1) << "[Chromium:AROS:ChildTeardown] main Shutdown end";
+ #endif
+     if (main_thread_->ShouldBeDestroyed()) {
+ #if BUILDFLAG(IS_AROS)
+-      LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main destroy begin";
++      VLOG(1) << "[Chromium:AROS:ChildTeardown] main destroy begin";
+ #endif
+       main_thread_.reset();
+ #if BUILDFLAG(IS_AROS)
+-      LOG(ERROR) << "[Chromium:AROS:ChildTeardown] main destroy end";
++      VLOG(1) << "[Chromium:AROS:ChildTeardown] main destroy end";
+ #endif
+     } else {
+       // Leak the main_thread_. See a comment in
+@@ -181,27 +181,27 @@ ChildProcess::~ChildProcess() {
+   }
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] IO Stop begin";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] IO Stop begin";
+ #endif
+   io_thread_->Stop();
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] IO Stop end";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] IO Stop end";
+ #endif
+   io_thread_.reset();
+ 
+   if (initialized_thread_pool_) {
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown begin";
++    VLOG(1) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown begin";
+ #endif
+     DCHECK(base::ThreadPoolInstance::Get());
+     base::ThreadPoolInstance::Get()->Shutdown();
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown end";
++    VLOG(1) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown end";
+ #endif
+   }
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor end";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor end";
+ #endif
+ 
+ #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
+@@ -225,7 +225,7 @@ void ChildProcess::AddRefProcess() {
+          main_thread_->main_thread_runner()->BelongsToCurrentThread());
+   ref_count_++;
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] process ref added count="
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] process ref added count="
+              << ref_count_;
+ #endif
+ }
+@@ -236,7 +236,7 @@ void ChildProcess::ReleaseProcess() {
+   DCHECK(ref_count_);
+   --ref_count_;
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] process ref released count="
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] process ref released count="
+              << ref_count_;
+ #endif
+   if (ref_count_)
+diff --git a/content/child/child_thread_impl.cc b/content/child/child_thread_impl.cc
+index 9373756d8b..94566f4ccc 100644
+--- a/content/child/child_thread_impl.cc
++++ b/content/child/child_thread_impl.cc
+@@ -822,7 +822,7 @@ void ChildThreadImpl::Init(const Options& options) {
+ 
+ ChildThreadImpl::~ChildThreadImpl() {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body begin";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body begin";
+ #endif
+ #if BUILDFLAG(IPC_MESSAGE_LOG_ENABLED) && BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
+   IPC::Logging::GetInstance()->SetIPCSender(NULL);
+@@ -853,7 +853,7 @@ ChildThreadImpl::~ChildThreadImpl() {
+     ANNOTATE_LEAKING_OBJECT_PTR(leaked_remote_ptr);
+   }
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body end";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] ChildThread destructor body end";
+ #endif
+ }
+ 
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 1ee8186bd0..1abd84b5c9 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -658,7 +658,7 @@ void RenderThreadImpl::Init() {
+ 
+ RenderThreadImpl::~RenderThreadImpl() {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body begin";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body begin";
+ #endif
+   g_main_task_runner.Get() = nullptr;
+ 
+@@ -669,7 +669,7 @@ RenderThreadImpl::~RenderThreadImpl() {
+         FROM_HERE, std::move(video_frame_compositor_context_provider_));
+   }
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body end";
++  VLOG(1) << "[Chromium:AROS:ChildTeardown] RenderThread destructor body end";
+ #endif
+ }
+ 
+diff --git a/content/utility/utility_main.cc b/content/utility/utility_main.cc
+index b73b404327..af5c15b921 100644
+--- a/content/utility/utility_main.cc
++++ b/content/utility/utility_main.cc
+@@ -438,11 +438,11 @@ int UtilityMain(MainFunctionParams parameters) {
+       switches::kUtilityProcess);
+ 
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility main entering run loop";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] utility main entering run loop";
+ #endif
+   run_loop.Run();
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility main left run loop";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] utility main left run loop";
+ #endif
+ 
+ #if defined(LEAK_SANITIZER)
+diff --git a/content/utility/utility_thread_impl.cc b/content/utility/utility_thread_impl.cc
+index 8350700c8f..a9527d8a5f 100644
+--- a/content/utility/utility_thread_impl.cc
++++ b/content/utility/utility_thread_impl.cc
+@@ -114,7 +114,7 @@ class ServiceBinderImpl {
+ 
+   void OnServiceTerminated() {
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] service terminated count="
++    VLOG(1) << "[Chromium:AROS:UtilityShutdown] service terminated count="
+                << num_service_instances_;
+ #endif
+     if (--num_service_instances_ > 0)
+@@ -134,7 +134,7 @@ class ServiceBinderImpl {
+ 
+   static void ShutDownProcess() {
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] releasing process";
++    VLOG(1) << "[Chromium:AROS:UtilityShutdown] releasing process";
+ #endif
+     UtilityThread::Get()->ReleaseProcess();
+   }
+@@ -189,14 +189,14 @@ UtilityThreadImpl::~UtilityThreadImpl() = default;
+ 
+ void UtilityThreadImpl::Shutdown() {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] utility thread shutdown";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] utility thread shutdown";
+ #endif
+   ChildThreadImpl::Shutdown();
+ }
+ 
+ void UtilityThreadImpl::ReleaseProcess() {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] release entered";
++  VLOG(1) << "[Chromium:AROS:UtilityShutdown] release entered";
+ #endif
+   // Ensure all main-thread services are destroyed before releasing the process.
+   // This limits the risk of services incorrectly attempting to post
+@@ -206,7 +206,7 @@ void UtilityThreadImpl::ReleaseProcess() {
+   if (!IsInBrowserProcess()) {
+     ChildProcess::current()->ReleaseProcess();
+ #if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[Chromium:AROS:UtilityShutdown] child process ref released";
++    VLOG(1) << "[Chromium:AROS:UtilityShutdown] child process ref released";
+ #endif
+     return;
+   }

@@ -1,0 +1,30 @@
+From 74c4381b802edfb0c959e992b70607b7cc382ea8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:13:30 -0500
+Subject: [PATCH 074/638] [AROS] Own optional declaration in First-Party Sets
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: First-Party Sets database helper compiles under the AROS GCC cross-toolchain.
+ROOT_CAUSE: The public helper interface declared std::optional return types without including <optional>, relying on a transitive include present in other toolchains.
+FIX_REASON: The header must own every standard-library declaration in its public API.
+SCOPE: content/browser/first_party_sets/first_party_sets_handler_database_helper.h only.
+VALIDATION: first_party_sets_handler_database_helper.o compiled with the AROS headless toolchain.
+RISK: None beyond correcting include ownership.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../first_party_sets/first_party_sets_handler_database_helper.h  | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/content/browser/first_party_sets/first_party_sets_handler_database_helper.h b/content/browser/first_party_sets/first_party_sets_handler_database_helper.h
+index a12af718ab..92afb98d64 100644
+--- a/content/browser/first_party_sets/first_party_sets_handler_database_helper.h
++++ b/content/browser/first_party_sets/first_party_sets_handler_database_helper.h
+@@ -6,6 +6,7 @@
+ #define CONTENT_BROWSER_FIRST_PARTY_SETS_FIRST_PARTY_SETS_HANDLER_DATABASE_HELPER_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <utility>
+ #include <vector>

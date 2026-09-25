@@ -1,0 +1,137 @@
+From f2778e037c0e457e9aee37c2be4c5d4e108316cd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:03:03 -0500
+Subject: [PATCH 083/638] [AROS] Define headless UI fallback contracts
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Resource, idle, file-dialog, and animation platform hooks are defined for AROS.
+ROOT_CAUSE: UI source selection assumed every desktop target was Linux, Apple, Windows, ChromeOS, or Fuchsia, leaving platform-neutral headless hooks undefined on AROS.
+FIX_REASON: Load packed images normally, report active/unlocked without a native idle service, use the existing unsupported file-dialog factory, and retain Chromium's enabled-animation default.
+SCOPE: UI Base resources and idle, shell dialogs, and gfx animation defaults.
+VALIDATION: Four affected objects and their four owning archives build; symbol inspection defines all eight first-link UI entries in this group.
+RISK: Native idle detection and file selection remain unavailable; headless resources and animation behavior are functional defaults.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ ui/base/BUILD.gn                         |  4 ++++
+ ui/base/idle/BUILD.gn                    |  4 ++++
+ ui/base/idle/idle_aros.cc                | 17 +++++++++++++++++
+ ui/base/resource/resource_bundle_aros.cc | 17 +++++++++++++++++
+ ui/gfx/animation/animation.cc            |  5 +++--
+ ui/shell_dialogs/BUILD.gn                |  2 +-
+ 6 files changed, 46 insertions(+), 3 deletions(-)
+ create mode 100644 ui/base/idle/idle_aros.cc
+ create mode 100644 ui/base/resource/resource_bundle_aros.cc
+
+diff --git a/ui/base/BUILD.gn b/ui/base/BUILD.gn
+index 3eb522cfca..72101eccc0 100644
+--- a/ui/base/BUILD.gn
++++ b/ui/base/BUILD.gn
+@@ -473,6 +473,10 @@ component("base") {
+     sources += [ "resource/resource_bundle_fuchsia.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "resource/resource_bundle_aros.cc" ]
++  }
++
+   configs += [
+     "//build/config/compiler:prevent_unsafe_narrowing",
+     "//build/config/compiler:wexit_time_destructors",
+diff --git a/ui/base/idle/BUILD.gn b/ui/base/idle/BUILD.gn
+index 2bef389a81..21fd7efb70 100644
+--- a/ui/base/idle/BUILD.gn
++++ b/ui/base/idle/BUILD.gn
+@@ -68,6 +68,10 @@ component("idle") {
+     sources += [ "idle_fuchsia.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "idle_aros.cc" ]
++  }
++
+   if (is_linux) {
+     sources += [ "idle_linux.cc" ]
+     deps += [ "//ui/display" ]
+diff --git a/ui/base/idle/idle_aros.cc b/ui/base/idle/idle_aros.cc
+new file mode 100644
+index 0000000000..1a45d4aed0
+--- /dev/null
++++ b/ui/base/idle/idle_aros.cc
+@@ -0,0 +1,17 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/base/idle/idle.h"
++
++namespace ui {
++
++int CalculateIdleTime() {
++  return 0;
++}
++
++bool CheckIdleStateIsLocked() {
++  return false;
++}
++
++}  // namespace ui
+diff --git a/ui/base/resource/resource_bundle_aros.cc b/ui/base/resource/resource_bundle_aros.cc
+new file mode 100644
+index 0000000000..7609ad937d
+--- /dev/null
++++ b/ui/base/resource/resource_bundle_aros.cc
+@@ -0,0 +1,17 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/base/resource/resource_bundle.h"
++
++namespace ui {
++
++void ResourceBundle::LoadCommonResources() {
++  LoadChromeResources();
++}
++
++gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
++  return GetImageNamed(resource_id);
++}
++
++}  // namespace ui
+diff --git a/ui/gfx/animation/animation.cc b/ui/gfx/animation/animation.cc
+index a6f7ad8c1c..3b51092dc4 100644
+--- a/ui/gfx/animation/animation.cc
++++ b/ui/gfx/animation/animation.cc
+@@ -112,7 +112,8 @@ bool Animation::ShouldRenderRichAnimation() {
+          RichAnimationRenderMode::FORCE_ENABLED;
+ }
+ 
+-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || BUILDFLAG(IS_FUCHSIA) || \
++    BUILDFLAG(IS_AROS)
+ // static
+ bool Animation::ShouldRenderRichAnimationImpl() {
+   return true;
+@@ -136,7 +137,7 @@ void Animation::UpdatePrefersReducedMotion() {
+   prefers_reduced_motion_ = false;
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || BUILDFLAG(IS_FUCHSIA)
++#endif
+ 
+ // static
+ bool Animation::PrefersReducedMotion() {
+diff --git a/ui/shell_dialogs/BUILD.gn b/ui/shell_dialogs/BUILD.gn
+index b14a028899..1caba4fc1c 100644
+--- a/ui/shell_dialogs/BUILD.gn
++++ b/ui/shell_dialogs/BUILD.gn
+@@ -41,7 +41,7 @@ component("shell_dialogs") {
+     "//url",
+   ]
+ 
+-  if (is_chromeos || is_castos || is_cast_android) {
++  if (is_chromeos || is_castos || is_cast_android || is_aros) {
+     sources += [ "shell_dialog_stub.cc" ]
+   }
+ 

@@ -1,0 +1,88 @@
+From f76ee8ff88caa664a0a0ab2a9714a9da553890da Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 18:58:38 -0500
+Subject: [PATCH 119/638] [AROS] Keep copied file maps on the fixed page ABI
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Run 0119 still reported the old impossible file-map backing size even though the linked SysInfo::VMAllocationGranularity body disassembled to a literal 4096 return, leaving an unnecessary runtime call/relocation boundary between the AROS mapper and its fixed platform invariant.
+FIX_REASON: Use the 4096-byte AROS page ABI directly in the AROS-only mapper and emit debug.resource records for file offset, requested bytes, rounded bytes, backing ownership, and actual read result.
+SCOPE: base/files/memory_mapped_file_aros.cc
+VALIDATION: memory_mapped_file_aros.o cross-compiled; merged 0119 disassembly proves SysInfo returns 0x1000 while hosted output still reported 1783869439 bytes, so the next run must observe the value at the mapper itself.
+RISK: Diagnostic records are emitted for each copied file map and should be reduced after the resource path passes; direct 4096 use matches the AROS public PAGESIZE ABI already adopted by Base and PartitionAlloc.
+AI_DECISION_CHAIN: fixed page-size entry points -> runtime still observes impossible map size -> bypass redundant call -> record mapper plan and read result
+Continues: cb94bcf983
+---
+ base/files/memory_mapped_file_aros.cc | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
+
+diff --git a/base/files/memory_mapped_file_aros.cc b/base/files/memory_mapped_file_aros.cc
+index f72f180553..864bdb39af 100644
+--- a/base/files/memory_mapped_file_aros.cc
++++ b/base/files/memory_mapped_file_aros.cc
+@@ -7,11 +7,13 @@
+ #include <algorithm>
+ #include <cstdint>
+ #include <limits>
++#include <optional>
+ 
+ #pragma push_macro("SCHED_RR")
+ #undef SCHED_RR
+ #include <aros/kernel.h>
+ #pragma pop_macro("SCHED_RR")
++#include <aros/debug.h>
+ #include <exec/memory.h>
+ #include <proto/exec.h>
+ #include <proto/kernel.h>
+@@ -21,7 +23,6 @@
+ #include "base/logging.h"
+ #include "base/numerics/checked_math.h"
+ #include "base/numerics/safe_conversions.h"
+-#include "base/system/sys_info.h"
+ #include "base/threading/scoped_blocking_call.h"
+ 
+ namespace base {
+@@ -62,9 +63,7 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     }
+   }
+ 
+-  const size_t granularity = SysInfo::VMAllocationGranularity();
+-  if (granularity == 0)
+-    return false;
++  constexpr size_t granularity = 4096u;
+ 
+   CheckedNumeric<size_t> allocation_size(data_size);
+   allocation_size += granularity - 1;
+@@ -74,6 +73,11 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     return false;
+ 
+   const size_t rounded_size = allocation_size.ValueOrDie();
++  bug("[AROS:MMAP] plan offset=%lld bytes=%llu page=%llu rounded=%llu\n",
++      static_cast<long long>(file_offset),
++      static_cast<unsigned long long>(data_size),
++      static_cast<unsigned long long>(granularity),
++      static_cast<unsigned long long>(rounded_size));
+   APTR KernelBase = OpenResource("kernel.resource");
+   void* allocation =
+       KernelBase
+@@ -99,12 +103,17 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+     const uintptr_t aligned_address =
+         (raw_address + granularity - 1) & ~(granularity - 1);
+     allocation = reinterpret_cast<void*>(aligned_address);
+-    DLOG(WARNING) << "KrnAllocPages unavailable; using tracked Exec backing "
+-                  << backing_size << " bytes for MemoryMappedFile";
++    bug("[AROS:MMAP] backing=exec base=%p data=%p bytes=%llu\n",
++        allocation_base, allocation,
++        static_cast<unsigned long long>(backing_size));
+   }
+ 
+   span<uint8_t> contents(static_cast<uint8_t*>(allocation), data_size);
+-  if (!file_.ReadAndCheck(file_offset, contents)) {
++  const std::optional<size_t> bytes_read = file_.Read(file_offset, contents);
++  if (!bytes_read || *bytes_read != data_size) {
++    bug("[AROS:MMAP] read failed requested=%llu actual=%lld errno=%d\n",
++        static_cast<unsigned long long>(data_size),
++        bytes_read ? static_cast<long long>(*bytes_read) : -1, errno);
+     if (uses_kernel_pages)
+       KrnFreePages(allocation_base, backing_size);
+     else

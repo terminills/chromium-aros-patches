@@ -1,0 +1,35 @@
+From 00e21592abca16071f2737a5d86bb4001973457b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:35:51 -0500
+Subject: [PATCH 323/638] cef: expose font family cache key
+
+Apply CEF's upstream font_family_cache_1501 patch as a discrete prerequisite for Alloy browser context font caching.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-font-cache-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 16 reported missing kFontFamilyCacheKey
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/16-libcef-static-after-blink-devtools.log
+
+AI_DECISION_CHAIN:; 52dac911; 9a7afacb8a
+---
+ chrome/browser/font_family_cache.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/chrome/browser/font_family_cache.h b/chrome/browser/font_family_cache.h
+index d4a32438bd..7e1d40e973 100644
+--- a/chrome/browser/font_family_cache.h
++++ b/chrome/browser/font_family_cache.h
+@@ -19,6 +19,8 @@ class Profile;
+ 
+ FORWARD_DECLARE_TEST(FontFamilyCacheTest, Caching);
+ 
++extern const char kFontFamilyCacheKey[];
++
+ // Caches font family preferences associated with a PrefService. This class
+ // relies on the assumption that each concatenation of map_name + '.' + script
+ // is a unique string. It also relies on the assumption that the (const char*)

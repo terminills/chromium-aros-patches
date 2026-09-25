@@ -1,0 +1,26 @@
+From 910454ea189103f35704db5e14777565482d30b0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 5 Aug 2026 06:07:56 -0500
+Subject: [PATCH 504/638] base: correct AROS terminate success result
+
+Process::Terminate() inverted the kill() result on AROS, reporting a successful signal as failure and a failed signal as success. Preserve the POSIX return contract so renderer retirement can distinguish a requested termination from an error.
+
+
+
+---
+ base/process/process_posix.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
+index e846a4bf27..622b7bdb50 100644
+--- a/base/process/process_posix.cc
++++ b/base/process/process_posix.cc
+@@ -350,7 +350,7 @@ bool Process::Terminate(int exit_code, bool wait) const {
+   const bool maybe_compromised = !wait && exit_code == 3;
+   if (maybe_compromised) {
+     // Forcibly terminate the process immediately.
+-    const bool was_killed = kill(process_, SIGKILL) != 0;
++    const bool was_killed = kill(process_, SIGKILL) == 0;
+ #if BUILDFLAG(IS_CHROMEOS)
+     if (was_killed)
+       CleanUpProcessAsync();

@@ -1,0 +1,47 @@
+From 8fad9cc34f3069043a84c8476215027e7d0574c0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:49:21 -0500
+Subject: [PATCH 168/638] ozone: define the unsupported AROS UI-controls helper
+ [chromium] [aros]
+
+Statement: Ozone generates one UI-controls constructor for every built platform, including AROS, while synthetic native input is not implemented yet.
+
+Decision: Route AROS through the existing fail-visible unsupported test helper. This closes test-support linkage without claiming input injection support.
+
+Evidence: The complete content_shell link lacked CreateOzoneUIControlsTestHelperAros().
+
+Validation: stub_ozone_ui_controls_test_helper.o compiles and exports the generated constructor contract.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ ui/ozone/common/test/stub_ozone_ui_controls_test_helper.cc | 4 ++++
+ ui/ozone/common/test/stub_ozone_ui_controls_test_helper.h  | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.cc b/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.cc
+index 7bf6abbf64..4168371b1b 100644
+--- a/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.cc
++++ b/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.cc
+@@ -21,6 +21,10 @@ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperWindows() {
+   return PrintErrorAndReturnNullptr();
+ }
+ 
++OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperAros() {
++  return PrintErrorAndReturnNullptr();
++}
++
+ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperDrm() {
+   return PrintErrorAndReturnNullptr();
+ }
+diff --git a/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.h b/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.h
+index bb2502bb8c..bf34c431c1 100644
+--- a/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.h
++++ b/ui/ozone/common/test/stub_ozone_ui_controls_test_helper.h
+@@ -10,6 +10,7 @@ namespace ui {
+ class OzoneUIControlsTestHelper;
+ 
+ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperWindows();
++OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperAros();
+ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperDrm();
+ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperScenic();
+ OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperFlatland();

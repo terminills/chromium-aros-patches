@@ -1,0 +1,36 @@
+From ae93804807569c2dc4e50d7f0c557866a0926a09 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:30:47 -0500
+Subject: [PATCH 193/638] extensions: isolate the AROS GLOBAL macro [chromium]
+ [aros]
+
+Statement:
+AROS exec/types.h exposes GLOBAL as a legacy linkage macro, and libstdc++ pulls that macro into Chromium translation units through pthread.h. It rewrote CommandScope::GLOBAL before C++ parsing.
+
+Decision:
+Undefine the legacy macro at the command-service header boundary where Chromium owns GLOBAL as an enum identifier. Preserve every extension command scope and keyboard feature.
+
+Evidence:
+obj/chrome/browser/extensions/api/api_registration/generated_api_registration.o builds successfully in out/aros-chrome.
+
+Chain:
+ first native upstream Chromium browser window.
+---
+ chrome/browser/extensions/api/commands/command_service.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/chrome/browser/extensions/api/commands/command_service.h b/chrome/browser/extensions/api/commands/command_service.h
+index cb5a077a1a..c5288df33e 100644
+--- a/chrome/browser/extensions/api/commands/command_service.h
++++ b/chrome/browser/extensions/api/commands/command_service.h
+@@ -18,6 +18,10 @@
+ #include "extensions/common/extension.h"
+ #include "extensions/common/extension_id.h"
+ 
++#if defined(__AROS__) && defined(GLOBAL)
++#undef GLOBAL
++#endif
++
+ class Profile;
+ 
+ namespace content {

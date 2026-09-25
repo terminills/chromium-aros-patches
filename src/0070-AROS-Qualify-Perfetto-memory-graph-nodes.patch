@@ -1,0 +1,54 @@
+From f0efe34a6b975d191cd840cfbd3fca752ab43c37 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:47:49 -0500
+Subject: [PATCH 070/638] [AROS] Qualify Perfetto memory graph nodes
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Resource-coordinator memory instrumentation compiles alongside AROS Exec headers.
+ROOT_CAUSE: A file-scope alias named Node collided with Exec's public global struct Node, imported transitively through pthread support.
+FIX_REASON: Remove the short alias and use the owning GlobalNodeGraph::Node type explicitly at each memory-graph use site.
+SCOPE: queued_request_dispatcher.cc only.
+VALIDATION: ninja -C out/aros-headless -j32 obj/services/resource_coordinator/lib/queued_request_dispatcher.o
+RISK: Minimal; type spelling only, with no runtime behavior change.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../queued_request_dispatcher.cc                       | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+index d362511b12..8f2a4f69d6 100644
+--- a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
++++ b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+@@ -37,7 +37,6 @@ using base::trace_event::TracedValue;
+ using perfetto::trace_processor::GlobalNodeGraph;
+ using perfetto::trace_processor::LevelOfDetail;
+ using perfetto::trace_processor::RawMemoryGraphNode;
+-using Node = perfetto::trace_processor::GlobalNodeGraph::Node;
+ using perfetto::trace_processor::GraphProcessor;
+ 
+ namespace memory_instrumentation {
+@@ -141,11 +140,12 @@ void NodeAsValueIntoRecursively(const GlobalNodeGraph::Node& node,
+   }
+ }
+ 
+-mojom::AllocatorMemDumpPtr CreateAllocatorDumpForNode(const Node* node,
+-                                                      bool recursive) {
++mojom::AllocatorMemDumpPtr CreateAllocatorDumpForNode(
++    const GlobalNodeGraph::Node* node,
++    bool recursive) {
+   base::flat_map<std::string, uint64_t> numeric_entries;
+   for (const auto& entry : node->const_entries()) {
+-    if (entry.second.type == Node::Entry::Type::kUInt64)
++    if (entry.second.type == GlobalNodeGraph::Node::Entry::Type::kUInt64)
+       numeric_entries.emplace(entry.first, entry.second.value_uint64);
+   }
+   base::flat_map<std::string, mojom::AllocatorMemDumpPtr> children;
+@@ -544,7 +544,7 @@ void QueuedRequestDispatcher::Finalize(QueuedRequest* request,
+         bool is_recursive = base::EndsWith(name, "/*");
+         std::string node_name =
+             (is_recursive ? name.substr(0, name.length() - 2) : name);
+-        Node* node = process_graph->FindNode(node_name);
++        GlobalNodeGraph::Node* node = process_graph->FindNode(node_name);
+ 
+         // Silently ignore any missing node in the process graph.
+         if (!node)

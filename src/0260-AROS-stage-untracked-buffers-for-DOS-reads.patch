@@ -1,0 +1,150 @@
+From 136bc1023a7ff8fb6205e25926c862a4454a9429 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 19 Jul 2026 18:20:11 -0500
+Subject: [PATCH 260/638] AROS: stage untracked buffers for DOS reads
+
+Hosted KrnAllocPages and Chromium page allocations can be valid host mappings while remaining invisible to Exec's MemList. Route only those untracked read targets through Exec-owned staging memory, and fall back from untracked KrnAllocPages backing to AllocMem for mapped files.
+
+ROOT_CAUSE: DOS debug Read validation rejects hosted host-mmap buffers when TypeOfMem() reports no Exec ownership.\nFIX_REASON: Preserve the direct path for Exec-backed native memory while staging only untracked hosted targets.\nVALIDATION: ninja -C out/aros-chrome chrome; /tmp/aros-hosted-vtest-multiclient-20260719.log contains no bad pointer, rom/dos/read.c, 64, or unattended-alert record; live VTest Chromium frames advanced 231 to 284.\nAI_DECISION_CHAIN:
+---
+ base/files/file_posix.cc              | 55 ++++++++++++++++++++++++---
+ base/files/memory_mapped_file_aros.cc |  7 ++++
+ 2 files changed, 57 insertions(+), 5 deletions(-)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index 6314a8a54f..54c651ecf7 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -16,8 +16,14 @@
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/memory.h>
++#include <proto/exec.h>
++#endif
++
+ static_assert(sizeof(base::stat_wrapper_t::st_size) >= 8);
+ 
++#include <cstring>
+ #include <optional>
+ 
+ #include "base/check_op.h"
+@@ -53,6 +59,36 @@ Lock& ArosFilePositionLock() {
+   return *lock;
+ }
+ 
++// Hosted KrnAllocPages() allocations are valid host mappings but are not
++// represented in Exec's MemList. DOS debug builds validate Read() buffers
++// through TypeOfMem(), so copy only those untracked targets through
++// Exec-owned staging memory. Best-effort reads are bounded; exact reads keep
++// their original request size. Native Exec-backed pages take the direct path.
++ssize_t CallArosRead(PlatformFile file,
++                     void* data,
++                     size_t size,
++                     bool allow_partial) {
++  if (size == 0 || TypeOfMem(data))
++    return HANDLE_EINTR(read(file, data, size));
++
++  constexpr size_t kMaxStagingSize = 64 * 1024;
++  const size_t staging_size =
++      allow_partial && size > kMaxStagingSize ? kMaxStagingSize : size;
++  void* staging = AllocMem(staging_size, MEMF_PUBLIC);
++  if (!staging) {
++    errno = ENOMEM;
++    return -1;
++  }
++
++  const ssize_t result = HANDLE_EINTR(read(file, staging, staging_size));
++  const int saved_errno = errno;
++  if (result > 0)
++    std::memcpy(data, staging, static_cast<size_t>(result));
++  FreeMem(staging, staging_size);
++  errno = saved_errno;
++  return result;
++}
++
+ struct ArosOpenResult {
+   int descriptor;
+   int error;
+@@ -68,13 +104,14 @@ ArosOpenResult CallOpen(const char* path, int flags, mode_t mode) {
+ ssize_t CallPread(PlatformFile file,
+                   void* data,
+                   size_t size,
+-                  off_t offset) {
++                  off_t offset,
++                  bool allow_partial) {
+   AutoLock lock(ArosFilePositionLock());
+   const off_t original_offset = HANDLE_EINTR(lseek(file, 0, SEEK_CUR));
+   if (original_offset < 0 || HANDLE_EINTR(lseek(file, offset, SEEK_SET)) < 0)
+     return -1;
+ 
+-  const ssize_t result = HANDLE_EINTR(read(file, data, size));
++  const ssize_t result = CallArosRead(file, data, size, allow_partial);
+   const int saved_errno = errno;
+   if (HANDLE_EINTR(lseek(file, original_offset, SEEK_SET)) < 0)
+     return -1;
+@@ -309,7 +346,7 @@ int File::Read(int64_t offset, char* data, int size) {
+ #if BUILDFLAG(IS_AROS)
+     rv = CallPread(file_.get(), data + bytes_read,
+                    static_cast<size_t>(size - bytes_read),
+-                   static_cast<off_t>(offset + bytes_read));
++                   static_cast<off_t>(offset + bytes_read), true);
+ #else
+     rv = HANDLE_EINTR(pread(file_.get(), data + bytes_read,
+                             static_cast<size_t>(size - bytes_read),
+@@ -339,8 +376,13 @@ int File::ReadAtCurrentPos(char* data, int size) {
+   int bytes_read = 0;
+   long rv;
+   do {
++#if BUILDFLAG(IS_AROS)
++    rv = CallArosRead(file_.get(), data + bytes_read,
++                      static_cast<size_t>(size - bytes_read), true);
++#else
+     rv = HANDLE_EINTR(read(file_.get(), data + bytes_read,
+                            static_cast<size_t>(size - bytes_read)));
++#endif
+     if (rv <= 0)
+       break;
+ 
+@@ -360,7 +402,7 @@ int File::ReadNoBestEffort(int64_t offset, char* data, int size) {
+ #if BUILDFLAG(IS_AROS)
+   return checked_cast<int>(CallPread(file_.get(), data,
+                                      static_cast<size_t>(size),
+-                                     static_cast<off_t>(offset)));
++                                     static_cast<off_t>(offset), false));
+ #else
+   return checked_cast<int>(
+       HANDLE_EINTR(pread(file_.get(), data, static_cast<size_t>(size),
+@@ -377,9 +419,12 @@ int File::ReadAtCurrentPosNoBestEffort(char* data, int size) {
+   SCOPED_FILE_TRACE_WITH_SIZE("ReadAtCurrentPosNoBestEffort", size);
+ #if BUILDFLAG(IS_AROS)
+   AutoLock lock(ArosFilePositionLock());
+-#endif
++  return checked_cast<int>(
++      CallArosRead(file_.get(), data, static_cast<size_t>(size), false));
++#else
+   return checked_cast<int>(
+       HANDLE_EINTR(read(file_.get(), data, static_cast<size_t>(size))));
++#endif
+ }
+ 
+ int File::Write(int64_t offset, const char* data, int size) {
+diff --git a/base/files/memory_mapped_file_aros.cc b/base/files/memory_mapped_file_aros.cc
+index 864bdb39af..7e166ec090 100644
+--- a/base/files/memory_mapped_file_aros.cc
++++ b/base/files/memory_mapped_file_aros.cc
+@@ -83,6 +83,13 @@ bool MemoryMappedFile::MapFileRegionToMemory(
+       KernelBase
+           ? KrnAllocPages(nullptr, rounded_size, MEMF_PUBLIC | MEMF_CLEAR)
+           : nullptr;
++  if (allocation && !TypeOfMem(allocation)) {
++    // Hosted KrnAllocPages() is a host mmap outside Exec's MemList.  DOS
++    // validates Read() buffers through TypeOfMem(), so use the tracked Exec
++    // backing below when the page allocation is not visible to Exec.
++    KrnFreePages(allocation, rounded_size);
++    allocation = nullptr;
++  }
+   void* allocation_base = allocation;
+   size_t backing_size = rounded_size;
+   bool uses_kernel_pages = allocation != nullptr;

@@ -1,0 +1,49 @@
+From 4e7ac3d6496654b908bf811f7625a06a35635842 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 16:41:53 -0500
+Subject: [PATCH 475/638] AROS: preserve assign roots from realpath
+
+Recover native assign syntax when realpath drops the colon from an assign root or descendant. This prevents T: temporary paths from becoming a synthetic /T volume while leaving genuine POSIX absolute paths unchanged.
+
+
+
+---
+ base/files/file_util_posix.cc | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 1f283a86e4..427601cda3 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -399,6 +399,31 @@ FilePath MakeAbsoluteFilePath(const FilePath& input) {
+         (separator == std::string_view::npos || colon < separator)) {
+       return FilePath(std::string(resolved.substr(1)));
+     }
++
++    // realpath() also drops the assign delimiter for an assign root on some
++    // AROS paths ("T:" becomes "/T", and descendants become "/T/...").
++    // Recover the native root only when the input itself named that assign;
++    // this keeps genuine POSIX paths such as "/tmp" untouched.
++    const std::string_view original(input.value());
++    const size_t original_colon = original.find(':');
++    const size_t original_separator = original.find('/');
++    if (original_colon != std::string_view::npos && original_colon != 0 &&
++        (original_separator == std::string_view::npos ||
++         original_colon < original_separator)) {
++      const std::string_view original_root =
++          original.substr(0, original_colon);
++      if (resolved.size() == original_root.size() + 1 &&
++          resolved.substr(1) == original_root) {
++        return FilePath(std::string(original.substr(0, original_colon + 1)));
++      }
++      if (resolved.size() > original_root.size() + 1 &&
++          resolved.substr(1, original_root.size()) == original_root &&
++          resolved[original_root.size() + 1] == '/') {
++        std::string native_path(original.substr(0, original_colon + 1));
++        native_path.append(resolved.substr(original_root.size() + 1));
++        return FilePath(std::move(native_path));
++      }
++    }
+   }
+ #endif
+   return FilePath(full_path);

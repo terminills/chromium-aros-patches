@@ -1,0 +1,51 @@
+From d65e66be18544327f314c44159d9171795d3b2c5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:26:40 -0500
+Subject: [PATCH 023/638] gl: use static ANGLE for the AROS headless baseline
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: AROS now links ANGLE's null EGL/GLES implementation into headless_shell instead of packaging ELF shared objects.
+
+ROOT_CAUSE: Ozone's EGL data dependencies unconditionally built libEGL.so and libGLESv2.so, but AROS dynamic symbol lookup and generic ELF shared-object loading are still explicit later-phase contracts. The cross GCC also injects executable startup.o into -shared links, producing an artificial undefined main.
+
+FIX_REASON: Select ANGLE's maintained static integration on AROS and suppress shared runtime data dependencies whenever use_static_angle is active. This keeps Phase 3 focused on the software-rendering baseline without pretending the dynamic-loader contract exists.
+
+SCOPE: ui/gl/features.gni and ui/gl/BUILD.gn
+
+VALIDATION: filtered GN generation produced 13565 targets; ninja inputs for headless_shell contains libEGL_static.a and libGLESv2_static.a with no ANGLE .so inputs; ninja built obj/third_party/angle/libEGL_static.a and libGLESv2_static.a successfully.
+
+RISK: AROS cannot swap ANGLE binaries independently in this phase; the later native GPU/shared-library phase must define an AROS library ABI or finish generic ELF shared-object support.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/gl/BUILD.gn     | 2 +-
+ ui/gl/features.gni | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/ui/gl/BUILD.gn b/ui/gl/BUILD.gn
+index cb0bbf636e..337ee582ad 100644
+--- a/ui/gl/BUILD.gn
++++ b/ui/gl/BUILD.gn
+@@ -241,7 +241,7 @@ component("gl") {
+   }
+ 
+   if (use_ozone) {
+-    if (use_egl && !is_fuchsia) {
++    if (use_egl && !is_fuchsia && !use_static_angle) {
+       data_deps += [
+         "//third_party/angle:libEGL",
+         "//third_party/angle:libGLESv2",
+diff --git a/ui/gl/features.gni b/ui/gl/features.gni
+index f81a3e5826..06806b8ceb 100644
+--- a/ui/gl/features.gni
++++ b/ui/gl/features.gni
+@@ -9,7 +9,7 @@ import("//chrome/version.gni")
+ 
+ declare_args() {
+   # Should ANGLE be linked statically?
+-  use_static_angle = is_android || is_ios
++  use_static_angle = is_android || is_aros || is_ios
+ 
+   # Should EGL support be compiled?
+   # Can be overriden to test during bring up of EGL support on other platforms.

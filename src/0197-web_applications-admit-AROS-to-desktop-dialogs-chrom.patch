@@ -1,0 +1,35 @@
+From 50ec30178d38341c62235665fa428c10a998bc0b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:52:25 -0500
+Subject: [PATCH 197/638] web_applications: admit AROS to desktop dialogs
+ [chromium] [aros]
+
+Statement:
+The native Chrome build reaches Web App dialog declarations, whose desktop platform assertion omitted AROS despite the port using the desktop Views surface.
+
+Decision:
+Include AROS in the existing desktop platform assertion and preserve the upstream dialog API unchanged.
+
+Evidence:
+out/aros-chrome compiles chrome_management_api_delegate.o with the AROS cross toolchain after this change.
+
+Chain:
+; first native Chromium window; web application desktop integration.
+---
+ chrome/browser/ui/web_applications/web_app_dialogs.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/web_applications/web_app_dialogs.h b/chrome/browser/ui/web_applications/web_app_dialogs.h
+index c68ea4ac55..cc3f79e553 100644
+--- a/chrome/browser/ui/web_applications/web_app_dialogs.h
++++ b/chrome/browser/ui/web_applications/web_app_dialogs.h
+@@ -22,7 +22,8 @@
+ #include "ui/gfx/native_widget_types.h"
+ 
+ static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-              BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA));
++              BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++              BUILDFLAG(IS_AROS));
+ 
+ class GURL;
+ class Profile;

@@ -1,0 +1,58 @@
+From 73d3ae5e594143c5d318d650ee7ee33fb6ddfee1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:03:18 -0500
+Subject: [PATCH 053/638] policy: define AROS device identity capabilities
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Cloud policy utilities now report only device identity fields available through process-independent AROS services.
+
+ROOT_CAUSE: GetMachineName rejected every unclassified platform at preprocessing time, while OS version and username fell into runtime NOTREACHED paths; AROSTCP hostname access is per-task network-library state rather than a base libc service.
+
+FIX_REASON: Return no machine or account name until AROS exposes suitable process-independent services, while using the existing uname-backed base::SysInfo implementation for the real OS version.
+
+SCOPE: Cloud policy machine name, OS version, and username reporting
+
+VALIDATION: cloud_policy_util.o compiled with the AROS GCC cross-toolchain; staged diff check passed.
+
+RISK: Enterprise reports omit machine and username fields on AROS; this is deliberate and preferable to opening AROSTCP implicitly or inventing identity.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/policy/core/common/cloud/cloud_policy_util.cc | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/components/policy/core/common/cloud/cloud_policy_util.cc b/components/policy/core/common/cloud/cloud_policy_util.cc
+index 3f2a69c1de..436046345b 100644
+--- a/components/policy/core/common/cloud/cloud_policy_util.cc
++++ b/components/policy/core/common/cloud/cloud_policy_util.cc
+@@ -135,6 +135,10 @@ std::string GetMachineName() {
+   return std::string();
+ #elif BUILDFLAG(IS_ANDROID)
+   return std::string();
++#elif BUILDFLAG(IS_AROS)
++  // AROSTCP's hostname belongs to a per-task network-library context, which
++  // this base-only policy component does not own.
++  return std::string();
+ #elif BUILDFLAG(IS_CHROMEOS)
+   NOTREACHED();
+   return std::string();
+@@ -145,7 +149,7 @@ std::string GetMachineName() {
+ 
+ std::string GetOSVersion() {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_APPLE) || \
+-    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   return base::SysInfo::OperatingSystemVersion();
+ #elif BUILDFLAG(IS_WIN)
+   base::win::OSInfo::VersionNumber version_number =
+@@ -210,6 +214,9 @@ std::string GetOSUsername() {
+   // TODO(crbug.com/1257674): This should be fully implemented when there is
+   // support in fuchsia.
+   return std::string();
++#elif BUILDFLAG(IS_AROS)
++  // AROS does not expose a process-independent POSIX account database.
++  return std::string();
+ #else
+   NOTREACHED();
+   return std::string();

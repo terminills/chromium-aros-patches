@@ -1,0 +1,47 @@
+From 33a80bf1b9e1f590697c0b58fa75404fd1d37e52 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:51:04 -0500
+Subject: [PATCH 071/638] [AROS] Parse pointer-width Perfetto process IDs
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Perfetto producer identity parsing supports AROS's native pointer-width pid_t.
+ROOT_CAUSE: Perfetto asserted that every non-Fuchsia ProcessId was 32-bit and reinterpreted its output storage as uint32_t, but AROS defines pid_t as signed pointer width.
+FIX_REASON: Parse into uint64_t, range-check against base::ProcessId, and assign without truncation or incompatible pointer casts.
+SCOPE: services/tracing/perfetto/perfetto_service.cc only.
+VALIDATION: ninja -C out/aros-headless -j32 obj/services/tracing/lib/perfetto_service.o
+RISK: Low; producer names remain unsigned decimal IDs and out-of-range values fail closed.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ services/tracing/perfetto/perfetto_service.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/services/tracing/perfetto/perfetto_service.cc b/services/tracing/perfetto/perfetto_service.cc
+index 5d0af2dfe7..a7b3de1afe 100644
+--- a/services/tracing/perfetto/perfetto_service.cc
++++ b/services/tracing/perfetto/perfetto_service.cc
+@@ -9,6 +9,7 @@
+ #include "base/functional/bind.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/no_destructor.h"
++#include "base/numerics/safe_conversions.h"
+ #include "base/process/process_handle.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -28,7 +29,16 @@ namespace {
+ // Parses the PID from |pid_as_string| and stores the result in |pid|.
+ // Returns true if the PID was parsed successfully.
+ bool ParseProcessId(const std::string& pid_as_string, base::ProcessId* pid) {
+-#if BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_AROS)
++  // AROS pid_t is a signed pointer-width task identity.
++  uint64_t parsed_pid = 0;
++  if (!base::StringToUint64(pid_as_string, &parsed_pid) ||
++      !base::IsValueInRangeForNumericType<base::ProcessId>(parsed_pid)) {
++    return false;
++  }
++  *pid = static_cast<base::ProcessId>(parsed_pid);
++  return true;
++#elif BUILDFLAG(IS_FUCHSIA)
+   // Fuchsia zx_koid_t is a 64-bit int.
+   static_assert(sizeof(base::ProcessId) == 8);
+   return base::StringToUint64(pid_as_string, pid);

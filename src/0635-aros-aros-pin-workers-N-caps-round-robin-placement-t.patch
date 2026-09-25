@@ -1,0 +1,145 @@
+From 436d57f9e17ea7be27cce3bbe8f900cea548d507 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 22 Sep 2026 02:13:28 -0500
+Subject: [PATCH 635/638] aros: --aros-pin-workers=N caps round-robin placement
+ to CPUs 1..N
+
+Bare --aros-pin-workers spreads pinned threads over every CPU but 0.
+With a value, placement stops at CPU N so the layout can be bisected on
+a big guest without changing the guest: N=3 on an 8-core guest
+reproduces the 4-core layout (works), N=7 the full one (stalled before
+the kernel fixes). Used for the pin3/pinl4 matrix that caught
+the lost cross-CPU IPI (aros-adt-src b77045a4) and the never-preempted
+user-mode spinner (924d645a). Same re-check-until-CommandLine-exists
+shape as before; nothing latches "off" from an early caller.
+
+---
+ base/base_switches.cc                  |  9 +++++
+ base/threading/platform_thread_aros.cc | 52 ++++++++++++++++++--------
+ third_party/skia                       |  2 +-
+ 3 files changed, 47 insertions(+), 16 deletions(-)
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index cdc8cb9932..192e7c4b3b 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -221,6 +221,15 @@ const char kArosCpuLimit[] = "aros-cpu-limit";
+ // single-core browser for a hung multi-core one. Keeping it a flag means this
+ // build is never worse than the last one, and multicore can be exercised the
+ // moment the kernel side lands - without another rebuild.
++//
++// Takes an optional value: "--aros-pin-workers=N" round-robins over CPUs 1..N
++// only, leaving the rest of the guest idle. This is a bisection instrument
++// for the placement-dependent stall seen 2026-09-21 (pinned across 4 cores
++// the 2x2 jank page runs at 15-20 fps, across 8 or 16 it drops to 8.6 fps
++// and stalls with every thread idle in Wait): on one 8-core guest, N=3 is
++// the working 4-core layout and N=7 the stalling one, so the CPU count at
++// which the stall appears can be found without touching the guest. The bare
++// switch pins over every CPU but 0, as before.
+ const char kArosPinWorkers[] = "aros-pin-workers";
+ 
+ // Let the thread pool choose WHICH worker to wake by the load on that worker's
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 365ffa87df..88865f3bc4 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -26,6 +26,7 @@
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
+ #include "base/message_loop/message_pump_type.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/threading/platform_thread_internal_posix.h"
+ 
+ namespace base {
+@@ -67,40 +68,58 @@ extern "C" void ArosKPutStr(const char*) asm("KPutStr");
+ 
+ namespace {
+ 
+-// True when --aros-pin-workers was given.
++// How many CPUs --aros-pin-workers may place threads on: -1 when the switch
++// is absent (do not pin), 0 for the bare switch (every CPU but 0), N for
++// "--aros-pin-workers=N" (CPUs 1..N only, so the placement can be bisected on
++// a big guest without changing the guest: N=3 on an 8-core guest reproduces
++// the 4-core layout, N=7 the full one).
+ //
+-// NOT a `static const bool` at any call site. Threads and child processes are
++// NOT a `static const` at any call site. Threads and child processes are
+ // both created before CommandLine::Init() runs in some processes, and a
+ // one-shot initialiser evaluated on such a call latches "off" for the life of
+ // the process. The switch then silently does nothing - the browser just keeps
+ // running everything on one core, exactly as it does without it, with no
+ // symptom to notice. Re-check until the command line exists, then latch.
+-bool MaybePinWorkersEnabled() {
+-  static std::atomic<int> state{0};  // 0 unknown, 1 pin, 2 do not pin
++int PinWorkersCpuCap() {
++  static std::atomic<int> state{-2};  // -2 unknown, -1 off, 0 all, N cap
+   int known = state.load(std::memory_order_relaxed);
+-  if (known != 0)
+-    return known == 1;
++  if (known != -2)
++    return known;
+   if (!base::CommandLine::InitializedForCurrentProcess())
+-    return false;  // too early to tell; ask again next time
+-  known = base::CommandLine::ForCurrentProcess()->HasSwitch(
+-              switches::kArosPinWorkers)
+-              ? 1
+-              : 2;
++    return -1;  // too early to tell; ask again next time
++  const base::CommandLine* cmdline = base::CommandLine::ForCurrentProcess();
++  known = -1;
++  if (cmdline->HasSwitch(switches::kArosPinWorkers)) {
++    known = 0;
++    int parsed = 0;
++    if (base::StringToInt(
++            cmdline->GetSwitchValueASCII(switches::kArosPinWorkers), &parsed) &&
++        parsed > 0) {
++      known = parsed;
++    }
++  }
+   state.store(known, std::memory_order_relaxed);
+-  return known == 1;
++  return known;
++}
++
++bool MaybePinWorkersEnabled() {
++  return PinWorkersCpuCap() >= 0;
+ }
+ 
+ }  // namespace
+ 
+ void MaybePinThreadRoundRobin(pthread_attr_t* attributes) {
+-  if (!MaybePinWorkersEnabled())
++  const int cap = PinWorkersCpuCap();
++  if (cap < 0)
+     return;
+ 
+   APTR KernelBase = OpenResource("kernel.resource");
+   if (!KernelBase)
+     return;
+ 
+-  const int cpus = static_cast<int>(KrnGetCPUCount());
++  int cpus = static_cast<int>(KrnGetCPUCount());
++  if (cap > 0 && cap + 1 < cpus)
++    cpus = cap + 1;
+   if (cpus < 2)
+     return;
+ 
+@@ -168,7 +187,10 @@ void* ArosAllocChildCpuMask() {
+   if (!KernelBase)
+     return nullptr;
+ 
+-  const int cpus = static_cast<int>(KrnGetCPUCount());
++  int cpus = static_cast<int>(KrnGetCPUCount());
++  const int cap = PinWorkersCpuCap();
++  if (cap > 0 && cap + 1 < cpus)
++    cpus = cap + 1;
+   if (cpus < 2)
+     return nullptr;
+ 
+diff --git a/third_party/skia b/third_party/skia
+index 5f230d5eb8..ed5e1db3cd 160000
+--- a/third_party/skia
++++ b/third_party/skia
+@@ -1 +1 @@
+-Subproject commit 5f230d5eb8114d62537cca4c9f7f440fd22da6fe
++Subproject commit ed5e1db3cdfeeedb8fcb314eace56ee1a0025d1a

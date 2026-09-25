@@ -1,0 +1,54 @@
+From 679df0fa50fd9047c5e6aa43985d4121f06ac2ea Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:26 -0500
+Subject: [PATCH 283/638] base: cover aliased AROS shared-memory views
+
+Preserve the regression where full and partial views share an address but retain independent mapping sizes and lifetimes.
+
+AI_PHASE: chromium-aros-shared-memory
+
+AI_STATUS: regression-checkpoint
+
+AI_ASSUMPTION: AROS may legitimately return the same base address for differently sized views
+
+AI_VALIDATION: test source compiled in the established Chromium AROS tree; focused Blink build remained green 15781/15781
+
+AI_LIMITATIONS: the focused Blink target does not execute this unit test
+
+AI_DECISION_CHAIN:
+---
+ base/memory/shared_memory_mapping_unittest.cc | 21 +++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/base/memory/shared_memory_mapping_unittest.cc b/base/memory/shared_memory_mapping_unittest.cc
+index 83cc3d6090..ed156748ee 100644
+--- a/base/memory/shared_memory_mapping_unittest.cc
++++ b/base/memory/shared_memory_mapping_unittest.cc
+@@ -57,6 +57,27 @@ TEST_F(SharedMemoryMappingTest, Scalar) {
+   EXPECT_EQ(0x12345678u, *read_ptr);
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++TEST_F(SharedMemoryMappingTest, SameAddressMappingsWithDifferentSizes) {
++  constexpr size_t kRegionSize = 128 * 1024 - 8;
++  auto result = ReadOnlySharedMemoryRegion::Create(kRegionSize);
++  ASSERT_TRUE(result.IsValid());
++
++  ReadOnlySharedMemoryMapping full_mapping = result.region.Map();
++  ASSERT_TRUE(full_mapping.IsValid());
++  ReadOnlySharedMemoryMapping partial_mapping = result.region.MapAt(0, 16);
++  ASSERT_TRUE(partial_mapping.IsValid());
++
++  EXPECT_EQ(full_mapping.GetMemoryAs<uint8_t>(),
++            partial_mapping.GetMemoryAs<uint8_t>());
++  EXPECT_EQ(kRegionSize, full_mapping.mapped_size());
++  EXPECT_EQ(16u, partial_mapping.mapped_size());
++
++  partial_mapping = ReadOnlySharedMemoryMapping();
++  EXPECT_TRUE(full_mapping.IsValid());
++}
++#endif  // BUILDFLAG(IS_AROS)
++
+ TEST_F(SharedMemoryMappingTest, SpanWithAutoDeducedElementCount) {
+   CreateMapping(sizeof(uint8_t) * 8);
+ 

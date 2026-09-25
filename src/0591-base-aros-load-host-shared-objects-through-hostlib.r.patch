@@ -1,0 +1,277 @@
+From 42f162595da3692f3e11e170a1204e92085bce8d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 21:21:19 -0500
+Subject: [PATCH 591/638] base/aros: load host shared objects through
+ hostlib.resource
+
+An ET_DYN .so is a host (Linux) image that only the host dynamic linker
+can map; an AROS loadable module is ET_REL and goes through LoadSeg.
+Classify by the ELF header and open the former with hostlib.resource,
+translating the boot-volume path to the host path via the bootstrap's
+working directory, which is where emul.handler mounts the root volume.
+
+GetLoadableModuleName now matches what loadable_module() emits
+(lib<name>.so) instead of the exec-library name.
+---
+ base/native_library_aros.cc | 196 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 192 insertions(+), 4 deletions(-)
+
+diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
+index 96b6b8222e..73e0746c32 100644
+--- a/base/native_library_aros.cc
++++ b/base/native_library_aros.cc
+@@ -9,6 +9,7 @@
+ #include "base/strings/string_util.h"
+ #include "base/threading/scoped_blocking_call.h"
+ 
++#include <stdint.h>
+ #include <string.h>
+ 
+ #include <dos/dos.h>
+@@ -20,6 +21,12 @@
+ #include <proto/exec.h>
+ #include <utility/hooks.h>
+ 
++// hostlib.resource only exists on hosted AROS; its base is looked up at run
++// time, so keep the SDK from declaring a global one.
++#define __HOSTLIB_NOLIBBASE__
++#define __HOSTLIB_LIBBASE HostLibBase
++#include <proto/hostlib.h>
++
+ namespace base {
+ 
+ namespace {
+@@ -27,6 +34,9 @@ namespace {
+ enum class ArosNativeLibraryKind {
+   kExecLibrary,
+   kLoadSegModule,
++  // A host (Linux) shared object opened through hostlib.resource.  Only
++  // hosted AROS can load these; they run on the host's libc, not AROS's.
++  kHostSharedObject,
+ };
+ 
+ struct ArosNativeLibrary {
+@@ -70,10 +80,125 @@ AROS_UFH3S(IPTR,
+   AROS_USERFUNC_EXIT
+ }
+ 
+-bool IsArosLoadSegModule(const FilePath& library_path) {
++// An AROS loadable module is a relocatable ELF object that LoadSeg links in
++// place; a host shared object is a linked ET_DYN image that only the host's
++// dynamic linker can map.  Both carry the .so suffix, so tell them apart by
++// the ELF header.
++enum class ElfObjectType { kUnreadable, kRelocatable, kDynamic, kOther };
++
++ElfObjectType ClassifyElfObject(const FilePath& library_path) {
++  BPTR file = Open(library_path.value().c_str(), MODE_OLDFILE);
++  if (!file)
++    return ElfObjectType::kUnreadable;
++
++  uint8_t header[18] = {};
++  const LONG got = Read(file, header, sizeof(header));
++  Close(file);
++  if (got != static_cast<LONG>(sizeof(header)))
++    return ElfObjectType::kUnreadable;
++
++  if (memcmp(header, "\177ELF", 4) != 0)
++    return ElfObjectType::kOther;
++
++  // e_type is a little-endian half at offset 16 on every AROS target.
++  const uint16_t type = header[16] | (header[17] << 8);
++  switch (type) {
++    case 1:
++      return ElfObjectType::kRelocatable;
++    case 3:
++      return ElfObjectType::kDynamic;
++    default:
++      return ElfObjectType::kOther;
++  }
++}
++
++bool IsArosLoadableModulePath(const FilePath& library_path) {
+   return EndsWith(library_path.value(), ".so", CompareCase::SENSITIVE);
+ }
+ 
++// Translate an AROS path on the boot volume into the host path that the host
++// dynamic linker needs.  Hosted AROS mounts its root volume on the
++// bootstrap's working directory (emul.handler's new_volume() takes
++// GetCurrentDir() for the root), so a path on that volume is the host cwd
++// plus the volume-relative part.  Files on other volumes have no host name
++// this code can learn, and they are not where Chromium stages a CDM.
++bool HostPathForArosPath(APTR HostLibBase,
++                         const std::string& aros_path,
++                         std::string* host_path,
++                         std::string* failure) {
++  char absolute[1024] = {};
++  {
++    BPTR lock = Lock(aros_path.c_str(), SHARED_LOCK);
++    if (!lock) {
++      *failure = StrCat({"Lock failed: ", aros_path});
++      return false;
++    }
++    const BOOL named = NameFromLock(lock, absolute, sizeof(absolute));
++    UnLock(lock);
++    if (!named) {
++      *failure = StrCat({"NameFromLock failed: ", aros_path});
++      return false;
++    }
++  }
++
++  char boot_volume[256] = {};
++  {
++    BPTR lock = Lock("SYS:", SHARED_LOCK);
++    if (!lock) {
++      *failure = "Lock SYS: failed";
++      return false;
++    }
++    const BOOL named = NameFromLock(lock, boot_volume, sizeof(boot_volume));
++    UnLock(lock);
++    if (!named) {
++      *failure = "NameFromLock SYS: failed";
++      return false;
++    }
++  }
++
++  const char* colon = strchr(absolute, ':');
++  const size_t volume_length = colon ? static_cast<size_t>(colon - absolute) + 1
++                                     : 0;
++  // Volume names compare case-insensitively, like every DOS name.
++  if (!colon || CompareCaseInsensitiveASCII(
++                    StringPiece(absolute, volume_length), boot_volume) != 0) {
++    *failure = StrCat({"not on the boot volume: ", absolute});
++    return false;
++  }
++
++  char* error = nullptr;
++  void* libc = HostLib_Open("libc.so.6", &error);
++  if (!libc) {
++    *failure = StrCat({"HostLib_Open libc failed: ", error ? error : "?"});
++    if (error)
++      HostLib_FreeErrorStr(error);
++    return false;
++  }
++  auto* host_getcwd = reinterpret_cast<char* (*)(char*, size_t)>(
++      HostLib_GetPointer(libc, "getcwd", &error));
++  if (!host_getcwd) {
++    *failure =
++        StrCat({"HostLib_GetPointer getcwd failed: ", error ? error : "?"});
++    if (error)
++      HostLib_FreeErrorStr(error);
++    HostLib_Close(libc, nullptr);
++    return false;
++  }
++
++  char cwd[1024] = {};
++  HostLib_Lock();
++  char* got = host_getcwd(cwd, sizeof(cwd));
++  HostLib_Unlock();
++  HostLib_Close(libc, nullptr);
++  if (!got) {
++    *failure = "host getcwd failed";
++    return false;
++  }
++
++  *host_path = StrCat({cwd, "/", absolute + volume_length});
++  return true;
++}
++
+ NativeLibrary WrapArosLibrary(ArosNativeLibraryKind kind,
+                               std::string name,
+                               void* handle) {
+@@ -215,7 +340,50 @@ NativeLibrary LoadNativeLibraryWithOptions(const FilePath& library_path,
+   (void)options;
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+ 
+-  if (IsArosLoadSegModule(library_path)) {
++  if (IsArosLoadableModulePath(library_path) &&
++      ClassifyElfObject(library_path) == ElfObjectType::kDynamic) {
++    APTR HostLibBase = OpenResource("hostlib.resource");
++    if (!HostLibBase) {
++      if (error) {
++        error->message = StrCat(
++            {"host shared object needs hosted AROS: ", library_path.value()});
++      }
++      return nullptr;
++    }
++
++    std::string host_path;
++    std::string failure;
++    if (!HostPathForArosPath(HostLibBase, library_path.value(), &host_path,
++                             &failure)) {
++      if (error)
++        error->message = failure;
++      LOG(ERROR) << "[Chromium:AROS:NativeLibrary] host path unresolved path="
++                 << library_path.value() << " reason=" << failure;
++      return nullptr;
++    }
++
++    char* host_error = nullptr;
++    void* handle = HostLib_Open(host_path.c_str(), &host_error);
++    if (!handle) {
++      if (error) {
++        error->message = StrCat({"HostLib_Open failed: ", host_path, ": ",
++                                 host_error ? host_error : "?"});
++      }
++      LOG(ERROR) << "[Chromium:AROS:NativeLibrary] host shared object failed "
++                    "path="
++                 << host_path << " error=" << (host_error ? host_error : "?");
++      if (host_error)
++        HostLib_FreeErrorStr(host_error);
++      return nullptr;
++    }
++
++    LOG(INFO) << "[Chromium:AROS:NativeLibrary] host shared object loaded path="
++              << library_path.value() << " host=" << host_path;
++    return WrapArosLibrary(ArosNativeLibraryKind::kHostSharedObject,
++                           library_path.BaseName().value(), handle);
++  }
++
++  if (IsArosLoadableModulePath(library_path)) {
+     BPTR segment = LoadSeg(library_path.value().c_str());
+     if (!segment) {
+       if (error)
+@@ -254,7 +422,11 @@ void UnloadNativeLibrary(NativeLibrary library) {
+   if (!aros_library)
+     return;
+ 
+-  if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
++  if (aros_library->kind == ArosNativeLibraryKind::kHostSharedObject) {
++    APTR HostLibBase = OpenResource("hostlib.resource");
++    if (HostLibBase)
++      HostLib_Close(aros_library->handle, nullptr);
++  } else if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
+     RunLoadSegModuleShutdown(aros_library);
+     UnLoadSeg(reinterpret_cast<BPTR>(aros_library->handle));
+   } else {
+@@ -270,6 +442,19 @@ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
+   if (!aros_library || !name)
+     return nullptr;
+ 
++  if (aros_library->kind == ArosNativeLibraryKind::kHostSharedObject) {
++    APTR HostLibBase = OpenResource("hostlib.resource");
++    if (!HostLibBase)
++      return nullptr;
++    char* host_error = nullptr;
++    void* result = HostLib_GetPointer(aros_library->handle, name, &host_error);
++    LOG(INFO) << "[Chromium:AROS:NativeLibrary] host symbol lookup module="
++              << aros_library->name << " name=" << name << " result=" << result;
++    if (host_error)
++      HostLib_FreeErrorStr(host_error);
++    return result;
++  }
++
+   if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
+     void* result = LookupLoadSegSymbol(aros_library, name);
+     LOG(INFO) << "[Chromium:AROS:NativeLibrary] symbol lookup module="
+@@ -288,7 +473,10 @@ std::string GetNativeLibraryName(StringPiece name) {
+ }
+ 
+ std::string GetLoadableModuleName(StringPiece name) {
+-  return GetNativeLibraryName(name);
++  // Loadable modules are what the toolchain's loadable_module() rule emits:
++  // lib<name>.so, loaded with LoadSeg (or, for a host build, hostlib).
++  DCHECK(IsStringASCII(name));
++  return StrCat({"lib", name, ".so"});
+ }
+ 
+ }  // namespace base

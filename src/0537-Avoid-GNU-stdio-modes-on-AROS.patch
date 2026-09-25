@@ -1,0 +1,25 @@
+From 9eff250eda61eac870cb19fbb851723c8c873e28 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 07:12:55 -0500
+Subject: [PATCH 537/638] Avoid GNU stdio modes on AROS
+
+---
+ base/files/file_util_posix.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 31c766591e..8744735ede 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -1042,9 +1042,10 @@ FILE* OpenFile(const FilePath& filename, const char* mode) {
+       (strchr(mode, ',') != nullptr && strchr(mode, 'e') > strchr(mode, ',')));
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+   FILE* result = nullptr;
+-#if BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_AROS)
+   // macOS does not provide a mode character to set O_CLOEXEC; see
+   // https://developer.apple.com/legacy/library/documentation/Darwin/Reference/ManPages/man3/fopen.3.html.
++  // AROS stdio does not accept glibc's nonstandard 'e' mode character.
+   const char* the_mode = mode;
+ #else
+   std::string mode_with_e(AppendModeCharacter(mode, 'e'));

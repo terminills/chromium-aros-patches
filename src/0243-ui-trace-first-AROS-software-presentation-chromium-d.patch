@@ -1,0 +1,58 @@
+From 27e899db246c00d49c993b8be3ecc71c97d9fbac Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 17:11:16 -0500
+Subject: [PATCH 243/638] ui: trace first AROS software presentation [chromium]
+ [debug]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: implemented
+
+ROOT_CAUSE: The first native Chromium window opened with a black client area, while the runtime log contained no evidence that Viz created, resized, or presented through the AROS SurfaceOzoneCanvas. The stopped debugger run ended too early to distinguish compositor selection from a pixel-blit defect.
+
+FIX_REASON: Log the AROS canvas factory boundary and the first successful PresentCanvas call, complementing the existing resize and failure diagnostics. The next fresh run can now identify the exact rendering stage without assuming WritePixelArray is at fault.
+
+SCOPE: AROS Ozone surface diagnostics only; rendering behavior and per-frame logging volume are unchanged.
+
+VALIDATION: ninja -C out/aros-windowed chrome completed; relocation-preserving section merge plus strip --strip-debug produced a 1,020,348,856-byte ET_REL runtime with 23 sections, seven RELA sections, and all three canvas markers.
+
+RISK: low; one INFO record is emitted at factory creation and one on the first successful present per surface.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap, ACD-chromium-aros-native-crash-reporting
+---
+ ui/ozone/platform/aros/aros_surface_factory.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+index e7c350f4bc..39044b9964 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.cc
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -60,6 +60,11 @@ class ArosCanvasSurface : public SurfaceOzoneCanvas {
+                                         pixels.rowBytes(), size_, damage)) {
+       LOG(ERROR) << "[Chromium:Ozone:AROS] present failed widget=" << widget_
+                  << " damage=" << damage.ToString();
++    } else if (!presented_once_) {
++      presented_once_ = true;
++      LOG(INFO) << "[Chromium:Ozone:AROS] first software canvas present widget="
++                << widget_ << " size=" << size_.ToString()
++                << " damage=" << damage.ToString();
+     }
+   }
+ 
+@@ -72,6 +77,7 @@ class ArosCanvasSurface : public SurfaceOzoneCanvas {
+   const gfx::AcceleratedWidget widget_;
+   gfx::Size size_;
+   sk_sp<SkSurface> surface_;
++  bool presented_once_ = false;
+ };
+ 
+ }  // namespace
+@@ -88,6 +94,8 @@ ArosSurfaceFactory::GetAllowedGLImplementations() {
+ 
+ std::unique_ptr<SurfaceOzoneCanvas> ArosSurfaceFactory::CreateCanvasForWidget(
+     gfx::AcceleratedWidget widget) {
++  LOG(INFO) << "[Chromium:Ozone:AROS] creating software canvas widget="
++            << widget;
+   return std::make_unique<ArosCanvasSurface>(window_manager_, widget);
+ }
+ 

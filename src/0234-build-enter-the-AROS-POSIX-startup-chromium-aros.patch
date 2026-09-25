@@ -1,0 +1,39 @@
+From 00eef6af42d57b7da186b85deba61d3805c16967 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 06:26:45 -0500
+Subject: [PATCH 234/638] build: enter the AROS POSIX startup [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: The AROS link used startup.o rather than nixmain.o, so posixc path translation and process-local environment initialization were absent before ChromiumMain.
+
+FIX_REASON: Select the AROS POSIX-aware startup at link time with -nix. Chromium has no __NIX__ source branches, so no broad recompilation contract is introduced.
+
+SCOPE: build/toolchain/aros/BUILD.gn
+
+VALIDATION: Regenerated the chrome link command and confirmed x86_64-aros-g++ receives -nix; rebuilt //chrome/browser:browser archive.
+
+RISK: All AROS Chromium executables from this toolchain now enter through nixmain; native AROS paths must be passed through posixc-compatible forms.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ build/toolchain/aros/BUILD.gn | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
+index dc4e6c0a7e..9f516313f7 100644
+--- a/build/toolchain/aros/BUILD.gn
++++ b/build/toolchain/aros/BUILD.gn
+@@ -29,7 +29,9 @@ gcc_toolchain("x64") {
+   extra_cppflags =
+       "-m64 -mcmodel=large -mno-red-zone -mno-ms-bitfields" +
+       " -fno-asynchronous-unwind-tables -fno-omit-frame-pointer" + _sysroot_flag
+-  extra_ldflags = "-m64 -mcmodel=large" + _sysroot_flag
++  # Select AROS's POSIX-aware startup, which initializes posixc path and
++  # process-local environment semantics before ChromiumMain runs.
++  extra_ldflags = "-m64 -mcmodel=large -nix" + _sysroot_flag
+ 
+   toolchain_args = {
+     current_cpu = "x64"

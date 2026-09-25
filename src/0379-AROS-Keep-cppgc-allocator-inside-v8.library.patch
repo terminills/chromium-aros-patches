@@ -1,0 +1,33 @@
+From 8aa41e9e56dd2e5fab2d5d21c7a56c537da3c232 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:38:36 -0500
+Subject: [PATCH 379/638] [AROS] Keep cppgc allocator inside v8.library
+
+Advance V8 to 8f08620 so multiprocess Blink initialization ignores allocator objects owned by separately relocated Chrome images and uses the stable allocator resident in v8.library.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: cppgc-library-owned-allocator-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-11 identity guard reported distinct renderer allocator addresses 0x7f19b29e68c8 and 0x7f19d61e68c8
+
+AI_VALIDATION: V8 source diff check passes; monolith/library rebuild and hosted replay pending
+
+AI_LIMITATIONS: renderer paint and independent PosixC descriptor sharing remain unproven
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-11-cppgc-shared-process.log; runtime-11-cppgc-shared-process.png
+
+AI_DECISION_CHAIN:; Chromium 956044fb74; V8 8f08620
+
+Job:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index bda916da1a..8f086208e4 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit bda916da1a0bc98ba7c812e6e0398caebc585285
++Subproject commit 8f086208e47a16a0da0cface834f85533fdf3dfa

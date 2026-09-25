@@ -1,0 +1,44 @@
+From 9fe27b5887f09396304a849fb1f616929c2640af Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 21:28:35 -0500
+Subject: [PATCH 490/638] AROS: finalize centralized OS memory dumps
+
+Treat AROS as a centralized OS-memory collector during both VM-region and global-dump finalization, matching the dispatch path and preserving real logical-process IDs.
+
+
+
+---
+ .../memory_instrumentation/queued_request_dispatcher.cc     | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+index 44419f28ec..88cff30c10 100644
+--- a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
++++ b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+@@ -284,7 +284,7 @@ void QueuedRequestDispatcher::SetUpAndDispatchVmRegionRequest(
+     const OsCallback& os_callback) {
+ // On Linux, OS stats can only be dumped from a privileged process to
+ // get around to sandboxing/selinux restrictions (see crbug.com/461788).
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   mojom::ClientProcess* browser_client = nullptr;
+   base::ProcessId browser_client_pid = 0;
+   for (const auto& client_info : clients) {
+@@ -334,7 +334,7 @@ QueuedRequestDispatcher::FinalizeVmRegionRequest(
+     // each client process provides 1 OS dump, % the case where the client is
+     // disconnected mid dump.
+     OSMemDumpMap& extra_os_dumps = response.second.os_dumps;
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+     for (auto& kv : extra_os_dumps) {
+       auto pid = kv.first == base::kNullProcessId ? original_pid : kv.first;
+       DCHECK(results.find(pid) == results.end());
+@@ -395,7 +395,7 @@ void QueuedRequestDispatcher::Finalize(QueuedRequest* request,
+     // crash). In the latter case (OS_LINUX) we expect the full map to come
+     // from the browser process response.
+     OSMemDumpMap& extra_os_dumps = response.second.os_dumps;
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+     for (const auto& kv : extra_os_dumps) {
+       auto pid = kv.first == base::kNullProcessId ? original_pid : kv.first;
+       DCHECK_EQ(pid_to_os_dump[pid], nullptr);

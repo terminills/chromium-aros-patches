@@ -1,0 +1,28 @@
+From 4276b1fd5386c552f6e272c6df219f6990d757c6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 17:25:21 -0500
+Subject: [PATCH 080/638] [AROS] Keep fork zygote behind its real capability
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: AROS no longer compiles Chromium's fork-based zygote path merely because it uses POSIX adapters.
+ROOT_CAUSE: use_zygote classified every non-Android, non-Apple POSIX target as fork-capable, while AROS has neither Chromium's Linux zygote delegate API nor concurrent fork semantics.
+FIX_REASON: Keep the direct process entry used by single-process headless bring-up and reserve zygote enablement for the future OPAL domain-clone fork contract.
+SCOPE: Content zygote feature selection only.
+VALIDATION: Generated USE_ZYGOTE is 0 and content_main_runner_impl.o compiles under the AROS target.
+RISK: Multiprocess AROS launches cannot use Chromium's zygote optimization until OPAL fork emulation is implemented and integrated.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-opal-fork-emulation
+---
+ content/public/common/zygote/features.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/content/public/common/zygote/features.gni b/content/public/common/zygote/features.gni
+index 5f8775d578..aaec688492 100644
+--- a/content/public/common/zygote/features.gni
++++ b/content/public/common/zygote/features.gni
+@@ -2,4 +2,4 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-use_zygote = is_posix && !is_android && !is_apple
++use_zygote = is_posix && !is_android && !is_apple && !is_aros

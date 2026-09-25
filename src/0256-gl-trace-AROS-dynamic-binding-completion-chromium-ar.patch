@@ -1,0 +1,39 @@
+From 10d103d40b0b4fc300e4fb11426de703defbd05c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 14:08:51 -0500
+Subject: [PATCH 256/638] gl: trace AROS dynamic binding completion [chromium]
+ [aros]
+
+ROOT_CAUSE: The hosted Chrome_InProcGpuThread fault appeared immediately after the final verbose GL procedure lookup, which made it unclear whether the AROS EGL bridge returned or Chromium's generated DriverGL table initialization faulted.\n\nFIX_REASON: Emit bounded AROS-only entry, return, and completion markers around DriverGL::InitializeDynamicBindings(). Chromium's existing AROS logging path uses debug.library and KPutStr, keeping the markers visible to both the kernel console and Sashimi.\n\nVALIDATION: ninja -C out/aros-chrome chrome; hosted 16 GiB Venus single-process probe logs three dynamic bindings begin/returned/complete sequences before the later host SIGSEGV.\n\nAI_AGENT: codex\nAI_MODEL: GPT-5\nAI_PHASE: chromium-phase-5-gpu-bridge\nAI_CHAIN:\nAI_EVIDENCE: /home/terminills/Documents/GitHub/chromium-aros/test-artifacts/hosted-20260718-gl-binding-boundary/README.md
+---
+ ui/gl/gl_context.cc | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/ui/gl/gl_context.cc b/ui/gl/gl_context.cc
+index 98593f601b..d5bd08cc71 100644
+--- a/ui/gl/gl_context.cc
++++ b/ui/gl/gl_context.cc
+@@ -440,8 +440,23 @@ void GLContext::InitializeDynamicBindings() {
+       real_gl_api_->set_version(GenerateGLVersionInfo());
+     }
+ 
++    // Keep this boundary visible through debug.resource on AROS. The hosted
++    // Chromium GPU probe faults after a GL procedure lookup; these markers
++    // distinguish a bridge return from generated binding-table completion.
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings begin context="
++                 << this << " driver=" << driver_gl_.get();
++#endif
+     driver_gl_->InitializeDynamicBindings(GetVersionInfo(), GetExtensions());
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings returned context="
++                 << this << " driver=" << driver_gl_.get();
++#endif
+     dynamic_bindings_initialized_ = true;
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings complete context="
++                 << this;
++#endif
+   }
+ }
+ 

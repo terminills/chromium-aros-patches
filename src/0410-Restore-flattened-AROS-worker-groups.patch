@@ -1,0 +1,31 @@
+From 72e8960847a5340a99e9206cb09ce57bd88ccf46 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 12:23:02 -0500
+Subject: [PATCH 410/638] [AROS] Restore flattened AROS worker groups
+
+Remove the Build66 override that split background work into a separate Chromium worker group. Runtime51 rendered multiprocess with Chromium's lock-safety flattening; Runtime53 first lost the child surface after enabling the extra group despite equal Exec priorities.
+
+
+---
+ base/task/thread_pool/environment_config.cc | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/base/task/thread_pool/environment_config.cc b/base/task/thread_pool/environment_config.cc
+index 91b0c0aa91..cf497f4fcb 100644
+--- a/base/task/thread_pool/environment_config.cc
++++ b/base/task/thread_pool/environment_config.cc
+@@ -24,14 +24,6 @@ bool CanUseBackgroundThreadTypeForWorkerThreadImpl() {
+     return true;
+   }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  // AROS maps background, utility, resource-efficient, and default worker
+-  // roles to the same Exec priority. Chromium's queues still separate and
+-  // classify their work, but the OS scheduler cannot starve an ordinary pool
+-  // solely because it was assigned a lower task priority.
+-  return true;
+-#endif
+-
+   // When Lock doesn't handle multiple thread priorities, run all
+   // WorkerThread with a normal priority to avoid priority inversion when a
+   // thread running with a normal priority tries to acquire a lock held by a

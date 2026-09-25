@@ -1,0 +1,38 @@
+From e7d21236ffb271ad29ecf3313a6642ce13b95cf5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 23:15:39 -0500
+Subject: [PATCH 3/3] pdfium: admit AROS to the portable font backend
+
+Pair the source-level platform guard with the GN selection that already reuses PDFium's folder-font implementation on AROS.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: compile-failure-corrected-under-validation
+
+AI_VALIDATION: prior rebuild reached fx_linux_impl.cpp and failed only its wrong-platform guard
+
+AI_ASSUMPTION: BUILDFLAG(IS_AROS) is the exact platform discriminator supplied by Chromium build_config
+
+AI_LIMITATIONS: archive rebuild, native link, and PDF rendering remain pending
+
+AI_EVIDENCE: chromium-aros/src/out/aros-cef-bootstrap/test-artifacts/-cef-exact-44-fix-20260725/04-archive-rebuild-after-protobuf-localize.log
+
+AI_DECISION_CHAIN:
+---
+ core/fxge/linux/fx_linux_impl.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/core/fxge/linux/fx_linux_impl.cpp b/core/fxge/linux/fx_linux_impl.cpp
+index 031da7e..11e4c34 100644
+--- a/core/fxge/linux/fx_linux_impl.cpp
++++ b/core/fxge/linux/fx_linux_impl.cpp
+@@ -17,7 +17,8 @@
+ #include "core/fxge/fx_font.h"
+ #include "core/fxge/systemfontinfo_iface.h"
+ 
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)
++#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && \
++    !BUILDFLAG(IS_AROS) && !defined(OS_ASMJS)
+ #error "Included on the wrong platform"
+ #endif
+ 

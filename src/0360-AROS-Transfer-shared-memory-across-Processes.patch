@@ -1,0 +1,338 @@
+From eaba885d1319ceb5cec59b6c0781f836b526270d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:06:05 -0500
+Subject: [PATCH 360/638] [AROS] Transfer shared memory across Processes
+
+AI_PHASE: chromium-process-model
+AI_STATUS: cross-process-shared-memory-runtime-pass
+ROOT_CAUSE: AROS shared-memory handles were tracked in per-image C++ state and SharedMemorySwitch rejected launch transfer, so a real Chromium child Process could not receive browser-owned regions.
+FIX_REASON: Place region metadata and backing storage in MEMF_PUBLIC, use cross-Process atomic ownership, serialize the trusted metadata pointer at launch, and keep mapping bookkeeping local to each image.
+SCOPE: base/memory/platform_shared_memory_region_aros.cc; base/memory/shared_memory_switch.cc; base/memory/shared_memory_switch_unittest.cc
+VALIDATION: Hosted 16 GiB run returned host=0 and guest=0; four parameterized cases spawned child PIDs 29-32 and each child mapped and compared parent marker bytes. Evidence-aros-shmem-process-20260728.
+RISK: Failed launch before deserialization can leak the transferred reference; pointer input remains trusted parent launch data until a token registry and policy boundary are added.
+AI_DECISION_CHAIN: direct CreateNewProc proven -> launch switch stub identified -> process-local registry removed -> MEMF_PUBLIC atomic metadata -> four-child hosted marker-byte PASS.
+Evidence:-aros-shmem-process-20260728
+Job:
+---
+ .../platform_shared_memory_region_aros.cc     | 116 ++++++++++--------
+ base/memory/shared_memory_switch.cc           |  20 ++-
+ base/memory/shared_memory_switch_unittest.cc  |  21 +++-
+ 3 files changed, 100 insertions(+), 57 deletions(-)
+
+diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
+index 01e00d12fe..23f0a9d4b0 100644
+--- a/base/memory/platform_shared_memory_region_aros.cc
++++ b/base/memory/platform_shared_memory_region_aros.cc
+@@ -28,19 +28,27 @@ namespace base::subtle {
+ namespace {
+ 
+ struct SharedRegionData {
++  static constexpr uint64_t kMagic = 0x41524f5353484d31ULL;
++
++  uint64_t magic = kMagic;
+   void* memory = nullptr;
+   void* allocation_base = nullptr;
+   size_t size = 0;
+   size_t allocation_size = 0;
+   size_t allocation_bytes = 0;
+-  size_t references = 1;
++  std::atomic_size_t references{1};
+   bool kernel_pages = false;
+-  SharedRegionData* next = nullptr;
++};
++
++struct MappingData {
++  span<uint8_t> mapping;
++  SharedRegionData* region = nullptr;
++  MappingData* next = nullptr;
+ };
+ 
+ std::atomic_flag g_registry_lock = ATOMIC_FLAG_INIT;
+ std::atomic_flag g_reported_exec_fallback = ATOMIC_FLAG_INIT;
+-SharedRegionData* g_regions = nullptr;
++MappingData* g_mappings = nullptr;
+ 
+ class RegistryGuard {
+  public:
+@@ -55,7 +63,15 @@ SharedRegionData* DataFor(ArosSharedMemoryHandle handle) {
+   return static_cast<SharedRegionData*>(handle.region);
+ }
+ 
++bool IsValidRegion(const SharedRegionData* region) {
++  return region && region->magic == SharedRegionData::kMagic &&
++         region->memory && region->size &&
++         region->allocation_size >= region->size;
++}
++
+ void DestroyRegion(SharedRegionData* region) {
++  DCHECK(IsValidRegion(region));
++  region->magic = 0;
+   if (region->memory) {
+     if (region->kernel_pages) {
+       APTR KernelBase = OpenResource("kernel.resource");
+@@ -65,21 +81,17 @@ void DestroyRegion(SharedRegionData* region) {
+       FreeMem(region->allocation_base, region->allocation_bytes);
+     }
+   }
+-  delete region;
++  region->~SharedRegionData();
++  FreeMem(region, sizeof(SharedRegionData));
+ }
+ 
+-SharedRegionData* DropReferenceLocked(SharedRegionData* region) {
++void DropReference(SharedRegionData* region) {
+   DCHECK(region);
+-  DCHECK_GT(region->references, 0u);
+-  if (--region->references)
+-    return nullptr;
+-
+-  SharedRegionData** link = &g_regions;
+-  while (*link && *link != region)
+-    link = &(*link)->next;
+-  if (*link == region)
+-    *link = region->next;
+-  return region;
++  const size_t previous =
++      region->references.fetch_sub(1, std::memory_order_acq_rel);
++  DCHECK_GT(previous, 0u);
++  if (previous == 1)
++    DestroyRegion(region);
+ }
+ 
+ }  // namespace
+@@ -122,14 +134,16 @@ ArosSharedMemoryHandle CreateArosSharedMemoryHandle(size_t size) {
+   if (!memory)
+     return {};
+ 
+-  auto* region = new (std::nothrow) SharedRegionData;
+-  if (!region) {
++  void* region_storage =
++      AllocMem(sizeof(SharedRegionData), MEMF_PUBLIC | MEMF_CLEAR);
++  if (!region_storage) {
+     if (kernel_pages)
+       KrnFreePages(memory, allocation_size);
+     else
+       FreeMem(allocation_base, allocation_bytes);
+     return {};
+   }
++  auto* region = new (region_storage) SharedRegionData;
+   region->memory = memory;
+   region->allocation_base = allocation_base;
+   region->size = size;
+@@ -137,36 +151,29 @@ ArosSharedMemoryHandle CreateArosSharedMemoryHandle(size_t size) {
+   region->allocation_bytes = allocation_bytes;
+   region->kernel_pages = kernel_pages;
+ 
+-  {
+-    RegistryGuard guard;
+-    region->next = g_regions;
+-    g_regions = region;
+-  }
+   return {region, false};
+ }
+ 
+ void RetainArosSharedMemoryHandle(ArosSharedMemoryHandle handle) {
+   if (!handle.region)
+     return;
+-  RegistryGuard guard;
+-  ++DataFor(handle)->references;
++  SharedRegionData* region = DataFor(handle);
++  CHECK(IsValidRegion(region));
++  region->references.fetch_add(1, std::memory_order_relaxed);
+ }
+ 
+ void ReleaseArosSharedMemoryHandle(ArosSharedMemoryHandle handle) {
+   if (!handle.region)
+     return;
+ 
+-  SharedRegionData* destroy = nullptr;
+-  {
+-    RegistryGuard guard;
+-    destroy = DropReferenceLocked(DataFor(handle));
+-  }
+-  if (destroy)
+-    DestroyRegion(destroy);
++  SharedRegionData* region = DataFor(handle);
++  CHECK(IsValidRegion(region));
++  DropReference(region);
+ }
+ 
+ size_t GetArosSharedMemorySize(ArosSharedMemoryHandle handle) {
+-  return handle.region ? DataFor(handle)->size : 0;
++  SharedRegionData* region = DataFor(handle);
++  return IsValidRegion(region) ? region->size : 0;
+ }
+ 
+ std::optional<span<uint8_t>> MapArosSharedMemory(
+@@ -175,40 +182,51 @@ std::optional<span<uint8_t>> MapArosSharedMemory(
+     uint64_t offset,
+     size_t size) {
+   SharedRegionData* region = DataFor(handle);
+-  if (!region || (write_allowed && handle.read_only) || offset > region->size ||
++  if (!IsValidRegion(region) || size == 0 ||
++      (write_allowed && handle.read_only) || offset > region->size ||
+       size > region->size - static_cast<size_t>(offset)) {
+     return std::nullopt;
+   }
+ 
++  auto* mapping_data = new (std::nothrow) MappingData;
++  if (!mapping_data)
++    return std::nullopt;
++
++  span<uint8_t> mapping =
++      make_span(static_cast<uint8_t*>(region->memory) + offset, size);
++  region->references.fetch_add(1, std::memory_order_relaxed);
+   {
+     RegistryGuard guard;
+-    ++region->references;
++    mapping_data->mapping = mapping;
++    mapping_data->region = region;
++    mapping_data->next = g_mappings;
++    g_mappings = mapping_data;
+   }
+-  return make_span(static_cast<uint8_t*>(region->memory) + offset, size);
++  return mapping;
+ }
+ 
+ void UnmapArosSharedMemory(span<uint8_t> mapping) {
+   if (mapping.empty())
+     return;
+ 
+-  const uintptr_t mapping_start =
+-      reinterpret_cast<uintptr_t>(mapping.data());
+-  const uintptr_t mapping_end = mapping_start + mapping.size();
+-  SharedRegionData* destroy = nullptr;
++  MappingData* found = nullptr;
+   {
+     RegistryGuard guard;
+-    for (SharedRegionData* region = g_regions; region; region = region->next) {
+-      const uintptr_t region_start =
+-          reinterpret_cast<uintptr_t>(region->memory);
+-      const uintptr_t region_end = region_start + region->allocation_size;
+-      if (mapping_start >= region_start && mapping_end <= region_end) {
+-        destroy = DropReferenceLocked(region);
+-        break;
+-      }
++    MappingData** link = &g_mappings;
++    while (*link && ((*link)->mapping.data() != mapping.data() ||
++                     (*link)->mapping.size() != mapping.size())) {
++      link = &(*link)->next;
++    }
++    if (*link) {
++      found = *link;
++      *link = found->next;
+     }
+   }
+-  if (destroy)
+-    DestroyRegion(destroy);
++  DCHECK(found);
++  if (!found)
++    return;
++  DropReference(found->region);
++  delete found;
+ }
+ 
+ PlatformSharedMemoryRegion PlatformSharedMemoryRegion::Take(
+diff --git a/base/memory/shared_memory_switch.cc b/base/memory/shared_memory_switch.cc
+index a314703b75..3adb65ada9 100644
+--- a/base/memory/shared_memory_switch.cc
++++ b/base/memory/shared_memory_switch.cc
+@@ -151,11 +151,15 @@ std::string Serialize(PlatformSharedMemoryRegion shmem_region,
+       &launch_options->handles_to_transfer, shmem_handle.release());
+   StrAppend(&serialized, {NumberToString(handle_id), ",i,"});
+ #elif BUILDFLAG(IS_AROS)
+-  // Cross-domain handle transfer depends on the OPAL spawn/fork channel.
+-  // The current native shared-memory handle is process-local.
++  // AROS Processes share one address space. The handle metadata and backing
++  // allocation both live in MEMF_PUBLIC memory, so transfer one owning
++  // reference by value in the child command line. Future protection domains
++  // can enforce this same seam without changing the launch ABI.
+   descriptor_to_share.reset();
+-  LOG(ERROR) << "AROS shared-memory launch transfer is not implemented";
+-  return std::string();
++  const auto handle = shmem_handle.release();
++  StrAppend(&serialized,
++            {NumberToString(reinterpret_cast<uintptr_t>(handle.region)),
++             ",a,"});
+ #elif BUILDFLAG(IS_POSIX)
+   // Serialize the key by which the child can lookup the shared memory handle.
+   // Ownership of the handle is transferred, via |descriptor_to_share|, to the
+@@ -259,8 +263,12 @@ expected<PlatformSharedMemoryRegion, SharedMemoryError> Deserialize(
+     return unexpected(SharedMemoryError::kInvalidHandle);
+   }
+ #elif BUILDFLAG(IS_AROS)
+-  ScopedPlatformSharedMemoryHandle scoped_handle;
+-  return unexpected(SharedMemoryError::kInvalidHandle);
++  if (tokens[1] != "a" || shmem_handle == 0) {
++    return unexpected(SharedMemoryError::kUnexpectedHandleType);
++  }
++  ScopedPlatformSharedMemoryHandle scoped_handle(subtle::ArosSharedMemoryHandle{
++      reinterpret_cast<void*>(checked_cast<uintptr_t>(shmem_handle)),
++      mode == PlatformSharedMemoryRegion::Mode::kReadOnly});
+ #elif BUILDFLAG(IS_POSIX)
+   DCHECK_EQ(tokens[1], "i");
+   const int fd = GlobalDescriptors::GetInstance()->MaybeGet(
+diff --git a/base/memory/shared_memory_switch_unittest.cc b/base/memory/shared_memory_switch_unittest.cc
+index 97789e1575..9a71656450 100644
+--- a/base/memory/shared_memory_switch_unittest.cc
++++ b/base/memory/shared_memory_switch_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "base/memory/shared_memory_switch.h"
+ 
++#include <cstring>
++
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
+ #include "base/metrics/persistent_histogram_allocator.h"
+@@ -55,7 +57,8 @@ MULTIPROCESS_TEST_MAIN(InitFromSwitchValue) {
+   //  - This doesn't apply on Apple platforms (which use Rendezvous Keys)
+   //  - On Android the global descriptor table is managed by the launcher
+   //    service, so we don't have to manually update the mapping here.
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && \
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   GlobalDescriptors::GetInstance()->Set(
+       kArbitraryDescriptorKey,
+       kArbitraryDescriptorKey + GlobalDescriptors::kBaseDescriptor);
+@@ -71,10 +74,18 @@ MULTIPROCESS_TEST_MAIN(InitFromSwitchValue) {
+     auto read_only_region = ReadOnlySharedMemoryRegionFrom(shared_memory_data);
+     CHECK(read_only_region.has_value());
+     CHECK_EQ(guid_string, read_only_region.value().GetGUID().ToString());
++    auto mapping = read_only_region.value().Map();
++    CHECK(mapping.IsValid());
++    CHECK_EQ(0, std::memcmp(mapping.memory(), kSharedMemoryData,
++                            sizeof(kSharedMemoryData)));
+   } else {
+     auto unsafe_region = UnsafeSharedMemoryRegionFrom(shared_memory_data);
+     CHECK(unsafe_region.has_value());
+     CHECK_EQ(guid_string, unsafe_region.value().GetGUID().ToString());
++    auto mapping = unsafe_region.value().Map();
++    CHECK(mapping.IsValid());
++    CHECK_EQ(0, std::memcmp(mapping.memory(), kSharedMemoryData,
++                            sizeof(kSharedMemoryData)));
+   }
+ 
+   return 0;
+@@ -100,6 +111,12 @@ TEST_P(SharedMemorySwitchTest, PassViaSwitch) {
+   auto read_only_region = ReadOnlySharedMemoryRegion::Create(kArbitrarySize);
+   ASSERT_TRUE(unsafe_region.IsValid());
+   ASSERT_TRUE(read_only_region.IsValid());
++  auto unsafe_mapping = unsafe_region.Map();
++  ASSERT_TRUE(unsafe_mapping.IsValid());
++  std::memcpy(unsafe_mapping.memory(), kSharedMemoryData,
++              sizeof(kSharedMemoryData));
++  std::memcpy(read_only_region.mapping.memory(), kSharedMemoryData,
++              sizeof(kSharedMemoryData));
+ 
+   // Initialize the command line and launch options.
+   CommandLine command_line = GetMultiProcessTestChildBaseCommandLine();
+@@ -142,7 +159,7 @@ TEST_P(SharedMemorySwitchTest, PassViaSwitch) {
+   ASSERT_TRUE(command_line.HasSwitch(kSharedMemoryData));
+   SCOPED_TRACE(command_line.GetSwitchValueASCII(kSharedMemoryData));
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+   // On posix, AddToLaunchParameters() ignores the launch options and instead
+   // returns the descriptor to be shared. This is because the browser child
+   // launcher helper manages a separate list of files to share via the zygote,

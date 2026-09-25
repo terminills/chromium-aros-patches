@@ -1,0 +1,67 @@
+From 180a9fed3535796bce2de3d463d5735643abb860 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:10:24 -0500
+Subject: [PATCH 216/638] downloads: expose desktop command helpers on AROS
+ [chromium] [aros]
+
+Statement:
+Chromium's generic desktop download models invoke DownloadCommands::GetBrowser on AROS, but the portable helper declaration and implementation were hidden behind an incomplete desktop platform list.
+
+Decision:
+Include AROS in the existing desktop DownloadCommands implementation boundary. Keep the separate OS policy for PDF system-viewer integration unchanged.
+
+Evidence:
+download_commands.o, download_ui_model.o, and download_item_model.o compile in out/aros-chrome.
+
+Chain:
+Follows adc5962c12's desktop interface correction and advances.
+---
+ chrome/browser/download/download_commands.cc | 7 ++++---
+ chrome/browser/download/download_commands.h  | 2 +-
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/download/download_commands.cc b/chrome/browser/download/download_commands.cc
+index af27b3d63e..d235ebb7db 100644
+--- a/chrome/browser/download/download_commands.cc
++++ b/chrome/browser/download/download_commands.cc
+@@ -26,7 +26,7 @@
+ #include "ui/base/clipboard/scoped_clipboard_writer.h"
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
+@@ -167,7 +167,7 @@ void DownloadCommands::ExecuteCommand(Command command) {
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ Browser* DownloadCommands::GetBrowser() const {
+   if (!model_)
+@@ -202,7 +202,8 @@ bool DownloadCommands::CanOpenPdfInSystemViewer() const {
+ }
+ 
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ void DownloadCommands::CopyFileAsImageToClipboard() {
+   if (!model_)
+diff --git a/chrome/browser/download/download_commands.h b/chrome/browser/download/download_commands.h
+index 31c913db91..863b2e7560 100644
+--- a/chrome/browser/download/download_commands.h
++++ b/chrome/browser/download/download_commands.h
+@@ -63,7 +63,7 @@ class DownloadCommands {
+   void ExecuteCommand(Command command);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   bool IsDownloadPdf() const;
+   bool CanOpenPdfInSystemViewer() const;
+   Browser* GetBrowser() const;

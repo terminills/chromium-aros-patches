@@ -1,0 +1,139 @@
+From fd3fc303a7c03a272c8ab951e275d066fed914ea Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 6 Sep 2026 21:55:32 -0500
+Subject: [PATCH 555/638] AROS: grow the AROSTCP descriptor table to the pump's
+ FD_SETSIZE
+
+AROSTCP built with fd.library takes socket numbers from the process-wide
+descriptor table and fails socket() with EMFILE once that number reaches
+the base's table size (default 64). Chromium holds more than 64 files
+before its first socket, so every socket() failed silently. Request
+SBTC_DTABLESIZE=1024 per task base, tied to the message pump's
+FD_SETSIZE by a static_assert, and log socket() failures from the
+interface probes.
+---
+ base/aros/socket_library.cc            | 34 ++++++++++++++++++++++++++
+ base/aros/socket_library.h             |  6 +++++
+ base/message_loop/message_pump_aros.cc |  5 ++++
+ 3 files changed, 45 insertions(+)
+
+diff --git a/base/aros/socket_library.cc b/base/aros/socket_library.cc
+index 6159593b23..ef9fc80914 100644
+--- a/base/aros/socket_library.cc
++++ b/base/aros/socket_library.cc
+@@ -7,6 +7,7 @@
+ #include <errno.h>
+ 
+ #include <algorithm>
++#include <cstdio>
+ #include <cstring>
+ #include <vector>
+ 
+@@ -17,6 +18,7 @@
+ #include <exec/libraries.h>
+ #include <exec/lists.h>
+ #include <exec/tasks.h>
++#include <bsdsocket/socketbasetags.h>
+ #include <libraries/bsdsocket.h>
+ #include <net/if.h>
+ #include <netdb.h>
+@@ -124,6 +126,7 @@ class SocketLibraryManager {
+     }
+ 
+     __SetErrnoPtr_WB(library, &errno, sizeof(errno));
++    GrowDescriptorTable(library);
+     entries_.push_back({task, library});
+     return library;
+   }
+@@ -147,6 +150,26 @@ class SocketLibraryManager {
+   }
+ 
+  private:
++  // AROSTCP hands out socket descriptor numbers from the process-wide
++  // fd.library table (shared with every file the process has open) and fails
++  // socket() with EMFILE whenever that number is at or beyond the base's
++  // descriptor table, which defaults to 64. Chromium holds more than 64 file
++  // descriptors before it opens its first socket, so every socket() would fail
++  // silently. Grow the table to the size the message pump's WaitSelect masks
++  // can address.
++  static void GrowDescriptorTable(Library* library) {
++    IPTR size = 0;
++    TagItem tags[] = {
++        {SBTM_SETVAL(SBTC_DTABLESIZE), kSocketDescriptorTableSize},
++        {SBTM_GETREF(SBTC_DTABLESIZE), reinterpret_cast<IPTR>(&size)},
++        {TAG_END, 0},
++    };
++    if (__SocketBaseTagList_WB(library, tags) != 0 ||
++        size < kSocketDescriptorTableSize) {
++      ArosKPutStr("[Chromium:Net] SBTC_DTABLESIZE grow failed\n");
++    }
++  }
++
+   Lock lock_;
+   std::vector<SocketLibraryEntry> entries_;
+ };
+@@ -160,6 +183,15 @@ Library* CurrentSocketLibrary() {
+   return Manager().GetForCurrentTask();
+ }
+ 
++// The interface probes run on a ThreadPool task with no logging of their own;
++// a failing socket() there used to vanish without a trace.
++void LogSocketFailure(const char* where) {
++  char line[96];
++  snprintf(line, sizeof(line), "[Chromium:Net] %s: socket() failed errno=%d\n",
++           where, errno);
++  ArosKPutStr(line);
++}
++
+ }  // namespace
+ 
+ int Socket(int family, int type, int protocol) {
+@@ -418,6 +450,7 @@ bool HaveOnlyLoopbackNetworkInterfaces(bool* only_loopback) {
+ 
+   const int descriptor = Socket(AF_INET, SOCK_DGRAM, 0);
+   if (descriptor < 0) {
++    LogSocketFailure("HaveOnlyLoopbackNetworkInterfaces");
+     return false;
+   }
+ 
+@@ -479,6 +512,7 @@ bool GetNetworkInterfaces(std::vector<NetworkInterfaceInfo>* result) {
+ 
+   const int descriptor = Socket(AF_INET, SOCK_DGRAM, 0);
+   if (descriptor < 0) {
++    LogSocketFailure("GetNetworkInterfaces");
+     return false;
+   }
+ 
+diff --git a/base/aros/socket_library.h b/base/aros/socket_library.h
+index 83a8a7eba5..0cfe466a43 100644
+--- a/base/aros/socket_library.h
++++ b/base/aros/socket_library.h
+@@ -20,6 +20,12 @@ struct addrinfo;
+ 
+ namespace base::aros {
+ 
++// Socket descriptor table size requested from every bsdsocket.library base
++// Chromium opens. Descriptor numbers are shared with the process's files, so
++// this bounds the highest descriptor a socket may be assigned; it must match
++// the FD_SETSIZE the message pump builds its WaitSelect masks with.
++inline constexpr int kSocketDescriptorTableSize = 1024;
++
+ struct BASE_EXPORT NetworkInterfaceInfo {
+   std::string name;
+   uint32_t index = 0;
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 70320a178f..fa5784efe1 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -28,6 +28,11 @@ static_assert(sizeof(fd_set) * NBBY >= FD_SETSIZE,
+ #include <vector>
+ 
+ #include "base/aros/socket_library.h"
++#if defined(__AROS__)
++static_assert(FD_SETSIZE == base::aros::kSocketDescriptorTableSize,
++              "WaitSelect mask capacity must match the AROSTCP descriptor "
++              "table size requested in socket_library.cc");
++#endif
+ #include "base/auto_reset.h"
+ #include "base/check.h"
+ #include "base/logging.h"

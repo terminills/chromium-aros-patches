@@ -1,0 +1,61 @@
+From 0ed4df6d6bffcf3460cb85c11a707635cbe5ca28 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 00:27:07 -0500
+Subject: [PATCH 131/638] [AROS] Defer exposed DevTools page replies
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: runtime-fix
+ROOT_CAUSE: Run 0133 shows bridge Runtime.evaluate 24 delivering the screenshot response, whose promise continuation synchronously sends Target.closeTarget before evaluation 24 returns. Browser responses enqueue page evaluations 25 and 26 reentrantly; evaluation 24 later completes, but 25/26 are never drained, leaving the outer command promise pending after a successful PNG capture.
+FIX_REASON: On single-process AROS, post browser-to-page Runtime.evaluate delivery to the current sequenced task runner through a weak connector reference. This lets the active renderer evaluation unwind before the next bridge command enters the page agent while preserving response order and connector lifetime safety.
+SCOPE: content/browser/devtools/protocol/target_handler.cc
+VALIDATION: AROS content/browser target_handler.o cross-compiled; run 0133 artifact 35 proves evaluations 25/26 are issued reentrantly before response 24 completes.
+RISK: AROS bridge replies move one UI task turn later. The weak reference intentionally drops a queued reply if the target closes before delivery; other platforms retain the original immediate dispatch.
+AI_DECISION_CHAIN: first PNG capture -> close response reenters active evaluation -> queued replies never drain -> defer page delivery one task turn
+---
+ .../browser/devtools/protocol/target_handler.cc   | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index 5de3c1225e..05766d94b5 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -16,8 +16,10 @@
+ #include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/ranges/algorithm.h"
+ #include "base/strings/stringprintf.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/unguessable_token.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+@@ -312,8 +314,20 @@ class BrowserToPageConnector {
+ 
+     base::Value::Dict params;
+     params.Set("expression", std::move(eval_code));
++#if BUILDFLAG(IS_AROS)
++    // In single-process AROS, a binding callback can synchronously generate a
++    // browser response while the page's previous Runtime.evaluate is still on
++    // the stack. Defer delivery so that evaluation can return before the next
++    // command enters the renderer agent.
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserToPageConnector::SendProtocolMessageToPage,
++                       weak_ptr_factory_.GetWeakPtr(), "Runtime.evaluate",
++                       base::Value(std::move(params))));
++#else
+     SendProtocolMessageToPage("Runtime.evaluate",
+                               base::Value(std::move(params)));
++#endif
+   }
+ 
+   void AgentHostClosed(DevToolsAgentHost* agent_host) {
+@@ -332,6 +346,7 @@ class BrowserToPageConnector {
+   std::unique_ptr<BrowserConnectorHostClient> browser_host_client_;
+   std::unique_ptr<BrowserConnectorHostClient> page_host_client_;
+   int page_message_id_ = 0;
++  base::WeakPtrFactory<BrowserToPageConnector> weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace

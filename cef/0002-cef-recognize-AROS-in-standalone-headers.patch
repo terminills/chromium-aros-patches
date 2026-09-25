@@ -1,0 +1,70 @@
+From 89abd82e4383dbf135b8d94c77b8a9547d43cdf3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 13:18:58 -0500
+Subject: [PATCH 02/43] cef: recognize AROS in standalone headers
+
+Define OS_AROS and include it in CEF's POSIX family so standalone wrapper consumers receive the existing pthread, errno, and wchar ABI definitions.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: focused-objects-passed
+
+AI_VALIDATION: cef lock, thread checker, logging, atomics, callbacks, weak pointers and refcount wrapper objects compiled past the previous public-base failure
+
+AI_LIMITATIONS: AROS window types, API hash selection and GetHead macro collision remain at the next wrapper boundary
+
+AI_DECISION_CHAIN:
+---
+ include/base/cef_build.h | 22 ++++++++++++----------
+ 1 file changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/include/base/cef_build.h b/include/base/cef_build.h
+index 717f05df..86ea3c17 100644
+--- a/include/base/cef_build.h
++++ b/include/base/cef_build.h
+@@ -33,13 +33,13 @@
+ /// <pre>
+ ///  Operating System:
+ ///    OS_AIX / OS_ANDROID / OS_ASMJS / OS_FREEBSD / OS_FUCHSIA / OS_IOS /
+-///    OS_LINUX / OS_MAC / OS_NACL (SFI or NONSFI) / OS_NETBSD / OS_OPENBSD /
+-///    OS_QNX / OS_SOLARIS / OS_WIN
++///    OS_AROS / OS_LINUX / OS_MAC / OS_NACL (SFI or NONSFI) / OS_NETBSD /
++///    OS_OPENBSD / OS_QNX / OS_SOLARIS / OS_WIN
+ ///  Operating System family:
+ ///    OS_APPLE: IOS or MAC
+ ///    OS_BSD: FREEBSD or NETBSD or OPENBSD
+-///    OS_POSIX: AIX or ANDROID or ASMJS or CHROMEOS or FREEBSD or IOS or LINUX
+-///              or MAC or NACL or NETBSD or OPENBSD or QNX or SOLARIS
++///    OS_POSIX: AIX or ANDROID or AROS or ASMJS or CHROMEOS or FREEBSD or IOS
++///              or LINUX or MAC or NACL or NETBSD or OPENBSD or QNX or SOLARIS
+ ///
+ ///  /!\ Note: OS_CHROMEOS is set by the build system, not this file
+ ///
+@@ -75,7 +75,9 @@
+ // updated to match.
+ 
+ // A set of macros to use for platform detection.
+-#if defined(ANDROID)
++#if defined(__AROS__)
++#define OS_AROS 1
++#elif defined(ANDROID)
+ #define OS_ANDROID 1
+ #elif defined(__APPLE__)
+ // Only include TargetConditionals after testing ANDROID as some Android builds
+@@ -137,11 +139,11 @@
+ 
+ // For access to standard POSIXish features, use OS_POSIX instead of a
+ // more specific macro.
+-#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_ASMJS) ||  \
+-    defined(OS_FREEBSD) || defined(OS_IOS) || defined(OS_LINUX) ||  \
+-    defined(OS_CHROMEOS) || defined(OS_MAC) || defined(OS_NACL) ||  \
+-    defined(OS_NETBSD) || defined(OS_OPENBSD) || defined(OS_QNX) || \
+-    defined(OS_SOLARIS)
++#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_AROS) || \
++    defined(OS_ASMJS) || defined(OS_FREEBSD) || defined(OS_IOS) || \
++    defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC) || \
++    defined(OS_NACL) || defined(OS_NETBSD) || defined(OS_OPENBSD) || \
++    defined(OS_QNX) || defined(OS_SOLARIS)
+ #define OS_POSIX 1
+ #endif
+ 

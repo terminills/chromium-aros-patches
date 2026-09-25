@@ -1,0 +1,30 @@
+From ed5abc3cafe15947e9d686bf1f7d6b8fcf715621 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 12:08:52 -0500
+Subject: [PATCH 571/638] gin: bound the per-isolate V8 code range on AROS
+
+---
+ gin/isolate_holder.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/gin/isolate_holder.cc b/gin/isolate_holder.cc
+index cdaa098dd4..c325384215 100644
+--- a/gin/isolate_holder.cc
++++ b/gin/isolate_holder.cc
+@@ -177,6 +177,16 @@ IsolateHolder::getDefaultIsolateParams() {
+   params->code_event_handler = DebugImpl::GetJitCodeEventHandler();
+   params->constraints.ConfigureDefaults(base::SysInfo::AmountOfPhysicalMemory(),
+                                         base::SysInfo::AmountOfVirtualMemory());
++#if BUILDFLAG(IS_AROS)
++  // AROS has no sparse address-space reservation: every page V8 reserves is
++  // physically backed (and zeroed) at reservation time. Without pointer
++  // compression each isolate gets its own code range, and the x64 default of
++  // 512 MiB per isolate - main thread, every worker, every service worker -
++  // exhausts an 8 GiB machine on a worker-heavy site (twitch.tv: the third
++  // isolate's reservation failed). Size the range for the JIT code a page
++  // actually produces instead.
++  params->constraints.set_code_range_size_in_bytes(64 * 1024 * 1024);
++#endif
+   params->array_buffer_allocator = g_array_buffer_allocator;
+   params->allow_atomics_wait = true;
+   params->external_references = g_reference_table;

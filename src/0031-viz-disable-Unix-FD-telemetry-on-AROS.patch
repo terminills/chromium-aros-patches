@@ -1,0 +1,60 @@
+From bf333512c790dbec423d5deba1c8b3bda8e735b0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 17:13:30 -0500
+Subject: [PATCH 031/638] viz: disable Unix FD telemetry on AROS
+
+AI_PHASE: chromium-aros-phase3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Viz treated every POSIX target as having a poll-addressable Unix descriptor table and included poll.h, which AROS does not provide.
+
+FIX_REASON: Return the API's supported unavailable result because AROS libc/Exec handles and AROSTCP sockets cannot be truthfully enumerated with Unix poll semantics.
+
+SCOPE: components/viz/common/viz_utils.cc
+
+VALIDATION: Ninja rebuilt viz_utils.o successfully for //build/toolchain/aros:x64.
+
+RISK: AROS omits optional Viz FD-count histograms; rendering behavior is unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/viz/common/viz_utils.cc | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/components/viz/common/viz_utils.cc b/components/viz/common/viz_utils.cc
+index 6eb0b44261..dff6ae50e5 100644
+--- a/components/viz/common/viz_utils.cc
++++ b/components/viz/common/viz_utils.cc
+@@ -22,7 +22,7 @@
+ #include "base/android/build_info.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include <poll.h>
+ #include <sys/resource.h>
+ #endif
+@@ -116,9 +116,11 @@ bool GatherFDStats(base::TimeDelta* delta_time_taken,
+                    int* fd_max,
+                    int* active_fd_count,
+                    int* rlim_cur) {
+-#if !BUILDFLAG(IS_POSIX)
++#if !BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_AROS)
++  // AROS descriptors are C-library/Exec objects, not a poll()-addressable
++  // Unix descriptor table. The caller treats unavailable telemetry as benign.
+   return false;
+-#else   // BUILDFLAG(IS_POSIX)
++#else
+   // https://stackoverflow.com/questions/7976769/
+   // getting-count-of-current-used-file-descriptors-from-c-code
+   base::ElapsedTimer timer;
+@@ -146,7 +148,7 @@ bool GatherFDStats(base::TimeDelta* delta_time_taken,
+   }
+   *delta_time_taken = timer.Elapsed();
+   return true;
+-#endif  // BUILDFLAG(IS_POSIX)
++#endif
+ }
+ gfx::RectF ClippedQuadRectangleF(const DrawQuad* quad) {
+   gfx::RectF quad_rect = cc::MathUtil::MapClippedRect(

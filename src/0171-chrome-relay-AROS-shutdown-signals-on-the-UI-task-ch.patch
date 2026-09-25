@@ -1,0 +1,151 @@
+From 3b3e0cd248808074c4c0f3c3b6a4ec504915b53f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:19:32 -0500
+Subject: [PATCH 171/638] chrome: relay AROS shutdown signals on the UI task
+ [chromium] [aros]
+
+Statement: Chrome's POSIX shutdown detector writes a pipe from signal context and blocks a helper thread, while AROS PIPE handles are not socket descriptors and cannot safely cross that boundary.
+
+Decision: Restrict the signal handler to a sig_atomic_t store, then poll and deliver the one-shot callback on the owning UI task every 100 ms. Keep the existing pipe implementation unchanged elsewhere.
+
+Evidence: AROS already requires native task-safe wakeups for Chromium message pumps; feeding PIPE handles into socket waits caused prior hosted stalls.
+
+Validation: shutdown_signal_handlers_posix.o compiles in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ .../browser/shutdown_signal_handlers_posix.cc | 65 ++++++++++++++++++-
+ 1 file changed, 63 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/shutdown_signal_handlers_posix.cc b/chrome/browser/shutdown_signal_handlers_posix.cc
+index 4efef98646..49a724fcb5 100644
+--- a/chrome/browser/shutdown_signal_handlers_posix.cc
++++ b/chrome/browser/shutdown_signal_handlers_posix.cc
+@@ -13,10 +13,13 @@
+ 
+ #include "base/debug/leak_annotations.h"
+ #include "base/functional/callback.h"
++#include "base/location.h"
+ #include "base/logging.h"
+ #include "base/posix/eintr_wrapper.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/platform_thread.h"
++#include "base/time/time.h"
++#include "build/build_config.h"
+ 
+ namespace {
+ 
+@@ -26,9 +29,14 @@ namespace {
+ // causing parent shutdowns, |g_pipe_pid| is the pid for the process
+ // which registered |g_shutdown_pipe_write_fd|.
+ // See <http://crbug.com/175341>.
++#if BUILDFLAG(IS_AROS)
++volatile sig_atomic_t g_pending_signal = 0;
++constexpr base::TimeDelta kSignalPollInterval = base::Milliseconds(100);
++#else
+ pid_t g_pipe_pid = -1;
+ int g_shutdown_pipe_write_fd = -1;
+ int g_shutdown_pipe_read_fd = -1;
++#endif
+ 
+ // Common code between SIG{HUP, INT, TERM}Handler.
+ void GracefulShutdownHandler(int signal) {
+@@ -38,6 +46,9 @@ void GracefulShutdownHandler(int signal) {
+   action.sa_handler = SIG_DFL;
+   RAW_CHECK(sigaction(signal, &action, nullptr) == 0);
+ 
++#if BUILDFLAG(IS_AROS)
++  g_pending_signal = signal;
++#else
+   RAW_CHECK(g_pipe_pid != -1);
+   RAW_CHECK(g_shutdown_pipe_write_fd != -1);
+   RAW_CHECK(g_shutdown_pipe_read_fd != -1);
+@@ -51,6 +62,7 @@ void GracefulShutdownHandler(int signal) {
+     RAW_CHECK(rv >= 0);
+     bytes_written += rv;
+   } while (bytes_written < sizeof(signal));
++#endif
+ }
+ 
+ void SIGHUPHandler(int signal) {
+@@ -68,6 +80,45 @@ void SIGTERMHandler(int signal) {
+   GracefulShutdownHandler(signal);
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++// AROS signals are observed by the UI task runner. Signal context only writes
++// sig_atomic_t; no DOS, Exec, allocation, or callback API is entered there.
++class ShutdownDetector {
++ public:
++  ShutdownDetector(
++      base::OnceCallback<void(int)> shutdown_callback,
++      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner)
++      : shutdown_callback_(std::move(shutdown_callback)),
++        task_runner_(task_runner) {}
++
++  ShutdownDetector(const ShutdownDetector&) = delete;
++  ShutdownDetector& operator=(const ShutdownDetector&) = delete;
++
++  void Start() { ScheduleSignalCheck(); }
++
++ private:
++  void ScheduleSignalCheck() {
++    task_runner_->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&ShutdownDetector::CheckForSignal,
++                       base::Unretained(this)),
++        kSignalPollInterval);
++  }
++
++  void CheckForSignal() {
++    const int signal = g_pending_signal;
++    if (signal != 0) {
++      g_pending_signal = 0;
++      std::move(shutdown_callback_).Run(signal);
++      return;
++    }
++    ScheduleSignalCheck();
++  }
++
++  base::OnceCallback<void(int)> shutdown_callback_;
++  const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
++};
++#else
+ // Runs a thread that invokes a callback when a termination signal handler
+ // is invoked. Uses a pipe to wait for the signal handler to run.
+ class ShutdownDetector : public base::PlatformThread::Delegate {
+@@ -171,12 +222,21 @@ void ShutdownDetector::ThreadMain() {
+   }
+   ExitPosted();
+ }
++#endif
+ 
+ }  // namespace
+ 
+ void InstallShutdownSignalHandlers(
+     base::OnceCallback<void(int)> shutdown_callback,
+     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
++#if BUILDFLAG(IS_AROS)
++  ShutdownDetector* detector =
++      new ShutdownDetector(std::move(shutdown_callback), task_runner);
++  ANNOTATE_LEAKING_OBJECT_PTR(detector);
++  detector->Start();
++  LOG(INFO) << "[Chromium:AROS] browser shutdown signals use task-safe "
++               "main-loop polling";
++#else
+   int pipefd[2];
+   int ret = pipe(pipefd);
+   if (ret < 0) {
+@@ -193,9 +253,10 @@ void InstallShutdownSignalHandlers(
+   if (!base::PlatformThread::CreateNonJoinable(0, detector)) {
+     LOG(DFATAL) << "Failed to create shutdown detector task.";
+   }
++#endif
+ 
+-  // Setup signal handlers for shutdown AFTER shutdown pipe is setup because
+-  // it may be called right away after handler is set.
++  // Set up handlers only after their relay is ready because a signal may be
++  // delivered immediately after a handler is installed.
+ 
+   // If adding to this list of signal handlers, note the new signal probably
+   // needs to be reset in child processes. See

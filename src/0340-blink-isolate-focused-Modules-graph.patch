@@ -1,0 +1,42 @@
+From 813d1e3b55ea69207143fed0df1100c681db2a77 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 21:14:24 -0500
+Subject: [PATCH 340/638] blink: isolate focused Modules graph
+
+Route AROS Modules extraction directly to its complete archive so independent CEF and browser aggregates cannot contaminate the boundary build.
+
+AI_PHASE: chromium-blink-library-extraction
+
+AI_STATUS: failure-driven-focused-root
+
+AI_ASSUMPTION: a focused gn_all branch should reuse the existing Modules closure without changing ordinary Chromium targets
+
+AI_VALIDATION: first GN generation failure preserved at out/aros-chrome/test-artifacts/-blink-modules-boundary-20260725/01-gn-gen.log; exact blocker was unrelated CEF enable_basic_printing assertion
+
+AI_LIMITATIONS: corrected focused generation and archive build have not yet been rerun
+
+AI_DECISION_CHAIN:; 95615c40ff; 0d431e7e1d
+---
+ BUILD.gn | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 53e8486645..1d92178ba6 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -95,7 +95,14 @@ if (is_official_build) {
+ group("gn_all") {
+   testonly = true
+ 
+-  if (is_aros && aros_cef_library_only) {
++  if (is_aros && aros_blink_modules_library_only) {
++    assert(use_blink)
++    assert(!aros_blink_core_library_only)
++    assert(!aros_blink_platform_library_only)
++    assert(!aros_cef_library_only)
++    assert(!aros_v8_library_only)
++    deps = [ "//third_party/blink/renderer/modules:aros_blink_modules_archive" ]
++  } else if (is_aros && aros_cef_library_only) {
+     assert(enable_cef)
+     assert(!aros_blink_platform_library_only)
+     assert(!aros_blink_core_library_only)

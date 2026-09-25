@@ -1,0 +1,47 @@
+From 5300627a4eb0b5d9be7c0e1045ded1f2eb0a297a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 10 Aug 2026 20:59:03 -0500
+Subject: [PATCH 551/638] AROS: tolerate hosted SQLite VFS reentry
+
+Allow AROS hosted shared Chromium reentry to continue when SQLite's VFSWrapper is already the default before SandboxedVfs registers for a storage utility process. Non-AROS keeps the existing DCHECK invariant.
+
+Evidence: ninja -C out/aros-cef-bootstrap -j32 obj/cef/libcef.a and make -j32 workbench-libs-cef-blink both pass. Hosted VS Code replay confirms the previous VFSWrapper fatal is gone and records the next blockers: Mojo SyncCallRestrictions plus Node state.vscdb TLSF corruption.
+---
+ sql/sandboxed_vfs.cc | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/sql/sandboxed_vfs.cc b/sql/sandboxed_vfs.cc
+index 3569dd0566..790e3b2c44 100644
+--- a/sql/sandboxed_vfs.cc
++++ b/sql/sandboxed_vfs.cc
+@@ -13,6 +13,7 @@
+ 
+ #include "base/check_op.h"
+ #include "base/files/file.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/threading/platform_thread.h"
+@@ -282,8 +283,22 @@ SandboxedVfs::SandboxedVfs(const char* name,
+       last_error_(base::File::FILE_OK) {
+   if (make_default) {
+     // This shouldn't override the VFS wrapper.
++#if BUILDFLAG(IS_AROS)
++    if (std::string_view(sqlite3_vfs_find(nullptr)->zName) ==
++        kVfsWrapperName) {
++      LOG(WARNING)
++          << "[Chromium:AROS:SQLite] SandboxedVfs default registration "
++             "observed existing VFSWrapper; continuing for hosted "
++             "process reentry name="
++          << name;
++    } else {
++      DCHECK_NE(std::string_view(sqlite3_vfs_find(nullptr)->zName),
++                kVfsWrapperName);
++    }
++#else
+     DCHECK_NE(std::string_view(sqlite3_vfs_find(nullptr)->zName),
+               kVfsWrapperName);
++#endif
+   }
+   // The register function returns a SQLite status as an int. The status is
+   // ignored here. If registration fails, we'd want to report the error while

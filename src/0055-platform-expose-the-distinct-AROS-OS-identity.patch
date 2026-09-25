@@ -1,0 +1,51 @@
+From 7f7287cccddff45061207c36101b37ac9e25dc8d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:20:23 -0500
+Subject: [PATCH 055/638] platform: expose the distinct AROS OS identity
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Chromium and Blink now expose stable AROS platform names instead of Unknown, Linux, or an unsupported-platform error.
+
+ROOT_CAUSE: version_info::GetOSType omitted AROS, and Blink's reduced navigator platform enumerated every supported desktop family except AROS.
+
+FIX_REASON: Return the literal OS identity AROS and the fixed current target identity AROS x86_64; the latter matches the only supported Chromium AROS architecture and the non-reduced uname result without leaking version detail.
+
+SCOPE: Base version OS type and Blink reduced navigator platform
+
+VALIDATION: navigator_base.o and cloud_policy_util.o compiled with the AROS cross-toolchain; staged diff check passed.
+
+RISK: The reduced navigator string must be revisited if the Chromium AROS target gains a second architecture.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/version_info/version_info.h                                | 2 ++
+ .../blink/renderer/core/execution_context/navigator_base.cc     | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/base/version_info/version_info.h b/base/version_info/version_info.h
+index 1f54eef6f4..00331ca835 100644
+--- a/base/version_info/version_info.h
++++ b/base/version_info/version_info.h
+@@ -70,6 +70,8 @@ constexpr std::string_view GetOSType() {
+   return "Android";
+ #elif BUILDFLAG(IS_LINUX)
+   return "Linux";
++#elif BUILDFLAG(IS_AROS)
++  return "AROS";
+ #elif BUILDFLAG(IS_FREEBSD)
+   return "FreeBSD";
+ #elif BUILDFLAG(IS_OPENBSD)
+diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+index 64bdfb1a10..e10e8ea4d5 100644
+--- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
++++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+@@ -31,6 +31,8 @@ String GetReducedNavigatorPlatform() {
+   return "Win32";
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return "";
++#elif BUILDFLAG(IS_AROS)
++  return "AROS x86_64";
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   return "Linux x86_64";
+ #elif BUILDFLAG(IS_IOS)

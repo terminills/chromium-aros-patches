@@ -1,0 +1,65 @@
+From f76bb6f217df1f5f72cfaf302c48aa06135aa165 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 16:54:50 -0500
+Subject: [PATCH 447/638] ozone: trace AROS cursor installation
+
+Treat kNull as the configured screen pointer and record whether each cursor was installed as configured, busy, or pointerclass-backed. This separates cursor requests from successful native object construction during hosted bring-up.
+
+
+
+---
+ ui/ozone/platform/aros/aros_window.cc         | 14 +++++++++++++-
+ ui/ozone/platform/aros/ozone_platform_aros.cc |  1 +
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index db3b44563a..dd13014063 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -615,14 +615,18 @@ void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
+       BitmapCursor::FromPlatformCursor(cursor_);
+   const mojom::CursorType type = bitmap_cursor->type();
+ 
+-  if (type == mojom::CursorType::kPointer) {
++  if (type == mojom::CursorType::kNull ||
++      type == mojom::CursorType::kPointer) {
+     // ResetNativeCursor() already restored the screen's configured pointer.
++    VLOG(1) << "[Chromium:Ozone:AROS] installed configured cursor type="
++            << type;
+     return;
+   }
+ 
+   if (type == mojom::CursorType::kWait ||
+       type == mojom::CursorType::kProgress) {
+     SetWindowPointer(window_, WA_BusyPointer, TRUE, TAG_DONE);
++    VLOG(1) << "[Chromium:Ozone:AROS] installed busy cursor type=" << type;
+     return;
+   }
+ 
+@@ -673,6 +677,14 @@ void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
+ 
+   if (cursor_object_) {
+     SetWindowPointer(window_, WA_Pointer, cursor_object_, TAG_DONE);
++    VLOG(1) << "[Chromium:Ozone:AROS] installed pointerclass cursor type="
++            << type << " bitmap="
++            << (cursor_bitmap_ ? GetBitMapAttr(cursor_bitmap_, BMA_WIDTH) : 0)
++            << "x"
++            << (cursor_bitmap_ ? GetBitMapAttr(cursor_bitmap_, BMA_HEIGHT) : 0);
++  } else {
++    LOG(WARNING) << "[Chromium:Ozone:AROS] failed to install cursor type="
++                 << type;
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 5106f89c33..28868138fc 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -44,6 +44,7 @@ class ArosCursorFactory : public BitmapCursorFactory {
+   scoped_refptr<PlatformCursor> GetDefaultCursor(
+       mojom::CursorType type) override {
+     switch (type) {
++      case mojom::CursorType::kNull:
+       case mojom::CursorType::kPointer:
+       case mojom::CursorType::kNone:
+       case mojom::CursorType::kWait:

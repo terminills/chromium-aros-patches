@@ -1,0 +1,30 @@
+From a1b914a2416ec2e28e2ef9b94b994aa79c875aaf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:41:16 -0500
+Subject: [PATCH 287/638] deps: checkpoint Skia AROS topology and mapping
+ support
+
+Advance the Skia gitlink through the committed AROS Exec-name/topology adaptation and read-backed file mappings.
+
+AI_PHASE: chromium-aros-display
+
+AI_STATUS: gitlink-checkpoint
+
+AI_ASSUMPTION: nested commits ac051dd and 5f230d5 form one ordered Skia capability series
+
+AI_VALIDATION: nested repository is clean; focused blink_platform build completed 15781/15781 with this revision
+
+AI_LIMITATIONS: GPU acceleration remains separate from the software-capable base path
+
+AI_DECISION_CHAIN:
+---
+ third_party/skia | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/skia b/third_party/skia
+index 9950dc8ec6..5f230d5eb8 160000
+--- a/third_party/skia
++++ b/third_party/skia
+@@ -1 +1 @@
+-Subproject commit 9950dc8ec6fd376a48fb1e892ed4ef040bf07331
++Subproject commit 5f230d5eb8114d62537cca4c9f7f440fd22da6fe

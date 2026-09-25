@@ -1,0 +1,71 @@
+From c83b83cd26331b06313be41f51d3daaeeb2bfafd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 18:29:31 -0500
+Subject: [PATCH 479/638] AROS: scope feature lists per native process
+
+---
+ base/feature_list.cc | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/base/feature_list.cc b/base/feature_list.cc
+index 6849e50693..9192a5e9dc 100644
+--- a/base/feature_list.cc
++++ b/base/feature_list.cc
+@@ -4,12 +4,14 @@
+ 
+ #include "base/feature_list.h"
+ 
++#include <map>
+ #include <string>
+ #include <tuple>
+ 
+ #include <stddef.h>
+ 
+ #include "base/base_switches.h"
++#include "base/command_line.h"
+ #include "base/containers/contains.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
+@@ -28,6 +30,7 @@
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
++#include "base/synchronization/lock.h"
+ #include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
+ 
+@@ -42,7 +45,34 @@ namespace {
+ // Pointer to the FeatureList instance singleton that was set via
+ // FeatureList::SetInstance(). Does not use base/memory/singleton.h in order to
+ // have more control over initialization timing. Leaky.
++#if BUILDFLAG(IS_AROS)
++struct FeatureListProcessRegistry {
++  Lock lock;
++  std::map<const CommandLine*, FeatureList*> instances;
++};
++
++FeatureList*& GetFeatureListForCurrentProcess() {
++  const CommandLine* const process_identity =
++      CommandLine::InitializedForCurrentProcess()
++          ? CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const CommandLine* cached_identity = nullptr;
++  thread_local FeatureList** cached_instance = nullptr;
++  if (cached_instance && cached_identity == process_identity) {
++    return *cached_instance;
++  }
++
++  static NoDestructor<FeatureListProcessRegistry> registry;
++  AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  cached_instance = &registry->instances[process_identity];
++  return *cached_instance;
++}
++
++#define g_feature_list_instance GetFeatureListForCurrentProcess()
++#else
+ FeatureList* g_feature_list_instance = nullptr;
++#endif
+ 
+ // Tracks access to Feature state before FeatureList registration.
+ class EarlyFeatureAccessTracker {

@@ -1,0 +1,124 @@
+From 4fe9250aee6dc0cc6d5d127633116a85458cfe4b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 05:45:57 -0500
+Subject: [PATCH 231/638] chrome: define the AROS update lifecycle [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: Desktop Chrome expects platform update detection and relaunch hooks, while the Linux implementations depend on inotify and Linux-only LaunchOptions fields that AROS does not provide.
+
+FIX_REASON: Report the linked Chromium version as the installed version, stop unsupported external-update monitoring explicitly, preserve the no-updater pending-restart contract, and relaunch through the existing native AROS process launcher.
+
+SCOPE: chrome/browser AROS upgrade and installed-version sources plus GN registration.
+
+VALIDATION: ninja -C out/aros-chrome -j48 obj/chrome/browser/libbrowser.a
+
+RISK: Automatic in-place update discovery remains unavailable; version reporting and explicit relaunch behavior are deterministic.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/BUILD.gn                       |  3 +++
+ chrome/browser/first_run/upgrade_util_aros.cc | 20 ++++++++++++++++
+ .../get_installed_version_aros.cc             | 15 ++++++++++++
+ .../installed_version_monitor_aros.cc         | 24 +++++++++++++++++++
+ 4 files changed, 62 insertions(+)
+ create mode 100644 chrome/browser/first_run/upgrade_util_aros.cc
+ create mode 100644 chrome/browser/upgrade_detector/get_installed_version_aros.cc
+ create mode 100644 chrome/browser/upgrade_detector/installed_version_monitor_aros.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index a883ae095b..c754564255 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6566,8 +6566,11 @@ static_library("browser") {
+   if (is_aros) {
+     sources += [
+       "first_run/first_run_internal_aros.cc",
++      "first_run/upgrade_util_aros.cc",
+       "media/webrtc/window_icon_util_ozone.cc",
+       "obsolete_system/obsolete_system_stub.cc",
++      "upgrade_detector/get_installed_version_aros.cc",
++      "upgrade_detector/installed_version_monitor_aros.cc",
+     ]
+   }
+ 
+diff --git a/chrome/browser/first_run/upgrade_util_aros.cc b/chrome/browser/first_run/upgrade_util_aros.cc
+new file mode 100644
+index 0000000000..7c71cbd73d
+--- /dev/null
++++ b/chrome/browser/first_run/upgrade_util_aros.cc
+@@ -0,0 +1,20 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/first_run/upgrade_util.h"
++
++#include "base/command_line.h"
++#include "base/process/launch.h"
++
++namespace upgrade_util {
++
++bool RelaunchChromeBrowserImpl(const base::CommandLine& command_line) {
++  return base::LaunchProcess(command_line, base::LaunchOptions()).IsValid();
++}
++
++bool IsUpdatePendingRestart() {
++  return false;
++}
++
++}  // namespace upgrade_util
+diff --git a/chrome/browser/upgrade_detector/get_installed_version_aros.cc b/chrome/browser/upgrade_detector/get_installed_version_aros.cc
+new file mode 100644
+index 0000000000..c2d86e82c1
+--- /dev/null
++++ b/chrome/browser/upgrade_detector/get_installed_version_aros.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/upgrade_detector/get_installed_version.h"
++
++#include <utility>
++
++#include "base/functional/callback.h"
++#include "components/version_info/version_info.h"
++
++void GetInstalledVersion(InstalledVersionCallback callback) {
++  std::move(callback).Run(
++      InstalledAndCriticalVersion(version_info::GetVersion()));
++}
+diff --git a/chrome/browser/upgrade_detector/installed_version_monitor_aros.cc b/chrome/browser/upgrade_detector/installed_version_monitor_aros.cc
+new file mode 100644
+index 0000000000..f7fa635564
+--- /dev/null
++++ b/chrome/browser/upgrade_detector/installed_version_monitor_aros.cc
+@@ -0,0 +1,24 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/upgrade_detector/installed_version_monitor.h"
++
++#include <memory>
++
++#include "base/functional/callback.h"
++
++namespace {
++
++class ArosInstalledVersionMonitor final : public InstalledVersionMonitor {
++ public:
++  void Start(Callback callback) override {
++    callback.Run(/*error=*/true);
++  }
++};
++
++}  // namespace
++
++std::unique_ptr<InstalledVersionMonitor> InstalledVersionMonitor::Create() {
++  return std::make_unique<ArosInstalledVersionMonitor>();
++}

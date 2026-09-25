@@ -1,0 +1,54 @@
+From 60d410c51803d5a5ac00d8e023bb2167569b09fb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:43:26 -0500
+Subject: [PATCH 631/638] aros: stop citing the trace-contaminated frame-time
+ runs as evidence
+
+The --aros-multi-process comments said frame-time measurements showed the
+renderer main thread to be the bottleneck. Those runs were dominated by
+the per-decommit serial trace turned off in 67b78a322e (fps 3.5 -> 12.0
+on the same guest with nothing else changed), so they do not show where
+the bottleneck is. The structural argument - one renderer main thread
+per single-process browser - stands on its own.
+
+---
+ base/base_switches.cc       | 5 ++---
+ content/app/content_main.cc | 9 +++++----
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index 9d1ac431d8..cdc8cb9932 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -243,9 +243,8 @@ const char kArosNativeThreadPool[] = "aros-native-threadpool";
+ // processes.
+ //
+ // This is the largest available multicore lever and the one that was being
+-// missed: single-process means every tab shares ONE renderer main thread, and
+-// frame-time measurements show the main thread - not the thread pool - is the
+-// bottleneck. Per-tab parallelism is zero until this is on. Pairs with
++// missed: single-process means every tab shares ONE renderer main thread.
++// Per-tab parallelism is zero until this is on. Pairs with
+ // per-process placement in base/process/launch_aros.cc, since a child process
+ // inherits its launcher's core exactly as a thread does.
+ //
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 3acb945f73..103a0c1a67 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -155,10 +155,11 @@ void ApplyArosProcessModelDefaults(base::CommandLine* command_line) {
+   // switch there was no way to ask for the multi-process model at all.
+   //
+   // This matters more than any thread-pool tuning. Single-process means every
+-  // tab shares one renderer main thread, and the main thread is what the
+-  // frame-time measurements show to be the bottleneck - so per-tab parallelism
+-  // is currently exactly zero, and no scheduling policy inside the one process
+-  // can change that.
++  // tab shares one renderer main thread, so per-tab parallelism is currently
++  // exactly zero, and no scheduling policy inside the one process can change
++  // that. (An earlier version of this comment cited frame-time measurements
++  // for the main thread being the bottleneck; those runs were dominated by a
++  // per-decommit serial trace, since turned off, and are not evidence.)
+   //
+   // Left OFF by default: multi-process on AROS is untested, and the sandbox and
+   // GPU-process defaults below stay as they are, so this changes one axis at a

@@ -1,0 +1,63 @@
+From 0c4bdf301ce2c28c2006e2a50d7f2b7431de6892 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:38:14 -0500
+Subject: [PATCH 021/638] gfx: reject native pixmap GPU buffers on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: GpuMemoryBuffer Mojo traits treated every Ozone target as owning a NativePixmapHandle, but the AROS handle intentionally exposes only shared-memory backing and has no native pixmap member.
+
+FIX_REASON: Add explicit AROS serialization and deserialization cases that log and reject NATIVE_PIXMAP while leaving SHARED_MEMORY_BUFFER transport untouched. This prevents both a compile-time field mismatch and a runtime metadata-only buffer claim.
+
+SCOPE: ui/gfx GpuMemoryBufferHandle Mojo platform-handle selection.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ui/gfx/mojom/shared_mojom_traits/buffer_types_mojom_traits.o
+
+RISK: low for software headless rendering; native GPU pixmap buffers remain unavailable until AROS defines a real backing handle.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/gfx/mojom/buffer_types_mojom_traits.cc | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/ui/gfx/mojom/buffer_types_mojom_traits.cc b/ui/gfx/mojom/buffer_types_mojom_traits.cc
+index dcd2b2d96e..d5cb49e670 100644
+--- a/ui/gfx/mojom/buffer_types_mojom_traits.cc
++++ b/ui/gfx/mojom/buffer_types_mojom_traits.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "ui/gfx/mojom/buffer_types_mojom_traits.h"
+ 
++#include "base/logging.h"
+ #include "build/build_config.h"
+ 
+ #if BUILDFLAG(IS_ANDROID)
+@@ -33,7 +34,10 @@ gfx::mojom::GpuMemoryBufferPlatformHandlePtr StructTraits<
+       return gfx::mojom::GpuMemoryBufferPlatformHandle::NewSharedMemoryHandle(
+           std::move(handle.region));
+     case gfx::NATIVE_PIXMAP:
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "AROS native pixmap GPU buffers are not implemented";
++      break;
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
+       return gfx::mojom::GpuMemoryBufferPlatformHandle::NewNativePixmapHandle(
+           std::move(handle.native_pixmap_handle));
+ #else
+@@ -115,7 +119,12 @@ bool StructTraits<gfx::mojom::GpuMemoryBufferHandleDataView,
+       out->type = gfx::SHARED_MEMORY_BUFFER;
+       out->region = std::move(platform_handle->get_shared_memory_handle());
+       return true;
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_AROS)
++    case gfx::mojom::GpuMemoryBufferPlatformHandleDataView::Tag::
++        kNativePixmapHandle:
++      LOG(ERROR) << "AROS received an unsupported native pixmap GPU buffer";
++      return false;
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
+     case gfx::mojom::GpuMemoryBufferPlatformHandleDataView::Tag::
+         kNativePixmapHandle:
+       out->type = gfx::NATIVE_PIXMAP;

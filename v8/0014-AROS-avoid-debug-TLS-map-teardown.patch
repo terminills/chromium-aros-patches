@@ -1,0 +1,33 @@
+From 065bea9580071a39112bd8e9f990b291a5f34301 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 22 Jul 2026 06:54:47 -0500
+Subject: [PATCH 14/28] AROS: avoid debug TLS map teardown
+
+---
+ src/logging/counters.cc | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/logging/counters.cc b/src/logging/counters.cc
+index 856f38b..ec5f577 100644
+--- a/src/logging/counters.cc
++++ b/src/logging/counters.cc
+@@ -94,8 +94,19 @@ bool TimedHistogram::ToggleRunningState(bool expect_to_run) const {
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wexit-time-destructors"
+ #endif
++#if V8_OS_AROS
++  // AROS' libsupc++ fallback runs non-trivial thread_local destructors from a
++  // pthread-key callback.  Destruction of this debug-only map has repeatedly
++  // reached free() with corrupted map storage during worker teardown.  Keep
++  // the per-thread state, but intentionally leave its tiny diagnostic map
++  // alive when the thread exits.
++  static thread_local auto* active_timer_storage =
++      new std::unordered_map<const TimedHistogram*, bool>;
++  auto& active_timer = *active_timer_storage;
++#else
+   static thread_local std::unordered_map<const TimedHistogram*, bool>
+       active_timer;
++#endif
+ #if __clang__
+ #pragma clang diagnostic pop
+ #endif

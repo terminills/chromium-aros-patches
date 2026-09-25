@@ -1,0 +1,134 @@
+From a0d7f30b9ab9c4cff74076494712ea73a9834a02 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:49:09 -0500
+Subject: [PATCH 212/638] chrome_apps: apply desktop deprecation policy on AROS
+ [chromium] [aros]
+
+Statement:
+AROS enables Chromium's extension and App Home stack, but legacy Chrome App deprecation APIs, feature state, help URL, and dialog resources were limited to established desktop targets. Portable call sites therefore compiled against missing declarations and strings.
+
+Decision:
+Treat AROS as a non-ChromeOS desktop for legacy Chrome App deprecation. Preserve PWAs and extensions, reject unsupported legacy apps through the existing policy, and use OS-neutral dialog wording.
+
+Evidence:
+The feature and extension policy objects compile; both deprecated-app dialog objects, the preinstalled-app dialog, and App Home page handler compile after AROS resource regeneration.
+
+Chain:
+Completes the portable App Home admission from 824d5b1e56 and advances.
+---
+ chrome/app/generated_resources.grd                          | 4 ++--
+ chrome/browser/web_applications/extension_status_utils.h    | 3 ++-
+ .../web_applications/extensions/extension_status_utils.cc   | 6 ++++--
+ chrome/common/chrome_features.cc                            | 4 ++--
+ chrome/common/chrome_features.h                             | 2 +-
+ chrome/common/url_constants.h                               | 2 +-
+ 6 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
+index fb12002ada..032c79b427 100644
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -6333,7 +6333,7 @@ Keep your key file in a safe place. You will need it to create new versions of y
+           Old versions of Chrome Apps won't open on Linux devices after December 2022. Contact your administrator to update to a new version or remove this app.
+         </message>
+       </if>
+-      <if expr="is_fuchsia">
++      <if expr="is_fuchsia or is_aros">
+         <message name="IDS_FORCE_INSTALLED_DEPRECATED_APPS_CONTENT" desc="Content of the force installed deprecated app dialog">
+           Old versions of Chrome Apps won't open after December 2022. Contact your administrator to update to a new version or remove this app.
+         </message>
+@@ -6379,7 +6379,7 @@ Keep your key file in a safe place. You will need it to create new versions of y
+           Old versions of Chrome apps won't open on Linux devices after December 2022. You can check if there's a new version available.
+         </message>
+       </if>
+-      <if expr="is_fuchsia">
++      <if expr="is_fuchsia or is_aros">
+         <message name="IDS_DEPRECATED_APPS_MONITOR_RENDERER" desc="Dialog content that educates users that Chrome Apps will soon no longer launch.">
+           Old versions of Chrome apps won't open after December 2022. You can check if there's a new version available.
+         </message>
+diff --git a/chrome/browser/web_applications/extension_status_utils.h b/chrome/browser/web_applications/extension_status_utils.h
+index f2e479e94d..4adb7b0e6c 100644
+--- a/chrome/browser/web_applications/extension_status_utils.h
++++ b/chrome/browser/web_applications/extension_status_utils.h
+@@ -55,7 +55,8 @@ bool IsExternalExtensionUninstalled(content::BrowserContext* context,
+ bool ClearExternalExtensionUninstalled(content::BrowserContext* context,
+                                        const std::string& extension_id);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ // If this method returns true, then |extension_id| will not be launchable.
+ //
+ // The eventual goal is that this method should return true for all hosted apps,
+diff --git a/chrome/browser/web_applications/extensions/extension_status_utils.cc b/chrome/browser/web_applications/extensions/extension_status_utils.cc
+index 5386c3c692..1c161f01f3 100644
+--- a/chrome/browser/web_applications/extensions/extension_status_utils.cc
++++ b/chrome/browser/web_applications/extensions/extension_status_utils.cc
+@@ -25,7 +25,8 @@ namespace {
+ 
+ const char* g_preinstalled_app_for_testing = nullptr;
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ // TODO(b/268221237): Remove this allow-list.
+ const char kDefaultAllowedExtensionIds[] =
+     "alhngdkjgnedakdlnamimgfihgkmenbh,"
+@@ -114,7 +115,8 @@ bool ClearExternalExtensionUninstalled(content::BrowserContext* context,
+       extension_id);
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ bool IsExtensionUnsupportedDeprecatedApp(content::BrowserContext* context,
+                                          const std::string& extension_id) {
+   if (testing::g_enable_chrome_apps_for_testing) {
+diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
+index 02056dd80c..4f2b34abfa 100644
+--- a/chrome/common/chrome_features.cc
++++ b/chrome/common/chrome_features.cc
+@@ -341,7 +341,7 @@ BASE_FEATURE(kDesktopPWAsTabStripSettings,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ // Controls whether Chrome Apps are supported. See https://crbug.com/1221251.
+ // If the feature is disabled, Chrome Apps continue to work. If enabled, Chrome
+ // Apps will not launch and will be marked in the UI as deprecated.
+@@ -352,7 +352,7 @@ BASE_FEATURE(kShortcutsNotApps,
+              "ShortcutsNotApps",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ // Enables notification permission revocation for origins that may send
+ // disruptive notifications.
+diff --git a/chrome/common/chrome_features.h b/chrome/common/chrome_features.h
+index 75ff240d94..a963551c84 100644
+--- a/chrome/common/chrome_features.h
++++ b/chrome/common/chrome_features.h
+@@ -216,7 +216,7 @@ COMPONENT_EXPORT(CHROME_FEATURES)
+ BASE_DECLARE_FEATURE(kDesktopPWAsTabStripSettings);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kChromeAppsDeprecation);
+ COMPONENT_EXPORT(CHROME_FEATURES)
+ BASE_DECLARE_FEATURE(kShortcutsNotApps);
+diff --git a/chrome/common/url_constants.h b/chrome/common/url_constants.h
+index ce8a3dfb16..fab61d8a87 100644
+--- a/chrome/common/url_constants.h
++++ b/chrome/common/url_constants.h
+@@ -848,7 +848,7 @@ inline constexpr char kPhoneHubPermissionLearnMoreURL[] =
+     "https://support.google.com/chromebook?p=multidevice";
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ // "Learn more" URL for the chrome apps deprecation dialog.
+ inline constexpr char kChromeAppsDeprecationLearnMoreURL[] =
+     "https://support.google.com/chrome?p=chrome_app_deprecation";

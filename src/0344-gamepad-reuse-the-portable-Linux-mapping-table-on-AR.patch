@@ -1,0 +1,40 @@
+From 884ca9010fed894e54d242d52a0d20fbc97cf379 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:54:13 -0500
+Subject: [PATCH 344/638] gamepad: reuse the portable Linux mapping table on
+ AROS
+
+AROS supplies its own HID transport, but the standard controller mapping function is a pure data/translation layer. Compile that implementation without importing Linux udev or hid-writer sources.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained exactly one unresolved GetGamepadStandardMappingFunction symbol
+
+AI_LIMITATIONS: controller runtime input and native CEF link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ device/gamepad/BUILD.gn | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/device/gamepad/BUILD.gn b/device/gamepad/BUILD.gn
+index 93b5bf78e1..d09b7c1251 100644
+--- a/device/gamepad/BUILD.gn
++++ b/device/gamepad/BUILD.gn
+@@ -115,6 +115,12 @@ component("gamepad") {
+     }
+   }
+ 
++  if (is_aros) {
++    # USB/HID transport is provided by AROS, but the controller mapping table
++    # is platform-neutral and shared with the Linux input conventions.
++    sources += [ "gamepad_standard_mappings_linux.cc" ]
++  }
++
+   if (is_android) {
+     sources += [
+       "gamepad_platform_data_fetcher_android.cc",

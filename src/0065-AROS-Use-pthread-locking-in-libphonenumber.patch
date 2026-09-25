@@ -1,0 +1,31 @@
+From b00aa42bc9c398ffdc1e14267f75339422d24f62 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:20:37 -0500
+Subject: [PATCH 065/638] [AROS] Use pthread locking in libphonenumber
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: libphonenumber now uses its maintained POSIX synchronization backend on AROS.
+ROOT_CAUSE: AROS was absent from libphonenumber's platform capability selection, so threaded Chromium code fell into lock_unsafe.h; GCC then rejected its const dummy ThreadChecker and the backend would not have been thread-safe.
+FIX_REASON: Define I18N_PHONENUMBERS_HAVE_POSIX_THREAD for AROS, selecting the existing pthread mutex implementation already supported by the OS substrate.
+SCOPE: third_party/libphonenumber/BUILD.gn only.
+VALIDATION: ninja -C out/aros-headless -j32 obj/third_party/libphonenumber/libphonenumber_without_metadata.a; archive imports pthread_mutex_init/lock/unlock/destroy.
+RISK: Low; AROS moves from an unsafe dummy backend to real pthread serialization.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/libphonenumber/BUILD.gn | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/third_party/libphonenumber/BUILD.gn b/third_party/libphonenumber/BUILD.gn
+index deeda6e39e..d19d5dc489 100644
+--- a/third_party/libphonenumber/BUILD.gn
++++ b/third_party/libphonenumber/BUILD.gn
+@@ -23,6 +23,9 @@ config("libphonenumber_config") {
+     "I18N_PHONENUMBERS_USE_ICU_REGEXP=1",
+     "I18N_PHONENUMBERS_USE_ALTERNATE_FORMATS=1",
+   ]
++  if (is_aros) {
++    defines += [ "I18N_PHONENUMBERS_HAVE_POSIX_THREAD=1" ]
++  }
+   if (!is_android) {
+     defines += [ "I18N_PHONENUMBERS_NO_THREAD_SAFETY=1" ]
+   }

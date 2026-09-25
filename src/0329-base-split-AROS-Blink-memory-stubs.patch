@@ -1,0 +1,57 @@
+From ec8ef7281df8c4c048d877a9a51652fab43ff6c1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 18:00:53 -0500
+Subject: [PATCH 329/638] base: split AROS Blink memory stubs
+
+When Blink adds process/memory.cc, suppress only the duplicate UncheckedCalloc definition from the AROS stub source while retaining its OOM and malloc/free functions. Non-Blink builds keep the complete stub.
+
+AI_PHASE: chromium-cef-native-library
+
+AI_STATUS: duplicate-symbol-boundary-corrected
+
+AI_FAILURE_PRESERVED: initial define placement failed GN generation because defines is initialized later in the base target
+
+AI_VALIDATION: corrected GN generation passes; libcef archive rebuild 1023/1023; memory_stubs.o defines UncheckedMalloc/UncheckedFree while memory.o alone defines UncheckedCalloc
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/27-memory-stub-split-gn.log; test-artifacts/-cef-bootstrap-20260724/29-memory-stub-split-gn-corrected.log; test-artifacts/-cef-bootstrap-20260724/30-libcef-archive-after-memory-split.log
+
+AI_DECISION_CHAIN:; 6247ab535b; CEF 9cd4dfb7; preserved libcef.so duplicate failure log 24
+---
+ base/BUILD.gn                | 6 ++++++
+ base/process/memory_stubs.cc | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index f290ec33ba..eb6779e98f 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1064,6 +1064,12 @@ component("base") {
+ 
+   all_dependent_configs = []
+   defines = [ "BASE_IMPLEMENTATION" ]
++  if (is_aros && use_blink) {
++    # Blink adds process/memory.cc, which provides UncheckedCalloc. Keep the
++    # remaining AROS stub implementations without defining that symbol twice.
++    # Non-Blink tools continue to use the complete stub.
++    defines += [ "BASE_AROS_USE_BLINK_MEMORY_IMPL" ]
++  }
+   data = []
+   data_deps = []
+   libs = []
+diff --git a/base/process/memory_stubs.cc b/base/process/memory_stubs.cc
+index 5d95949836..b8e76aedb8 100644
+--- a/base/process/memory_stubs.cc
++++ b/base/process/memory_stubs.cc
+@@ -32,10 +32,12 @@ bool UncheckedMalloc(size_t size, void** result) {
+   return *result != nullptr;
+ }
+ 
++#if !defined(BASE_AROS_USE_BLINK_MEMORY_IMPL)
+ bool UncheckedCalloc(size_t num_items, size_t size, void** result) {
+   *result = calloc(num_items, size);
+   return *result != nullptr;
+ }
++#endif
+ 
+ void UncheckedFree(void* ptr) {
+   free(ptr);

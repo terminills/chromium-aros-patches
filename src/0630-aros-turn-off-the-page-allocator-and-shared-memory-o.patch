@@ -1,0 +1,77 @@
+From 67b78a322e3c5248bf201955f64c1bb0bc43f8ff Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:38:03 -0500
+Subject: [PATCH 630/638] aros: turn off the page-allocator and shared-memory
+ ownership traces
+
+Both traces were switched to "log everything" in df1b955c87 "until the
+gather_8888 fault is explained". It is: the exec-slack PROT_NONE memset,
+fixed in 001f83966d. The trace outlived its question - in a two-minute
+HeavyBase run (tset10) 6741 of the 7024 serial lines were [Chromium:PA]
+decommit events, each a synchronous kernel serial write on the raster
+path, and a further 209 were [Chromium:shm] region events.
+
+Keep the helpers, gate them on a constexpr bool that is false, so the
+next ownership question is a one-line re-arm rather than a rewrite.
+
+---
+ .../page_allocator_internals_aros.h                | 14 +++++++++-----
+ base/memory/platform_shared_memory_region_aros.cc  | 13 ++++++++-----
+ 2 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index abbed086b1..c5ad6b6736 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -361,16 +361,20 @@ void LogRetainedPageSuffix(uintptr_t address,
+   CloseLibrary(DebugBase);
+ }
+ 
+-// Ownership trace for the viz gather_8888 trap: page-level events on ranges
+-// large enough to hold a raster tile, so a faulting address can be matched
+-// to the reservation, decommit or protection change that made it fault.
+-constexpr size_t kTracePageEventSize = 0;
++// Ownership trace from the viz gather_8888 investigation: page-level events
++// were logged so a faulting address could be matched to the reservation,
++// decommit or protection change that made it fault. That fault is explained
++// (the exec-slack PROT_NONE memset, fixed in 001f83966d), so the trace is off:
++// with it on, decommits alone were 6741 of the 7024 serial lines of a
++// two-minute run, each a synchronous kernel serial write on the raster path.
++// Set kTracePageEvents to re-arm it for the next ownership question.
++constexpr bool kTracePageEvents = false;
+ 
+ void TracePageEvent(const char* what,
+                     uintptr_t address,
+                     size_t length,
+                     unsigned long protection) {
+-  if (length < kTracePageEventSize) {
++  if (!kTracePageEvents) {
+     return;
+   }
+   // debug.library is opened once by the auto-init code that binds KPutStr;
+diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
+index 12337fcb2a..daf565bcbd 100644
+--- a/base/memory/platform_shared_memory_region_aros.cc
++++ b/base/memory/platform_shared_memory_region_aros.cc
+@@ -75,13 +75,16 @@ bool IsValidRegion(const SharedRegionData* region) {
+          region->allocation_size >= region->size;
+ }
+ 
+-// Ownership trace for the viz gather_8888 trap: every region large enough
+-// to hold a raster tile is logged at creation and destruction so a faulting
+-// pixel address can be matched to the region that held it.
+-constexpr size_t kTraceRegionSize = 0;
++// Ownership trace from the viz gather_8888 investigation: regions were logged
++// at creation and destruction so a faulting pixel address could be matched to
++// the region that held it. That fault is explained (the exec-slack PROT_NONE
++// memset, fixed in 001f83966d), so the trace is off: every region event was a
++// synchronous serial write, ~200 lines per two-minute run. Set kTraceRegions
++// to re-arm it for the next ownership question.
++constexpr bool kTraceRegions = false;
+ 
+ void TraceRegion(const char* what, const SharedRegionData* region) {
+-  if (region->allocation_size < kTraceRegionSize)
++  if (!kTraceRegions)
+     return;
+   char line[128];
+   snprintf(line, sizeof(line), "[Chromium:shm] %s memory=%p len=%zu refs=%zu\n",

@@ -1,0 +1,172 @@
+From e8cd891b80f527cdb99852fa9840062de55b2c0c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:46:24 -0500
+Subject: [PATCH 098/638] [AROS] Define the child-process launch boundary
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Chromium now has an AROS child-launch lifecycle that fails through normal callbacks until native process spawn and Mojo message-port transport are available.
+ROOT_CAUSE: AROS compiled the shared POSIX launcher plumbing but had no platform helper; Linux cannot be reused because its zygote, sandbox socket, and file-descriptor bootstrap contracts do not exist on AROS.
+FIX_REASON: Add an AROS-specific helper with an empty descriptor map, explicit launch-failed status, native debug logging, supported preload-file opening, and safe process lifecycle fallbacks.
+SCOPE: Content browser child-process launcher platform implementation and source selection.
+VALIDATION: Filtered GN generation; child_process_launcher_helper_aros.o builds; x86_64-aros-nm confirms OpenFileToShare and all eleven launcher lifecycle definitions.
+RISK: Multiprocess Chromium remains unavailable by design; current runtime bring-up requires --single-process until CreateNewProc-style launch and Mojo message-port capabilities exist.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-opal-fork-emulation
+---
+ content/browser/BUILD.gn                      |   5 +-
+ .../child_process_launcher_helper_aros.cc     | 130 ++++++++++++++++++
+ 2 files changed, 134 insertions(+), 1 deletion(-)
+ create mode 100644 content/browser/child_process_launcher_helper_aros.cc
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 1865cb0586..4f7a41c091 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2439,7 +2439,10 @@ source_set("browser") {
+   }
+ 
+   if (is_aros) {
+-    sources += [ "speech/tts_aros.cc" ]
++    sources += [
++      "child_process_launcher_helper_aros.cc",
++      "speech/tts_aros.cc",
++    ]
+   }
+ 
+   # ChromeOS also defines linux but their memory-monitors conflict.
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+new file mode 100644
+index 0000000000..7818b370be
+--- /dev/null
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -0,0 +1,130 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/browser/child_process_launcher_helper.h"
++
++#include <utility>
++
++#include "base/files/file.h"
++#include "base/logging.h"
++#include "base/path_service.h"
++#include "content/browser/child_process_launcher.h"
++#include "content/browser/child_process_launcher_helper_posix.h"
++#include "content/browser/posix_file_descriptor_info_impl.h"
++#include "content/public/browser/child_process_launcher_utils.h"
++#include "content/public/common/result_codes.h"
++
++namespace content::internal {
++
++std::optional<mojo::NamedPlatformChannel>
++ChildProcessLauncherHelper::CreateNamedPlatformChannelOnLauncherThread() {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++  return std::nullopt;
++}
++
++void ChildProcessLauncherHelper::BeforeLaunchOnClientThread() {
++  DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
++}
++
++std::unique_ptr<FileMappedForLaunch>
++ChildProcessLauncherHelper::GetFilesToMap() {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++
++  // AROS has no cross-process Mojo transport yet. Keep a valid, empty mapping
++  // object so the generic launch flow can fail through its normal callback.
++  return PosixFileDescriptorInfoImpl::Create();
++}
++
++bool ChildProcessLauncherHelper::IsUsingLaunchOptions() {
++  return true;
++}
++
++bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
++    FileMappedForLaunch&,
++    base::LaunchOptions* options) {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++  DCHECK(options);
++
++  file_data_.reset();
++  LOG(ERROR) << "AROS child-process launch requires native process spawn and "
++                "Mojo message-port backends; use --single-process";
++  return false;
++}
++
++ChildProcessLauncherHelper::Process
++ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
++    const base::LaunchOptions*,
++    std::unique_ptr<FileMappedForLaunch>,
++    bool* is_synchronous_launch,
++    int* launch_result) {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++  *is_synchronous_launch = true;
++  *launch_result = LAUNCH_RESULT_FAILURE;
++  return Process();
++}
++
++void ChildProcessLauncherHelper::AfterLaunchOnLauncherThread(
++    const ChildProcessLauncherHelper::Process&,
++    const base::LaunchOptions*) {
++  file_data_.reset();
++}
++
++ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
++    const ChildProcessLauncherHelper::Process& process,
++    bool known_dead) {
++  ChildProcessTerminationInfo info;
++  if (!process.process.IsValid()) {
++    info.status = base::TERMINATION_STATUS_LAUNCH_FAILED;
++    info.exit_code = LAUNCH_RESULT_FAILURE;
++    return info;
++  }
++
++  info.status = known_dead ? base::GetKnownDeadTerminationStatus(
++                                 process.process.Handle(), &info.exit_code)
++                           : base::GetTerminationStatus(
++                                 process.process.Handle(), &info.exit_code);
++  return info;
++}
++
++// static
++bool ChildProcessLauncherHelper::TerminateProcess(const base::Process& process,
++                                                  int exit_code) {
++  return process.IsValid() && process.Terminate(exit_code, false);
++}
++
++// static
++void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
++    ChildProcessLauncherHelper::Process process) {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++  if (!process.process.IsValid()) {
++    return;
++  }
++
++  process.process.Terminate(RESULT_CODE_NORMAL_EXIT, false);
++  base::EnsureProcessTerminated(std::move(process.process));
++}
++
++void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
++    base::Process process,
++    base::Process::Priority priority) {
++  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
++  if (process.CanSetPriority()) {
++    process.SetPriority(priority);
++  }
++}
++
++base::File OpenFileToShare(const base::FilePath& path,
++                           base::MemoryMappedFile::Region* region) {
++  *region = base::MemoryMappedFile::Region::kWholeFile;
++
++  base::FilePath exe_dir;
++  if (!base::PathService::Get(base::BasePathKey::DIR_EXE, &exe_dir)) {
++    return base::File();
++  }
++
++  return base::File(exe_dir.Append(path),
++                    base::File::FLAG_OPEN | base::File::FLAG_READ);
++}
++
++}  // namespace content::internal

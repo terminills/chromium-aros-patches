@@ -1,0 +1,320 @@
+From bb0f9b90a31a7e559c3418273568bafc00efcdc3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 05:05:20 -0500
+Subject: [PATCH 562/638] aros: route malloc through the PartitionAlloc
+ allocator shim
+
+Chromium's non-Blink allocations went to stdc.library's single
+semaphore-protected pool, so every malloc/free across the ~40 runtime threads
+serialised on one lock (six threads waiting on it at a time in the hosted
+probes). Enable the allocator shim with PartitionAlloc as malloc, as on Linux.
+
+stdc.library still allocates on the program's behalf (strdup, asprintf,
+realpath, scandir), so free()/realloc() route pointers PartitionAlloc does not
+manage back to the library through its jump table. Thread caches use pthread
+keys: thread_local is emulated on AROS and allocates on first access.
+
+The Exec API macros clash with PartitionAlloc identifiers now that the
+starscan headers reach platform_thread_posix.cc, so they are included last.
+---
+ .../partition_allocator/partition_alloc.gni   |  5 +--
+ .../src/partition_alloc/BUILD.gn              |  9 +++++
+ .../partition_alloc/partition_alloc_config.h  |  8 +++--
+ .../shim/allocator_shim_aros_libc.cc          | 36 +++++++++++++++++++
+ .../shim/allocator_shim_aros_libc.h           | 26 ++++++++++++++
+ ...him_default_dispatch_to_partition_alloc.cc | 35 ++++++++++++++++--
+ .../shim/allocator_shim_internals.h           |  8 +++++
+ .../allocator_shim_override_libc_symbols.h    |  2 ++
+ base/threading/platform_thread_posix.cc       | 12 ++++---
+ build_overrides/partition_alloc.gni           |  2 +-
+ 10 files changed, 131 insertions(+), 12 deletions(-)
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
+
+diff --git a/base/allocator/partition_allocator/partition_alloc.gni b/base/allocator/partition_allocator/partition_alloc.gni
+index 53f7508eb0..57e54222a5 100644
+--- a/base/allocator/partition_allocator/partition_alloc.gni
++++ b/base/allocator/partition_allocator/partition_alloc.gni
+@@ -89,8 +89,9 @@ declare_args() {
+                                   use_partition_alloc_as_malloc_default
+ }
+ 
+-assert(!use_allocator_shim || (is_android || is_apple || is_chromeos ||
+-                                   is_fuchsia || is_linux || is_win),
++assert(!use_allocator_shim || (is_android || is_apple || is_aros ||
++                                   is_chromeos || is_fuchsia || is_linux ||
++                                   is_win),
+        "The allocator shim does not (yet) support the platform.")
+ 
+ if (use_allocator_shim && is_win) {
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+index c2ee205575..5c2f298305 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
++++ b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+@@ -865,6 +865,15 @@ if (is_clang_or_gcc) {
+         "shim/allocator_shim_override_libc_symbols.h",
+       ]
+     }
++    if (is_aros) {
++      shim_headers += [
++        "shim/allocator_shim_aros_libc.h",
++        "shim/allocator_shim_override_aros_wrap_symbols.h",
++        "shim/allocator_shim_override_cpp_symbols.h",
++        "shim/allocator_shim_override_libc_symbols.h",
++      ]
++      shim_sources += [ "shim/allocator_shim_aros_libc.cc" ]
++    }
+     if (is_win) {
+       shim_headers += [
+         "shim/allocator_shim_override_ucrt_symbols_win.h",
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
+index e39fe7242f..bd5eb9d1e1 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
+@@ -208,10 +208,14 @@ static_assert(sizeof(void*) == 8);
+ // On GNU/Linux and ChromeOS:
+ // - `thread_local` allocates, reentering the allocator.
+ //
++// On AROS:
++// - `thread_local` is emulated (emutls), which allocates on first access.
++//
+ // Regardless, the "normal" TLS access is fast on x86_64 (see partition_tls.h),
+ // so don't bother with thread_local anywhere.
+-#if !(BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD)) && \
+-    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
++#if !(BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD)) &&                  \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && \
++    !BUILDFLAG(IS_AROS)
+ #define PA_CONFIG_THREAD_LOCAL_TLS() 1
+ #else
+ #define PA_CONFIG_THREAD_LOCAL_TLS() 0
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+new file mode 100644
+index 0000000000..7a4573355c
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "partition_alloc/shim/allocator_shim_aros_libc.h"
++
++#include <defines/stdc_LVO.h>
++
++// <proto/stdc.h> pulls in the complete C library prototypes, which include
++// C99 complex-number declarations that do not parse in C++. Only the library
++// base getter (provided by libstdc's auto-open code) is needed here.
++extern "C" struct StdCBase* __aros_getbase_StdCBase(void);
++
++namespace allocator_shim::internal {
++
++namespace {
++
++// stdc.library function vectors sit below the library base, one pointer per
++// LVO, in the same way <inline/stdc.h> reaches them.
++template <typename Fn>
++Fn StdCVector(int lvo) {
++  void** base = reinterpret_cast<void**>(__aros_getbase_StdCBase());
++  return reinterpret_cast<Fn>(base[-lvo]);
++}
++
++}  // namespace
++
++void ArosLibcFree(void* ptr) {
++  StdCVector<void (*)(void*)>(LVOfree)(ptr);
++}
++
++void* ArosLibcRealloc(void* ptr, size_t size) {
++  return StdCVector<void* (*)(void*, size_t)>(LVOrealloc)(ptr, size);
++}
++
++}  // namespace allocator_shim::internal
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
+new file mode 100644
+index 0000000000..45bac36fcc
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_AROS_LIBC_H_
++#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_AROS_LIBC_H_
++
++#include <cstddef>
++
++#include "partition_alloc/partition_alloc_base/component_export.h"
++
++// On AROS the shim replaces the malloc family of the executable, but
++// stdc.library keeps allocating on behalf of the program (strdup(), asprintf(),
++// realpath(NULL, ...), scandir(), ...) from its own pool. Pointers handed out
++// that way reach the shim's free()/realloc() and must be routed back to the
++// library. These entry points call stdc.library through its jump table, so
++// they are unaffected by the symbol override.
++namespace allocator_shim::internal {
++
++PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) void ArosLibcFree(void* ptr);
++PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
++void* ArosLibcRealloc(void* ptr, size_t size);
++
++}  // namespace allocator_shim::internal
++
++#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_AROS_LIBC_H_
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.cc
+index 5e9f04c2bf..b022f7068d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.cc
+@@ -29,6 +29,10 @@
+ #include "partition_alloc/shim/allocator_shim_internals.h"
+ #include "partition_alloc/shim/nonscannable_allocator.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/shim/allocator_shim_aros_libc.h"
++#endif
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <malloc.h>
+ #endif
+@@ -255,6 +259,15 @@ void* PartitionAlignedRealloc(const AllocatorDispatch* dispatch,
+                               size_t alignment,
+                               void* context) {
+   partition_alloc::ScopedDisallowAllocations guard{};
++#if BUILDFLAG(IS_AROS)
++  if (PA_UNLIKELY(!partition_alloc::IsManagedByPartitionAlloc(
++                      reinterpret_cast<uintptr_t>(address)) &&
++                  address)) {
++    // The block belongs to stdc.library; let it resize the block. The library
++    // only guarantees its default alignment for the result.
++    return ArosLibcRealloc(address, size);
++  }
++#endif  // BUILDFLAG(IS_AROS)
+   void* new_ptr = nullptr;
+   if (size > 0) {
+     new_ptr = AllocateAlignedMemory(alignment, size);
+@@ -297,6 +310,15 @@ void* PartitionRealloc(const AllocatorDispatch*,
+     return realloc(address, size);
+   }
+ #endif  // BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_AROS)
++  if (PA_UNLIKELY(!partition_alloc::IsManagedByPartitionAlloc(
++                      reinterpret_cast<uintptr_t>(address)) &&
++                  address)) {
++    // A block allocated by stdc.library on the program's behalf (strdup(),
++    // asprintf(), ...) is passed in. Forward it to the library's realloc().
++    return ArosLibcRealloc(address, size);
++  }
++#endif  // BUILDFLAG(IS_AROS)
+ 
+   return Allocator()->Realloc<partition_alloc::AllocFlags::kNoHooks>(address,
+                                                                      size, "");
+@@ -321,6 +343,15 @@ void PartitionFree(const AllocatorDispatch*, void* object, void* context) {
+     return free(object);
+   }
+ #endif  // BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_AROS)
++  if (PA_UNLIKELY(!partition_alloc::IsManagedByPartitionAlloc(
++                      reinterpret_cast<uintptr_t>(object)) &&
++                  object)) {
++    // A block allocated by stdc.library on the program's behalf is passed in.
++    // Forward it to the library's free().
++    return ArosLibcFree(object);
++  }
++#endif  // BUILDFLAG(IS_AROS)
+ 
+   // On Android Chromecast devices, there is at least one case where a system
+   // malloc() pointer can be passed to PartitionAlloc's free(). If we don't own
+@@ -369,7 +400,7 @@ size_t PartitionGetSizeEstimate(const AllocatorDispatch*,
+     return 0;
+   }
+ 
+-#if BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_AROS)
+   if (!partition_alloc::IsManagedByPartitionAlloc(
+           reinterpret_cast<uintptr_t>(address))) {
+     // The object pointed to by `address` is not allocated by the
+@@ -377,7 +408,7 @@ size_t PartitionGetSizeEstimate(const AllocatorDispatch*,
+     // belong to this malloc zone.
+     return 0;
+   }
+-#endif  // BUILDFLAG(IS_APPLE)
++#endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_AROS)
+ 
+   // TODO(lizeb): Returns incorrect values for aligned allocations.
+   const size_t size =
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_internals.h b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_internals.h
+index 2c1f2c695c..5cfec939d8 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_internals.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_internals.h
+@@ -13,6 +13,14 @@
+ #include <sys/cdefs.h>  // for __THROW
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++// <aros/system.h> defines __THROW as `throw ()` for C++, but the AROS C
++// library declares the malloc family without an exception specification. The
++// shim definitions must match those declarations.
++#undef __THROW
++#define __THROW
++#endif
++
+ #ifndef __THROW   // Not a glibc system
+ #ifdef _NOEXCEPT  // LLVM libc++ uses noexcept instead
+ #define __THROW _NOEXCEPT
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_libc_symbols.h b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_libc_symbols.h
+index b366f88423..d4302026ed 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_libc_symbols.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_libc_symbols.h
+@@ -19,6 +19,8 @@
+ 
+ #if BUILDFLAG(IS_APPLE)
+ #include <malloc/malloc.h>
++#elif BUILDFLAG(IS_AROS)
++#include <stdlib.h>
+ #else
+ #include <malloc.h>
+ #endif
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index 0a8ce586f8..dc2a36a01b 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -33,11 +33,6 @@
+ #include "base/posix/can_lower_nice_to.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_AROS)
+-#include <exec/tasks.h>
+-#include <proto/exec.h>
+-#endif
+-
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <sys/syscall.h>
+ #include <atomic>
+@@ -56,6 +51,13 @@
+ #include "partition_alloc/starscan/stack/stack.h"
+ #endif
+ 
++// The Exec API macros (Allocate(), SysBase, ...) clash with PartitionAlloc
++// identifiers, so include them last.
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ namespace base {
+ 
+ void InitThreading();
+diff --git a/build_overrides/partition_alloc.gni b/build_overrides/partition_alloc.gni
+index 9be57076ef..b47ffc3230 100644
+--- a/build_overrides/partition_alloc.gni
++++ b/build_overrides/partition_alloc.gni
+@@ -52,7 +52,7 @@ if (is_ios) {
+ # Under Fuchsia, the allocator shim is only required for PA-E.
+ # For all other platforms & configurations, the shim is required, to replace
+ #     the default system allocators, e.g. with PartitionAlloc.
+-if ((is_linux || is_chromeos || is_android || is_apple ||
++if ((is_linux || is_chromeos || is_android || is_apple || is_aros ||
+      (is_fuchsia && !_disable_partition_alloc_everywhere) ||
+      (is_win && !is_component_build && !is_debug)) && !_is_using_sanitizers) {
+   _default_use_allocator_shim = true

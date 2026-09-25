@@ -1,0 +1,54 @@
+From 2182eeb87e7dc78735b64270e2f7a65583db7116 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 23:47:50 -0500
+Subject: [PATCH 387/638] [AROS] Bind canvas reply port to compositor task
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: runtime-pending
+
+ROOT_CAUSE: CreateMsgPort records the calling task in mp_SigTask. Constructing Viz's reply port on the GPU main task made browser ReplyMsg wake that task while the compositor task blocked forever in WaitPort.
+
+FIX_REASON: Create the private reply port lazily on the first out-of-process PresentCanvas call, which is the compositor task that synchronously waits and owns the raster buffer lifetime.
+
+SCOPE: One AROS Ozone source file; browser service port and presentation semantics remain unchanged. No loader or relocation changes.
+
+VALIDATION: Runtime 27 proved every precondition and wrong-task wake; formatted source and cached diff checks pass. Runtime 28 follows.
+
+AI_DECISION_CHAIN: runtime 27
+---
+ ui/ozone/platform/aros/aros_window_manager.cc | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 2ed586cfa0..5d83c93eca 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -41,8 +41,6 @@ struct ArosPresentMessage {
+ ArosWindowManager::ArosWindowManager() {
+   event_port_ = CreateMsgPort();
+   CHECK(event_port_);
+-  presentation_reply_port_ = CreateMsgPort();
+-  CHECK(presentation_reply_port_);
+   LOG(INFO) << "[Chromium:Ozone:AROS] shared IDCMP port=" << event_port_
+             << " signal=" << static_cast<int>(event_port_->mp_SigBit);
+ }
+@@ -233,6 +231,18 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+     return it->second->PresentPixels(pixels, row_bytes, pixel_size, damage);
+   }
+ 
++  // Initialize this private reply port on the compositor task that actually
++  // waits for presentation completion. CreateMsgPort() records the calling
++  // task in mp_SigTask; constructing it with the manager on the GPU main task
++  // would make ReplyMsg() wake the wrong task.
++  if (!presentation_reply_port_) {
++    presentation_reply_port_ = CreateMsgPort();
++    CHECK(presentation_reply_port_);
++    LOG(INFO) << "[Chromium:Ozone:AROS] canvas reply port="
++              << presentation_reply_port_
++              << " owner=" << presentation_reply_port_->mp_SigTask;
++  }
++
+   ArosPresentMessage request;
+   request.message.mn_ReplyPort = presentation_reply_port_;
+   request.message.mn_Length = sizeof(request);

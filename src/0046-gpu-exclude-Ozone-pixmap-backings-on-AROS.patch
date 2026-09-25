@@ -1,0 +1,86 @@
+From ba3de813c7295c02697bb59b41624c9ec89856c1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:01:33 -0500
+Subject: [PATCH 046/638] gpu: exclude Ozone pixmap backings on AROS
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: The AROS GPU service now builds and registers shared-memory image backings without compiling Ozone's NativePixmap-specific backing family.
+
+ROOT_CAUSE: Patch 0028 removed native pixmap handles from AROS GpuMemoryBufferHandle, but gpu/command_buffer/service still compiled OzoneImageBacking and its GL, Vulkan, and Dawn representations and registered OzoneImageBackingFactory.
+
+FIX_REASON: Exclude only the NativePixmap-specific Ozone backing sources and factory on AROS while retaining Ozone platform integration, shared-memory image factories, EGL/ANGLE paths, and future non-pixmap acceleration work.
+
+SCOPE: gpu command-buffer service GN source graph and SharedImageFactory registration
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/gpu/command_buffer/service/libgles2_sources.a passed; regenerated Ninja graph contains shared_memory_image_backing objects and no OzoneImageBacking objects; git diff --check passed.
+
+RISK: NativePixmap zero-copy import, accelerated scanout, and its Vulkan/Dawn representations remain unavailable until AROS defines native image handles and synchronization.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/command_buffer/service/BUILD.gn                         | 6 +++---
+ .../service/shared_image/shared_image_factory.cc            | 4 ++++
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/gpu/command_buffer/service/BUILD.gn b/gpu/command_buffer/service/BUILD.gn
+index f5362e9122..31dd9965fb 100644
+--- a/gpu/command_buffer/service/BUILD.gn
++++ b/gpu/command_buffer/service/BUILD.gn
+@@ -416,7 +416,7 @@ target(link_target_type, "gles2_sources") {
+     deps += [ "//third_party/angle:translator_gl_d3d_only" ]
+   }
+ 
+-  if (use_ozone) {
++  if (use_ozone && !is_aros) {
+     sources += [
+       "shared_image/gl_ozone_image_representation.cc",
+       "shared_image/gl_ozone_image_representation.h",
+@@ -468,7 +468,7 @@ target(link_target_type, "gles2_sources") {
+       ]
+     }
+ 
+-    if (use_ozone) {
++    if (use_ozone && !is_aros) {
+       sources += [
+         "shared_image/skia_vk_ozone_image_representation.cc",
+         "shared_image/skia_vk_ozone_image_representation.h",
+@@ -500,7 +500,7 @@ target(link_target_type, "gles2_sources") {
+         "shared_image/dawn_gl_texture_representation.h",
+       ]
+     }
+-    if (use_ozone) {
++    if (use_ozone && !is_aros) {
+       sources += [
+         "shared_image/dawn_ozone_image_representation.cc",
+         "shared_image/dawn_ozone_image_representation.h",
+diff --git a/gpu/command_buffer/service/shared_image/shared_image_factory.cc b/gpu/command_buffer/service/shared_image/shared_image_factory.cc
+index 4de12f193c..be68381576 100644
+--- a/gpu/command_buffer/service/shared_image/shared_image_factory.cc
++++ b/gpu/command_buffer/service/shared_image/shared_image_factory.cc
+@@ -49,7 +49,9 @@
+ #endif  // BUILDFLAG(ENABLE_VULKAN)
+ 
+ #if BUILDFLAG(IS_OZONE)
++#if !BUILDFLAG(IS_AROS)
+ #include "gpu/command_buffer/service/shared_image/ozone_image_backing_factory.h"
++#endif
+ #include "ui/ozone/public/gl_ozone.h"
+ #include "ui/ozone/public/ozone_platform.h"
+ #include "ui/ozone/public/surface_factory_ozone.h"
+@@ -362,6 +364,7 @@ SharedImageFactory::SharedImageFactory(
+     factories_.push_back(std::move(external_vk_image_factory));
+   }
+ #elif BUILDFLAG(IS_OZONE)
++#if !BUILDFLAG(IS_AROS)
+   // For all Ozone platforms - Desktop Linux, ChromeOS, Fuchsia, CastOS.
+   if (ui::OzonePlatform::GetInstance()
+           ->GetPlatformRuntimeProperties()
+@@ -370,6 +373,7 @@ SharedImageFactory::SharedImageFactory(
+         std::make_unique<OzoneImageBackingFactory>(context_state, workarounds);
+     factories_.push_back(std::move(ozone_factory));
+   }
++#endif  // !BUILDFLAG(IS_AROS)
+ #if BUILDFLAG(ENABLE_VULKAN)
+   if (gr_context_type_ == GrContextType::kVulkan) {
+     auto external_vk_image_factory =

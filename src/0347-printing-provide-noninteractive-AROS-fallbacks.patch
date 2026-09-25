@@ -1,0 +1,75 @@
+From a4f0136b3d34d3965e6491205c13c35f351e32e7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:55:54 -0500
+Subject: [PATCH 347/638] printing: provide noninteractive AROS fallbacks
+
+CEF requires basic printing symbols even before AROS has a native print-manager UI. Reuse Chromium's no-system-dialog PrintingContext and provide an explicit warning-only printer-manager action instead of importing Linux desktop process launchers.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained only PrintingContext::CreateImpl and PrinterManagerDialog::ShowPrinterManagerDialog from this boundary
+
+AI_ASSUMPTION: capability absence is preferable to pretending a system dialog exists; future airprint.device integration replaces the UI fallback
+
+AI_LIMITATIONS: printing behavior, compile, and native CEF link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ chrome/browser/BUILD.gn                           |  3 +++
+ .../printing/printer_manager_dialog_aros.cc       | 15 +++++++++++++++
+ printing/BUILD.gn                                 |  2 +-
+ 3 files changed, 19 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/printing/printer_manager_dialog_aros.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index f5767485d6..06a1705062 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -7005,6 +7005,9 @@ static_library("browser") {
+     if (is_linux) {
+       sources += [ "printing/printer_manager_dialog_linux.cc" ]
+     }
++    if (is_aros) {
++      sources += [ "printing/printer_manager_dialog_aros.cc" ]
++    }
+     if (enable_oop_printing) {
+       sources += [
+         "printing/print_backend_service_manager.cc",
+diff --git a/chrome/browser/printing/printer_manager_dialog_aros.cc b/chrome/browser/printing/printer_manager_dialog_aros.cc
+new file mode 100644
+index 0000000000..96a75954f8
+--- /dev/null
++++ b/chrome/browser/printing/printer_manager_dialog_aros.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/printing/printer_manager_dialog.h"
++
++#include "base/logging.h"
++
++namespace printing {
++
++void PrinterManagerDialog::ShowPrinterManagerDialog() {
++  LOG(WARNING) << "AROS printer manager UI is not available";
++}
++
++}  // namespace printing
+diff --git a/printing/BUILD.gn b/printing/BUILD.gn
+index a92033b8df..b4b35c330e 100644
+--- a/printing/BUILD.gn
++++ b/printing/BUILD.gn
+@@ -224,7 +224,7 @@ component("printing") {
+     ]
+   }
+ 
+-  if (!enable_basic_print_dialog) {
++  if (!enable_basic_print_dialog || is_aros) {
+     sources += [
+       "printing_context_no_system_dialog.cc",
+       "printing_context_no_system_dialog.h",

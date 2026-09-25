@@ -1,0 +1,71 @@
+From 2ce6439b2ff70117873e185fdeadaeea16c0e591 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 11:33:27 -0500
+Subject: [PATCH 368/638] [AROS] Launch Chromium child Processes with Mojo
+
+AI_PHASE: chromium-process-model
+AI_STATUS: chromium-child-launcher-compiled
+ROOT_CAUSE: The AROS ChildProcessLauncherHelper deliberately returned failure even though native LaunchProcess and MessagePort-backed Mojo channels now work across Processes.
+FIX_REASON: Pass the remote PlatformChannel endpoint through the child command line and launch Chromium child roles with base::LaunchProcess, retaining generic file-mapping setup for later shared-region work.
+SCOPE: content/browser/child_process_launcher_helper_aros.cc
+VALIDATION: Established out/aros-chrome tree compiled obj/content/browser/browser/child_process_launcher_helper_aros.o successfully with the real content/browser dependency graph.
+RISK: Full Chrome link and hosted browser/renderer runtime remain in progress; histogram and field-trial fd mappings may expose the next AROS-specific boundary.
+AI_DECISION_CHAIN: invitation PASS -> identify forced launcher stub -> native endpoint handoff -> exact launcher object integration compile PASS.
+Evidence:-chromium-browser-renderer-20260728/build-03-launcher-object.log
+Job:
+---
+ .../child_process_launcher_helper_aros.cc     | 24 ++++++++++++-------
+ 1 file changed, 15 insertions(+), 9 deletions(-)
+
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+index 34bb3109e5..3572110ed2 100644
+--- a/content/browser/child_process_launcher_helper_aros.cc
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -31,8 +31,10 @@ std::unique_ptr<FileMappedForLaunch>
+ ChildProcessLauncherHelper::GetFilesToMap() {
+   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+ 
+-  // AROS has no cross-process Mojo transport yet. Keep a valid, empty mapping
+-  // object so the generic launch flow can fail through its normal callback.
++  // Native AROS channels are passed by command-line rendezvous rather than by
++  // POSIX descriptor remapping. Keep the mapping object for the generic
++  // histogram and field-trial setup; LaunchProcess owns the actual endpoint
++  // handoff below.
+   return PosixFileDescriptorInfoImpl::Create();
+ }
+ 
+@@ -45,23 +47,27 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+     base::LaunchOptions* options) {
+   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+   DCHECK(options);
++  DCHECK(mojo_channel_);
+ 
+-  file_data_.reset();
+-  LOG(ERROR) << "AROS child-process launch requires native process spawn and "
+-                "Mojo message-port backends; use --single-process";
+-  return false;
++  mojo_channel_->PrepareToPassRemoteEndpoint(options, command_line());
++  return true;
+ }
+ 
+ ChildProcessLauncherHelper::Process
+ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
+-    const base::LaunchOptions*,
++    const base::LaunchOptions* options,
+     std::unique_ptr<FileMappedForLaunch>,
+     bool* is_synchronous_launch,
+     int* launch_result) {
++  DCHECK(options);
+   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+   *is_synchronous_launch = true;
+-  *launch_result = LAUNCH_RESULT_FAILURE;
+-  return Process();
++
++  Process process;
++  process.process = base::LaunchProcess(*command_line(), *options);
++  *launch_result = process.process.IsValid() ? LAUNCH_RESULT_SUCCESS
++                                             : LAUNCH_RESULT_FAILURE;
++  return process;
+ }
+ 
+ void ChildProcessLauncherHelper::AfterLaunchOnLauncherThread(

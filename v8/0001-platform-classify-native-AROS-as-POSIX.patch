@@ -1,0 +1,50 @@
+From 914a0f6f2ab79299a9e846b46d5098df1ae3653f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:31:37 -0500
+Subject: [PATCH 01/28] platform: classify native AROS as POSIX
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: V8 did not recognize __AROS__, so its native mutex, condition-variable, semaphore, time, and platform handle types were never selected.
+
+FIX_REASON: Define a distinct V8_OS_AROS identity and opt it into V8_OS_POSIX while compiling against native AROS pthread layouts.
+
+SCOPE: include/v8config.h
+
+VALIDATION: bounded-page-allocator.o passes; 28 of 37 v8_libbase edges compile through native synchronization and timing objects.
+
+RISK: medium; POSIX selects the closest V8 abstraction family, with unsupported individual services handled by later AROS-specific branches.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ include/v8config.h | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/include/v8config.h b/include/v8config.h
+index e649d8c..f974f8a 100644
+--- a/include/v8config.h
++++ b/include/v8config.h
+@@ -67,6 +67,7 @@ path. Add it with -I<path> to the command line
+ //
+ //  V8_OS_ANDROID       - Android
+ //  V8_OS_BSD           - BSDish (macOS, Net/Free/Open/DragonFlyBSD)
++//  V8_OS_AROS          - AROS Research Operating System
+ //  V8_OS_CYGWIN        - Cygwin
+ //  V8_OS_DRAGONFLYBSD  - DragonFlyBSD
+ //  V8_OS_FREEBSD       - FreeBSD
+@@ -84,7 +85,12 @@ path. Add it with -I<path> to the command line
+ //  V8_OS_AIX           - AIX
+ //  V8_OS_WIN           - Microsoft Windows
+ 
+-#if defined(__ANDROID__)
++#if defined(__AROS__)
++# define V8_OS_AROS 1
++# define V8_OS_POSIX 1
++# define V8_OS_STRING "aros"
++
++#elif defined(__ANDROID__)
+ # define V8_OS_ANDROID 1
+ # define V8_OS_LINUX 1
+ # define V8_OS_POSIX 1

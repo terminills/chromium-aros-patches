@@ -1,0 +1,64 @@
+From df0b1bd50b25aeb6047edad861c215e228d5753c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 22:47:04 -0500
+Subject: [PATCH 17/28] AROS: allow Chromium to consume v8.library
+
+Add an opt-in V8 group branch that exports headers and the generated AROS import layer instead of V8 implementation and snapshot objects. The default remains the monolithic source graph used to build v8.library itself.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: consumer-link-switch
+
+AI_ASSUMPTION: the AROS import target implements the measured Chromium-to-V8 ABI boundary
+
+AI_VALIDATION: generated 696-function import probe linked and passed hosted GetVersion runtime
+
+AI_LIMITATIONS: first full Chromium shared-v8 link remains pending
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn   | 15 +++++++++++----
+ gni/v8.gni |  4 ++++
+ 2 files changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index bf62e23..e280aad 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -7438,10 +7438,17 @@ if (is_component_build) {
+   }
+ } else {
+   group("v8") {
+-    public_deps = [
+-      ":v8_base",
+-      ":v8_snapshot",
+-    ]
++    if (is_aros && v8_use_aros_library) {
++      public_deps = [
++        ":v8_headers",
++        "//build/config/aros/v8_library:v8_library_imports",
++      ]
++    } else {
++      public_deps = [
++        ":v8_base",
++        ":v8_snapshot",
++      ]
++    }
+ 
+     public_configs = [ ":external_config" ]
+   }
+diff --git a/gni/v8.gni b/gni/v8.gni
+index 7c4e3ba..b86a41c 100644
+--- a/gni/v8.gni
++++ b/gni/v8.gni
+@@ -49,6 +49,10 @@ declare_args() {
+   # Enable monolithic static library for embedders.
+   v8_monolithic = false
+ 
++  # Resolve Chromium's V8 C++ ABI imports from AROS v8.library instead of
++  # linking V8 implementation objects into the executable.
++  v8_use_aros_library = false
++
+   # Expose public symbols for native modules of Node.js and Electron. Default
+   # is false.
+   v8_expose_public_symbols = ""

@@ -1,0 +1,62 @@
+From 05c9b2199600eb20d4dd9af0300eee2533601c70 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 03:15:23 -0500
+Subject: [PATCH 529/638] Default AROS renderers to single-threaded V8 GC
+
+---
+ .../renderer_host/render_process_host_impl.cc | 28 +++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index e5ec571894..5dcdb19019 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -53,6 +53,8 @@
+ #include "base/rand_util.h"
+ #include "base/ranges/algorithm.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_piece.h"
++#include "base/strings/string_split.h"
+ #include "base/supports_user_data.h"
+ #include "base/system/sys_info.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -3284,6 +3286,28 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
+     command_line->AppendSwitch(cc::switches::kEnableMainFrameBeforeActivation);
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++static void AppendArosRendererJavaScriptFlags(base::CommandLine* command_line) {
++  constexpr char kSingleThreadedGC[] = "--single-threaded-gc";
++  constexpr char kNoSingleThreadedGC[] = "--no-single-threaded-gc";
++
++  std::string js_flags =
++      command_line->GetSwitchValueASCII(blink::switches::kJavaScriptFlags);
++  std::vector<base::StringPiece> flag_list = base::SplitStringPiece(
++      js_flags, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  for (base::StringPiece flag : flag_list) {
++    if (flag == kSingleThreadedGC || flag == kNoSingleThreadedGC) {
++      return;
++    }
++  }
++
++  if (!js_flags.empty())
++    js_flags.append(",");
++  js_flags.append(kSingleThreadedGC);
++  command_line->AppendSwitchASCII(blink::switches::kJavaScriptFlags, js_flags);
++}
++#endif
++
+ void RenderProcessHostImpl::AppendRendererCommandLine(
+     base::CommandLine* command_line) {
+   // Pass the process type first, so it shows first in process listings.
+@@ -3337,6 +3361,10 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+     }
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  AppendArosRendererJavaScriptFlags(command_line);
++#endif
++
+   if (features::IsTouchTextEditingRedesignEnabled()) {
+     command_line->AppendSwitchASCII(
+         blink::switches::kTouchTextSelectionStrategy,

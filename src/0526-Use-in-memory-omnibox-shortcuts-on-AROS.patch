@@ -1,0 +1,42 @@
+From 476df7b2e4c841e76176829285532da89cb171c6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 01:52:23 -0500
+Subject: [PATCH 526/638] Use in-memory omnibox shortcuts on AROS
+
+The shortcuts database is optional: ShortcutsBackend already has a suppress_db mode that keeps omnibox shortcuts in memory. Force that mode on AROS to avoid SQLite recovery/raze traps from the profile Shortcuts DB while preserving navigation behavior needed for YouTube bring-up.
+
+Evidence:
+
+- build117 linked cleanly with ninja -C out/aros-chrome chrome -j32.
+
+- installed chrome hash 4666c64625ff1954c33ce610b431cae9a591f9d11b37b7550597668a56cd8fbd.
+
+- hosted run31 scripted YouTube replay returned chrome status 0 and emitted 0 fatal/profile/shortcut/quota/socket-buffer matches in telemetry.
+---
+ chrome/browser/autocomplete/shortcuts_backend_factory.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/chrome/browser/autocomplete/shortcuts_backend_factory.cc b/chrome/browser/autocomplete/shortcuts_backend_factory.cc
+index 13ef32004d..df7ad874e2 100644
+--- a/chrome/browser/autocomplete/shortcuts_backend_factory.cc
++++ b/chrome/browser/autocomplete/shortcuts_backend_factory.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <memory>
+ 
++#include "build/build_config.h"
+ #include "chrome/browser/history/history_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+@@ -95,6 +96,11 @@ void ShortcutsBackendFactory::BrowserContextShutdown(
+ scoped_refptr<ShortcutsBackend> ShortcutsBackendFactory::CreateShortcutsBackend(
+     Profile* profile,
+     bool suppress_db) {
++#if BUILDFLAG(IS_AROS)
++  // The shortcuts service is optional, and the in-memory mode keeps omnibox
++  // navigation usable while avoiding AROS SQLite recovery traps on profile DBs.
++  suppress_db = true;
++#endif
+   scoped_refptr<ShortcutsBackend> backend(new ShortcutsBackend(
+       TemplateURLServiceFactory::GetForProfile(profile),
+       std::make_unique<UIThreadSearchTermsData>(),

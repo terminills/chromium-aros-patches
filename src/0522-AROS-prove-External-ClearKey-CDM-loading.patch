@@ -1,0 +1,493 @@
+From df7fd48241c7d5044e0c539e413d92c115b652e6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 22:55:29 -0500
+Subject: [PATCH 522/638] AROS: prove External ClearKey CDM loading
+
+---
+ base/files/file_enumerator_posix.cc           |   7 +
+ base/native_library_aros.cc                   | 262 +++++++++++++++++-
+ .../key_system_support_update_aros.cc         |  18 +-
+ media/cdm/cdm_adapter.cc                      |  28 ++
+ media/cdm/cdm_module.cc                       |  28 ++
+ 5 files changed, 333 insertions(+), 10 deletions(-)
+
+diff --git a/base/files/file_enumerator_posix.cc b/base/files/file_enumerator_posix.cc
+index 5cdb7c6582..8351fa7255 100644
+--- a/base/files/file_enumerator_posix.cc
++++ b/base/files/file_enumerator_posix.cc
+@@ -89,10 +89,17 @@ void GetStat(const FilePath& path, bool show_links, stat_wrapper_t* st) {
+   const int res = show_links ? File::Lstat(path.value().c_str(), st)
+                              : File::Stat(path.value().c_str(), st);
+   if (res < 0) {
++#if BUILDFLAG(IS_AROS)
++    // AROS cache cleanup commonly enumerates stale names while another cleanup
++    // pass removes them. ENOENT is still represented as a zeroed stat entry
++    // below; avoid turning those expected races into large ERROR bursts.
++    DPLOG_IF(ERROR, errno != ENOENT) << "Cannot stat '" << path << "'";
++#else
+     // Print the stat() error message unless it was ENOENT and we're following
+     // symlinks.
+     DPLOG_IF(ERROR, errno != ENOENT || show_links)
+         << "Cannot stat '" << path << "'";
++#endif
+     memset(st, 0, sizeof(*st));
+   }
+ }
+diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
+index 0ef75fb570..96b6b8222e 100644
+--- a/base/native_library_aros.cc
++++ b/base/native_library_aros.cc
+@@ -4,15 +4,207 @@
+ 
+ #include "base/native_library.h"
+ 
+-#include <exec/libraries.h>
+-#include <proto/exec.h>
+-
++#include "base/logging.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_util.h"
+ #include "base/threading/scoped_blocking_call.h"
+ 
++#include <string.h>
++
++#include <dos/dos.h>
++#include <exec/execbase.h>
++#include <exec/libraries.h>
++#include <libraries/debug.h>
++#include <proto/debug.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++#include <utility/hooks.h>
++
+ namespace base {
+ 
++namespace {
++
++enum class ArosNativeLibraryKind {
++  kExecLibrary,
++  kLoadSegModule,
++};
++
++struct ArosNativeLibrary {
++  ArosNativeLibraryKind kind;
++  std::string name;
++  void* handle;
++  bool module_startup_ran = false;
++};
++
++struct SymbolLookupData {
++  const ArosNativeLibrary* library;
++  const char* symbol_name;
++  void* result;
++};
++
++AROS_UFH3S(IPTR,
++           SymbolLookupHook,
++           AROS_UFHA(struct Hook*, hook, A0),
++           AROS_UFHA(APTR, object, A2),
++           AROS_UFHA(APTR, message, A1)) {
++  AROS_USERFUNC_INIT
++
++  (void)object;
++  auto* data = static_cast<SymbolLookupData*>(hook->h_Data);
++  auto* symbol = static_cast<struct SymbolInfo*>(message);
++  if (!data || data->result || !symbol || !symbol->si_SymbolName) {
++    return 0;
++  }
++
++  if (strcmp(symbol->si_SymbolName, data->symbol_name) == 0) {
++    if (!data->library->name.empty() && symbol->si_ModuleName &&
++        strstr(symbol->si_ModuleName, data->library->name.c_str()) == nullptr) {
++      return 0;
++    }
++
++    data->result = symbol->si_SymbolStart;
++  }
++
++  return 0;
++
++  AROS_USERFUNC_EXIT
++}
++
++bool IsArosLoadSegModule(const FilePath& library_path) {
++  return EndsWith(library_path.value(), ".so", CompareCase::SENSITIVE);
++}
++
++NativeLibrary WrapArosLibrary(ArosNativeLibraryKind kind,
++                              std::string name,
++                              void* handle) {
++  if (!handle) {
++    return nullptr;
++  }
++
++  auto* library = new ArosNativeLibrary;
++  library->kind = kind;
++  library->name = std::move(name);
++  library->handle = handle;
++  return library;
++}
++
++void* LookupLoadSegSymbol(const ArosNativeLibrary* library, const char* name) {
++  if (!library || !name)
++    return nullptr;
++
++  struct Library* debug_base = OpenLibrary("debug.library", 0);
++  if (!debug_base)
++    return nullptr;
++
++  SymbolLookupData data = {library, name, nullptr};
++  struct Hook hook = {};
++  hook.h_Entry = reinterpret_cast<APTR>(SymbolLookupHook);
++  hook.h_Data = &data;
++
++  EnumerateSymbolsA(&hook, nullptr);
++  CloseLibrary(debug_base);
++  return data.result;
++}
++
++using ArosOpenLibrariesListFunc =
++    int (*)(const void* const list[], struct ExecBase* sys_base);
++using ArosCloseLibrariesListFunc =
++    void (*)(const void* const list[], struct ExecBase* sys_base);
++using ArosSetCallFuncsFunc = int (*)(const void* const set[],
++                                     int direction,
++                                     int test_fail,
++                                     struct ExecBase* sys_base);
++
++bool RunLoadSegModuleStartup(ArosNativeLibrary* library,
++                             NativeLibraryLoadError* error) {
++  auto* open_libraries = reinterpret_cast<ArosOpenLibrariesListFunc>(
++      LookupLoadSegSymbol(library, "_set_open_libraries_list"));
++  auto* call_funcs = reinterpret_cast<ArosSetCallFuncsFunc>(
++      LookupLoadSegSymbol(library, "_set_call_funcs"));
++  auto* libs = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__LIBS_LIST__"));
++  auto* init = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__INIT_LIST__"));
++  auto* ctors = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__CTORS_LIST__"));
++  auto* init_array = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__INIT_ARRAY_LIST__"));
++
++  LOG(INFO) << "[Chromium:AROS:NativeLibrary] module startup symbols module="
++            << library->name << " open_libraries="
++            << reinterpret_cast<void*>(open_libraries) << " call_funcs="
++            << reinterpret_cast<void*>(call_funcs) << " libs=" << libs
++            << " init=" << init << " ctors=" << ctors
++            << " init_array=" << init_array;
++
++  if (!open_libraries || !call_funcs || !libs) {
++    if (error) {
++      error->message =
++          StrCat({"AROS module startup symbols missing: ", library->name});
++    }
++    return false;
++  }
++
++  if (!open_libraries(libs, SysBase)) {
++    if (error) {
++      error->message =
++          StrCat({"AROS module failed to open libraries: ", library->name});
++    }
++    return false;
++  }
++
++  library->module_startup_ran = true;
++
++  if (init && !call_funcs(init, 1, 1, SysBase)) {
++    if (error)
++      error->message = StrCat({"AROS module INIT failed: ", library->name});
++    return false;
++  }
++
++  if (ctors)
++    call_funcs(ctors, -1, 0, SysBase);
++  if (init_array)
++    call_funcs(init_array, 1, 0, SysBase);
++
++  LOG(INFO) << "[Chromium:AROS:NativeLibrary] module startup complete module="
++            << library->name;
++  return true;
++}
++
++void RunLoadSegModuleShutdown(ArosNativeLibrary* library) {
++  if (!library || !library->module_startup_ran)
++    return;
++
++  auto* close_libraries = reinterpret_cast<ArosCloseLibrariesListFunc>(
++      LookupLoadSegSymbol(library, "_set_close_libraries_list"));
++  auto* call_funcs = reinterpret_cast<ArosSetCallFuncsFunc>(
++      LookupLoadSegSymbol(library, "_set_call_funcs"));
++  auto* fini_array = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__FINI_ARRAY_LIST__"));
++  auto* dtors = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__DTORS_LIST__"));
++  auto* exit = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__EXIT_LIST__"));
++  auto* libs = reinterpret_cast<const void* const*>(
++      LookupLoadSegSymbol(library, "__LIBS_LIST__"));
++
++  if (call_funcs) {
++    if (fini_array)
++      call_funcs(fini_array, -1, 0, SysBase);
++    if (dtors)
++      call_funcs(dtors, 1, 0, SysBase);
++    if (exit)
++      call_funcs(exit, -1, 0, SysBase);
++  }
++
++  if (close_libraries && libs)
++    close_libraries(libs, SysBase);
++
++  library->module_startup_ran = false;
++}
++
++}  // namespace
++
+ std::string NativeLibraryLoadError::ToString() const {
+   return message;
+ }
+@@ -20,21 +212,73 @@ std::string NativeLibraryLoadError::ToString() const {
+ NativeLibrary LoadNativeLibraryWithOptions(const FilePath& library_path,
+                                            const NativeLibraryOptions& options,
+                                            NativeLibraryLoadError* error) {
++  (void)options;
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
++
++  if (IsArosLoadSegModule(library_path)) {
++    BPTR segment = LoadSeg(library_path.value().c_str());
++    if (!segment) {
++      if (error)
++        error->message = StrCat({"LoadSeg failed: ", library_path.value()});
++      return nullptr;
++    }
++
++    LOG(INFO) << "[Chromium:AROS:NativeLibrary] LoadSeg module loaded path="
++              << library_path.value();
++    NativeLibrary library = WrapArosLibrary(ArosNativeLibraryKind::kLoadSegModule,
++                                            library_path.BaseName().value(),
++                                            reinterpret_cast<void*>(segment));
++    if (!RunLoadSegModuleStartup(static_cast<ArosNativeLibrary*>(library),
++                                 error)) {
++      UnLoadSeg(segment);
++      delete static_cast<ArosNativeLibrary*>(library);
++      return nullptr;
++    }
++
++    return library;
++  }
++
+   struct Library* library = OpenLibrary(library_path.value().c_str(), 0);
+-  if (!library && error)
+-    error->message = StrCat({"OpenLibrary failed: ", library_path.value()});
+-  return library;
++  if (!library) {
++    if (error)
++      error->message = StrCat({"OpenLibrary failed: ", library_path.value()});
++    return nullptr;
++  }
++
++  return WrapArosLibrary(ArosNativeLibraryKind::kExecLibrary,
++                         library_path.BaseName().value(), library);
+ }
+ 
+ void UnloadNativeLibrary(NativeLibrary library) {
+-  if (library)
+-    CloseLibrary(static_cast<struct Library*>(library));
++  auto* aros_library = static_cast<ArosNativeLibrary*>(library);
++  if (!aros_library)
++    return;
++
++  if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
++    RunLoadSegModuleShutdown(aros_library);
++    UnLoadSeg(reinterpret_cast<BPTR>(aros_library->handle));
++  } else {
++    CloseLibrary(static_cast<struct Library*>(aros_library->handle));
++  }
++
++  delete aros_library;
+ }
+ 
+ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
+                                           const char* name) {
+-  // AROS exports versioned library vectors, not a dlsym-style name table.
++  auto* aros_library = static_cast<ArosNativeLibrary*>(library);
++  if (!aros_library || !name)
++    return nullptr;
++
++  if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
++    void* result = LookupLoadSegSymbol(aros_library, name);
++    LOG(INFO) << "[Chromium:AROS:NativeLibrary] symbol lookup module="
++              << aros_library->name << " name=" << name
++              << " result=" << result;
++    return result;
++  }
++
++  // Exec libraries export versioned vectors, not a dlsym-style name table.
+   return nullptr;
+ }
+ 
+diff --git a/components/cdm/renderer/key_system_support_update_aros.cc b/components/cdm/renderer/key_system_support_update_aros.cc
+index 942827211f..bb21637e74 100644
+--- a/components/cdm/renderer/key_system_support_update_aros.cc
++++ b/components/cdm/renderer/key_system_support_update_aros.cc
+@@ -4,13 +4,29 @@
+ 
+ #include "components/cdm/renderer/key_system_support_update.h"
+ 
++#include <memory>
++#include <utility>
++
++#include "base/feature_list.h"
++#include "base/logging.h"
++#include "components/cdm/renderer/external_clear_key_key_system_info.h"
++#include "media/base/media_switches.h"
++
+ namespace cdm {
+ 
+ std::unique_ptr<media::KeySystemSupportObserver> GetSupportedKeySystemsUpdates(
+     bool can_persist_data,
+     media::GetSupportedKeySystemsCB cb) {
+   (void)can_persist_data;
+-  cb.Run(media::KeySystemInfos());
++
++  media::KeySystemInfos key_systems;
++  if (base::FeatureList::IsEnabled(media::kExternalClearKeyForTesting)) {
++    LOG(ERROR) << "[Chromium:AROS:CDM] advertising ExternalClearKey testing "
++                  "key system";
++    key_systems.push_back(std::make_unique<ExternalClearKeyKeySystemInfo>());
++  }
++
++  cb.Run(std::move(key_systems));
+   return nullptr;
+ }
+ 
+diff --git a/media/cdm/cdm_adapter.cc b/media/cdm/cdm_adapter.cc
+index befa0de945..899891a2a9 100644
+--- a/media/cdm/cdm_adapter.cc
++++ b/media/cdm/cdm_adapter.cc
+@@ -240,10 +240,23 @@ CdmWrapper* CdmAdapter::CreateCdmInstance(const std::string& key_system) {
+   DCHECK(task_runner_->BelongsToCurrentThread());
+   TRACE_EVENT0("media", "CdmAdapter::CreateCdmInstance");
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] create instance begin key_system="
++            << key_system << " origin=" << cdm_origin_;
++#endif
+   CdmWrapper* cdm = CdmWrapper::Create(create_cdm_func_, key_system.data(),
+                                        key_system.size(), GetCdmHost, this);
+   DVLOG(1) << "CDM instance for " + key_system + (cdm ? "" : " could not be") +
+                   " created.";
++#if BUILDFLAG(IS_AROS)
++  if (cdm) {
++    LOG(INFO) << "[Chromium:AROS:CDM] create instance success key_system="
++              << key_system << " interface=" << cdm->GetInterfaceVersion();
++  } else {
++    LOG(ERROR) << "[Chromium:AROS:CDM] create instance failed key_system="
++               << key_system;
++  }
++#endif
+ 
+   if (cdm) {
+     // The interface version is relatively small. So using normal histogram
+@@ -688,6 +701,10 @@ void CdmAdapter::OnInitialized(bool success) {
+   DVLOG(3) << __func__ << ": success = " << success;
+   DCHECK(task_runner_->BelongsToCurrentThread());
+   DCHECK_NE(init_promise_id_, CdmPromiseAdapter::kInvalidPromiseId);
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] initialized success=" << success
++            << " key_system=" << cdm_config_.key_system;
++#endif
+ 
+   if (!success) {
+     cdm_promise_adapter_.RejectPromise(
+@@ -759,6 +776,11 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
+   std::string session_id_str(session_id, session_id_size);
+   DVLOG(2) << __func__ << ": session_id = " << session_id_str;
+   DCHECK(task_runner_->BelongsToCurrentThread());
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] session message key_system="
++            << cdm_config_.key_system << " session=" << session_id_str
++            << " type=" << message_type << " bytes=" << message_size;
++#endif
+ 
+   TRACE_EVENT2("media", "CdmAdapter::OnSessionMessage", "session_id",
+                session_id_str, "message_type", message_type);
+@@ -777,6 +799,12 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
+   std::string session_id_str(session_id, session_id_size);
+   DVLOG(2) << __func__ << ": session_id = " << session_id_str;
+   DCHECK(task_runner_->BelongsToCurrentThread());
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] keys change key_system="
++            << cdm_config_.key_system << " session=" << session_id_str
++            << " usable=" << has_additional_usable_key
++            << " count=" << keys_info_count;
++#endif
+ 
+   TRACE_EVENT2("media", "CdmAdapter::OnSessionKeysChange", "session_id",
+                session_id_str, "has_additional_usable_key",
+diff --git a/media/cdm/cdm_module.cc b/media/cdm/cdm_module.cc
+index 65fef0d75b..e4af677efe 100644
+--- a/media/cdm/cdm_module.cc
++++ b/media/cdm/cdm_module.cc
+@@ -108,9 +108,15 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+ 
+   // Load the CDM.
+   base::TimeTicks start = base::TimeTicks::Now();
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] load begin path=" << cdm_path.value();
++#endif
+   library_ = base::ScopedNativeLibrary(cdm_path);
+   base::TimeDelta load_time = base::TimeTicks::Now() - start;
+   if (!library_.is_valid()) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:CDM] load failed path=" << cdm_path.value();
++#endif
+     LOG(ERROR) << "CDM at " << cdm_path.value() << " could not be loaded.";
+     LOG(ERROR) << "Error: " << library_.GetError()->ToString();
+     ReportLoadResult(kUmaPrefix, base::PathExists(cdm_path)
+@@ -136,6 +142,15 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+ 
+   if (!initialize_cdm_module_func_ || !deinitialize_cdm_module_func_ ||
+       !create_cdm_func_ || !get_cdm_version_func_) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:CDM] entrypoint missing path="
++               << cdm_path.value() << " initialize="
++               << static_cast<bool>(initialize_cdm_module_func_)
++               << " deinitialize="
++               << static_cast<bool>(deinitialize_cdm_module_func_)
++               << " create=" << static_cast<bool>(create_cdm_func_)
++               << " version=" << static_cast<bool>(get_cdm_version_func_);
++#endif
+     LOG(ERROR) << "Missing entry function in CDM at " << cdm_path.value();
+     initialize_cdm_module_func_ = nullptr;
+     deinitialize_cdm_module_func_ = nullptr;
+@@ -150,6 +165,11 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+   std::string cdm_version = get_cdm_version_func_();
+   DVLOG(2) << __func__ << ": cdm_version = " << cdm_version;
+   TRACE_EVENT1("media", "CdmModule::Initialize", "cdm_version", cdm_version);
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] load success path=" << cdm_path.value()
++            << " version=" << cdm_version
++            << " load_ms=" << load_time.InMilliseconds();
++#endif
+ 
+   static crash_reporter::CrashKeyString<32> cdm_version_key("cdm-version");
+   cdm_version_key.Set(cdm_version);
+@@ -173,7 +193,15 @@ void CdmModule::InitializeCdmModule() {
+   DCHECK(initialized_);
+   DCHECK(initialize_cdm_module_func_);
+   TRACE_EVENT0("media", "CdmModule::InitializeCdmModule");
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] module initialize begin path="
++            << cdm_path_.value();
++#endif
+   initialize_cdm_module_func_();
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:CDM] module initialize end path="
++            << cdm_path_.value();
++#endif
+ }
+ 
+ }  // namespace media

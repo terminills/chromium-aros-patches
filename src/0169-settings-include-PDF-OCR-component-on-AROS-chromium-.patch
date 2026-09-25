@@ -1,0 +1,32 @@
+From 351c8c5d283a8578e5e6f7001f3b23e19c5158e5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:15:10 -0500
+Subject: [PATCH 169/638] settings: include PDF OCR component on AROS
+ [chromium] [aros]
+
+Statement: Settings GRIT preprocessing selects the desktop Linux PDF OCR export for AROS, while the GN TypeScript source list omitted the component.
+
+Decision: Admit AROS to the matching PDF OCR web-component source branch. This restores generated-module consistency without claiming native ScreenAI service support.
+
+Evidence: //chrome/browser/resources/settings:build_ts failed because lazy_load.ts exported ./a11y_page/pdf_ocr_toggle.js but no source generated it.
+
+Validation: The isolated build_ts target regenerates and compiles successfully in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ chrome/browser/resources/settings/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
+index 6a10fe92d1..32755a9415 100644
+--- a/chrome/browser/resources/settings/BUILD.gn
++++ b/chrome/browser/resources/settings/BUILD.gn
+@@ -263,7 +263,7 @@ build_webui("build") {
+   if (is_win || is_mac) {
+     web_component_files += [ "autofill_page/passkeys_subpage.ts" ]
+   }
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     web_component_files += [ "a11y_page/pdf_ocr_toggle.ts" ]
+   }
+   if (is_chrome_branded) {

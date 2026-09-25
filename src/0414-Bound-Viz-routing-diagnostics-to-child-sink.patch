@@ -1,0 +1,52 @@
+From 2c462f847c2bddd80142d12605ac8d46f728ba94 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 13:20:49 -0500
+Subject: [PATCH 414/638] [AROS] Bound Viz routing diagnostics to child
+ sinks
+
+---
+ .../compositor_frame_sink_support.cc          | 24 +++++++++++--------
+ 1 file changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+index dfbae96bf5..3e7f311c84 100644
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -550,12 +550,14 @@ void CompositorFrameSinkSupport::EvictLastActiveSurface() {
+ 
+ void CompositorFrameSinkSupport::SetNeedsBeginFrame(bool needs_begin_frame) {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS viz-support-needs] sink=" << frame_sink_id_
+-             << " needs=" << needs_begin_frame
+-             << " source=" << begin_frame_source_.get()
+-             << " source_id="
+-             << (begin_frame_source_ ? begin_frame_source_->source_id() : 0)
+-             << " observing=" << added_frame_observer_;
++  if (!is_root_) {
++    LOG(ERROR) << "[AROS viz-support-needs] sink=" << frame_sink_id_
++               << " needs=" << needs_begin_frame
++               << " source=" << begin_frame_source_.get()
++               << " source_id="
++               << (begin_frame_source_ ? begin_frame_source_->source_id() : 0)
++               << " observing=" << added_frame_observer_;
++  }
+ #endif
+   client_needs_begin_frame_ = needs_begin_frame;
+   UpdateNeedsBeginFramesInternal();
+@@ -1338,10 +1340,12 @@ void CompositorFrameSinkSupport::UpdateNeedsBeginFramesInternal() {
+ 
+ void CompositorFrameSinkSupport::StartObservingBeginFrameSource() {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS viz-observe-start] sink=" << frame_sink_id_
+-             << " source=" << begin_frame_source_.get()
+-             << " source_id="
+-             << (begin_frame_source_ ? begin_frame_source_->source_id() : 0);
++  if (!is_root_) {
++    LOG(ERROR) << "[AROS viz-observe-start] sink=" << frame_sink_id_
++               << " source=" << begin_frame_source_.get()
++               << " source_id="
++               << (begin_frame_source_ ? begin_frame_source_->source_id() : 0);
++  }
+ #endif
+   added_frame_observer_ = true;
+   begin_frame_source_->AddObserver(this);

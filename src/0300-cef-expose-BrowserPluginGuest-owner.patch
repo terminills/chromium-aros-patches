@@ -1,0 +1,58 @@
+From 4ef2ed2993a380c392e4409de88a5b6ef1697679 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:05:35 -0500
+Subject: [PATCH 300/638] cef: expose BrowserPluginGuest owner
+
+Apply the owner accessor hunks from CEF's upstream chrome_plugins patch as their own prerequisite. This gives CEF guest lookup a stable route back to the embedding WebContents.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-browser-plugin-owner-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 chrome_plugins.patch is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: libcef_static reached browser_extensions_util.cc and failed only because BrowserPluginGuest lacked owner_web_contents
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/11-libcef-static-after-upstream-prereqs.log
+
+AI_DECISION_CHAIN:; 52dac911; d49108efbb
+---
+ content/browser/browser_plugin/browser_plugin_guest.cc | 2 ++
+ content/browser/browser_plugin/browser_plugin_guest.h  | 4 ++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/content/browser/browser_plugin/browser_plugin_guest.cc b/content/browser/browser_plugin/browser_plugin_guest.cc
+index f94fcfcf56..066c66f46b 100644
+--- a/content/browser/browser_plugin/browser_plugin_guest.cc
++++ b/content/browser/browser_plugin/browser_plugin_guest.cc
+@@ -49,6 +49,8 @@ std::unique_ptr<WebContentsImpl> BrowserPluginGuest::CreateNewGuestWindow(
+ }
+ 
+ void BrowserPluginGuest::InitInternal(WebContentsImpl* owner_web_contents) {
++  owner_web_contents_ = owner_web_contents;
++
+   RenderWidgetHostImpl* rwhi =
+       GetWebContents()->GetPrimaryMainFrame()->GetRenderWidgetHost();
+   DCHECK(rwhi);
+diff --git a/content/browser/browser_plugin/browser_plugin_guest.h b/content/browser/browser_plugin/browser_plugin_guest.h
+index 7f3083029d..94a5cbed96 100644
+--- a/content/browser/browser_plugin/browser_plugin_guest.h
++++ b/content/browser/browser_plugin/browser_plugin_guest.h
+@@ -70,6 +70,8 @@ class BrowserPluginGuest : public WebContentsObserver {
+   WebContentsImpl* GetWebContents() const;
+   RenderFrameHostImpl* GetProspectiveOuterDocument();
+ 
++  WebContentsImpl* owner_web_contents() const { return owner_web_contents_; }
++
+  private:
+   // BrowserPluginGuest is a WebContentsObserver of |web_contents| and
+   // |web_contents| has to stay valid for the lifetime of BrowserPluginGuest.
+@@ -80,6 +82,8 @@ class BrowserPluginGuest : public WebContentsObserver {
+ 
+   // May be null during guest destruction.
+   const base::WeakPtr<BrowserPluginGuestDelegate> delegate_;
++
++  raw_ptr<WebContentsImpl> owner_web_contents_ = nullptr;
+ };
+ 
+ }  // namespace content

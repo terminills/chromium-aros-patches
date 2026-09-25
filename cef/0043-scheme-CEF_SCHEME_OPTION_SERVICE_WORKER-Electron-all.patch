@@ -1,0 +1,185 @@
+From 5f6580c6aac786620abf718922cf65f1503be15c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 04:56:44 -0500
+Subject: [PATCH 43/43] scheme: CEF_SCHEME_OPTION_SERVICE_WORKER (Electron
+ allowServiceWorkers)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A custom scheme registered as standard+secure still cannot register a
+service worker: content's OriginCanAccessServiceWorkers() consults
+GetServiceWorkerSchemes() and Blink's ServiceWorkerContainer consults
+SchemeRegistry::ShouldTreatURLSchemeAsAllowingServiceWorkers(), and CEF
+never fed either list. VS Code's webviews (vscode-webview://) refuse to
+start on that ("Service Workers are not enabled").
+
+New option bit 1<<7 pushes the scheme into Schemes::service_worker_schemes
+(browser side) and, in the renderer, registers it with WebSecurityPolicy
+after the render thread connects — the same two steps Electron takes for
+its allowServiceWorkers privilege. CefSchemeInfo carries the flag.
+---
+ include/cef_api_hash.h                              |  8 ++++----
+ include/internal/cef_types.h                        |  9 +++++++++
+ libcef/common/net/scheme_info.h                     |  3 +++
+ libcef/common/scheme_registrar_impl.cc              | 10 +++++++++-
+ .../renderer/alloy/alloy_content_renderer_client.cc | 10 ++++++++++
+ .../chrome/chrome_content_renderer_client_cef.cc    | 13 +++++++++++++
+ 6 files changed, 48 insertions(+), 5 deletions(-)
+
+diff --git a/include/cef_api_hash.h b/include/cef_api_hash.h
+index 6ad8d81f..d2655085 100644
+--- a/include/cef_api_hash.h
++++ b/include/cef_api_hash.h
+@@ -42,13 +42,13 @@
+ // way that may cause binary incompatibility with other builds. The universal
+ // hash value will change if any platform is affected whereas the platform hash
+ // values will change only if that particular platform is affected.
+-#define CEF_API_HASH_UNIVERSAL "a419379d63087c1c3fb8a8215c066882fd4fce03"
++#define CEF_API_HASH_UNIVERSAL "359e096a6570e9b15e1bbbe8517f890798812c5f"
+ #if defined(OS_WIN)
+-#define CEF_API_HASH_PLATFORM "04f4a1140954f4b11e6fef271d39908ecff07b86"
++#define CEF_API_HASH_PLATFORM "f9576697dc382360a20319a6ba362c96663c4e60"
+ #elif defined(OS_MAC)
+-#define CEF_API_HASH_PLATFORM "d0143d677ea9945ed5e0c3624afdb444796661ee"
++#define CEF_API_HASH_PLATFORM "9ce49c333dad81b1934195b944f0ce58d69af42c"
+ #elif defined(OS_LINUX) || defined(OS_AROS)
+-#define CEF_API_HASH_PLATFORM "cac5605286f35bf76576098a0da810a9a34b418a"
++#define CEF_API_HASH_PLATFORM "1a20d3253dd7d016e44e81c472cbbdc7640f8017"
+ #endif
+ 
+ #ifdef __cplusplus
+diff --git a/include/internal/cef_types.h b/include/internal/cef_types.h
+index 38211e52..a6fa0117 100644
+--- a/include/internal/cef_types.h
++++ b/include/internal/cef_types.h
+@@ -3204,6 +3204,15 @@ typedef enum {
+   /// requests.
+   ///
+   CEF_SCHEME_OPTION_FETCH_ENABLED = 1 << 6,
++
++  ///
++  /// If CEF_SCHEME_OPTION_SERVICE_WORKER is set pages of the scheme can
++  /// register service workers (the scheme is registered with content and
++  /// Blink as allowing service workers). Requires CEF_SCHEME_OPTION_STANDARD
++  /// and CEF_SCHEME_OPTION_SECURE; the equivalent of Electron's
++  /// allowServiceWorkers privilege.
++  ///
++  CEF_SCHEME_OPTION_SERVICE_WORKER = 1 << 7,
+ } cef_scheme_options_t;
+ 
+ ///
+diff --git a/libcef/common/net/scheme_info.h b/libcef/common/net/scheme_info.h
+index 4730d00e..efa703a3 100644
+--- a/libcef/common/net/scheme_info.h
++++ b/libcef/common/net/scheme_info.h
+@@ -48,6 +48,9 @@ struct CefSchemeInfo {
+ 
+   // A scheme that can perform fetch request.
+   bool is_fetch_enabled;
++
++  // A scheme whose pages can register service workers.
++  bool is_service_worker_enabled;
+ };
+ 
+ #endif  // CEF_LIBCEF_COMMON_NET_SCHEME_INFO_H_
+diff --git a/libcef/common/scheme_registrar_impl.cc b/libcef/common/scheme_registrar_impl.cc
+index 285373ad..e1139567 100644
+--- a/libcef/common/scheme_registrar_impl.cc
++++ b/libcef/common/scheme_registrar_impl.cc
+@@ -44,6 +44,8 @@ bool CefSchemeRegistrarImpl::AddCustomScheme(const CefString& scheme_name,
+   const bool is_cors_enabled = options & CEF_SCHEME_OPTION_CORS_ENABLED;
+   const bool is_csp_bypassing = options & CEF_SCHEME_OPTION_CSP_BYPASSING;
+   const bool is_fetch_enabled = options & CEF_SCHEME_OPTION_FETCH_ENABLED;
++  const bool is_service_worker_enabled =
++      options & CEF_SCHEME_OPTION_SERVICE_WORKER;
+ 
+   // The |is_display_isolated| value is excluded here because it's registered
+   // with Blink only.
+@@ -65,10 +67,14 @@ bool CefSchemeRegistrarImpl::AddCustomScheme(const CefString& scheme_name,
+   if (is_csp_bypassing) {
+     schemes_.csp_bypassing_schemes.push_back(scheme);
+   }
++  if (is_service_worker_enabled) {
++    schemes_.service_worker_schemes.push_back(scheme);
++  }
+ 
+   CefSchemeInfo scheme_info = {
+       scheme,    is_standard,     is_local,         is_display_isolated,
+-      is_secure, is_cors_enabled, is_csp_bypassing, is_fetch_enabled};
++      is_secure, is_cors_enabled, is_csp_bypassing, is_fetch_enabled,
++      is_service_worker_enabled};
+   CefAppManager::Get()->AddCustomScheme(&scheme_info);
+ 
+   return true;
+@@ -82,4 +88,6 @@ void CefSchemeRegistrarImpl::GetSchemes(
+   AppendArray(schemes_.secure_schemes, &schemes->secure_schemes);
+   AppendArray(schemes_.cors_enabled_schemes, &schemes->cors_enabled_schemes);
+   AppendArray(schemes_.csp_bypassing_schemes, &schemes->csp_bypassing_schemes);
++  AppendArray(schemes_.service_worker_schemes,
++              &schemes->service_worker_schemes);
+ }
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index 3e36740e..17264bdb 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -25,6 +25,7 @@
+ #include "libcef/browser/context.h"
+ #include "libcef/common/alloy/alloy_content_client.h"
+ #include "libcef/common/app_manager.h"
++#include "libcef/common/net/scheme_info.h"
+ #include "libcef/common/cef_switches.h"
+ #include "libcef/common/extensions/extensions_client.h"
+ #include "libcef/common/extensions/extensions_util.h"
+@@ -279,6 +280,15 @@ void AlloyContentRendererClient::RenderThreadConnected() {
+       extensions_v8::LoadTimesExtension::Get());
+ 
+   render_manager_->RenderThreadConnected();
++
++  // content registers its own service-worker schemes with Blink
++  // (RenderThreadImpl); custom ones are the embedder's to register.
++  for (const CefSchemeInfo& info : *CefAppManager::Get()->GetCustomSchemes()) {
++    if (info.is_service_worker_enabled) {
++      blink::WebSecurityPolicy::RegisterURLSchemeAsAllowingServiceWorkers(
++          blink::WebString::FromUTF8(info.scheme_name));
++    }
++  }
+ }
+ 
+ void AlloyContentRendererClient::RenderFrameCreated(
+diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
+index 9c333375..c4791435 100644
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
+@@ -5,11 +5,15 @@
+ 
+ #include "libcef/renderer/chrome/chrome_content_renderer_client_cef.h"
+ 
++#include "libcef/common/app_manager.h"
++#include "libcef/common/net/scheme_info.h"
+ #include "libcef/renderer/render_frame_observer.h"
+ #include "libcef/renderer/render_manager.h"
+ #include "libcef/renderer/thread_util.h"
+ 
+ #include "content/public/renderer/render_thread.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_security_policy.h"
+ 
+ ChromeContentRendererClientCef::ChromeContentRendererClientCef()
+     : render_manager_(new CefRenderManager) {}
+@@ -35,6 +39,15 @@ void ChromeContentRendererClientCef::RenderThreadConnected() {
+   ChromeContentRendererClient::RenderThreadConnected();
+ 
+   render_manager_->RenderThreadConnected();
++
++  // content registers its own service-worker schemes with Blink
++  // (RenderThreadImpl); custom ones are the embedder's to register.
++  for (const CefSchemeInfo& info : *CefAppManager::Get()->GetCustomSchemes()) {
++    if (info.is_service_worker_enabled) {
++      blink::WebSecurityPolicy::RegisterURLSchemeAsAllowingServiceWorkers(
++          blink::WebString::FromUTF8(info.scheme_name));
++    }
++  }
+ }
+ 
+ void ChromeContentRendererClientCef::RenderFrameCreated(

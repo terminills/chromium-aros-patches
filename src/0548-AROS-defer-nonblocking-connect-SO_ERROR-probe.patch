@@ -1,0 +1,33 @@
+From f6a90c004277d66cc5931be942cbc88d3430ccee Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 10:34:59 -0500
+Subject: [PATCH 548/638] AROS: defer nonblocking connect SO_ERROR probe
+
+---
+ net/socket/socket_posix.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/net/socket/socket_posix.cc b/net/socket/socket_posix.cc
+index 7d2d7b65bd..17268ba4e4 100644
+--- a/net/socket/socket_posix.cc
++++ b/net/socket/socket_posix.cc
+@@ -317,6 +317,7 @@ int SocketPosix::Connect(const SockaddrStorage& address,
+     return MapSystemError(errno);
+   }
+ 
++#if !BUILDFLAG(IS_AROS)
+   // There is a race-condition in the above code if the kernel receive a RST
+   // packet for the "connect" call before the registration of the socket file
+   // descriptor to the message loop pump. On most platform it is benign as the
+@@ -336,6 +337,11 @@ int SocketPosix::Connect(const SockaddrStorage& address,
+     write_socket_watcher_.StopWatchingFileDescriptor();
+     return rv;
+   }
++#else
++  // AROSTCP can report a transient ENOTCONN through this immediate SO_ERROR
++  // probe while the nonblocking connect is still pending. Let write readiness
++  // deliver the final connect result on AROS.
++#endif
+ 
+   write_callback_ = std::move(callback);
+   waiting_connect_ = true;

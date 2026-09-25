@@ -1,0 +1,81 @@
+From bc96f2493278df3c08764a09b16641212bfb9932 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 23:54:21 -0500
+Subject: [PATCH 129/638] [AROS] Trace the exposed DevTools bridge
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Run 0131 loads the command harness and posts Runtime.evaluate, but even about:blank plus --timeout=10000 remains pending. The harness installs its timeout only after Target.createTarget and Target.attachToTarget, so the unresolved boundary is the exposed page-to-browser DevTools bridge before navigation.
+FIX_REASON: Log AROS BrowserToPageConnector initialization, page Runtime.bindingCalled payloads, browser protocol responses, and page Runtime.evaluate delivery through Chromium logging/debug.resource. This distinguishes a request that never crosses into the browser from a response that cannot re-enter the renderer.
+SCOPE: content/browser/devtools/protocol/target_handler.cc
+VALIDATION: AROS content/browser target_handler.o cross-compiled; artifact 33 records a stable pending Runtime.evaluate with the file URL removed.
+RISK: AROS-only INFO diagnostics can expose DevTools command payloads in debug logs during bring-up; no protocol behavior changes.
+AI_DECISION_CHAIN: staged harness pack -> executeCommands runs -> about:blank still pending -> trace exposed CDP request/response crossings
+---
+ .../devtools/protocol/target_handler.cc        | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index e2ec7fe346..2eae9def14 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -13,6 +13,7 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/json/json_reader.h"
+ #include "base/json/json_writer.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/ranges/algorithm.h"
+@@ -185,6 +186,9 @@ class BrowserToPageConnector {
+   BrowserToPageConnector(const std::string& binding_name,
+                          DevToolsAgentHost* page_host)
+       : binding_name_(binding_name), page_host_(page_host) {
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:cdp-bridge] create binding=" << binding_name_;
++#endif
+     browser_host_ = BrowserDevToolsAgentHost::CreateForDiscovery();
+     browser_host_client_ =
+         std::make_unique<BrowserConnectorHostClient>(this, browser_host_.get());
+@@ -212,6 +216,9 @@ class BrowserToPageConnector {
+     SendProtocolMessageToPage("Runtime.evaluate",
+                               base::Value(std::move(evaluate_params)));
+     GetInstanceMap()[page_host_.get()].reset(this);
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:cdp-bridge] binding ready";
++#endif
+   }
+ 
+   BrowserToPageConnector(const BrowserToPageConnector&) = delete;
+@@ -236,6 +243,10 @@ class BrowserToPageConnector {
+     base::JSONWriter::Write(message, &json_message);
+     page_host_->DispatchProtocolMessage(
+         page_host_client_.get(), base::as_bytes(base::make_span(json_message)));
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:cdp-bridge] page command method=" << method
++              << " id=" << page_message_id_ - 1;
++#endif
+   }
+ 
+   void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
+@@ -269,6 +280,9 @@ class BrowserToPageConnector {
+       if (!payload) {
+         return;
+       }
++#if BUILDFLAG(IS_AROS)
++      LOG(INFO) << "[Chromium:cdp-bridge] page binding payload=" << *payload;
++#endif
+       browser_host_->DispatchProtocolMessage(
+           browser_host_client_.get(),
+           base::as_bytes(base::make_span(*payload)));
+@@ -276,6 +290,10 @@ class BrowserToPageConnector {
+     }
+     DCHECK(agent_host == browser_host_.get());
+ 
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:cdp-bridge] browser response=" << message_sp;
++#endif
++
+     std::string encoded = base::Base64Encode(message_sp);
+     std::string eval_code =
+         "try { window." + binding_name_ + ".onmessage(atob(\"";

@@ -1,0 +1,180 @@
+From fe445b3a632473499d195e3deb0797e32160142d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 12 Sep 2026 22:59:12 -0500
+Subject: [PATCH 611/638] Latch the stdc base in the AROS allocator bridge, and
+ trace it
+
+Groundwork and instrumentation for the cef-blink/v8.library one-heap work, not
+a fix for anything currently enabled. Inert while PartitionAlloc-Everywhere is
+on, because these entry points then only serve the rare foreign-pointer free.
+
+Three changes:
+
+- Resolve __aros_getbase_StdCBase() once and reuse it, instead of per call.
+  This is DEFENSIVE AND UNPROVEN. It was added on the theory that a task with
+  a stale or absent per-task base would index a bad vector table; the trace
+  below subsequently showed the base never diverges in practice, so the theory
+  is not supported. Kept because one base serving every thread is provably as
+  safe as one per thread here - stdc's malloc pool is process-global and
+  MEMF_SEM_PROTECTED - but it should not be described as a fix.
+
+- Report a differing per-task base once, INCLUDING when it is null. The first
+  version of this check read `current != cached && current != nullptr`, which
+  excluded the one case worth detecting and printed nothing; that silence was
+  briefly misread as evidence of correctness.
+
+- Check each vector before calling it. If stdc is genuinely unreachable the
+  allocation must fail as a null return the caller can handle, not as a jump
+  to address zero from inside malloc, which is unreadable in a crash log.
+
+Measured with these in place, PA-E off: no per-task divergence at the caller,
+and yet StdCBase is NULL inside stdc.library's malloc (page fault at malloc+0x5d,
+CR2 = offsetof(StdCIntBase, mempool)). So the remaining defect is on the
+stdc/genmodule side, not here.
+---
+ .../shim/allocator_shim_aros_libc.cc          | 95 +++++++++++++++++--
+ 1 file changed, 88 insertions(+), 7 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+index f84c9d9033..183c3844ea 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "partition_alloc/shim/allocator_shim_aros_libc.h"
+ 
++#include <atomic>
++#include <cstdio>
++
+ #include <defines/stdc_LVO.h>
+ 
+ // <proto/stdc.h> pulls in the complete C library prototypes, which include
+@@ -11,34 +14,112 @@
+ // base getter (provided by libstdc's auto-open code) is needed here.
+ extern "C" struct StdCBase* __aros_getbase_StdCBase(void);
+ 
++// Reached directly rather than through proto/debug.h for the same reason, and
++// because this must stay callable from inside malloc.
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
+ namespace allocator_shim::internal {
+ 
+ namespace {
+ 
++// __aros_getbase_StdCBase() resolves the library base PER TASK, and a task that
++// never opened stdc - or whose base was closed under it, as the posixc thread
++// leave hook has been seen to do - gets a stale or freed pointer back. Reading
++// StdCBase->mempool through that lands AllocPooled() with a garbage pool: a
++// #GP whose faulting "pointer" is actually code bytes.
++//
++// That was survivable while this file only served the rare foreign-pointer
++// free. It is not survivable once the shim's default dispatch routes EVERY
++// allocation here, which is what allocator_shim_default_dispatch_to_aros_libc.cc
++// does. So latch the first base that resolves non-null and keep using it: the
++// malloc pool is process-global and MEMF_SEM_PROTECTED (compiler/crt/stdc/
++// malloc.c), so one base serving every thread is exactly as safe as one base
++// per thread, and it cannot be closed out from under an unrelated task.
++//
++// A plain global, not a function-local static: the latter needs a guard
++// variable, and __cxa_guard_acquire is not something to invoke from inside
++// malloc.
++std::atomic<void**> g_stdc_base{nullptr};
++std::atomic<bool> g_stdc_base_logged{false};
++std::atomic<bool> g_stdc_base_mismatch_logged{false};
++
++void** StdCBaseCached() {
++  void** cached = g_stdc_base.load(std::memory_order_acquire);
++  void** current = reinterpret_cast<void**>(__aros_getbase_StdCBase());
++
++  if (cached == nullptr) {
++    if (current == nullptr) {
++      return nullptr;  // Nothing usable yet; the caller reports the failure.
++    }
++    g_stdc_base.store(current, std::memory_order_release);
++    if (!g_stdc_base_logged.exchange(true, std::memory_order_relaxed)) {
++      char line[96];
++      std::snprintf(line, sizeof(line), "[Chromium:stdc] base latched %p\n",
++                    static_cast<void*>(current));
++      ArosKPutStr(line);
++    }
++    return current;
++  }
++
++  // Whether per-task bases actually diverge is the open question behind this
++  // whole change, so say so once rather than silently papering over it.
++  //
++  // This deliberately reports current==nullptr too. An earlier version of this
++  // check read `current != cached && current != nullptr`, which excluded the
++  // ONE case that actually occurs - a Chromium-created thread with no per-task
++  // base at all - so it printed nothing and I misread the silence as "bases
++  // never diverge". Report the case you are hunting.
++  if (current != cached &&
++      !g_stdc_base_mismatch_logged.exchange(true, std::memory_order_relaxed)) {
++    char line[160];
++    std::snprintf(line, sizeof(line),
++                  "[Chromium:stdc] per-task base differs: latched %p, this "
++                  "task %p%s - using the latched one\n",
++                  static_cast<void*>(cached), static_cast<void*>(current),
++                  current == nullptr ? " (NULL: thread never opened stdc)"
++                                     : "");
++    ArosKPutStr(line);
++  }
++  return cached;
++}
++
+ // stdc.library function vectors sit below the library base, one pointer per
+ // LVO, in the same way <inline/stdc.h> reaches them.
+ template <typename Fn>
+ Fn StdCVector(int lvo) {
+-  void** base = reinterpret_cast<void**>(__aros_getbase_StdCBase());
++  void** base = StdCBaseCached();
++  if (base == nullptr) {
++    return nullptr;
++  }
+   return reinterpret_cast<Fn>(base[-lvo]);
+ }
+ 
+ }  // namespace
+ 
++// Every entry point checks the vector rather than calling through a null. If
++// stdc is genuinely unreachable the allocation has to fail, but it must fail
++// as a null return the caller can handle - not as a jump to address zero from
++// inside malloc, which is unreadable in a crash log.
+ void ArosLibcFree(void* ptr) {
+-  StdCVector<void (*)(void*)>(LVOfree)(ptr);
++  auto fn = StdCVector<void (*)(void*)>(LVOfree);
++  if (fn != nullptr) {
++    fn(ptr);
++  }
+ }
+ 
+ void* ArosLibcRealloc(void* ptr, size_t size) {
+-  return StdCVector<void* (*)(void*, size_t)>(LVOrealloc)(ptr, size);
++  auto fn = StdCVector<void* (*)(void*, size_t)>(LVOrealloc);
++  return fn != nullptr ? fn(ptr, size) : nullptr;
+ }
+ 
+ void* ArosLibcMalloc(size_t size) {
+-  return StdCVector<void* (*)(size_t)>(LVOmalloc)(size);
++  auto fn = StdCVector<void* (*)(size_t)>(LVOmalloc);
++  return fn != nullptr ? fn(size) : nullptr;
+ }
+ 
+ void* ArosLibcCalloc(size_t n, size_t size) {
+-  return StdCVector<void* (*)(size_t, size_t)>(LVOcalloc)(n, size);
++  auto fn = StdCVector<void* (*)(size_t, size_t)>(LVOcalloc);
++  return fn != nullptr ? fn(n, size) : nullptr;
+ }
+ 
+ void* ArosLibcAlignedAlloc(size_t alignment, size_t size) {
+@@ -50,8 +131,8 @@ void* ArosLibcAlignedAlloc(size_t alignment, size_t size) {
+   if (rounded < size) {
+     return nullptr;  // Overflowed.
+   }
+-  return StdCVector<void* (*)(size_t, size_t)>(LVOaligned_alloc)(alignment,
+-                                                                 rounded);
++  auto fn = StdCVector<void* (*)(size_t, size_t)>(LVOaligned_alloc);
++  return fn != nullptr ? fn(alignment, rounded) : nullptr;
+ }
+ 
+ }  // namespace allocator_shim::internal

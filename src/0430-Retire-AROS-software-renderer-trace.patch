@@ -1,0 +1,146 @@
+From fb7d02ec1f3d32f1cf83b992465cefd99ba7adb5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:05:15 -0500
+Subject: [PATCH 430/638] [AROS] Retire AROS software renderer trace
+
+Remove the bounded quad census and output-pixmap fingerprint probe now that software composition is established. The diagnostic checkpoint remains preserved in history.
+
+---
+ .../viz/service/display/software_renderer.cc  | 92 -------------------
+ 1 file changed, 92 deletions(-)
+
+diff --git a/components/viz/service/display/software_renderer.cc b/components/viz/service/display/software_renderer.cc
+index ac9d158fb1..134c15eefe 100644
+--- a/components/viz/service/display/software_renderer.cc
++++ b/components/viz/service/display/software_renderer.cc
+@@ -8,7 +8,6 @@
+ #include <utility>
+ #include <vector>
+ 
+-#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/process/memory.h"
+ #include "base/trace_event/trace_event.h"
+@@ -42,7 +41,6 @@
+ #include "third_party/skia/include/core/SkImageFilter.h"
+ #include "third_party/skia/include/core/SkMatrix.h"
+ #include "third_party/skia/include/core/SkPath.h"
+-#include "third_party/skia/include/core/SkPixmap.h"
+ #include "third_party/skia/include/core/SkPoint.h"
+ #include "third_party/skia/include/core/SkShader.h"
+ #include "third_party/skia/include/core/SkSwizzle.h"
+@@ -54,42 +52,6 @@
+ 
+ namespace viz {
+ namespace {
+-
+-#if BUILDFLAG(IS_AROS)
+-struct ArosSoftwareFrameStats {
+-  uint32_t total = 0;
+-  uint32_t render_pass = 0;
+-  uint32_t picture = 0;
+-  uint32_t solid = 0;
+-  uint32_t texture = 0;
+-  uint32_t tile = 0;
+-  uint32_t other = 0;
+-};
+-
+-ArosSoftwareFrameStats g_aros_software_frame_stats;
+-
+-uint32_t ArosPixmapFingerprint(const SkPixmap& pixmap) {
+-  if (!pixmap.addr() || pixmap.width() <= 0 || pixmap.height() <= 0) {
+-    return 0;
+-  }
+-
+-  uint32_t hash = 2166136261u;
+-  for (int sample_y = 0; sample_y < 8; ++sample_y) {
+-    const int y = sample_y * (pixmap.height() - 1) / 7;
+-    for (int sample_x = 0; sample_x < 8; ++sample_x) {
+-      const int x = sample_x * (pixmap.width() - 1) / 7;
+-      uint32_t color = pixmap.getColor(x, y);
+-      for (int byte = 0; byte < 4; ++byte) {
+-        hash ^= color & 0xffu;
+-        hash *= 16777619u;
+-        color >>= 8;
+-      }
+-    }
+-  }
+-  return hash;
+-}
+-#endif
+-
+ class AnimatedImagesProvider : public cc::ImageProvider {
+  public:
+   AnimatedImagesProvider(
+@@ -140,40 +102,10 @@ bool SoftwareRenderer::CanPartialSwap() {
+ 
+ void SoftwareRenderer::BeginDrawingFrame() {
+   TRACE_EVENT0("viz", "SoftwareRenderer::BeginDrawingFrame");
+-#if BUILDFLAG(IS_AROS)
+-  g_aros_software_frame_stats = ArosSoftwareFrameStats();
+-#endif
+ }
+ 
+ void SoftwareRenderer::FinishDrawingFrame() {
+   TRACE_EVENT0("viz", "SoftwareRenderer::FinishDrawingFrame");
+-#if BUILDFLAG(IS_AROS)
+-  static uint32_t aros_output_sequence = 0;
+-  if (root_canvas_ && aros_output_sequence < 16) {
+-    ++aros_output_sequence;
+-    SkPixmap pixmap;
+-    const bool peeked = root_canvas_->peekPixels(&pixmap);
+-    const int center_x = peeked ? pixmap.width() / 2 : 0;
+-    const int center_y = peeked ? pixmap.height() / 2 : 0;
+-    const int lower_y = peeked ? pixmap.height() * 3 / 4 : 0;
+-    LOG(ERROR) << "[AROS software-output] seq=" << aros_output_sequence
+-               << " peeked=" << peeked
+-               << " width=" << (peeked ? pixmap.width() : 0)
+-               << " height=" << (peeked ? pixmap.height() : 0)
+-               << " fingerprint="
+-               << (peeked ? ArosPixmapFingerprint(pixmap) : 0) << " center="
+-               << (peeked ? pixmap.getColor(center_x, center_y) : 0)
+-               << " lower="
+-               << (peeked ? pixmap.getColor(center_x, lower_y) : 0)
+-               << " quads=" << g_aros_software_frame_stats.total
+-               << " render_pass=" << g_aros_software_frame_stats.render_pass
+-               << " picture=" << g_aros_software_frame_stats.picture
+-               << " solid=" << g_aros_software_frame_stats.solid
+-               << " texture=" << g_aros_software_frame_stats.texture
+-               << " tile=" << g_aros_software_frame_stats.tile
+-               << " other=" << g_aros_software_frame_stats.other;
+-  }
+-#endif
+   // `current_canvas_` may be pointing to `current_framebuffer_canvas_`. Make
+   // sure to reset it before destroying `current_framebuffer_canvas_`.
+   current_canvas_ = nullptr;
+@@ -319,30 +251,6 @@ void SoftwareRenderer::DoDrawQuad(const DrawQuad* quad,
+   if (!current_canvas_)
+     return;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  ++g_aros_software_frame_stats.total;
+-  switch (quad->material) {
+-    case DrawQuad::Material::kAggregatedRenderPass:
+-      ++g_aros_software_frame_stats.render_pass;
+-      break;
+-    case DrawQuad::Material::kPictureContent:
+-      ++g_aros_software_frame_stats.picture;
+-      break;
+-    case DrawQuad::Material::kSolidColor:
+-      ++g_aros_software_frame_stats.solid;
+-      break;
+-    case DrawQuad::Material::kTextureContent:
+-      ++g_aros_software_frame_stats.texture;
+-      break;
+-    case DrawQuad::Material::kTiledContent:
+-      ++g_aros_software_frame_stats.tile;
+-      break;
+-    default:
+-      ++g_aros_software_frame_stats.other;
+-      break;
+-  }
+-#endif
+-
+   TRACE_EVENT0("viz", "SoftwareRenderer::DoDrawQuad");
+   const bool should_apply_rounded_corner = ShouldApplyRoundedCorner(quad);
+   bool do_save =

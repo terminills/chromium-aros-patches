@@ -1,0 +1,40 @@
+From 7fa07dd65b2c8ac2d4713cf555f9c5f0681440a9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 11:37:23 -0500
+Subject: [PATCH 08/28] base: contain the AROS GLOBAL qualifier
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: exec/types.h exports GLOBAL as the legacy extern storage qualifier, which rewrote V8's RegExpMacroAssembler::GLOBAL enum token and broke every downstream regexp declaration.
+
+FIX_REASON: Remove GLOBAL at V8's internal macro boundary beside REGISTER; V8 does not consume the AROS qualifier and uses GLOBAL as owned C++ identity in both headers and sources.
+
+SCOPE: src/base/macros.h
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/v8/v8_base_without_compiler/external-reference.o
+
+RISK: low; the undef is AROS-only and applies after platform headers at V8's internal source boundary.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/base/macros.h | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/base/macros.h b/src/base/macros.h
+index ed0a1aa..9d837cb 100644
+--- a/src/base/macros.h
++++ b/src/base/macros.h
+@@ -13,8 +13,9 @@
+ #include "src/base/logging.h"
+ 
+ #if V8_OS_AROS
+-// exec/types.h exposes this legacy storage qualifier in the global macro
+-// namespace, where it collides with V8 register-location enum values.
++// exec/types.h exposes these legacy storage qualifiers in the global macro
++// namespace, where they collide with V8 enum values.
++#undef GLOBAL
+ #undef REGISTER
+ #endif
+ 

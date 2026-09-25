@@ -1,0 +1,38 @@
+From 0ab25908db1d6e51bc586b9269ee75a67c14029d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 18:02:36 -0500
+Subject: [PATCH 116/638] [AROS] Normalize executable names from DOS
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: GetProgramName returned the invoked command path Developer:Chromium/headless_shell, while GetProgramDir already resolved System:Developer/Chromium; concatenating both produced a duplicated DIR_ASSETS path and hid the headless resource packs.
+FIX_REASON: Reduce the DOS program string to its FilePart basename before joining it to the locked program directory.
+SCOPE: base/base_paths_aros.cc
+VALIDATION: base_paths_aros.o cross-compiled; hosted 0116 logged failed lookups under System:Developer/Chromium/Developer:Chromium and then aborted after locale resources remained empty.
+RISK: Low; FILE_EXE and FILE_MODULE retain the resolved program directory and now consistently use the executable basename regardless of invocation syntax.
+AI_DECISION_CHAIN: PartitionAlloc pools initialized -> headless command starts -> duplicated DIR_ASSETS -> normalize AROS program basename
+Continues: 3e42c47a8e
+---
+ base/base_paths_aros.cc | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+index cf86eed0c7..f0a911a9cb 100644
+--- a/base/base_paths_aros.cc
++++ b/base/base_paths_aros.cc
+@@ -27,10 +27,14 @@ bool GetExecutablePath(FilePath* result) {
+     return false;
+   }
+ 
++  const char* program_name = FilePart(program);
++  if (!program_name || !*program_name)
++    program_name = program;
++
+   std::string path(directory);
+   if (!path.empty() && path.back() != ':' && path.back() != '/')
+     path.push_back('/');
+-  path.append(program);
++  path.append(program_name);
+   *result = FilePath(path);
+   return true;
+ }

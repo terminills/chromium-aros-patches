@@ -1,0 +1,36 @@
+From b04f9e673b393a7bf96c251d7787b1ea2758b9a5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:28:32 -0500
+Subject: [PATCH 097/638] [AROS] Retain the fail-closed system tracing wrapper
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS now links Chromium system tracing control while Perfetto daemon IPC remains explicitly unavailable.
+ROOT_CAUSE: The AROS Perfetto source filter removed the Unix system producer and unintentionally removed SystemTracingService with it, leaving two browser-process symbols undefined.
+FIX_REASON: Select the Mojo-facing SystemTracingService wrapper independently on AROS; its existing AROS connector path reports EAFNOSUPPORT without compiling AF_UNIX producer IPC.
+SCOPE: services/tracing/public/cpp GN source selection.
+VALIDATION: Filtered GN generation; libtracing_cpp.a rebuild; x86_64-aros-nm confirms SystemTracingService constructor and BindAndPassPendingRemote definitions.
+RISK: Cross-process Perfetto daemon sessions remain unavailable by design; in-process tracing and the browser control boundary remain available.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-aros-native-crash-reporting
+---
+ services/tracing/public/cpp/BUILD.gn | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/services/tracing/public/cpp/BUILD.gn b/services/tracing/public/cpp/BUILD.gn
+index 097271bbce..8fbc744385 100644
+--- a/services/tracing/public/cpp/BUILD.gn
++++ b/services/tracing/public/cpp/BUILD.gn
+@@ -175,6 +175,13 @@ target(tracing_lib_type, "cpp") {
+       }
+     }
+ 
++    if (is_aros) {
++      sources += [
++        "system_tracing_service.cc",
++        "system_tracing_service.h",
++      ]
++    }
++
+     if (is_chromeos_ash) {
+       deps += [ "//chromeos/dbus/constants" ]
+     }

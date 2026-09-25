@@ -1,0 +1,160 @@
+From 6336e40a7d50f1ade0f3dd82557352199881595a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 21:41:41 -0500
+Subject: [PATCH 272/638] v8: prove direct AROS shared-library import
+
+Add a focused Chromium-built consumer that calls v8::V8::GetVersion through an AROS runtime import trampoline. Keep the consumer on V8 headers plus v8.library only, and allow the existing focused extraction graph to include explicit consumer gates.
+
+AI_PHASE: v8-library-convergence
+AI_STATUS: implemented
+AI_ROOT_CAUSE: Chromium calls the V8 C++ ABI directly, while the AROS v8 link library exposes only its small wrapper API; loading v8.library alone would not remove static V8 objects from Chrome.
+AI_FIX: Add the first ABI-preserving x86-64 import trampoline and a direct C++ consumer probe resolved by V8FindEngineSymbol; allow root_extra_deps in the focused AROS V8 graph.
+AI_VALIDATION: focused GN generation and probe link passed; hosted 16 GiB run resolved _ZN2v82V810GetVersionEv from v8.library, returned 12.4.254, printed direct C++ import PASS, and bootstrap exited 0.
+AI_FAILURE: Full strip removed AROS relocations and trapped at RIP=0; preserved as evidence, then corrected with strip --strip-unneeded.
+AI_RISK: This proves one function import only; full Chrome requires generated cached trampolines plus classification of direct V8 data symbols.
+AI_CHAIN:
+---
+ BUILD.gn                                      |  1 +
+ build/config/aros/v8_library/BUILD.gn         | 24 +++++++++
+ .../aros/v8_library/v8_get_version_import.S   | 31 ++++++++++++
+ .../v8_library/v8_library_consumer_probe.cc   | 50 +++++++++++++++++++
+ 4 files changed, 106 insertions(+)
+ create mode 100644 build/config/aros/v8_library/BUILD.gn
+ create mode 100644 build/config/aros/v8_library/v8_get_version_import.S
+ create mode 100644 build/config/aros/v8_library/v8_library_consumer_probe.cc
+
+diff --git a/BUILD.gn b/BUILD.gn
+index d600833277..f0a0c3caf7 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -91,6 +91,7 @@ group("gn_all") {
+   if (is_aros && aros_v8_library_only) {
+     assert(v8_monolithic)
+     deps = [ "//v8:v8_monolith" ]
++    deps += root_extra_deps
+   } else if (is_cronet_build) {
+     if (is_android) {
+       deps = [ "//components/cronet/android:cronet_package_android" ]
+diff --git a/build/config/aros/v8_library/BUILD.gn b/build/config/aros/v8_library/BUILD.gn
+new file mode 100644
+index 0000000000..51d114ece6
+--- /dev/null
++++ b/build/config/aros/v8_library/BUILD.gn
+@@ -0,0 +1,24 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++assert(is_aros)
++
++# First consumer-side gate for replacing Chromium's monolithic V8 linkage.
++# This target deliberately depends on V8 headers only. The GetVersion
++# implementation is resolved from v8.library at runtime through the AROS import
++# trampoline, so a successful link and run cannot silently fall back to V8
++# objects in the executable.
++executable("v8_library_consumer_probe") {
++  sources = [
++    "v8_get_version_import.S",
++    "v8_library_consumer_probe.cc",
++  ]
++
++  deps = [ "//v8:v8_headers" ]
++
++  libs = [
++    "debug",
++    "v8",
++  ]
++}
+diff --git a/build/config/aros/v8_library/v8_get_version_import.S b/build/config/aros/v8_library/v8_get_version_import.S
+new file mode 100644
+index 0000000000..c168c5898e
+--- /dev/null
++++ b/build/config/aros/v8_library/v8_get_version_import.S
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Consumer-side import trampoline for v8::V8::GetVersion().
++//
++// This intentionally starts with one known-good C++ ABI symbol. Once this
++// direct-call boundary is proven, the same mechanism can be generated for the
++// complete set of Chromium-to-V8 function imports.
++
++        .text
++        .p2align 4
++        .globl _ZN2v82V810GetVersionEv
++        .type _ZN2v82V810GetVersionEv, @function
++_ZN2v82V810GetVersionEv:
++        // SysV x86-64 enters with RSP == 8 (mod 16). Align before calling the
++        // resolver, then tail-call the resolved V8 implementation.
++        subq $8, %rsp
++        call ArosResolveV8GetVersion
++        addq $8, %rsp
++        testq %rax, %rax
++        je .Lget_version_missing
++        jmp *%rax
++
++.Lget_version_missing:
++        xorl %eax, %eax
++        ret
++
++        .size _ZN2v82V810GetVersionEv, .-_ZN2v82V810GetVersionEv
++
++        .section .note.GNU-stack,"",@progbits
+diff --git a/build/config/aros/v8_library/v8_library_consumer_probe.cc b/build/config/aros/v8_library/v8_library_consumer_probe.cc
+new file mode 100644
+index 0000000000..8b4dbb7b5c
+--- /dev/null
++++ b/build/config/aros/v8_library/v8_library_consumer_probe.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <proto/v8.h>
++
++#include "v8/include/v8.h"
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++namespace {
++
++constexpr char kGetVersionSymbol[] = "_ZN2v82V810GetVersionEv";
++
++bool StringsEqual(const char* lhs, const char* rhs) {
++  if (!lhs || !rhs)
++    return false;
++  while (*lhs && *rhs) {
++    if (*lhs++ != *rhs++)
++      return false;
++  }
++  return *lhs == *rhs;
++}
++
++}  // namespace
++
++extern "C" void* ArosResolveV8GetVersion() {
++  return V8FindEngineSymbol(kGetVersionSymbol);
++}
++
++int main() {
++  ArosKPutStr("[Chromium:shared-v8] direct C++ import begin\n");
++  const char* version = v8::V8::GetVersion();
++  if (!version) {
++    ArosKPutStr("[Chromium:shared-v8] GetVersion resolution failed\n");
++    return 20;
++  }
++
++  ArosKPutStr("[Chromium:shared-v8] GetVersion returned ");
++  ArosKPutStr(version);
++  ArosKPutStr("\n");
++
++  if (!StringsEqual(version, "12.4.254")) {
++    ArosKPutStr("[Chromium:shared-v8] unexpected V8 ABI version\n");
++    return 20;
++  }
++
++  ArosKPutStr("[Chromium:shared-v8] direct C++ import PASS\n");
++  return 0;
++}

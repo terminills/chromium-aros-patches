@@ -1,0 +1,231 @@
+From ae89f56d95d195fb5a94ca8a4d7134cde0666cb6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 15:50:28 -0500
+Subject: [PATCH 472/638] AROS: scope Chromium thread pools per native process
+
+Register each ThreadPoolInstance against its creating Exec task and inherit it through the task parent chain. Remove child entries after shutdown so independently scheduled browser, GPU, renderer, and utility processes do not collide in the shared address space.
+
+
+
+---
+ base/task/thread_pool/thread_pool_instance.cc | 122 +++++++++++++++---
+ content/app/content_main_runner_impl.cc       |  10 ++
+ 2 files changed, 116 insertions(+), 16 deletions(-)
+
+diff --git a/base/task/thread_pool/thread_pool_instance.cc b/base/task/thread_pool/thread_pool_instance.cc
+index 86ff4d95ef..024ffbcf5d 100644
+--- a/base/task/thread_pool/thread_pool_instance.cc
++++ b/base/task/thread_pool/thread_pool_instance.cc
+@@ -5,23 +5,108 @@
+ #include "base/task/thread_pool/thread_pool_instance.h"
+ 
+ #include <algorithm>
++#include <map>
+ #include <string_view>
+ 
+ #include "base/check.h"
+ #include "base/memory/ptr_util.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/system/sys_info.h"
+ #include "base/task/thread_pool/thread_pool_impl.h"
+ #include "base/threading/platform_thread.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ namespace base {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// Native AROS processes share an address space but retain independent process
++// and worker-task trees. Register each pool against the task that creates it,
++// then let workers inherit it through their parent chain.
++struct ThreadPoolProcessRegistry {
++  Lock lock;
++  std::map<struct Task*, ThreadPoolInstance*> pools;
++};
++
++ThreadPoolProcessRegistry& GetThreadPoolProcessRegistry() {
++  static NoDestructor<ThreadPoolProcessRegistry> registry;
++  return *registry;
++}
++
++ThreadPoolInstance* GetThreadPoolForCurrentTask() {
++  auto& registry = GetThreadPoolProcessRegistry();
++  AutoLock lock(registry.lock);
++
++  struct Task* task = FindTask(nullptr);
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    const auto it = registry.pools.find(task);
++    if (it != registry.pools.end()) {
++      return it->second;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return nullptr;
++}
++
++void SetThreadPoolForCurrentTask(
++    std::unique_ptr<ThreadPoolInstance> thread_pool) {
++  auto& registry = GetThreadPoolProcessRegistry();
++  ThreadPoolInstance* old_thread_pool = nullptr;
++  {
++    AutoLock lock(registry.lock);
++    struct Task* task = FindTask(nullptr);
++
++    if (thread_pool) {
++      ThreadPoolInstance*& slot = registry.pools[task];
++      old_thread_pool = slot;
++      slot = thread_pool.release();
++    } else {
++      for (size_t depth = 0; task && depth < 64; ++depth) {
++        const auto it = registry.pools.find(task);
++        if (it != registry.pools.end()) {
++          old_thread_pool = it->second;
++          registry.pools.erase(it);
++          break;
++        }
++
++        struct ETask* etask = GetETask(task);
++        task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++      }
++    }
++  }
++
++  delete old_thread_pool;
++}
++
++#else
++
+ // |g_thread_pool| is intentionally leaked on shutdown.
+ ThreadPoolInstance* g_thread_pool = nullptr;
+ 
++ThreadPoolInstance* GetThreadPoolForCurrentTask() {
++  return g_thread_pool;
++}
++
++void SetThreadPoolForCurrentTask(
++    std::unique_ptr<ThreadPoolInstance> thread_pool) {
++  delete g_thread_pool;
++  g_thread_pool = thread_pool.release();
++}
++
++#endif
++
+ size_t GetDefaultMaxNumUtilityThreads(size_t max_num_foreground_threads_in) {
+   int num_of_efficient_processors = SysInfo::NumberOfEfficientProcessors();
+   if (num_of_efficient_processors != 0) {
+@@ -48,39 +133,45 @@ ThreadPoolInstance::InitParams::InitParams(size_t max_num_foreground_threads_in,
+ ThreadPoolInstance::InitParams::~InitParams() = default;
+ 
+ ThreadPoolInstance::ScopedExecutionFence::ScopedExecutionFence() {
+-  DCHECK(g_thread_pool);
+-  g_thread_pool->BeginFence();
++  ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask();
++  DCHECK(thread_pool);
++  thread_pool->BeginFence();
+ }
+ 
+ ThreadPoolInstance::ScopedExecutionFence::~ScopedExecutionFence() {
+-  DCHECK(g_thread_pool);
+-  g_thread_pool->EndFence();
++  ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask();
++  DCHECK(thread_pool);
++  thread_pool->EndFence();
+ }
+ 
+ ThreadPoolInstance::ScopedBestEffortExecutionFence::
+     ScopedBestEffortExecutionFence() {
+-  DCHECK(g_thread_pool);
+-  g_thread_pool->BeginBestEffortFence();
++  ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask();
++  DCHECK(thread_pool);
++  thread_pool->BeginBestEffortFence();
+ }
+ 
+ ThreadPoolInstance::ScopedBestEffortExecutionFence::
+     ~ScopedBestEffortExecutionFence() {
+-  DCHECK(g_thread_pool);
+-  g_thread_pool->EndBestEffortFence();
++  ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask();
++  DCHECK(thread_pool);
++  thread_pool->EndBestEffortFence();
+ }
+ 
+ ThreadPoolInstance::ScopedFizzleBlockShutdownTasks::
+     ScopedFizzleBlockShutdownTasks() {
+   // It's possible for this to be called without a ThreadPool present in tests.
+-  if (g_thread_pool)
+-    g_thread_pool->BeginFizzlingBlockShutdownTasks();
++  if (ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask()) {
++    thread_pool->BeginFizzlingBlockShutdownTasks();
++  }
+ }
+ 
+ ThreadPoolInstance::ScopedFizzleBlockShutdownTasks::
+     ~ScopedFizzleBlockShutdownTasks() {
+   // It's possible for this to be called without a ThreadPool present in tests.
+-  if (g_thread_pool)
+-    g_thread_pool->EndFizzlingBlockShutdownTasks();
++  if (ThreadPoolInstance* const thread_pool = GetThreadPoolForCurrentTask()) {
++    thread_pool->EndFizzlingBlockShutdownTasks();
++  }
+ }
+ 
+ #if !BUILDFLAG(IS_NACL)
+@@ -88,7 +179,7 @@ ThreadPoolInstance::ScopedFizzleBlockShutdownTasks::
+ void ThreadPoolInstance::CreateAndStartWithDefaultParams(
+     std::string_view name) {
+   Create(name);
+-  g_thread_pool->StartWithDefaultParams();
++  Get()->StartWithDefaultParams();
+ }
+ 
+ void ThreadPoolInstance::StartWithDefaultParams() {
+@@ -110,13 +201,12 @@ void ThreadPoolInstance::Create(std::string_view name) {
+ 
+ // static
+ void ThreadPoolInstance::Set(std::unique_ptr<ThreadPoolInstance> thread_pool) {
+-  delete g_thread_pool;
+-  g_thread_pool = thread_pool.release();
++  SetThreadPoolForCurrentTask(std::move(thread_pool));
+ }
+ 
+ // static
+ ThreadPoolInstance* ThreadPoolInstance::Get() {
+-  return g_thread_pool;
++  return GetThreadPoolForCurrentTask();
+ }
+ 
+ }  // namespace base
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index 0272103e39..18d9ec1c58 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -1345,6 +1345,16 @@ void ContentMainRunnerImpl::Shutdown() {
+ 
+   exit_manager_.reset(nullptr);
+ 
++#if BUILDFLAG(IS_AROS)
++  // Unlike separate-address-space platforms, a native child leaving does not
++  // discard address-space globals. Remove its process-scoped ThreadPool entry
++  // after all child shutdown users are finished so a recycled Task address
++  // cannot inherit a stopped pool.
++  if (!process_type.empty()) {
++    base::ThreadPoolInstance::Set(nullptr);
++  }
++#endif
++
+   delegate_ = nullptr;
+   is_shutdown_ = true;
+ }

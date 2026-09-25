@@ -1,0 +1,30 @@
+From 863526af8cbb103c731d816c4ede0867f0a619a0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 21:06:11 -0500
+Subject: [PATCH 101/638] [AROS] Link the native network support runtime
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Chromium net consumers now link AROS libnet for standard vectored I/O and IPv6 address constants.
+ROOT_CAUSE: AROS provides writev, in6addr_any, and in6addr_loopback in libnet.a rather than the default C runtime, but Chromium declared no platform library dependency for its net component.
+FIX_REASON: Attach the native net library to the AROS net target so only final binaries that consume the network component inherit it.
+SCOPE: Chromium net component AROS system-library dependency.
+VALIDATION: Filtered GN generation; the Chromium net archive builds; the headless_shell link command contains -lnet; AROS libnet.a exports writev and both IPv6 constants.
+RISK: libnet remains a static support archive; task-local bsdsocket operations continue to use the explicit Chromium SocketBase adapter.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-aros-native-crash-reporting
+---
+ net/BUILD.gn | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index 8537a9b13a..0289cf8a0e 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1350,6 +1350,7 @@ component("net") {
+       "base/platform_mime_util_aros.cc",
+       "cert/test_root_certs_builtin.cc",
+     ]
++    libs = [ "net" ]
+   } else if (is_posix && !is_linux && !is_chromeos) {
+     # Use getifaddrs() on other non-Linux POSIX platforms.
+     sources += [

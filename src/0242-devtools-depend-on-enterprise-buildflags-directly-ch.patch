@@ -1,0 +1,37 @@
+From 645f4c8eb0d2a9d6886d9f69e24466044fae9881 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 15:54:40 -0500
+Subject: [PATCH 242/638] devtools: depend on enterprise buildflags directly
+ [chromium] [build]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: build-validated
+
+ROOT_CAUSE: devtools_window.cc includes file_select_helper.h, which directly includes the generated enterprise buildflags header. The devtools target intentionally cannot depend on //chrome/browser:browser because of a GN cycle, so a regenerated MessageCenter graph compiled devtools before that browser-owned header existed.
+
+FIX_REASON: Add the enterprise buildflags generator beside the target's existing explicit indirect dependencies for the same browser-cycle constraint.
+
+SCOPE: chrome/browser/devtools/BUILD.gn only.
+
+VALIDATION: ninja -C out/aros-windowed chrome -j48 regenerated the graph, compiled all 5980 object/archive steps, and linked the 69,696,356,792-byte unmerged Chrome ET_REL successfully.
+
+RISK: This adds only build ordering and generated-header availability; compile-time enterprise feature values and runtime behavior are unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;; MessageCenter graph regeneration -> missing components/enterprise/buildflags/buildflags.h -> direct generator dependency.
+---
+ chrome/browser/devtools/BUILD.gn | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
+index bf03e44832..a85a30f4ee 100644
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -113,6 +113,7 @@ static_library("devtools") {
+     "//chrome/browser/autofill:autofill",
+     "//components/autofill/content/browser:browser",
+     "//components/autofill/core/browser:browser",
++    "//components/enterprise/buildflags",
+     "//components/paint_preview/buildflags:buildflags",
+     "//content/public/browser",
+     "//net",

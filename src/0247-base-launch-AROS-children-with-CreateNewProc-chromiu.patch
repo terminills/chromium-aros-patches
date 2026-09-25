@@ -1,0 +1,273 @@
+From 420e9a235417e013f47674ccac0b25cb0d7c473a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 15:54:54 -0500
+Subject: [PATCH 247/638] base: launch AROS children with CreateNewProc
+ [chromium] [aros]
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: hosted-validated, native-pending
+
+ROOT_CAUSE: AROS base::LaunchProcess returned ENOSYS, preventing Chromium from creating independent child processes even though DOS/Exec already provides tracked child creation and posixc waitpid consumes NP_NotifyOnDeath state.
+
+FIX_REASON: Load the native executable, quote AmigaDOS arguments, launch with CreateNewProc and NP_NotifyOnDeath, expose the ETask ID as Chromium process handle, and fail closed for unsupported POSIX-only launch options.
+
+SCOPE: base/process/launch_aros.cc only. MessagePort/Mojo transport and child-role enablement remain separate phases.
+
+VALIDATION: launch_aros.o and launch_process_aros_probe build. Clean hosted AROS observed parent 35, child 36, exact argv, three-second concurrent lifetime, child exit 23, and successful WaitForExit. Evidence: /home/terminills/Documents/GitHub/chromium-aros/test-artifacts/hosted-20260716-process-model. Native SMP validation delegated as.
+
+RISK: moderate. fd remapping, environment replacement, pre-exec delegates, rlimits, and process groups remain fail-closed; native SMP result is pending.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap,,
+---
+ base/process/launch_aros.cc | 216 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 211 insertions(+), 5 deletions(-)
+
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index 58ad58773e..5e64f642f2 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -8,16 +8,30 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
++#include <limits>
++#include <string>
++
+ #include "base/command_line.h"
+ #include "base/logging.h"
+ #include "base/process/process_metrics.h"
++#include "base/threading/scoped_blocking_call.h"
++
++#include <dos/dos.h>
++#include <dos/dosextens.h>
++#include <dos/dostags.h>
++#include <exec/tasks.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
+ 
+ namespace base {
+ namespace {
+ 
+-Process UnsupportedLaunch() {
+-  errno = ENOSYS;
+-  LOG(ERROR) << "LaunchProcess requires the OPAL domain fork/spawn backend";
++constexpr ULONG kChromiumChildStackSize = 4 * 1024 * 1024;
++
++Process UnsupportedLaunch(const char* reason, int error = ENOTSUP) {
++  errno = error;
++  LOG(ERROR) << "[Chromium:AROS:Launch] unsupported launch request: "
++             << reason;
+   return Process();
+ }
+ 
+@@ -30,15 +44,207 @@ bool UnsupportedOutput(std::string* output, int* exit_code = nullptr) {
+   return false;
+ }
+ 
++int IoErrToErrno(LONG io_error) {
++  switch (io_error) {
++    case ERROR_NO_FREE_STORE:
++      return ENOMEM;
++    case ERROR_OBJECT_NOT_FOUND:
++    case ERROR_DIR_NOT_FOUND:
++      return ENOENT;
++    case ERROR_OBJECT_WRONG_TYPE:
++      return ENOTDIR;
++    case ERROR_READ_PROTECTED:
++      return EACCES;
++    default:
++      return EIO;
++  }
++}
++
++std::string ToDosPath(const FilePath& path) {
++  const std::string& value = path.value();
++  if (value.empty() || value.find(':') != std::string::npos ||
++      value.front() != '/') {
++    return value;
++  }
++
++  const size_t volume_start = value.find_first_not_of('/');
++  if (volume_start == std::string::npos)
++    return ":";
++
++  const size_t volume_end = value.find('/', volume_start);
++  if (volume_end == std::string::npos)
++    return value.substr(volume_start) + ":";
++
++  std::string dos_path = value.substr(volume_start, volume_end - volume_start);
++  dos_path.push_back(':');
++  dos_path.append(value, volume_end + 1, std::string::npos);
++  return dos_path;
++}
++
++bool AppendQuotedArgument(const std::string& argument,
++                          std::string* command_line) {
++  if (argument.find('\0') != std::string::npos)
++    return false;
++
++  command_line->push_back('"');
++  for (const char character : argument) {
++    switch (character) {
++      case '\n':
++        command_line->append("*N");
++        break;
++      case '"':
++      case '*':
++        command_line->push_back('*');
++        command_line->push_back(character);
++        break;
++      default:
++        command_line->push_back(character);
++        break;
++    }
++  }
++  command_line->append("\" ");
++  return true;
++}
++
++bool BuildArguments(const std::vector<std::string>& argv,
++                    std::string* arguments) {
++  arguments->clear();
++  for (size_t index = 1; index < argv.size(); ++index) {
++    if (!AppendQuotedArgument(argv[index], arguments))
++      return false;
++  }
++
++  if (arguments->empty())
++    arguments->push_back('\n');
++  else
++    arguments->back() = '\n';
++  return true;
++}
++
++const char* UnsupportedOption(const LaunchOptions& options) {
++  if (!options.fds_to_remap.empty())
++    return "file descriptor remapping requires native MessagePort handles";
++  if (!options.environment.empty() || options.clear_environment)
++    return "POSIX environment replacement is not implemented";
++  if (options.pre_exec_delegate)
++    return "pre-exec delegates are not valid for CreateNewProc";
++  if (options.maximize_rlimits)
++    return "POSIX resource limits are not available";
++  if (options.new_process_group)
++    return "POSIX process groups are not available";
++  return nullptr;
++}
++
+ }  // namespace
+ 
+ Process LaunchProcess(const CommandLine& cmdline, const LaunchOptions& options) {
+-  return UnsupportedLaunch();
++  return LaunchProcess(cmdline.argv(), options);
+ }
+ 
+ Process LaunchProcess(const std::vector<std::string>& argv,
+                       const LaunchOptions& options) {
+-  return UnsupportedLaunch();
++  if (argv.empty() || argv.front().empty())
++    return UnsupportedLaunch("empty executable path", EINVAL);
++
++  if (const char* unsupported = UnsupportedOption(options))
++    return UnsupportedLaunch(unsupported);
++
++  const FilePath executable =
++      options.real_path.empty() ? FilePath(argv.front()) : options.real_path;
++  const std::string dos_executable = ToDosPath(executable);
++  if (dos_executable.empty())
++    return UnsupportedLaunch("empty native executable path", EINVAL);
++
++  std::string arguments;
++  if (!BuildArguments(argv, &arguments))
++    return UnsupportedLaunch("argument contains an embedded NUL", EINVAL);
++
++  BPTR current_directory = BNULL;
++  if (!options.current_directory.empty()) {
++    const std::string dos_directory = ToDosPath(options.current_directory);
++    current_directory = Lock(dos_directory.c_str(), SHARED_LOCK);
++    if (current_directory == BNULL) {
++      const LONG io_error = IoErr();
++      errno = IoErrToErrno(io_error);
++      LOG(ERROR) << "[Chromium:AROS:Launch] cannot lock working directory '"
++                 << dos_directory << "': IoErr=" << io_error;
++      return Process();
++    }
++  }
++
++  BPTR segment = LoadSeg(dos_executable.c_str());
++  if (segment == BNULL) {
++    const LONG io_error = IoErr();
++    if (current_directory != BNULL)
++      UnLock(current_directory);
++    errno = IoErrToErrno(io_error);
++    LOG(ERROR) << "[Chromium:AROS:Launch] LoadSeg failed for '"
++               << dos_executable << "': IoErr=" << io_error;
++    return Process();
++  }
++
++  struct ::Task* current_task = FindTask(nullptr);
++  const BYTE parent_priority =
++      current_task ? current_task->tc_Node.ln_Pri : static_cast<BYTE>(0);
++  const BYTE launch_priority =
++      parent_priority > std::numeric_limits<BYTE>::min()
++          ? static_cast<BYTE>(parent_priority - 1)
++          : parent_priority;
++
++  const char* process_name = FilePart(dos_executable.c_str());
++  if (!process_name || !*process_name)
++    process_name = dos_executable.c_str();
++
++  struct TagItem tags[] = {
++      {NP_Seglist, reinterpret_cast<IPTR>(segment)},
++      {NP_FreeSeglist, TRUE},
++      {NP_StackSize, kChromiumChildStackSize},
++      {NP_Name, reinterpret_cast<IPTR>(process_name)},
++      {NP_Priority, static_cast<IPTR>(launch_priority)},
++      {NP_Arguments, reinterpret_cast<IPTR>(arguments.data())},
++      {NP_Cli, TRUE},
++      {TAG_IGNORE, 0},
++      {NP_NotifyOnDeath, TRUE},
++      {TAG_DONE, 0},
++  };
++
++  if (current_directory != BNULL) {
++    tags[7].ti_Tag = NP_CurrentDir;
++    tags[7].ti_Data = reinterpret_cast<IPTR>(current_directory);
++  }
++
++  struct ::Process* child = CreateNewProc(tags);
++  if (!child) {
++    const LONG io_error = IoErr();
++    UnLoadSeg(segment);
++    if (current_directory != BNULL)
++      UnLock(current_directory);
++    errno = IoErrToErrno(io_error);
++    LOG(ERROR) << "[Chromium:AROS:Launch] CreateNewProc failed for '"
++               << dos_executable << "': IoErr=" << io_error;
++    return Process();
++  }
++
++  const ProcessHandle child_id =
++      static_cast<ProcessHandle>(GetETaskID(&child->pr_Task));
++  SetTaskPri(&child->pr_Task, parent_priority);
++
++  LOG(INFO) << "[Chromium:AROS:Launch] spawned pid=" << child_id
++            << " program='" << dos_executable << "' argc=" << argv.size()
++            << " stack=" << kChromiumChildStackSize;
++
++  Process process(child_id);
++  if (options.wait) {
++    ScopedBlockingCall scoped_blocking_call(FROM_HERE,
++                                            BlockingType::MAY_BLOCK);
++    int exit_code = 0;
++    if (!process.WaitForExit(&exit_code)) {
++      LOG(ERROR) << "[Chromium:AROS:Launch] waitpid failed for pid="
++                 << child_id;
++    }
++  }
++
++  return process;
+ }
+ 
+ void CloseSuperfluousFds(const InjectiveMultimap& saved_mapping) {

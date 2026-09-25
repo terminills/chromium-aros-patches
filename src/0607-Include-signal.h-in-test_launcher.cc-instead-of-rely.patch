@@ -1,0 +1,57 @@
+From a9cda52c00762b740a113e8817659a35573eab59 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 12 Sep 2026 10:07:42 -0500
+Subject: [PATCH 607/638] Include signal.h in test_launcher.cc instead of
+ relying on a transitive one
+
+test_launcher.cc calls kill() and installs a sigaction() handler for
+SIGINT/SIGTERM/SIGKILL, but never included <signal.h>. On glibc platforms the
+declarations arrive transitively through some other header, so nobody noticed.
+
+On AROS they do not, and the transitive path that happened to supply them
+exists only in dcheck_always_on builds. That makes the symptom actively
+misleading: the file compiled in the DCHECK build and failed in the no-DCHECK
+build of the same tree, with errors that look like a platform gap -
+
+    test_launcher.cc:289: error: 'SIGTERM' was not declared in this scope;
+                                 did you mean 'SIPTR'?
+    test_launcher.cc:289: error: 'kill' was not declared in this scope
+    test_launcher.cc:1116: error: aggregate 'sigaction action' has incomplete
+                                  type and cannot be defined
+
+- rather than a missing include. Nothing about AROS is short here: it splits
+the declarations across aros/stdc/signal.h (SIGTERM, SIGINT) and
+aros/posixc/signal.h (SIGKILL, kill, sigaction, sigemptyset), and the posixc
+header includes the stdc one, so one <signal.h> is enough.
+
+Added inside the existing BUILDFLAG(IS_POSIX) include block, next to
+<fcntl.h>, since every use of these is already POSIX-only.
+
+This file reaches libcef through //cef:libcef -> //cef:libcef_test_support ->
+//net:test_support -> //base/test:test_support, so it is not optional for a
+CEF build even though it is test-support code.
+---
+ base/test/launcher/test_launcher.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/base/test/launcher/test_launcher.cc b/base/test/launcher/test_launcher.cc
+index 476caf49dc..c77f335968 100644
+--- a/base/test/launcher/test_launcher.cc
++++ b/base/test/launcher/test_launcher.cc
+@@ -70,6 +70,16 @@
+ 
+ #if BUILDFLAG(IS_POSIX)
+ #include <fcntl.h>
++// This file calls kill() and installs a sigaction() for SIGINT/SIGTERM/SIGKILL
++// but never included <signal.h>; on glibc platforms it arrives transitively.
++// On AROS it does not, and the transitive path that supplied it happens to
++// exist only in dcheck_always_on builds - so the file compiled with DCHECKs on
++// and failed with them off, which is a confusing way to discover a missing
++// include. AROS splits the declarations across aros/stdc/signal.h (SIGTERM,
++// SIGINT) and aros/posixc/signal.h (SIGKILL, kill, sigaction, sigemptyset),
++// and the posixc header includes the stdc one, so this single include is
++// enough.
++#include <signal.h>
+ 
+ #include "base/files/file_descriptor_watcher_posix.h"
+ #endif

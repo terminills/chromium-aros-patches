@@ -1,0 +1,95 @@
+From b8c1f82d878b6d2805d88e233296469efbaf47d3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 20:26:32 -0500
+Subject: [PATCH 04/28] build: identify AROS as the V8 target OS
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: V8's target-OS namespace did not include AROS, so Linux-hosted cross-build objects fell back to an empty V8_TARGET_OS_LINUX macro and failed in target-specific preprocessor guards.
+
+FIX_REASON: Emit V8_HAVE_TARGET_OS with V8_TARGET_OS_AROS from GN, recognize AROS as a valid target, and report the target string independently from the build host.
+
+SCOPE: BUILD.gn; include/v8config.h
+
+VALIDATION: ninja -C out/aros-headless -j4 clang_x64/obj/v8/v8_base_without_compiler/canonical-types.o; generated host and target Ninja defines contain V8_HAVE_TARGET_OS and V8_TARGET_OS_AROS
+
+RISK: low; this adds target identity without changing host platform implementation or target code generation policy.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ BUILD.gn           |  5 ++++-
+ include/v8config.h | 15 ++++++++++++---
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index a25b6f2..6030e18 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1434,7 +1434,10 @@ config("toolchain") {
+   # mksnapshot. We additionally set V8_HAVE_TARGET_OS to determine that a
+   # target OS has in fact been set; otherwise we internally assume that target
+   # OS == host OS (see v8config.h).
+-  if (target_os == "android") {
++  if (target_os == "aros") {
++    defines += [ "V8_HAVE_TARGET_OS" ]
++    defines += [ "V8_TARGET_OS_AROS" ]
++  } else if (target_os == "android") {
+     defines += [ "V8_HAVE_TARGET_OS" ]
+     defines += [ "V8_TARGET_OS_ANDROID" ]
+   } else if (target_os == "fuchsia") {
+diff --git a/include/v8config.h b/include/v8config.h
+index f974f8a..299f1c6 100644
+--- a/include/v8config.h
++++ b/include/v8config.h
+@@ -174,6 +174,7 @@ path. Add it with -I<path> to the command line
+ // -----------------------------------------------------------------------------
+ // Operating system detection (target)
+ //
++//  V8_TARGET_OS_AROS
+ //  V8_TARGET_OS_ANDROID
+ //  V8_TARGET_OS_FUCHSIA
+ //  V8_TARGET_OS_IOS
+@@ -187,7 +188,8 @@ path. Add it with -I<path> to the command line
+ #ifdef V8_HAVE_TARGET_OS
+ 
+ // The target OS is provided, just check that at least one known value is set.
+-# if !defined(V8_TARGET_OS_ANDROID) \
++# if !defined(V8_TARGET_OS_AROS) \
++  && !defined(V8_TARGET_OS_ANDROID) \
+   && !defined(V8_TARGET_OS_FUCHSIA) \
+   && !defined(V8_TARGET_OS_IOS) \
+   && !defined(V8_TARGET_OS_LINUX) \
+@@ -199,7 +201,8 @@ path. Add it with -I<path> to the command line
+ 
+ #else  // V8_HAVE_TARGET_OS
+ 
+-# if defined(V8_TARGET_OS_ANDROID) \
++# if defined(V8_TARGET_OS_AROS) \
++  || defined(V8_TARGET_OS_ANDROID) \
+   || defined(V8_TARGET_OS_FUCHSIA) \
+   || defined(V8_TARGET_OS_IOS) \
+   || defined(V8_TARGET_OS_LINUX) \
+@@ -210,6 +213,10 @@ path. Add it with -I<path> to the command line
+ # endif
+ 
+ // Fall back to the detected host OS.
++#ifdef V8_OS_AROS
++# define V8_TARGET_OS_AROS
++#endif
++
+ #ifdef V8_OS_ANDROID
+ # define V8_TARGET_OS_ANDROID
+ #endif
+@@ -236,7 +243,9 @@ path. Add it with -I<path> to the command line
+ 
+ #endif  // V8_HAVE_TARGET_OS
+ 
+-#if defined(V8_TARGET_OS_ANDROID)
++#if defined(V8_TARGET_OS_AROS)
++# define V8_TARGET_OS_STRING "aros"
++#elif defined(V8_TARGET_OS_ANDROID)
+ # define V8_TARGET_OS_STRING "android"
+ #elif defined(V8_TARGET_OS_FUCHSIA)
+ # define V8_TARGET_OS_STRING "fuchsia"

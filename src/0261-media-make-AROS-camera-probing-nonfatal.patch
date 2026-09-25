@@ -1,0 +1,93 @@
+From 404af88e7eb7c3fc3beb7af93ae9f54bf8123e10 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 19 Jul 2026 22:22:51 -0500
+Subject: [PATCH 261/638] media: make AROS camera probing nonfatal
+
+AI_PHASE: chromium-media-capture-baseline
+
+AI_STATUS: complete
+
+ROOT_CAUSE: AROS fell through CreatePlatformSpecificVideoCaptureDeviceFactory() to NOTIMPLEMENTED() and returned nullptr when Chromium's media device manager probed cameras. The observed YouTube media-enumeration run reached that path immediately before failure.
+
+FIX_REASON: Provide an explicit AROS factory that reports zero devices while no VHI provider is installed, and return a normal device-not-found error for an impossible descriptor. This preserves the future VHI backend seam without claiming hardware support.
+
+SCOPE: media/capture/video/create_video_capture_device_factory.cc, media/capture/video/video_capture_device_unittest.cc
+
+VALIDATION: ninja -C out/aros-chrome obj/media/capture/capture_lib/create_video_capture_device_factory.o capture_unittests; ninja -C out/aros-chrome capture_unittests; ninja -C out/aros-chrome chrome; git diff --check.
+
+RISK: low; applies only to BUILDFLAG(IS_AROS), where the current tree exposes VHI ABI headers but no capture provider or driver.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../create_video_capture_device_factory.cc    | 22 +++++++++++++++++++
+ .../video/video_capture_device_unittest.cc    | 17 ++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/media/capture/video/create_video_capture_device_factory.cc b/media/capture/video/create_video_capture_device_factory.cc
+index f00517a393..6e1f54b570 100644
+--- a/media/capture/video/create_video_capture_device_factory.cc
++++ b/media/capture/video/create_video_capture_device_factory.cc
+@@ -33,6 +33,26 @@ namespace media {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++// AROS defines the VHI capture ABI, but current AROS installations do not ship
++// a VHI provider. Keep normal media-device probing nonfatal until a VHI-backed
++// factory can enumerate real capture hardware.
++class VideoCaptureDeviceFactoryAros final : public VideoCaptureDeviceFactory {
++ public:
++  VideoCaptureErrorOrDevice CreateDevice(
++      const VideoCaptureDeviceDescriptor& device_descriptor) override {
++    DCHECK(thread_checker_.CalledOnValidThread());
++    return VideoCaptureErrorOrDevice(
++        VideoCaptureError::kVideoCaptureSystemDeviceIdNotFound);
++  }
++
++  void GetDevicesInfo(GetDevicesInfoCallback callback) override {
++    DCHECK(thread_checker_.CalledOnValidThread());
++    std::move(callback).Run({});
++  }
++};
++#endif
++
+ std::unique_ptr<VideoCaptureDeviceFactory>
+ CreateFakeVideoCaptureDeviceFactory() {
+   const base::CommandLine* command_line =
+@@ -72,6 +92,8 @@ CreatePlatformSpecificVideoCaptureDeviceFactory(
+   return std::make_unique<VideoCaptureDeviceFactoryFuchsia>();
+ #elif BUILDFLAG(IS_IOS)
+   return CreateFakeVideoCaptureDeviceFactory();
++#elif BUILDFLAG(IS_AROS)
++  return std::make_unique<VideoCaptureDeviceFactoryAros>();
+ #else
+   NOTIMPLEMENTED();
+   return nullptr;
+diff --git a/media/capture/video/video_capture_device_unittest.cc b/media/capture/video/video_capture_device_unittest.cc
+index fa93128213..37ce822e83 100644
+--- a/media/capture/video/video_capture_device_unittest.cc
++++ b/media/capture/video/video_capture_device_unittest.cc
+@@ -250,6 +250,23 @@ constexpr auto kMainThreadType =
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_AROS)
++TEST(VideoCaptureDeviceFactoryArosTest, EnumeratesNoDevicesWithoutVhiProvider) {
++  base::test::TaskEnvironment task_environment;
++  auto factory = CreateVideoCaptureDeviceFactory(
++      base::SingleThreadTaskRunner::GetCurrentDefault());
++  ASSERT_TRUE(factory);
++
++  base::RunLoop run_loop;
++  factory->GetDevicesInfo(base::BindLambdaForTesting(
++      [&run_loop](std::vector<VideoCaptureDeviceInfo> devices_info) {
++        EXPECT_TRUE(devices_info.empty());
++        run_loop.Quit();
++      }));
++  run_loop.Run();
++}
++#endif
++
+ class VideoCaptureDeviceTest
+     : public testing::TestWithParam<
+           std::tuple<gfx::Size, VideoCaptureImplementationTweak>> {

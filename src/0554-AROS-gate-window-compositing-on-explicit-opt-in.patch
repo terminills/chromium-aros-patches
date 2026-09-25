@@ -1,0 +1,46 @@
+From 50d2f2db6c88509d7fb9b1aa3858a660785ca6a5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 31 Aug 2026 03:06:07 -0500
+Subject: [PATCH 554/638] AROS: gate window compositing on explicit opt-in
+
+---
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 53e0d90adc..e0f278e6be 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/logging.h"
+@@ -37,6 +38,10 @@ namespace ui {
+ 
+ namespace {
+ 
++constexpr char kEnableArosGpuCompositing[] =
++    "aros-enable-gpu-compositing";
++constexpr char kDisableGpuCompositing[] = "disable-gpu-compositing";
++
+ class ArosCursorFactory : public BitmapCursorFactory {
+  public:
+   ArosCursorFactory() = default;
+@@ -127,7 +132,12 @@ class OzonePlatformAros : public OzonePlatform,
+                                         std::move(properties));
+   }
+ 
+-  bool IsWindowCompositingSupported() const override { return false; }
++  bool IsWindowCompositingSupported() const override {
++    const base::CommandLine& command_line =
++        *base::CommandLine::ForCurrentProcess();
++    return command_line.HasSwitch(kEnableArosGpuCompositing) &&
++           !command_line.HasSwitch(kDisableGpuCompositing);
++  }
+ 
+   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
+       override {

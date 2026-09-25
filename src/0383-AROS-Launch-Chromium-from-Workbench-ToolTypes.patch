@@ -1,0 +1,75 @@
+From 8e234fcd0eb1bf474f782dba5e44d2b2b98d6dea Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 20:53:00 -0500
+Subject: [PATCH 383/638] [AROS] Launch Chromium from Workbench ToolTypes
+
+Translate Workbench argc==0 startup through ArgArrayInit and accept repeatable CHROME_ARG ToolTypes before entering the unchanged ChromeMain path. This connects the committed native chrome.info metadata to Chromium without changing CLI launches.
+
+AI_PHASE: chromium-workbench-integration
+AI_STATUS: workbench-tooltype-startup
+ROOT_CAUSE: Workbench launches native tools with argc==0 and a WBStartup pointer, while Chromium only understood CLI argc/argv.
+FIX_REASON: Convert only CHROME_ARG ToolTypes into an owned argv vector and preserve the normal command-line path unchanged.
+SCOPE: chrome/app/chrome_exe_main_aura.cc
+VALIDATION: chrome_exe_main_aura.o compiled in build 43; the final true shared-v8.library Chrome linked cleanly in build 46 with SHA-256 93d5795b455c1256ebf9ddea7ee75aa98365ba52f0b404b210d3c95495e03d3f.
+RISK: Workbench double-click behavior remains to be runtime-tested; CLI startup is structurally unchanged.
+AI_DECISION_CHAIN: native chrome.info -> ToolTypes require argc==0 adapter -> compile proof -> true shared-V8 full link.
+Evidence: test-artifacts/-chromium-browser-renderer-20260728/build-46-shared-v8-private-context.log; test-artifacts/-chromium-browser-renderer-20260728/build-46-shared-v8-private-context-verdict.md
+Job:
+---
+ chrome/app/chrome_exe_main_aura.cc | 37 ++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/chrome/app/chrome_exe_main_aura.cc b/chrome/app/chrome_exe_main_aura.cc
+index 16f1d1fe08..34b11ab76c 100644
+--- a/chrome/app/chrome_exe_main_aura.cc
++++ b/chrome/app/chrome_exe_main_aura.cc
+@@ -4,6 +4,15 @@
+ 
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <cstring>
++#include <string>
++#include <vector>
++
++#include <exec/types.h>
++#include <clib/alib_protos.h>
++#endif
++
+ // The entry point for all invocations of Chromium, browser and renderer. On
+ // windows, this does nothing but load chrome.dll and invoke its entry point in
+ // order to make it easy to update the app from GoogleUpdate. We don't need
+@@ -14,5 +23,33 @@ int ChromeMain(int argc, const char** argv);
+ }
+ 
+ int main(int argc, const char** argv) {
++#if BUILDFLAG(IS_AROS)
++  if (argc == 0) {
++    constexpr char kToolTypePrefix[] = "CHROME_ARG=";
++    std::vector<std::string> argument_storage = {"chrome"};
++
++    UBYTE** tool_types =
++        ArgArrayInit(0, reinterpret_cast<UBYTE**>(const_cast<char**>(argv)));
++    if (tool_types) {
++      for (UBYTE** tool_type = tool_types; *tool_type; ++tool_type) {
++        const char* value = reinterpret_cast<const char*>(*tool_type);
++        if (std::strncmp(value, kToolTypePrefix,
++                         std::strlen(kToolTypePrefix)) == 0) {
++          argument_storage.emplace_back(value + std::strlen(kToolTypePrefix));
++        }
++      }
++      ArgArrayDone();
++    }
++
++    std::vector<const char*> arguments;
++    arguments.reserve(argument_storage.size() + 1);
++    for (const std::string& argument : argument_storage) {
++      arguments.push_back(argument.c_str());
++    }
++    arguments.push_back(nullptr);
++    return ChromeMain(static_cast<int>(argument_storage.size()),
++                      arguments.data());
++  }
++#endif
+   return ChromeMain(argc, argv);
+ }

@@ -1,0 +1,37 @@
+From 16b90d82dda18f6a5603706a4069570d9250834f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 23:36:27 -0500
+Subject: [PATCH 353/638] cdm: retain key-system updates for the AROS observer
+
+Compile the generic key-system support observer on AROS so Chrome's renderer callback has its concrete provider. Unsupported key systems still report as an empty capability set.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-native-link-gap-fixed-under-validation
+
+AI_VALIDATION: mixed-provenance diagnostic native link contained exactly one unresolved cdm::GetSupportedKeySystemsUpdates symbol
+
+AI_ASSUMPTION: an empty unsupported-CDM result is a first-class non-error state on AROS
+
+AI_LIMITATIONS: coherent archive rebuild, native relink, and encrypted-media behavior remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-native-link-pass2-20260725/03-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ components/cdm/renderer/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/components/cdm/renderer/BUILD.gn b/components/cdm/renderer/BUILD.gn
+index 10ebce2eee..fe7a4e7cf3 100644
+--- a/components/cdm/renderer/BUILD.gn
++++ b/components/cdm/renderer/BUILD.gn
+@@ -17,7 +17,7 @@ static_library("renderer") {
+     "//third_party/widevine/cdm:buildflags",
+   ]
+ 
+-  if (enable_library_cdms || is_win || is_android) {
++  if (enable_library_cdms || is_win || is_android || is_aros) {
+     sources += [
+       "key_system_support_update.cc",
+       "key_system_support_update.h",

@@ -1,0 +1,50 @@
+From 7d2b3ef7e991966cb11a341f0bb24e06d5de31c3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:18:08 -0500
+Subject: [PATCH 032/638] base: include optional where SpanReader owns it
+
+AI_PHASE: chromium-aros-phase3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: SpanReader's public API and the WAV parser named std::optional while relying on incidental libc++ transitive includes absent from the AROS GCC C++20 graph.
+
+FIX_REASON: Include the owning C++ standard header in both the public template header and its direct media consumer.
+
+SCOPE: base/containers/span_reader.h and media/audio/wav_audio_handler.cc
+
+VALIDATION: Ninja rebuilt wav_audio_handler.o successfully for //build/toolchain/aros:x64.
+
+RISK: minimal; declaration-only standard header additions.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/containers/span_reader.h    | 2 ++
+ media/audio/wav_audio_handler.cc | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/base/containers/span_reader.h b/base/containers/span_reader.h
+index 6b67b436bd..3f323fd57a 100644
+--- a/base/containers/span_reader.h
++++ b/base/containers/span_reader.h
+@@ -5,6 +5,8 @@
+ #ifndef BASE_CONTAINERS_SPAN_READER_H_
+ #define BASE_CONTAINERS_SPAN_READER_H_
+ 
++#include <optional>
++
+ #include "base/containers/span.h"
+ #include "base/numerics/safe_conversions.h"
+ 
+diff --git a/media/audio/wav_audio_handler.cc b/media/audio/wav_audio_handler.cc
+index d5df79c297..c89ccf9a48 100644
+--- a/media/audio/wav_audio_handler.cc
++++ b/media/audio/wav_audio_handler.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <cstring>
++#include <optional>
+ 
+ #include "base/check.h"
+ #include "base/check_op.h"

@@ -1,0 +1,39 @@
+From 845a95b777eb144e75e77f1f93683dc899204542 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 09:46:43 -0500
+Subject: [PATCH 24/43] AROS: preserve native locale resource path
+
+AI_PHASE: cef-library-lifecycle
+AI_STATUS: in-progress
+ROOT_CAUSE: Alloy registered the native locales assign with PathService::Override, which always POSIX-canonicalized through MakeAbsoluteFilePath and discarded the AROS path; ResourceBundle then saw an empty locale path.
+FIX_REASON: Register the already-absolute AROS assign with OverrideAndCreateIfNeeded(is_absolute=true), matching the proven CEF user-data path contract while retaining generic behavior elsewhere.
+SCOPE: libcef/common/alloy/alloy_main_delegate.cc
+VALIDATION: exact object and complete libcef archive passed 1588/1588; archive SHA e9c4b880..., 34,492 members, zero true V8 engine members; hosted replay follows native relink.
+RISK: AROS path existence is created/validated without POSIX canonicalization; all non-AROS builds keep the original Override call.
+AI_DECISION_CHAIN: version-matched paks mapped -> locale_file_path still empty -> PathService::Override forces MakeAbsoluteFilePath -> native assign lost
+Evidence:-cef-resource-path-runtime-20260725;-cef-aros-locale-override-20260725
+Job:
+---
+ libcef/common/alloy/alloy_main_delegate.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/libcef/common/alloy/alloy_main_delegate.cc b/libcef/common/alloy/alloy_main_delegate.cc
+index e194b4fd..dbdb914a 100644
+--- a/libcef/common/alloy/alloy_main_delegate.cc
++++ b/libcef/common/alloy/alloy_main_delegate.cc
+@@ -736,7 +736,15 @@ void AlloyMainDelegate::InitializeResourceBundle() {
+     }
+ 
+     if (!locales_dir.empty()) {
++#if BUILDFLAG(IS_AROS)
++      // Native assigns are already absolute but cannot be canonicalized through
++      // the POSIX MakeAbsoluteFilePath path used by PathService::Override.
++      base::PathService::OverrideAndCreateIfNeeded(
++          ui::DIR_LOCALES, locales_dir, /*is_absolute=*/true,
++          /*create=*/true);
++#else
+       base::PathService::Override(ui::DIR_LOCALES, locales_dir);
++#endif
+     }
+   }
+ 

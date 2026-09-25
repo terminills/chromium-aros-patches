@@ -1,0 +1,71 @@
+From 08b78f8dd4e827e029d8e5ce561f7f2f14375dbb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 20:13:37 -0500
+Subject: [PATCH 588/638] aros: announce max-bandwidth change with connection
+ type so renderers see navigator.onLine
+
+BrowserOnlineStateObserver is a MaxBandwidthObserver; it is the only path
+that reaches mojom::Renderer::OnNetworkConnectionChanged.  Only sending
+the connection-type change left every renderer at CONNECTION_NONE
+(navigator.onLine=false, Netflix Offline banner).  Pair the two like the
+Linux/Windows/passive notifiers do.
+---
+ net/base/network_change_notifier_aros.cc | 18 ++++++++++++++++--
+ net/base/network_change_notifier_aros.h  |  1 +
+ 2 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/net/base/network_change_notifier_aros.cc b/net/base/network_change_notifier_aros.cc
+index 3a0f7f95c3..605473a28e 100644
+--- a/net/base/network_change_notifier_aros.cc
++++ b/net/base/network_change_notifier_aros.cc
+@@ -148,6 +148,20 @@ void NetworkChangeNotifierAros::Poll() {
+   }
+ }
+ 
++void NetworkChangeNotifierAros::AnnounceConnectionTypeChange(
++    ConnectionType type) {
++  NotifyObserversOfConnectionTypeChange();
++  // Renderers do not listen to the connection-type observers: the browser's
++  // BrowserOnlineStateObserver is a MaxBandwidthObserver and forwards that
++  // signal as mojom::Renderer::OnNetworkConnectionChanged, which is what
++  // sets navigator.onLine.  Every other platform notifier pairs the two
++  // (see NetworkChangeNotifierLinux::OnLinkChanged); do the same here.
++  NotifyObserversOfMaxBandwidthChange(
++      GetMaxBandwidthMbpsForConnectionSubtype(
++          type == CONNECTION_NONE ? SUBTYPE_NONE : SUBTYPE_UNKNOWN),
++      type);
++}
++
+ void NetworkChangeNotifierAros::OnPollResult(PollResult result) {
+   if (result.interfaces_valid) {
+     bool connection_type_changed = false;
+@@ -169,7 +183,7 @@ void NetworkChangeNotifierAros::OnPollResult(PollResult result) {
+       // OnInitialConnectionType and navigator.onLine stays false for the
+       // life of the process.
+       if (connection_type_changed) {
+-        NotifyObserversOfConnectionTypeChange();
++        AnnounceConnectionTypeChange(result.connection_type);
+       }
+     } else if (interface_fingerprint_ != result.interface_fingerprint) {
+       LOG(INFO) << "[Chromium:AROS:NetworkChange] interfaces changed count="
+@@ -177,7 +191,7 @@ void NetworkChangeNotifierAros::OnPollResult(PollResult result) {
+                 << " connection_type=" << result.connection_type;
+       NotifyObserversOfIPAddressChange();
+       if (connection_type_changed) {
+-        NotifyObserversOfConnectionTypeChange();
++        AnnounceConnectionTypeChange(result.connection_type);
+       }
+     }
+     interface_fingerprint_ = std::move(result.interface_fingerprint);
+diff --git a/net/base/network_change_notifier_aros.h b/net/base/network_change_notifier_aros.h
+index b86ecedef5..14462fa66d 100644
+--- a/net/base/network_change_notifier_aros.h
++++ b/net/base/network_change_notifier_aros.h
+@@ -46,6 +46,7 @@ class NET_EXPORT_PRIVATE NetworkChangeNotifierAros
+   void SchedulePoll(base::TimeDelta delay);
+   void Poll();
+   void OnPollResult(PollResult result);
++  void AnnounceConnectionTypeChange(ConnectionType type);
+ 
+   mutable base::Lock connection_lock_;
+   ConnectionType connection_type_ GUARDED_BY(connection_lock_);

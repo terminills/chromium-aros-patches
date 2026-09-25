@@ -1,0 +1,137 @@
+From fa431ecfa4868fda67702ca5096ace1373034848 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 21:05:38 -0500
+Subject: [PATCH 419/638] [AROS] Create AROS Chrome profile at startup
+
+Workbench launches do not pass through the Shell smoke scripts that previously created the selected user-data directory. Establish the native DOS path before PathService initializes Local State.
+
+Keep proto/dos.h isolated in a dedicated translation unit so classic Lock, Write, Exit, and Close macros and link wrappers cannot collide with Chromium C++ APIs.
+
+
+
+---
+ chrome/BUILD.gn                    |  7 +++++++
+ chrome/app/BUILD.gn                |  7 +++++++
+ chrome/app/aros_user_data_dir.cc   | 26 ++++++++++++++++++++++++++
+ chrome/app/aros_user_data_dir.h    | 12 ++++++++++++
+ chrome/app/chrome_main_delegate.cc | 12 ++++++++++++
+ 5 files changed, 64 insertions(+)
+ create mode 100644 chrome/app/aros_user_data_dir.cc
+ create mode 100644 chrome/app/aros_user_data_dir.h
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 07f755e771..0924498f2e 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -276,6 +276,13 @@ if (!is_android && !is_mac) {
+           "app/chrome_main_delegate.h",
+         ]
+ 
++        if (is_aros) {
++          sources += [
++            "app/aros_user_data_dir.cc",
++            "app/aros_user_data_dir.h",
++          ]
++        }
++
+         deps += [
+           # On Linux, link the dependencies (libraries) that make up actual
+           # Chromium functionality directly into the executable.
+diff --git a/chrome/app/BUILD.gn b/chrome/app/BUILD.gn
+index c4f3bad4b5..4d2ca1e0f7 100644
+--- a/chrome/app/BUILD.gn
++++ b/chrome/app/BUILD.gn
+@@ -146,6 +146,13 @@ static_library("test_support") {
+     "chrome_main_delegate.h",
+   ]
+ 
++  if (is_aros) {
++    sources += [
++      "aros_user_data_dir.cc",
++      "aros_user_data_dir.h",
++    ]
++  }
++
+   deps = [
+     "//base",
+     "//build:chromeos_buildflags",
+diff --git a/chrome/app/aros_user_data_dir.cc b/chrome/app/aros_user_data_dir.cc
+new file mode 100644
+index 0000000000..04ce050e9c
+--- /dev/null
++++ b/chrome/app/aros_user_data_dir.cc
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/app/aros_user_data_dir.h"
++
++#include "base/logging.h"
++
++// Keep the classic Amiga library-call macros local to this translation unit.
++// Names such as Close, Exit, Lock, and Write collide with Chromium C++ APIs.
++#include <dos/dos.h>
++#include <proto/dos.h>
++
++bool EnsureArosUserDataDirectory(const base::FilePath& path) {
++  BPTR lock = Lock(path.value().c_str(), ACCESS_READ);
++  if (!lock)
++    lock = CreateDir(path.value().c_str());
++  if (!lock) {
++    LOG(ERROR) << "[Chromium:AROS:Profile] failed to create user data "
++                  "directory '"
++               << path.value() << "', IoErr=" << IoErr();
++    return false;
++  }
++  UnLock(lock);
++  return true;
++}
+diff --git a/chrome/app/aros_user_data_dir.h b/chrome/app/aros_user_data_dir.h
+new file mode 100644
+index 0000000000..ffd1ae6be8
+--- /dev/null
++++ b/chrome/app/aros_user_data_dir.h
+@@ -0,0 +1,12 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_APP_AROS_USER_DATA_DIR_H_
++#define CHROME_APP_AROS_USER_DATA_DIR_H_
++
++#include "base/files/file_path.h"
++
++bool EnsureArosUserDataDirectory(const base::FilePath& path);
++
++#endif  // CHROME_APP_AROS_USER_DATA_DIR_H_
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 0d2688dd8e..29a6c75899 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -101,6 +101,10 @@
+ #include "ui/base/resource/scoped_startup_resource_bundle.h"
+ #include "ui/base/ui_base_switches.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "chrome/app/aros_user_data_dir.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <malloc.h>
+ 
+@@ -668,6 +672,14 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(IS_AROS)
++  // AROS applications may be launched directly from Workbench, without a
++  // Shell script that prepares their profile directory. Establish the
++  // requested (or default) native DOS path before base::PathService performs
++  // its POSIX-facing validation.
++  if (user_data_dir.empty())
++    chrome::GetDefaultUserDataDirectory(&user_data_dir);
++  EnsureArosUserDataDirectory(user_data_dir);
++
+   // Native volume and assignment paths cannot be canonicalized by the POSIX
+   // realpath implementation. Relative values still resolve against
+   // DIR_CURRENT.

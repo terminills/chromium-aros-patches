@@ -1,0 +1,24 @@
+From fc74d73cb0f38aaa0b148c27a7a3834dba0c2ab8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 08:25:47 -0500
+Subject: [PATCH 565/638] Include <optional> in gpu_adapter_info.h
+
+std::optional was only reachable through a DCHECK-only transitive include;
+the dcheck_always_on=false build failed to compile the header.
+---
+ third_party/blink/renderer/modules/webgpu/gpu_adapter_info.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter_info.h b/third_party/blink/renderer/modules/webgpu/gpu_adapter_info.h
+index 70b15d5c05..2084afbe6e 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter_info.h
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter_info.h
+@@ -5,6 +5,8 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGPU_GPU_ADAPTER_INFO_H_
+ #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGPU_GPU_ADAPTER_INFO_H_
+ 
++#include <optional>
++
+ #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+ #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"

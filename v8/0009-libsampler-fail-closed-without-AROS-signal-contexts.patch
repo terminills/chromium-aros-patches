@@ -1,0 +1,66 @@
+From 34bd0b9de8b68767e699b3882496d4357207a789 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 12:12:27 -0500
+Subject: [PATCH 09/28] libsampler: fail closed without AROS signal contexts
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: V8 enabled its POSIX signal sampler on AROS, but AROS has no sys/syscall.h, pthread_kill returns EINVAL, sigaction has no asynchronous delivery, and ucontext_t exposes no register set.
+
+FIX_REASON: Exclude AROS from USE_SIGNALS and provide an inert platform backend so normal V8 execution remains available without claiming unsupported cross-thread CPU profiling semantics.
+
+SCOPE: src/libsampler/sampler.h; src/libsampler/sampler.cc
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/v8/v8_base_without_compiler/sampler.o
+
+RISK: medium; AROS CPU sampling remains unavailable by design until the OS provides asynchronous thread contexts, while non-profiling V8 behavior is unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/libsampler/sampler.cc | 10 ++++++++++
+ src/libsampler/sampler.h  |  2 +-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/libsampler/sampler.cc b/src/libsampler/sampler.cc
+index 0164cbb..debcf8a 100644
+--- a/src/libsampler/sampler.cc
++++ b/src/libsampler/sampler.cc
+@@ -312,6 +312,12 @@ class Sampler::PlatformData {
+   zx_handle_t profiled_thread_ = ZX_HANDLE_INVALID;
+ };
+ 
++#elif V8_OS_AROS
++
++// AROS does not yet provide asynchronous pthread signals with a register
++// context, so sampling remains unavailable until that system contract exists.
++class Sampler::PlatformData {};
++
+ #endif  // USE_SIGNALS
+ 
+ #if defined(USE_SIGNALS)
+@@ -671,6 +677,10 @@ void Sampler::DoSample() {
+ #undef ZX_THREAD_STATE_GENERAL_REGS
+ #endif
+ 
++#elif V8_OS_AROS
++
++void Sampler::DoSample() {}
++
+ #endif  // USE_SIGNALS
+ 
+ }  // namespace sampler
+diff --git a/src/libsampler/sampler.h b/src/libsampler/sampler.h
+index 98c0606..b7015ac 100644
+--- a/src/libsampler/sampler.h
++++ b/src/libsampler/sampler.h
+@@ -13,7 +13,7 @@
+ #include "src/base/lazy-instance.h"
+ #include "src/base/macros.h"
+ 
+-#if V8_OS_POSIX && !V8_OS_CYGWIN && !V8_OS_FUCHSIA
++#if V8_OS_POSIX && !V8_OS_AROS && !V8_OS_CYGWIN && !V8_OS_FUCHSIA
+ #define USE_SIGNALS
+ #endif
+ 

@@ -1,0 +1,340 @@
+From 8d1c651e25e9e0a28f749a71b6d9956bb1effc18 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 8 Sep 2026 00:33:56 -0500
+Subject: [PATCH 597/638] base: implement SyncSocket pairs on AROS
+
+AROS has no socketpair() or poll(), so SyncSocket::CreatePair returned
+ENOSYS and every audio::OutputStream failed its SyncReader validity
+check before reaching the AHI backend.  Build the pair as an in-process
+duplex pipe on Lock/ConditionVariable; each endpoint is named by a real
+descriptor (open NIL:) so the handle keeps ScopedFD semantics through
+mojo::PlatformHandle, with a registry mapping descriptor to endpoint.
+Shutdown() has shutdown(SHUT_RDWR) semantics; the destructor closes the
+endpoint on AROS so a socket dropped without Close() cannot strand its
+peer.
+---
+ base/sync_socket.cc      |  10 +-
+ base/sync_socket_aros.cc | 231 ++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 227 insertions(+), 14 deletions(-)
+
+diff --git a/base/sync_socket.cc b/base/sync_socket.cc
+index 8ed46ae811..3bd44efbd9 100644
+--- a/base/sync_socket.cc
++++ b/base/sync_socket.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "base/sync_socket.h"
+ 
++#include "build/build_config.h"
++
+ namespace base {
+ 
+ const SyncSocket::Handle SyncSocket::kInvalidHandle = kInvalidPlatformFile;
+@@ -14,7 +16,13 @@ SyncSocket::SyncSocket(Handle handle) : handle_(handle) {}
+ 
+ SyncSocket::SyncSocket(ScopedHandle handle) : handle_(std::move(handle)) {}
+ 
+-SyncSocket::~SyncSocket() = default;
++SyncSocket::~SyncSocket() {
++#if BUILDFLAG(IS_AROS)
++  // The AROS endpoint registry is keyed by the descriptor; releasing the
++  // descriptor alone would strand the peer in Receive().
++  SyncSocket::Close();
++#endif
++}
+ 
+ SyncSocket::ScopedHandle SyncSocket::Take() {
+   return std::move(handle_);
+diff --git a/base/sync_socket_aros.cc b/base/sync_socket_aros.cc
+index 24e7787499..4338719fbb 100644
+--- a/base/sync_socket_aros.cc
++++ b/base/sync_socket_aros.cc
+@@ -5,24 +5,211 @@
+ #include "base/sync_socket.h"
+ 
+ #include <errno.h>
++#include <fcntl.h>
++#include <unistd.h>
+ 
+-#include "base/files/file_util.h"
++#include <algorithm>
++#include <deque>
++#include <map>
++#include <optional>
++
++#include "base/containers/span.h"
++#include "base/logging.h"
++#include "base/memory/ref_counted.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/no_destructor.h"
++#include "base/posix/eintr_wrapper.h"
++#include "base/synchronization/condition_variable.h"
++#include "base/synchronization/lock.h"
++#include "base/time/time.h"
++
++// AROS has no socketpair() or poll(): a SyncSocket pair is two endpoints of an
++// in-process duplex pipe built on base::Lock/ConditionVariable.  Each endpoint
++// is named by a real file descriptor (an open NIL:) so that the handle keeps
++// ScopedFD semantics - it can be closed, moved into a mojo::PlatformHandle and
++// handed to the peer - while a process-wide registry maps that descriptor back
++// to the endpoint.  Every AROS "process" shares one address space, so the
++// registry is reachable from wherever the handle lands.
+ 
+ namespace base {
+ 
++namespace {
++
++// Both directions of one pair.  dir(i) holds the bytes queued towards
++// endpoint i; a closed pair fails every Send and returns EOF to every Receive.
++class Pipe : public RefCountedThreadSafe<Pipe> {
++ public:
++  Pipe() = default;
++
++  struct Direction {
++    explicit Direction(Lock* lock) : cv(lock) {
++      cv.declare_only_used_while_idle();
++    }
++    std::deque<uint8_t> bytes;
++    ConditionVariable cv;
++  };
++
++  Direction& dir(int side) { return side == 0 ? to_0_ : to_1_; }
++
++  Lock lock_;
++  bool closed_ GUARDED_BY(lock_) = false;
++
++ private:
++  Direction to_0_{&lock_};
++  Direction to_1_{&lock_};
++
++  friend class RefCountedThreadSafe<Pipe>;
++  ~Pipe() = default;
++};
++
++struct Endpoint : public RefCountedThreadSafe<Endpoint> {
++  Endpoint(scoped_refptr<Pipe> pipe, int side)
++      : pipe(std::move(pipe)), side(side) {}
++
++  Pipe::Direction& incoming() { return pipe->dir(side); }
++  Pipe::Direction& outgoing() { return pipe->dir(side ^ 1); }
++
++  scoped_refptr<Pipe> pipe;
++  const int side;
++
++ private:
++  friend class RefCountedThreadSafe<Endpoint>;
++  ~Endpoint() = default;
++};
++
++struct Registry {
++  Lock lock;
++  std::map<int, scoped_refptr<Endpoint>> endpoints GUARDED_BY(lock);
++};
++
++Registry& GetRegistry() {
++  static NoDestructor<Registry> registry;
++  return *registry;
++}
++
++scoped_refptr<Endpoint> LookupEndpoint(int fd) {
++  if (fd < 0)
++    return nullptr;
++  Registry& registry = GetRegistry();
++  AutoLock auto_lock(registry.lock);
++  auto it = registry.endpoints.find(fd);
++  return it == registry.endpoints.end() ? nullptr : it->second;
++}
++
++scoped_refptr<Endpoint> TakeEndpoint(int fd) {
++  if (fd < 0)
++    return nullptr;
++  Registry& registry = GetRegistry();
++  AutoLock auto_lock(registry.lock);
++  auto it = registry.endpoints.find(fd);
++  if (it == registry.endpoints.end())
++    return nullptr;
++  scoped_refptr<Endpoint> endpoint = std::move(it->second);
++  registry.endpoints.erase(it);
++  return endpoint;
++}
++
++// A descriptor whose only job is to be a unique, closable name.
++ScopedFD OpenNameDescriptor() {
++  return ScopedFD(HANDLE_EINTR(open("NIL:", O_RDWR)));
++}
++
++void ShutdownPipe(Pipe* pipe) {
++  AutoLock auto_lock(pipe->lock_);
++  pipe->closed_ = true;
++  pipe->dir(0).cv.Broadcast();
++  pipe->dir(1).cv.Broadcast();
++}
++
++// Moves up to buffer.size() queued bytes into |buffer|; returns how many.
++size_t Drain(std::deque<uint8_t>& bytes, span<uint8_t> buffer) {
++  const size_t n = std::min(bytes.size(), buffer.size());
++  std::copy_n(bytes.begin(), n, buffer.begin());
++  bytes.erase(bytes.begin(), bytes.begin() + n);
++  return n;
++}
++
++// Shared by Receive() and ReceiveWithTimeout(): fills |buffer| completely
++// unless the pair is shut down (returns 0) or |deadline| passes (returns the
++// bytes read so far).
++size_t ReceiveInternal(Endpoint* endpoint,
++                       span<uint8_t> buffer,
++                       std::optional<TimeTicks> deadline) {
++  Pipe* pipe = endpoint->pipe.get();
++  Pipe::Direction& in = endpoint->incoming();
++  size_t total = 0;
++  AutoLock auto_lock(pipe->lock_);
++  while (total < buffer.size()) {
++    total += Drain(in.bytes, buffer.subspan(total));
++    if (total == buffer.size())
++      break;
++    if (pipe->closed_)
++      return 0;
++    if (deadline) {
++      const TimeDelta remaining = *deadline - TimeTicks::Now();
++      if (remaining <= TimeDelta())
++        break;
++      in.cv.TimedWait(remaining);
++    } else {
++      in.cv.Wait();
++    }
++  }
++  return total;
++}
++
++}  // namespace
++
++// static
+ bool SyncSocket::CreatePair(SyncSocket* socket_a, SyncSocket* socket_b) {
+-  errno = ENOSYS;
+-  return false;
++  DCHECK_NE(socket_a, socket_b);
++  DCHECK(!socket_a->IsValid());
++  DCHECK(!socket_b->IsValid());
++
++  ScopedFD fd_a = OpenNameDescriptor();
++  ScopedFD fd_b = OpenNameDescriptor();
++  if (!fd_a.is_valid() || !fd_b.is_valid()) {
++    PLOG(ERROR) << "[Chromium:AROS:SyncSocket] cannot allocate descriptors";
++    return false;
++  }
++
++  auto pipe = MakeRefCounted<Pipe>();
++  {
++    Registry& registry = GetRegistry();
++    AutoLock auto_lock(registry.lock);
++    // A descriptor number is unique while open, so anything still filed under
++    // it belongs to a socket that was destroyed without Close().
++    registry.endpoints[fd_a.get()] = MakeRefCounted<Endpoint>(pipe, 0);
++    registry.endpoints[fd_b.get()] = MakeRefCounted<Endpoint>(pipe, 1);
++  }
++  socket_a->handle_ = std::move(fd_a);
++  socket_b->handle_ = std::move(fd_b);
++  return true;
+ }
+ 
+ void SyncSocket::Close() {
++  if (scoped_refptr<Endpoint> endpoint = TakeEndpoint(handle_.get()))
++    ShutdownPipe(endpoint->pipe.get());
+   handle_.reset();
+ }
+ 
+ size_t SyncSocket::Send(span<const uint8_t> data) {
+-  if (!IsValid() || data.empty())
++  if (data.empty())
++    return 0;
++  scoped_refptr<Endpoint> endpoint = LookupEndpoint(handle_.get());
++  if (!endpoint) {
++    errno = EBADF;
++    return 0;
++  }
++  Pipe* pipe = endpoint->pipe.get();
++  Pipe::Direction& out = endpoint->outgoing();
++  AutoLock auto_lock(pipe->lock_);
++  if (pipe->closed_) {
++    errno = EPIPE;
+     return 0;
+-  return WriteFileDescriptor(handle(), data) ? data.size() : 0;
++  }
++  out.bytes.insert(out.bytes.end(), data.begin(), data.end());
++  out.cv.Signal();
++  return data.size();
+ }
+ 
+ size_t SyncSocket::Send(const void* buffer, size_t length) {
+@@ -30,9 +217,14 @@ size_t SyncSocket::Send(const void* buffer, size_t length) {
+ }
+ 
+ size_t SyncSocket::Receive(span<uint8_t> buffer) {
+-  if (!IsValid() || buffer.empty())
++  if (buffer.empty())
+     return 0;
+-  return ReadFromFD(handle(), as_writable_chars(buffer)) ? buffer.size() : 0;
++  scoped_refptr<Endpoint> endpoint = LookupEndpoint(handle_.get());
++  if (!endpoint) {
++    errno = EBADF;
++    return 0;
++  }
++  return ReceiveInternal(endpoint.get(), buffer, std::nullopt);
+ }
+ 
+ size_t SyncSocket::Receive(void* buffer, size_t length) {
+@@ -41,8 +233,14 @@ size_t SyncSocket::Receive(void* buffer, size_t length) {
+ 
+ size_t SyncSocket::ReceiveWithTimeout(span<uint8_t> buffer,
+                                       TimeDelta timeout) {
+-  errno = ENOSYS;
+-  return 0;
++  if (buffer.empty())
++    return 0;
++  scoped_refptr<Endpoint> endpoint = LookupEndpoint(handle_.get());
++  if (!endpoint) {
++    errno = EBADF;
++    return 0;
++  }
++  return ReceiveInternal(endpoint.get(), buffer, TimeTicks::Now() + timeout);
+ }
+ 
+ size_t SyncSocket::ReceiveWithTimeout(void* buffer,
+@@ -53,8 +251,11 @@ size_t SyncSocket::ReceiveWithTimeout(void* buffer,
+ }
+ 
+ size_t SyncSocket::Peek() {
+-  errno = ENOSYS;
+-  return 0;
++  scoped_refptr<Endpoint> endpoint = LookupEndpoint(handle_.get());
++  if (!endpoint)
++    return 0;
++  AutoLock auto_lock(endpoint->pipe->lock_);
++  return endpoint->incoming().bytes.size();
+ }
+ 
+ bool SyncSocket::IsValid() const {
+@@ -69,10 +270,13 @@ SyncSocket::Handle SyncSocket::Release() {
+   return handle_.release();
+ }
+ 
++// Like shutdown(SHUT_RDWR): wakes a Receive() blocked on another thread and
++// fails later Sends on both ends, but leaves the handle open.
+ bool CancelableSyncSocket::Shutdown() {
+-  if (!IsValid())
++  scoped_refptr<Endpoint> endpoint = LookupEndpoint(handle_.get());
++  if (!endpoint)
+     return false;
+-  Close();
++  ShutdownPipe(endpoint->pipe.get());
+   return true;
+ }
+ 
+@@ -84,6 +288,7 @@ size_t CancelableSyncSocket::Send(const void* buffer, size_t length) {
+   return SyncSocket::Send(buffer, length);
+ }
+ 
++// static
+ bool CancelableSyncSocket::CreatePair(CancelableSyncSocket* socket_a,
+                                       CancelableSyncSocket* socket_b) {
+   return SyncSocket::CreatePair(socket_a, socket_b);

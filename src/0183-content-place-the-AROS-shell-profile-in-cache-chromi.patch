@@ -1,0 +1,36 @@
+From 405b1926fe5db9b5cfd436cc94c0566ec0109b34 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:49:54 -0500
+Subject: [PATCH 183/638] content: place the AROS shell profile in cache
+ [chromium] [aros]
+
+Statement:
+content_shell reached browser startup but aborted because its default user-data directory provider had no AROS implementation.
+
+Decision:
+Build the shell profile below the native AROS DIR_CACHE assignment. This resolves to writable T:Chromium storage and remains isolated from the full browser profile.
+
+Evidence:
+Hosted run 3 reached ShellContentBrowserClient and failed only at SHELL_DIR_USER_DATA. The updated shell_paths.o compiles in out/aros-windowed.
+
+Chain:
+
+ACD-chromium-native-port-roadmap
+---
+ content/shell/browser/shell_paths.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/content/shell/browser/shell_paths.cc b/content/shell/browser/shell_paths.cc
+index 284b9102e2..8b90ea7da7 100644
+--- a/content/shell/browser/shell_paths.cc
++++ b/content/shell/browser/shell_paths.cc
+@@ -36,6 +36,9 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+ #elif BUILDFLAG(IS_ANDROID)
+   CHECK(base::PathService::Get(base::DIR_ANDROID_APP_DATA, result));
+   *result = result->Append(FILE_PATH_LITERAL("content_shell"));
++#elif BUILDFLAG(IS_AROS)
++  CHECK(base::PathService::Get(base::DIR_CACHE, result));
++  *result = result->Append(FILE_PATH_LITERAL("content_shell"));
+ #elif BUILDFLAG(IS_FUCHSIA)
+   *result = base::FilePath(base::kPersistedDataDirectoryPath)
+                 .Append(FILE_PATH_LITERAL("content_shell"));

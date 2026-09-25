@@ -1,0 +1,41 @@
+From 63457aaa8604fa0609e6fb2d4d9d827efcac2c28 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 09:08:49 -0500
+Subject: [PATCH 07/28] base: contain the AROS REGISTER qualifier globally
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Exec's global REGISTER qualifier collides with 57 internal V8 enum and qualified-name uses across deoptimizer, linkage, and instruction operands.
+
+FIX_REASON: Remove the legacy qualifier at V8's internal base macro boundary after AROS system headers have declared their APIs, leaving public v8config and AROS headers unchanged.
+
+SCOPE: src/base/macros.h
+
+VALIDATION: AROS target baseline.o advanced past every REGISTER/linkage-location diagnostic and now stops only on the independent empty-variadic macro boundary
+
+RISK: low; AROS headers do not consume REGISTER after defining it, while V8 internal identifiers retain their upstream names and enum ordering.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/base/macros.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/base/macros.h b/src/base/macros.h
+index 0254d0d..ed0a1aa 100644
+--- a/src/base/macros.h
++++ b/src/base/macros.h
+@@ -12,6 +12,12 @@
+ #include "src/base/compiler-specific.h"
+ #include "src/base/logging.h"
+ 
++#if V8_OS_AROS
++// exec/types.h exposes this legacy storage qualifier in the global macro
++// namespace, where it collides with V8 register-location enum values.
++#undef REGISTER
++#endif
++
+ // No-op macro which is used to work around MSVC's funky VA_ARGS support.
+ #define EXPAND(x) x
+ 

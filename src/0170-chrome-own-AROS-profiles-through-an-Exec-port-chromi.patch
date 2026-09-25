@@ -1,0 +1,213 @@
+From 968d2acc0d823df13de36808a22ad3f0222844f3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:19:00 -0500
+Subject: [PATCH 170/638] chrome: own AROS profiles through an Exec port
+ [chromium] [aros]
+
+Statement: The POSIX process singleton depends on Unix-domain sockets, filesystem locks, and PID probing that AROS does not provide.
+
+Decision: Represent each browser profile with a public Exec MsgPort named from a stable FNV-1a hash of its user-data path. Register ownership atomically under Forbid/Permit and reject a second process without claiming command forwarding support.
+
+Evidence: The real //chrome:chrome graph selected process_singleton_posix.cc and could not express profile ownership on AROS.
+
+Validation: process_singleton_aros.o compiles in the symbol-free out/aros-chrome target graph.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ chrome/browser/BUILD.gn                  |   7 +-
+ chrome/browser/process_singleton.h       |  15 +++-
+ chrome/browser/process_singleton_aros.cc | 104 +++++++++++++++++++++++
+ 3 files changed, 122 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/browser/process_singleton_aros.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 5d698b969a..366de6b80d 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -4808,9 +4808,14 @@ static_library("browser") {
+         "chrome_browser_main_posix.cc",
+         "chrome_browser_main_posix.h",
+         "importer/firefox_profile_lock_posix.cc",
+-        "process_singleton_posix.cc",
+       ]
+ 
++      if (is_aros) {
++        sources += [ "process_singleton_aros.cc" ]
++      } else {
++        sources += [ "process_singleton_posix.cc" ]
++      }
++
+       if (is_chromeos) {
+         sources += [ "first_run/first_run_internal_chromeos.cc" ]
+       } else {
+diff --git a/chrome/browser/process_singleton.h b/chrome/browser/process_singleton.h
+index 23a8257aa2..27b52fa31d 100644
+--- a/chrome/browser/process_singleton.h
++++ b/chrome/browser/process_singleton.h
+@@ -5,6 +5,8 @@
+ #ifndef CHROME_BROWSER_PROCESS_SINGLETON_H_
+ #define CHROME_BROWSER_PROCESS_SINGLETON_H_
+ 
++#include <string>
++
+ #include "base/sequence_checker.h"
+ #include "build/build_config.h"
+ 
+@@ -20,7 +22,7 @@
+ #include "base/process/process.h"
+ #include "ui/gfx/native_widget_types.h"
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ #include "base/files/scoped_temp_dir.h"
+ #endif
+ 
+@@ -32,6 +34,10 @@ namespace base {
+ class CommandLine;
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++struct MsgPort;
++#endif
++
+ // ProcessSingleton ----------------------------------------------------------
+ //
+ // This class allows different browser processes to communicate with
+@@ -133,7 +139,7 @@ class ProcessSingleton {
+   // Clear any lock state during shutdown.
+   void Cleanup();
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   static void DisablePromptForTesting();
+   static void SkipIsChromeProcessCheckForTesting(bool skip);
+   static void SetUserOptedUnlockInUseProfileForTesting(bool set_unlock);
+@@ -153,7 +159,7 @@ class ProcessSingleton {
+   // On Windows, Create() has to be called before this.
+   NotifyResult NotifyOtherProcess();
+ 
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   // Exposed for testing.  We use a timeout on Linux, and in tests we want
+   // this timeout to be short.
+   NotifyResult NotifyOtherProcessWithTimeout(
+@@ -182,6 +188,9 @@ class ProcessSingleton {
+   HANDLE lock_file_;
+   base::FilePath user_data_dir_;
+   ShouldKillRemoteProcessCallback should_kill_remote_process_callback_;
++#elif BUILDFLAG(IS_AROS)
++  std::string port_name_;
++  MsgPort* singleton_port_ = nullptr;
+ #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+   // Return true if the given pid is one of our child processes.
+   // Assumes that the current pid is the root of all pids of the current
+diff --git a/chrome/browser/process_singleton_aros.cc b/chrome/browser/process_singleton_aros.cc
+new file mode 100644
+index 0000000000..911a59440e
+--- /dev/null
++++ b/chrome/browser/process_singleton_aros.cc
+@@ -0,0 +1,104 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/process_singleton.h"
++
++#include <cstdint>
++
++#include "base/check.h"
++#include "base/logging.h"
++#include "base/strings/stringprintf.h"
++
++#include <exec/ports.h>
++#include <proto/exec.h>
++
++namespace {
++
++uint64_t HashProfilePath(const base::FilePath& path) {
++  uint64_t hash = UINT64_C(14695981039346656037);
++  for (unsigned char byte : path.value()) {
++    hash ^= byte;
++    hash *= UINT64_C(1099511628211);
++  }
++  return hash;
++}
++
++}  // namespace
++
++ProcessSingleton::ProcessSingleton(
++    const base::FilePath& user_data_dir,
++    const NotificationCallback& notification_callback)
++    : notification_callback_(notification_callback),
++      port_name_(base::StringPrintf(
++          "CHROMIUM.SINGLETON.%016llx",
++          static_cast<unsigned long long>(HashProfilePath(user_data_dir)))) {}
++
++ProcessSingleton::~ProcessSingleton() {
++  Cleanup();
++}
++
++ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  return Create() ? PROCESS_NONE : PROFILE_IN_USE;
++}
++
++bool ProcessSingleton::Create() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (singleton_port_) {
++    return true;
++  }
++
++  MsgPort* candidate = CreateMsgPort();
++  if (!candidate) {
++    LOG(ERROR) << "[Chromium:AROS] could not allocate browser singleton port";
++    return false;
++  }
++  candidate->mp_Node.ln_Name = const_cast<char*>(port_name_.c_str());
++
++  Forbid();
++  const bool profile_in_use = FindPort(port_name_.c_str()) != nullptr;
++  if (!profile_in_use) {
++    AddPort(candidate);
++    singleton_port_ = candidate;
++  }
++  Permit();
++
++  if (profile_in_use) {
++    candidate->mp_Node.ln_Name = nullptr;
++    DeleteMsgPort(candidate);
++    LOG(ERROR) << "[Chromium:AROS] browser profile already owns port "
++               << port_name_;
++    return false;
++  }
++
++  LOG(INFO) << "[Chromium:AROS] browser profile owns port " << port_name_;
++  return true;
++}
++
++void ProcessSingleton::StartWatching() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  // The named port establishes ownership. A later protocol will forward a
++  // second invocation's command line through this same native boundary.
++}
++
++void ProcessSingleton::Cleanup() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (!singleton_port_) {
++    return;
++  }
++
++  RemPort(singleton_port_);
++  singleton_port_->mp_Node.ln_Name = nullptr;
++  DeleteMsgPort(singleton_port_);
++  singleton_port_ = nullptr;
++}
++
++ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcess() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++
++  Forbid();
++  const bool profile_in_use = FindPort(port_name_.c_str()) != nullptr;
++  Permit();
++  return profile_in_use ? PROFILE_IN_USE : PROCESS_NONE;
++}

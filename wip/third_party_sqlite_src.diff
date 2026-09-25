@@ -1,0 +1,114 @@
+diff --git a/amalgamation/sqlite3.c b/amalgamation/sqlite3.c
+index cc724ea..f157787 100644
+--- a/amalgamation/sqlite3.c
++++ b/amalgamation/sqlite3.c
+@@ -41431,7 +41431,18 @@ static int seekAndWriteFd(
+   TIMER_END;
+   OSTRACE(("WRITE   %-3d %5d %7lld %llu\n", fd, rc, iOff, TIMER_ELAPSED));
+ 
+-  if( rc<0 ) *piErrno = errno;
++  if( rc<0 ){
++    *piErrno = errno;
++#if defined(__AROS__)
++    {
++      char zArosLog[256];
++      sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++          "[Chromium:AROS:SQLiteVFS] pwrite failed fd=%d off=%lld amt=%d errno=%d\n",
++          fd, (long long)iOff, nBuf, *piErrno);
++      write(2, zArosLog, sqlite3Strlen30(zArosLog));
++    }
++#endif
++  }
+   return rc;
+ }
+ 
+@@ -41522,6 +41533,16 @@ static int unixWrite(
+   if( amt>wrote ){
+     if( wrote<0 && pFile->lastErrno!=ENOSPC ){
+       /* lastErrno set by seekAndWrite */
++#if defined(__AROS__)
++      {
++        char zArosLog[512];
++        sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++            "[Chromium:AROS:SQLiteVFS] write failed path='%s' fd=%d off=%lld amt=%d wrote=%d errno=%d\n",
++            pFile->zPath ? pFile->zPath : "", pFile->h,
++            (long long)offset, amt, wrote, pFile->lastErrno);
++        write(2, zArosLog, sqlite3Strlen30(zArosLog));
++      }
++#endif
+       return SQLITE_IOERR_WRITE;
+     }else{
+       storeLastErrno(pFile, 0); /* not a system error */
+@@ -41742,6 +41763,15 @@ static int unixSync(sqlite3_file *id, int flags){
+   rc = full_fsync(pFile->h, isFullsync, isDataOnly);
+   SimulateIOError( rc=1 );
+   if( rc ){
++#if defined(__AROS__)
++    {
++      char zArosLog[512];
++      sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++          "[Chromium:AROS:SQLiteVFS] fsync failed path='%s' fd=%d flags=%d errno=%d\n",
++          pFile->zPath ? pFile->zPath : "", pFile->h, flags, errno);
++      write(2, zArosLog, sqlite3Strlen30(zArosLog));
++    }
++#endif
+     storeLastErrno(pFile, errno);
+     return unixLogError(SQLITE_IOERR_FSYNC, "full_fsync", pFile->zPath);
+   }
+diff --git a/src/os_unix.c b/src/os_unix.c
+index 4b3d63c..bdb3919 100644
+--- a/src/os_unix.c
++++ b/src/os_unix.c
+@@ -3475,7 +3475,18 @@ static int seekAndWriteFd(
+   TIMER_END;
+   OSTRACE(("WRITE   %-3d %5d %7lld %llu\n", fd, rc, iOff, TIMER_ELAPSED));
+ 
+-  if( rc<0 ) *piErrno = errno;
++  if( rc<0 ){
++    *piErrno = errno;
++#if defined(__AROS__)
++    {
++      char zArosLog[256];
++      sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++          "[Chromium:AROS:SQLiteVFS] pwrite failed fd=%d off=%lld amt=%d errno=%d\n",
++          fd, (long long)iOff, nBuf, *piErrno);
++      write(2, zArosLog, sqlite3Strlen30(zArosLog));
++    }
++#endif
++  }
+   return rc;
+ }
+ 
+@@ -3566,6 +3577,16 @@ static int unixWrite(
+   if( amt>wrote ){
+     if( wrote<0 && pFile->lastErrno!=ENOSPC ){
+       /* lastErrno set by seekAndWrite */
++#if defined(__AROS__)
++      {
++        char zArosLog[512];
++        sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++            "[Chromium:AROS:SQLiteVFS] write failed path='%s' fd=%d off=%lld amt=%d wrote=%d errno=%d\n",
++            pFile->zPath ? pFile->zPath : "", pFile->h,
++            (long long)offset, amt, wrote, pFile->lastErrno);
++        write(2, zArosLog, sqlite3Strlen30(zArosLog));
++      }
++#endif
+       return SQLITE_IOERR_WRITE;
+     }else{
+       storeLastErrno(pFile, 0); /* not a system error */
+@@ -3786,6 +3807,15 @@ static int unixSync(sqlite3_file *id, int flags){
+   rc = full_fsync(pFile->h, isFullsync, isDataOnly);
+   SimulateIOError( rc=1 );
+   if( rc ){
++#if defined(__AROS__)
++    {
++      char zArosLog[512];
++      sqlite3_snprintf(sizeof(zArosLog), zArosLog,
++          "[Chromium:AROS:SQLiteVFS] fsync failed path='%s' fd=%d flags=%d errno=%d\n",
++          pFile->zPath ? pFile->zPath : "", pFile->h, flags, errno);
++      write(2, zArosLog, sqlite3Strlen30(zArosLog));
++    }
++#endif
+     storeLastErrno(pFile, errno);
+     return unixLogError(SQLITE_IOERR_FSYNC, "full_fsync", pFile->zPath);
+   }

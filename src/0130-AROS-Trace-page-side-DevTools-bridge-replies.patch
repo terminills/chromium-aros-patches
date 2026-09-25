@@ -1,0 +1,45 @@
+From c3bb9d9694c6ee74f89da3f7ca29a1f9ff0fcb98 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 00:11:52 -0500
+Subject: [PATCH 130/638] [AROS] Trace page-side DevTools bridge replies
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Run 0132 proves Chromium creates and attaches the target, navigates about:blank through load, captures a valid 1280x720 PNG, and closes the target, but the outer Runtime.evaluate remains pending. The unresolved boundary is the final page-side Runtime.evaluate used to deliver Target.closeTarget's response back into the command harness.
+FIX_REASON: Log non-binding page protocol replies so an exception in bridge message delivery is visible, and summarize oversized browser responses by byte count instead of synchronously logging the full screenshot base64 payload.
+SCOPE: content/browser/devtools/protocol/target_handler.cc
+VALIDATION: AROS content/browser target_handler.o cross-compiled; artifact 34 contains the first valid Chromium-rendered AROS PNG recovered from Page.captureScreenshot.
+RISK: AROS-only diagnostics add protocol reply logging; truncating oversized diagnostic payloads removes timing perturbation without changing protocol data delivery.
+AI_DECISION_CHAIN: full CDP path works -> first PNG captured -> outer promise still pending -> inspect final page Runtime.evaluate reply
+---
+ content/browser/devtools/protocol/target_handler.cc | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index 2eae9def14..5de3c1225e 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -263,6 +263,9 @@ class BrowserToPageConnector {
+       // Make sure this is a binding call.
+       const std::string* method = dict.FindString("method");
+       if (!method || *method != "Runtime.bindingCalled") {
++#if BUILDFLAG(IS_AROS)
++        LOG(INFO) << "[Chromium:cdp-bridge] page response=" << message_sp;
++#endif
+         return;
+       }
+ 
+@@ -291,7 +294,12 @@ class BrowserToPageConnector {
+     DCHECK(agent_host == browser_host_.get());
+ 
+ #if BUILDFLAG(IS_AROS)
+-    LOG(INFO) << "[Chromium:cdp-bridge] browser response=" << message_sp;
++    if (message_sp.size() > 1024) {
++      LOG(INFO) << "[Chromium:cdp-bridge] browser response bytes="
++                << message_sp.size();
++    } else {
++      LOG(INFO) << "[Chromium:cdp-bridge] browser response=" << message_sp;
++    }
+ #endif
+ 
+     std::string encoded = base::Base64Encode(message_sp);

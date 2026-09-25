@@ -1,0 +1,56 @@
+From 185a24cada0b56088f2af738b448efa4cfc7ad4c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 09:56:09 -0500
+Subject: [PATCH 546/638] AROS: suppress expected startup infobars
+
+AROS hosted Chromium requires --no-sandbox and unbranded builds do not have Google API keys, so suppress those two expected startup infobars on AROS while leaving other bad-flag warnings intact.
+
+Validated with build165 d7e7bc0052b5b550362420467a549ec9e4587f7bce6a73f4cee4ef7a128f2829 (-j32), build log 9cc485833e8fda12d9e79727224f16ce2a95c8ad46c5b73ebfcd715e7ce13bfb. Hosted run91 reached YouTube with no unsupported-command-line, Google API key, Memory Saver, restore, or cursor fallback banner markers; screenshot run91 hash 46fea0a8b5fbfe68eb75b9496d0c73d3d107e164fc2e0289ad2c36d6819780cc.
+---
+ chrome/browser/ui/startup/bad_flags_prompt.cc | 5 +++++
+ chrome/browser/ui/startup/infobar_utils.cc    | 9 ++++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
+index 7dd0358488..00e54ec32f 100644
+--- a/chrome/browser/ui/startup/bad_flags_prompt.cc
++++ b/chrome/browser/ui/startup/bad_flags_prompt.cc
+@@ -224,6 +224,11 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
+ // for flags which are not available in about:flags.
+ #if !BUILDFLAG(IS_ANDROID)
+   for (const char* flag : kBadFlags) {
++#if BUILDFLAG(IS_AROS)
++    if (base::StringPiece(flag) == sandbox::policy::switches::kNoSandbox) {
++      continue;
++    }
++#endif
+     if (base::CommandLine::ForCurrentProcess()->HasSwitch(flag)) {
+       ShowBadFlagsInfoBar(web_contents, IDS_BAD_FLAGS_WARNING_MESSAGE, flag);
+       return;
+diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
+index 470a76610e..2370c8556c 100644
+--- a/chrome/browser/ui/startup/infobar_utils.cc
++++ b/chrome/browser/ui/startup/infobar_utils.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/command_line.h"
+ #include "build/branding_buildflags.h"
++#include "build/build_config.h"
+ #include "build/buildflag.h"
+ #include "build/chromeos_buildflags.h"
+ #include "chrome/browser/browser_process.h"
+@@ -151,7 +152,13 @@ void AddInfoBarsIfNecessary(Browser* browser,
+     infobars::ContentInfoBarManager* infobar_manager =
+         infobars::ContentInfoBarManager::FromWebContents(web_contents);
+ 
+-    if (!google_apis::HasAPIKeyConfigured()) {
++#if BUILDFLAG(IS_AROS)
++    const bool should_show_missing_api_keys_infobar = false;
++#else
++    const bool should_show_missing_api_keys_infobar =
++        !google_apis::HasAPIKeyConfigured();
++#endif
++    if (should_show_missing_api_keys_infobar) {
+       GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
+     }
+ 

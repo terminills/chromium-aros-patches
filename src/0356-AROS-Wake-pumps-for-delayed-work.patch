@@ -1,0 +1,37 @@
+From 8ec908285f64a701511439289178c21daa3b1dfb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 27 Jul 2026 18:51:09 -0500
+Subject: [PATCH 356/638] [AROS] Wake pumps for delayed work
+
+AI_PHASE: electron-event-loop-coexistence
+AI_STATUS: renderer-delayed-work-wake
+ROOT_CAUSE: MessagePumpAROS::ScheduleDelayedWork was empty, so Blink timers posted after the renderer entered its wait never woke the pump to recompute and arm timer.device.
+FIX_REASON: Reuse ScheduleWork's native Exec signal; Run then recalculates the earliest deadline and uses the existing timer.device wait.
+SCOPE: base/message_loop/message_pump_aros.cc
+VALIDATION: cef:libcef_static rebuild passes at -j32 in evidence 210; hosted Electron renderer-timer replay follows.
+RISK: This may add harmless extra wakeups when a later delayed deadline is posted; Chromium's work deduplicator controls notification frequency.
+AI_DECISION_CHAIN: CEF cross-thread posts and Blink timers both stalled -> inspect common AROS pump -> delayed scheduling omitted wake.
+Job:
+---
+ base/message_loop/message_pump_aros.cc | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 2d3b9142c4..56816439d8 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -200,7 +200,13 @@ void MessagePumpAROS::ScheduleWork() {
+ }
+ 
+ void MessagePumpAROS::ScheduleDelayedWork(
+-    const Delegate::NextWorkInfo& next_work_info) {}
++    const Delegate::NextWorkInfo& next_work_info) {
++  // A delayed task may be posted while the pump is blocked indefinitely or
++  // waiting for a later timer deadline. Wake it so Run() can recompute the
++  // earliest deadline and arm timer.device accordingly.
++  (void)next_work_info;
++  ScheduleWork();
++}
+ 
+ void MessagePumpAROS::WaitForIdleEvents(TimeDelta timeout,
+                                         bool wait_indefinitely) {

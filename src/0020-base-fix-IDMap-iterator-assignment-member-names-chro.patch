@@ -1,0 +1,40 @@
+From f68a5d0229f47a71ca125c32f472aedf359753a3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:35:03 -0500
+Subject: [PATCH 020/638] base: fix IDMap iterator assignment member names
+ [chromium] [gcc]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: IDMap::Iterator's copy-assignment operator referenced nonexistent iter.map and iter.iter members. Chromium's usual Clang path left the dormant template body unchecked, while GCC 15 validates it and stopped the AROS cross-build.
+
+FIX_REASON: Use the actual private members map_ and iter_, matching the already-correct copy constructor and the intended iterator-depth bookkeeping.
+
+SCOPE: base/containers IDMap iterator copy assignment.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ipc/ipc/message_router.o
+
+RISK: low; this is a direct typo correction in previously ill-formed code.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/containers/id_map.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/base/containers/id_map.h b/base/containers/id_map.h
+index 4ff5ee7c8b..f84c7c5c6f 100644
+--- a/base/containers/id_map.h
++++ b/base/containers/id_map.h
+@@ -178,8 +178,8 @@ class IDMap final {
+     }
+ 
+     const Iterator& operator=(const Iterator& iter) {
+-      map_ = iter.map;
+-      iter_ = iter.iter;
++      map_ = iter.map_;
++      iter_ = iter.iter_;
+       Init();
+       return *this;
+     }

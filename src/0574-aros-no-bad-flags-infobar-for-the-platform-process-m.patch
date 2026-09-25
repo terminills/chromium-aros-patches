@@ -1,0 +1,26 @@
+From f0c95aca4740472792dc9d435e00be86d2a86be4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 13:35:57 -0500
+Subject: [PATCH 574/638] aros: no bad-flags infobar for the platform process
+ model
+
+---
+ chrome/browser/ui/startup/bad_flags_prompt.cc | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
+index 00e54ec32f..ebbc3d0a75 100644
+--- a/chrome/browser/ui/startup/bad_flags_prompt.cc
++++ b/chrome/browser/ui/startup/bad_flags_prompt.cc
+@@ -225,7 +225,10 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
+ #if !BUILDFLAG(IS_ANDROID)
+   for (const char* flag : kBadFlags) {
+ #if BUILDFLAG(IS_AROS)
+-    if (base::StringPiece(flag) == sandbox::policy::switches::kNoSandbox) {
++    // The in-process, unsandboxed model is the platform's, not the user's
++    // choice (see ApplyArosProcessModelDefaults in content_main.cc).
++    if (base::StringPiece(flag) == sandbox::policy::switches::kNoSandbox ||
++        base::StringPiece(flag) == switches::kSingleProcess) {
+       continue;
+     }
+ #endif

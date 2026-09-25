@@ -1,0 +1,64 @@
+From 809520223489426e669350e78e772b1985e23722 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:25:15 -0500
+Subject: [PATCH 016/638] tracing: fail closed without AROS Unix sockets
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Perfetto's external system-producer connector unconditionally opens an AF_UNIX socket. AROS networking is provided by AROSTCP for Internet protocols and does not expose this Unix-domain socket service, leaving socket/connect undeclared and no valid transport to substitute.
+
+FIX_REASON: Return EAFNOSUPPORT through the connector's existing asynchronous failure path and log the missing service through Chromium's AROS debug-resource backend. Do not route local IPC through AROSTCP or fabricate a successful descriptor.
+
+SCOPE: services/tracing public C++ system producer connector.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/services/tracing/public/cpp/cpp/system_tracing_service.o
+
+RISK: low; external Perfetto system tracing is unavailable, while in-process Chromium tracing and the headless graph remain intact.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ services/tracing/public/cpp/system_tracing_service.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/services/tracing/public/cpp/system_tracing_service.cc b/services/tracing/public/cpp/system_tracing_service.cc
+index 57ca7d94b4..c0abe84feb 100644
+--- a/services/tracing/public/cpp/system_tracing_service.cc
++++ b/services/tracing/public/cpp/system_tracing_service.cc
+@@ -10,10 +10,14 @@
+ #include "base/types/expected.h"
+ #include "build/build_config.h"
+ 
++#include <errno.h>
++
++#if !BUILDFLAG(IS_AROS)
+ #include <sys/socket.h>
+ #include <sys/types.h>
+ #include <sys/un.h>
+ #include <unistd.h>
++#endif
+ 
+ #include "base/check.h"
+ #include "base/functional/bind.h"
+@@ -63,6 +67,11 @@ class ProducerSocketConnector
+   }
+ 
+   base::expected<bool, int> ConnectSocket() {
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING)
++        << "AROS Perfetto system-producer sockets are not implemented";
++    return base::unexpected(EAFNOSUPPORT);
++#else
+     std::string producer_sock_name = perfetto::GetProducerSocket();
+     socket_fd_.reset(socket(AF_UNIX, SOCK_STREAM, 0));
+     if (socket_fd_.get() == -1) {
+@@ -86,6 +95,7 @@ class ProducerSocketConnector
+       return base::unexpected(errno);
+     }
+     return base::ok(connect_rv == 0);
++#endif
+   }
+ 
+   void OnConnectSocketResult(base::expected<bool, int> res) {

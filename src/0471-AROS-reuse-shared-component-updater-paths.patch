@@ -1,0 +1,49 @@
+From b4d9172087be4a968ad774725e843b772adc8e2c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 15:17:28 -0500
+Subject: [PATCH 471/638] AROS: reuse shared component updater paths
+
+Native AROS child processes share the browser address space and PathService registry. Accept repeated registration only when all component path keys match the browser-established mapping, while retaining fatal checks for mismatches.
+
+Run 74 crossed shared ICU initialization and stopped the GPU child at the duplicate component path registration guard.
+
+
+
+---
+ .../component_updater/component_updater_paths.cc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/components/component_updater/component_updater_paths.cc b/components/component_updater/component_updater_paths.cc
+index 1f59227186..0137dd74c9 100644
+--- a/components/component_updater/component_updater_paths.cc
++++ b/components/component_updater/component_updater_paths.cc
+@@ -9,6 +9,7 @@
+ #include "base/files/file_path.h"
+ #include "base/lazy_instance.h"
+ #include "base/path_service.h"
++#include "build/build_config.h"
+ 
+ namespace component_updater {
+ namespace {
+@@ -66,6 +67,21 @@ bool PathProvider(int key, base::FilePath* result) {
+ void RegisterPathProvider(int components_preinstalled_root_key,
+                           int components_preinstalled_root_key_alt,
+                           int components_user_root_key) {
++#if BUILDFLAG(IS_AROS)
++  // Native AROS child processes share the browser's address space. The path
++  // provider and its key mapping are therefore already installed when a child
++  // enters its own Chromium startup sequence. Reuse the shared registration,
++  // but retain strict checks so a child cannot silently request a different
++  // mapping.
++  if (g_components_preinstalled_root_key != -1) {
++    CHECK_EQ(g_components_preinstalled_root_key,
++             components_preinstalled_root_key);
++    CHECK_EQ(g_components_preinstalled_root_key_alt,
++             components_preinstalled_root_key_alt);
++    CHECK_EQ(g_components_user_root_key, components_user_root_key);
++    return;
++  }
++#endif
+   CHECK_EQ(g_components_preinstalled_root_key, -1);
+   CHECK_EQ(g_components_preinstalled_root_key_alt, -1);
+   CHECK_EQ(g_components_user_root_key, -1);

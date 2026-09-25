@@ -1,0 +1,88 @@
+From ac2cb376a5af1d3ce19da8c8c4bd98af16a49fec Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 05:29:29 -0500
+Subject: [PATCH 229/638] chrome: enable portable desktop features on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chrome linked portable media preview, mirroring, payments, spelling, WebUI preload, and keyboard call sites on AROS while their implementations remained restricted to established desktop platform predicates.
+
+FIX_REASON: Admit AROS to source sets that contain no Linux, DBus, X11, or native-handle assumptions, select the existing Ozone keyboard path, and define the WebUI result move constructor already declared by its public contract.
+
+SCOPE: Chrome browser/browser-ui GN source selection, Views webview Ozone selection, and one missing WebUI special-member definition.
+
+VALIDATION: All 36 newly selected compile/archive edges completed; //chrome:chrome final link inventory fell from 64 to 47 unresolved OS contracts; git diff --cached --check passes.
+
+RISK: low to medium; these are existing cross-platform feature implementations, with actual media/device availability still governed by Chromium service capabilities.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/BUILD.gn                                       | 4 ++--
+ chrome/browser/ui/BUILD.gn                                    | 2 +-
+ .../ui/webui/top_chrome/webui_contents_preload_manager.cc     | 1 +
+ ui/views/controls/webview/BUILD.gn                            | 2 +-
+ 4 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 7a967db9f0..fe4c02fe29 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6661,7 +6661,7 @@ static_library("browser") {
+     sources += [ "hang_monitor/hang_crash_dump.cc" ]
+   }
+ 
+-  if (is_win || is_linux || is_chromeos) {
++  if (is_win || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "renderer_context_menu/spelling_options_submenu_observer.cc",
+       "renderer_context_menu/spelling_options_submenu_observer.h",
+@@ -6759,7 +6759,7 @@ static_library("browser") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "media/cast_mirroring_service_host.cc",
+       "media/cast_mirroring_service_host.h",
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 119e911b3c..11895162e0 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4788,7 +4788,7 @@ static_library("ui") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "startup/web_app_info_recorder_utils.cc",
+       "startup/web_app_info_recorder_utils.h",
+diff --git a/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc b/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
+index 6f4dc86ed4..a76b989514 100644
+--- a/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
++++ b/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
+@@ -142,6 +142,7 @@ class WebUIContentsPreloadManager::WebUIControllerEmbedderStub final
+ using MakeContentsResult = WebUIContentsPreloadManager::MakeContentsResult;
+ 
+ MakeContentsResult::MakeContentsResult() = default;
++MakeContentsResult::MakeContentsResult(MakeContentsResult&&) = default;
+ MakeContentsResult::~MakeContentsResult() = default;
+ MakeContentsResult& MakeContentsResult::operator=(MakeContentsResult&&) =
+     default;
+diff --git a/ui/views/controls/webview/BUILD.gn b/ui/views/controls/webview/BUILD.gn
+index e3dd4fab3a..76dc5ecf9b 100644
+--- a/ui/views/controls/webview/BUILD.gn
++++ b/ui/views/controls/webview/BUILD.gn
+@@ -54,7 +54,7 @@ component("webview") {
+     "//ui/views",
+   ]
+ 
+-  if (is_linux || is_chromeos || is_android || is_fuchsia) {
++  if (is_linux || is_chromeos || is_android || is_fuchsia || is_aros) {
+     if (use_ozone) {
+       sources += [ "unhandled_keyboard_event_handler_ozone.cc" ]
+       deps += [ "//ui/ozone" ]

@@ -1,0 +1,34 @@
+From d96ad86d27d6f1c405de41f0f27c55af1aaaee46 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:35:18 -0500
+Subject: [PATCH 194/638] enterprise: enable Views watermarking on AROS
+ [chromium] [aros]
+
+Statement:
+The AROS desktop Chrome graph enables Views, but the enterprise watermark capability excluded AROS and left BrowserView compiled against a disabled watermark namespace.
+
+Decision:
+Enable Chromium's existing Views watermark implementation on AROS. Preserve managed-browser watermark behavior instead of compile-gating it away.
+
+Evidence:
+The generated enterprise buildflag is enabled and chrome_password_protection_service.o builds successfully in out/aros-chrome.
+
+Chain:
+ first native upstream Chromium browser window.
+---
+ components/enterprise/buildflags/buildflags.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/components/enterprise/buildflags/buildflags.gni b/components/enterprise/buildflags/buildflags.gni
+index fa27ba6cfe..c6571a92c1 100644
+--- a/components/enterprise/buildflags/buildflags.gni
++++ b/components/enterprise/buildflags/buildflags.gni
+@@ -26,7 +26,7 @@ declare_args() {
+ 
+   # The watermark is currently implemented using the views framework
+   enterprise_watermark =
+-      toolkit_views && (is_win || is_mac || is_linux || is_chromeos)
++      toolkit_views && (is_win || is_mac || is_linux || is_chromeos || is_aros)
+ }
+ 
+ declare_args() {

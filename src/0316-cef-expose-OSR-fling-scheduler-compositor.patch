@@ -1,0 +1,108 @@
+From 788896bd50e0499665a3de846cc358eeeb5fbe19 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:33:32 -0500
+Subject: [PATCH 316/638] cef: expose OSR fling scheduler compositor
+
+Apply CEF's upstream osr_fling_2745 patch as a discrete prerequisite for RenderWidgetHostViewOSR.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-osr-fling-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 16 reported missing RenderWidgetHostImpl::SetCompositorForFlingScheduler
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/16-libcef-static-after-blink-devtools.log
+
+AI_DECISION_CHAIN:; 52dac911; 3940c07c77
+---
+ .../browser/renderer_host/input/fling_scheduler.cc    |  3 +++
+ .../browser/renderer_host/render_widget_host_impl.cc  |  5 +++++
+ .../browser/renderer_host/render_widget_host_impl.h   |  1 +
+ content/common/input/fling_scheduler_base.h           | 11 +++++++++++
+ content/common/input/render_input_router.h            |  1 +
+ 5 files changed, 21 insertions(+)
+
+diff --git a/content/browser/renderer_host/input/fling_scheduler.cc b/content/browser/renderer_host/input/fling_scheduler.cc
+index 431df5d50d..0fcc9ea8fb 100644
+--- a/content/browser/renderer_host/input/fling_scheduler.cc
++++ b/content/browser/renderer_host/input/fling_scheduler.cc
+@@ -68,6 +68,9 @@ void FlingScheduler::ProgressFlingOnBeginFrameIfneeded(
+ }
+ 
+ ui::Compositor* FlingScheduler::GetCompositor() {
++  if (compositor_) {
++    return compositor_;
++  }
+   if (!host_->GetView()) {
+     return nullptr;
+   }
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index 7f63e954dc..c916d68d3f 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -3234,6 +3234,11 @@ void RenderWidgetHostImpl::OnInvalidInputEventSource() {
+       GetProcess(), bad_message::INPUT_ROUTER_INVALID_EVENT_SOURCE);
+ }
+ 
++void RenderWidgetHostImpl::SetCompositorForFlingScheduler(
++    ui::Compositor* compositor) {
++  GetRenderInputRouter()->fling_scheduler()->SetCompositor(compositor);
++}
++
+ void RenderWidgetHostImpl::AddPendingUserActivation(
+     const WebInputEvent& event) {
+   if ((base::FeatureList::IsEnabled(
+diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+index fb89c4500e..5e8f8d258d 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -814,6 +814,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+ 
+   void ProgressFlingIfNeeded(base::TimeTicks current_time);
+   void StopFling();
++  void SetCompositorForFlingScheduler(ui::Compositor* compositor);
+ 
+   RenderWidgetHostViewBase* GetRenderWidgetHostViewBase();
+ 
+diff --git a/content/common/input/fling_scheduler_base.h b/content/common/input/fling_scheduler_base.h
+index e8ee63f3ab..2d17170827 100644
+--- a/content/common/input/fling_scheduler_base.h
++++ b/content/common/input/fling_scheduler_base.h
+@@ -7,12 +7,23 @@
+ 
+ #include "content/common/input/fling_controller.h"
+ 
++namespace ui {
++class Compositor;
++}
++
+ namespace content {
+ 
+ class FlingSchedulerBase : public FlingControllerSchedulerClient {
+  public:
+   virtual void ProgressFlingOnBeginFrameIfneeded(
+       base::TimeTicks current_time) = 0;
++
++  void SetCompositor(ui::Compositor* compositor) {
++    compositor_ = compositor;
++  }
++
++protected:
++ ui::Compositor* compositor_ = nullptr;
+ };
+ 
+ }  // namespace content
+diff --git a/content/common/input/render_input_router.h b/content/common/input/render_input_router.h
+index 9d664e43a3..584a4fa7d6 100644
+--- a/content/common/input/render_input_router.h
++++ b/content/common/input/render_input_router.h
+@@ -56,6 +56,7 @@ class CONTENT_EXPORT RenderInputRouter : public InputRouterImplClient {
+   void RendererWidgetCreated(bool for_frame_widget);
+ 
+   InputRouter* input_router() { return input_router_.get(); }
++  FlingSchedulerBase* fling_scheduler() { return fling_scheduler_.get(); }
+ 
+   void SetForceEnableZoom(bool);
+   void SetDeviceScaleFactor(float device_scale_factor);

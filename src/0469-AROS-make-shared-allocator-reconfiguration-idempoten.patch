@@ -1,0 +1,54 @@
+From 1c2986a94cf33dcc61c9939898971b1770461c16 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 14:48:57 -0500
+Subject: [PATCH 469/638] AROS: make shared allocator reconfiguration
+ idempotent
+
+Native AROS child processes execute ContentMain independently while sharing one PartitionAlloc instance with the browser. Preserve the browser-established allocator configuration when child startup repeats the configuration phases.
+
+Run 68 crossed the CommandLine ownership boundary and then stopped specifically on the second ReconfigureEarlyish call from the GPU child. This change deliberately keeps one authoritative allocator configuration rather than inventing per-process allocator state.
+
+
+
+---
+ base/allocator/partition_alloc_support.cc | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/base/allocator/partition_alloc_support.cc b/base/allocator/partition_alloc_support.cc
+index 217dda37af..e41f5f9d35 100644
+--- a/base/allocator/partition_alloc_support.cc
++++ b/base/allocator/partition_alloc_support.cc
+@@ -1008,11 +1008,20 @@ void PartitionAllocSupport::ReconfigureEarlyish(
+       return;
+     }
+ 
++#if BUILDFLAG(IS_AROS)
++    // AROS processes share one address space and therefore one allocator.
++    // Native child processes still execute ContentMain independently, but
++    // must inherit the allocator configuration established by the browser.
++    if (called_earlyish_) {
++      return;
++    }
++#else
+     // TODO(bartekn): Switch to DCHECK once confirmed there are no issues.
+     CHECK(!called_earlyish_)
+         << "ReconfigureEarlyish was already called for process '"
+         << established_process_type_ << "'; current process: '" << process_type
+         << "'";
++#endif
+ 
+     called_earlyish_ = true;
+     established_process_type_ = process_type;
+@@ -1068,10 +1077,12 @@ void PartitionAllocSupport::ReconfigureAfterFeatureListInit(
+     base::AutoLock scoped_lock(lock_);
+     // Avoid initializing more than once.
+     if (called_after_feature_list_init_) {
++#if !BUILDFLAG(IS_AROS)
+       DCHECK_EQ(established_process_type_, process_type)
+           << "ReconfigureAfterFeatureListInit was already called for process '"
+           << established_process_type_ << "'; current process: '"
+           << process_type << "'";
++#endif
+       return;
+     }
+     DCHECK(called_earlyish_)

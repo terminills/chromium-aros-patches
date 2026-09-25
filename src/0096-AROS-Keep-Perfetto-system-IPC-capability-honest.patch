@@ -1,0 +1,120 @@
+From 3dfd92ffbc2203e0a4e45a9995672de3fc8472e6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:03:12 -0500
+Subject: [PATCH 096/638] [AROS] Keep Perfetto system IPC capability honest
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Chromium retains in-process Perfetto tracing on AROS and selects DummyProducer for unavailable system tracing.
+ROOT_CAUSE: Chromium classified AROS as POSIX and therefore linked Perfetto Unix-domain system-producer code even though AROSTCP has no compatible AF_UNIX service transport.
+FIX_REASON: Exclude the system-producer sources and runtime socket path on AROS while preserving the custom and in-process tracing backends.
+SCOPE: Chromium tracing source selection and PerfettoTracedProcess backend setup.
+VALIDATION: Filtered GN generation removes producer/default-socket targets; traced-process object and archive build; nm shows no GetProducerSocket, ProducerIPCClient, or PosixSystemProducer references.
+RISK: Cross-process Perfetto service sessions remain unavailable until a native AROS transport is implemented.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-aros-native-crash-reporting
+---
+ services/tracing/public/cpp/BUILD.gn          |  2 +-
+ .../cpp/perfetto/perfetto_traced_process.cc   | 25 +++++++++++--------
+ 2 files changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/services/tracing/public/cpp/BUILD.gn b/services/tracing/public/cpp/BUILD.gn
+index 6b350436a5..097271bbce 100644
+--- a/services/tracing/public/cpp/BUILD.gn
++++ b/services/tracing/public/cpp/BUILD.gn
+@@ -147,7 +147,7 @@ target(tracing_lib_type, "cpp") {
+     ]
+ 
+     # Add the SystemProducer implementations.
+-    if (is_posix || is_fuchsia) {
++    if ((is_posix && !is_aros) || is_fuchsia) {
+       sources += [
+         "perfetto/posix_system_producer.cc",
+         "perfetto/posix_system_producer.h",
+diff --git a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
+index 827f57a921..636b8a84dc 100644
+--- a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
++++ b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
+@@ -32,7 +32,8 @@
+ #include "components/tracing/common/etw_system_data_source_win.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || \
++    BUILDFLAG(IS_FUCHSIA)
+ // As per 'gn help check':
+ /*
+   If you have conditional includes, make sure the build conditions and the
+@@ -43,29 +44,31 @@
+ // non-android builds.
+ #include "services/tracing/public/cpp/perfetto/posix_system_producer.h"  // nogncheck
+ #include "third_party/perfetto/include/perfetto/tracing/default_socket.h"  // nogncheck
+-#endif  // BUILDFLAG(IS_POSIX)
++#endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || IS_FUCHSIA
+ 
+ namespace tracing {
+ namespace {
+-#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || \
++    BUILDFLAG(IS_FUCHSIA)
+ // Set to use the dummy producer for Chrome OS browser_tests and
+ // content_browsertests to keep the system producer from causing flakes.
+ static bool g_system_producer_enabled = true;
+-#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || IS_FUCHSIA
+ 
+ std::unique_ptr<SystemProducer> NewSystemProducer(
+     base::tracing::PerfettoTaskRunner* runner,
+     const char* socket_name) {
+-#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || \
++    BUILDFLAG(IS_FUCHSIA)
+   DCHECK(socket_name);
+   if (g_system_producer_enabled)
+     return std::make_unique<PosixSystemProducer>(socket_name, runner);
+-#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || IS_FUCHSIA
+   return std::make_unique<DummyProducer>(runner);
+ }
+ 
+ const char* MaybeSocket() {
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   return perfetto::GetProducerSocket();
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // The socket is connected via a socket pair passed over IPC, which is not
+@@ -84,7 +87,7 @@ void OnPerfettoLogMessage(perfetto::base::LogMessageCallbackArgs args) {
+ }
+ 
+ #if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY) && BUILDFLAG(IS_POSIX) && \
+-    !BUILDFLAG(IS_ANDROID)
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+ // The async socket connection function passed to the client library for
+ // connecting the producer socket in the browser process via mojo IPC.
+ // |cb| is a callback from within the client library this function calls when
+@@ -364,7 +367,7 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer) {
+   init_args.shmem_direct_patching_enabled = true;
+   init_args.use_monotonic_clock = true;
+   init_args.disallow_merging_with_system_tracks = true;
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // In non-SDK build we only use the client library system backend for the
+   // consumer side, which is only allowed in the browser process.
+   // In SDK build we use system backend for producers too, but note that
+@@ -380,7 +383,7 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer) {
+     init_args.backends |= perfetto::kSystemBackend;
+     init_args.tracing_policy = this;
+ #if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY) && BUILDFLAG(IS_POSIX) && \
+-    !BUILDFLAG(IS_ANDROID)
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+     auto type =
+         base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("type");
+     if (!type.empty()) {  // Sandboxed. Need to delegate to the browser process
+@@ -490,7 +493,7 @@ void PerfettoTracedProcess::ShouldAllowSystemConsumerSession(
+ }
+ 
+ void PerfettoTracedProcess::SetSystemProducerEnabledForTesting(bool enabled) {
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // If set to disabled, use the dummy implementation to prevent the real system
+   // producer from interfering with browser tests.
+   g_system_producer_enabled = enabled;

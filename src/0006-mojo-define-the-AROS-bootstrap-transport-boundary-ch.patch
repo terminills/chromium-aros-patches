@@ -1,0 +1,275 @@
+From d48a551dc8caa0f722b6a1adcfa702a4b7e2babc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:50:03 -0500
+Subject: [PATCH 006/638] mojo: define the AROS bootstrap transport boundary
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: wip
+
+ROOT_CAUSE: Mojo's POSIX platform channel assumes AF_UNIX socketpairs and transferable file descriptors; wrapping an AROSTCP socket or integer placeholder would compile but misrepresent ownership and cross-process semantics.
+
+FIX_REASON: Select explicit AROS channel stubs for the initial single-process headless graph, return unsupported at cross-process bootstrap points, preserve 64-bit task identity without narrowing it onto Mojo's compatibility wire field, and emit the boundary through AROS debug output.
+
+SCOPE: Mojo platform-channel source selection, named/server/socket utility stubs, platform_channel construction, and node process-identity compatibility.
+
+VALIDATION: focused platform-channel and node-channel objects compile; headless_shell generation no longer imports AF_UNIX implementations on AROS.
+
+RISK: high for multiprocess Chromium; native Exec message-port/OPAL channel transport is required before renderer or GPU process isolation is enabled.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ mojo/core/node_channel.cc                     |  4 +-
+ mojo/public/cpp/platform/BUILD.gn             | 16 ++++-
+ .../platform/named_platform_channel_aros.cc   | 31 ++++++++++
+ mojo/public/cpp/platform/platform_channel.cc  | 17 ++++++
+ .../platform/platform_channel_server_aros.cc  | 33 ++++++++++
+ mojo/public/cpp/platform/socket_utils_aros.cc | 60 +++++++++++++++++++
+ 6 files changed, 157 insertions(+), 4 deletions(-)
+ create mode 100644 mojo/public/cpp/platform/named_platform_channel_aros.cc
+ create mode 100644 mojo/public/cpp/platform/platform_channel_server_aros.cc
+ create mode 100644 mojo/public/cpp/platform/socket_utils_aros.cc
+
+diff --git a/mojo/core/node_channel.cc b/mojo/core/node_channel.cc
+index da55656a9e..754d74e47e 100644
+--- a/mojo/core/node_channel.cc
++++ b/mojo/core/node_channel.cc
+@@ -98,9 +98,11 @@ struct alignas(8) AddBrokerClientDataV0 {
+ 
+ using AddBrokerClientData = AddBrokerClientDataV0;
+ 
+-#if !BUILDFLAG(IS_WIN)
++#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_AROS)
+ static_assert(sizeof(base::ProcessHandle) == sizeof(uint32_t),
+               "Unexpected pid size");
++#endif
++#if !BUILDFLAG(IS_WIN)
+ static_assert(sizeof(AddBrokerClientData) % kChannelMessageAlignment == 0,
+               "Invalid AddBrokerClientData size.");
+ #endif
+diff --git a/mojo/public/cpp/platform/BUILD.gn b/mojo/public/cpp/platform/BUILD.gn
+index f346fd5971..c52582748f 100644
+--- a/mojo/public/cpp/platform/BUILD.gn
++++ b/mojo/public/cpp/platform/BUILD.gn
+@@ -25,7 +25,11 @@ component("platform") {
+ 
+   if (is_posix && !is_mac && !is_nacl) {
+     public += [ "socket_utils_posix.h" ]
+-    sources += [ "socket_utils_posix.cc" ]
++    if (is_aros) {
++      sources += [ "socket_utils_aros.cc" ]
++    } else {
++      sources += [ "socket_utils_posix.cc" ]
++    }
+   }
+ 
+   if (is_win || is_mac || (is_posix && !is_nacl && !is_ios)) {
+@@ -41,6 +45,8 @@ component("platform") {
+     ]
+   } else if (is_mac) {
+     sources += [ "platform_channel_server_mac.cc" ]
++  } else if (is_aros) {
++    sources += [ "platform_channel_server_aros.cc" ]
+   } else if (is_posix && !is_nacl) {
+     sources += [ "platform_channel_server_posix.cc" ]
+   }
+@@ -54,8 +60,12 @@ component("platform") {
+   deps = []
+ 
+   if (is_posix && !is_nacl && !is_minimal_toolchain && !is_mac) {
+-    sources += [ "named_platform_channel_posix.cc" ]
+-    deps += [ "//net" ]
++    if (is_aros) {
++      sources += [ "named_platform_channel_aros.cc" ]
++    } else {
++      sources += [ "named_platform_channel_posix.cc" ]
++      deps += [ "//net" ]
++    }
+   }
+ 
+   if (is_mac) {
+diff --git a/mojo/public/cpp/platform/named_platform_channel_aros.cc b/mojo/public/cpp/platform/named_platform_channel_aros.cc
+new file mode 100644
+index 0000000000..b5eebb783e
+--- /dev/null
++++ b/mojo/public/cpp/platform/named_platform_channel_aros.cc
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "mojo/public/cpp/platform/named_platform_channel.h"
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++namespace mojo {
++
++// static
++PlatformChannelServerEndpoint NamedPlatformChannel::CreateServerEndpoint(
++    const Options& options,
++    ServerName* server_name) {
++  ArosKPutStr(
++      "[Chromium:Mojo] named server channel unavailable on AROS; "
++      "use single-process mode\n");
++  server_name->clear();
++  return PlatformChannelServerEndpoint();
++}
++
++// static
++PlatformChannelEndpoint NamedPlatformChannel::CreateClientEndpoint(
++    const Options& options) {
++  ArosKPutStr(
++      "[Chromium:Mojo] named client channel unavailable on AROS; "
++      "use single-process mode\n");
++  return PlatformChannelEndpoint();
++}
++
++}  // namespace mojo
+diff --git a/mojo/public/cpp/platform/platform_channel.cc b/mojo/public/cpp/platform/platform_channel.cc
+index a9ef9e35de..f89bed3b84 100644
+--- a/mojo/public/cpp/platform/platform_channel.cc
++++ b/mojo/public/cpp/platform/platform_channel.cc
+@@ -15,6 +15,10 @@
+ #include "build/build_config.h"
+ #include "mojo/buildflags.h"
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+ 
+@@ -121,6 +125,18 @@ void CreateChannel(PlatformHandle* local_endpoint,
+ #elif BUILDFLAG(IS_POSIX)
+ void CreateChannel(PlatformHandle* local_endpoint,
+                    PlatformHandle* remote_endpoint) {
++#if BUILDFLAG(IS_AROS)
++  // AROSTCP has no AF_UNIX socketpair or SCM_RIGHTS equivalent. Do not wrap
++  // its task-owned socket handles in ScopedFD: close(), dup(), and descriptor
++  // passing would then operate on the wrong namespace. Single-process AROS
++  // does not need a bootstrap transport; cross-process use is rejected until
++  // the native Exec/OPAL channel backend exists.
++  ArosKPutStr(
++      "[Chromium:Mojo] platform channel unavailable: native AROS transport "
++      "is not implemented\n");
++  *local_endpoint = PlatformHandle();
++  *remote_endpoint = PlatformHandle();
++#else
+   int fds[2];
+ #if BUILDFLAG(IS_NACL)
+   PCHECK(imc_socketpair(fds) == 0);
+@@ -147,6 +163,7 @@ void CreateChannel(PlatformHandle* local_endpoint,
+   *remote_endpoint = PlatformHandle(base::ScopedFD(fds[1]));
+   DCHECK(local_endpoint->is_valid());
+   DCHECK(remote_endpoint->is_valid());
++#endif  // BUILDFLAG(IS_AROS)
+ }
+ #else
+ #error "Unsupported platform."
+diff --git a/mojo/public/cpp/platform/platform_channel_server_aros.cc b/mojo/public/cpp/platform/platform_channel_server_aros.cc
+new file mode 100644
+index 0000000000..8356540634
+--- /dev/null
++++ b/mojo/public/cpp/platform/platform_channel_server_aros.cc
+@@ -0,0 +1,33 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "mojo/public/cpp/platform/platform_channel_server.h"
++
++#include <memory>
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++namespace mojo {
++namespace {
++
++class UnsupportedListener final : public PlatformChannelServer::Listener {
++ public:
++  bool Start(PlatformChannelServerEndpoint& server_endpoint,
++             PlatformChannelServer::ConnectionCallback& callback) override {
++    ArosKPutStr(
++        "[Chromium:Mojo] platform channel server unavailable on AROS; "
++        "use single-process mode\n");
++    return false;
++  }
++};
++
++}  // namespace
++
++// static
++std::unique_ptr<PlatformChannelServer::Listener>
++PlatformChannelServer::Listener::Create() {
++  return std::make_unique<UnsupportedListener>();
++}
++
++}  // namespace mojo
+diff --git a/mojo/public/cpp/platform/socket_utils_aros.cc b/mojo/public/cpp/platform/socket_utils_aros.cc
+new file mode 100644
+index 0000000000..44e787080f
+--- /dev/null
++++ b/mojo/public/cpp/platform/socket_utils_aros.cc
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "mojo/public/cpp/platform/socket_utils_posix.h"
++
++#include <errno.h>
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++namespace mojo {
++namespace {
++
++ssize_t UnsupportedSocketTransport() {
++  errno = ENOSYS;
++  ArosKPutStr(
++      "[Chromium:Mojo] POSIX descriptor transport requested on AROS\n");
++  return -1;
++}
++
++}  // namespace
++
++ssize_t SocketWrite(base::PlatformFile socket,
++                    const void* bytes,
++                    size_t num_bytes) {
++  return UnsupportedSocketTransport();
++}
++
++ssize_t SocketWritev(base::PlatformFile socket,
++                     struct iovec* iov,
++                     size_t num_iov) {
++  return UnsupportedSocketTransport();
++}
++
++ssize_t SendmsgWithHandles(
++    base::PlatformFile socket,
++    struct iovec* iov,
++    size_t num_iov,
++    const std::vector<base::ScopedFD>& descriptors) {
++  return UnsupportedSocketTransport();
++}
++
++ssize_t SocketRecvmsg(base::PlatformFile socket,
++                      void* buf,
++                      size_t num_bytes,
++                      std::vector<base::ScopedFD>* descriptors,
++                      bool block) {
++  descriptors->clear();
++  return UnsupportedSocketTransport();
++}
++
++bool AcceptSocketConnection(base::PlatformFile server_fd,
++                            base::ScopedFD* connection_fd,
++                            bool check_peer_user) {
++  connection_fd->reset();
++  UnsupportedSocketTransport();
++  return false;
++}
++
++}  // namespace mojo

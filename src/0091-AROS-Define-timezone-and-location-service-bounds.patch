@@ -1,0 +1,75 @@
+From d7d390d5613f3aa40c73fab35c178a514fca76c0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:17:00 -0500
+Subject: [PATCH 091/638] [AROS] Define timezone and location service bounds
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS device services expose current timezone state and an honest geolocation fallback.
+ROOT_CAUSE: TimeZoneMonitor::Create had no AROS definition, and the location arbitrator tried to link a system-location provider that AROS does not implement.
+FIX_REASON: Construct the base ICU-backed timezone monitor without fabricated change events, and classify AROS with platforms that skip the system provider so Chromium may use its network provider.
+SCOPE: Device-service timezone source selection and geolocation arbitration.
+VALIDATION: Filtered GN generation succeeded; both objects and source-set stamps build; nm confirms the timezone factory and no free NewSystemLocationProvider reference.
+RISK: Runtime timezone changes are not broadcast, and location requires an enabled network provider until AROS gains native services.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../device/geolocation/location_arbitrator.cc |  3 ++-
+ services/device/time_zone_monitor/BUILD.gn    |  4 ++++
+ .../time_zone_monitor_aros.cc                 | 19 +++++++++++++++++++
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 services/device/time_zone_monitor/time_zone_monitor_aros.cc
+
+diff --git a/services/device/geolocation/location_arbitrator.cc b/services/device/geolocation/location_arbitrator.cc
+index e2807b2e3f..54b63ee106 100644
+--- a/services/device/geolocation/location_arbitrator.cc
++++ b/services/device/geolocation/location_arbitrator.cc
+@@ -196,7 +196,8 @@ LocationArbitrator::NewNetworkLocationProvider(
+ 
+ std::unique_ptr<LocationProvider>
+ LocationArbitrator::NewSystemLocationProvider() {
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+   return nullptr;
+ #else
+   return device::NewSystemLocationProvider(
+diff --git a/services/device/time_zone_monitor/BUILD.gn b/services/device/time_zone_monitor/BUILD.gn
+index 02ab188498..dcbd097224 100644
+--- a/services/device/time_zone_monitor/BUILD.gn
++++ b/services/device/time_zone_monitor/BUILD.gn
+@@ -47,6 +47,10 @@ source_set("time_zone_monitor") {
+     deps += [ "//build:chromeos_buildflags" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "time_zone_monitor_aros.cc" ]
++  }
++
+   if (is_chromeos_ash) {
+     sources += [ "time_zone_monitor_ash.cc" ]
+     deps += [ "//chromeos/ash/components/settings" ]
+diff --git a/services/device/time_zone_monitor/time_zone_monitor_aros.cc b/services/device/time_zone_monitor/time_zone_monitor_aros.cc
+new file mode 100644
+index 0000000000..38000e78f3
+--- /dev/null
++++ b/services/device/time_zone_monitor/time_zone_monitor_aros.cc
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/device/time_zone_monitor/time_zone_monitor.h"
++
++#include <memory>
++
++#include "base/task/sequenced_task_runner.h"
++
++namespace device {
++
++// static
++std::unique_ptr<TimeZoneMonitor> TimeZoneMonitor::Create(
++    scoped_refptr<base::SequencedTaskRunner>) {
++  return std::unique_ptr<TimeZoneMonitor>(new TimeZoneMonitor());
++}
++
++}  // namespace device

@@ -1,0 +1,48 @@
+From cf6aab6d1a035d57333c400a2e44e0586e54b57d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 00:10:38 -0500
+Subject: [PATCH 21/28] AROS: resolve Exec task ID outside the V8 namespace
+
+Expand AROS's GetETaskID macro in global scope so its unqualified struct Task refers to the Exec type rather than v8::Task.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: task-id-namespace-build-correction
+
+AI_ASSUMPTION: GetETaskID macro lookup is namespace-sensitive in C++
+
+AI_VALIDATION: first task-identity rebuild failed because the macro selected v8::Task and could not access Exec task fields
+
+AI_LIMITATIONS: rebuild and runtime revalidation remain pending
+
+AI_DECISION_CHAIN:
+---
+ src/base/platform/platform-posix.cc | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 05cade2..37110bc 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -119,6 +119,12 @@ extern int madvise(caddr_t, size_t, int);
+ extern "C" void* __libc_stack_end;
+ #endif
+ 
++#if V8_OS_AROS
++static int ArosCurrentTaskId() {
++  return static_cast<int>(GetETaskID(FindTask(nullptr)));
++}
++#endif
++
+ namespace v8 {
+ namespace base {
+ 
+@@ -1050,7 +1056,7 @@ int OS::GetCurrentThreadId() {
+ #elif V8_OS_SOLARIS
+   return static_cast<int>(pthread_self());
+ #elif V8_OS_AROS
+-  return static_cast<int>(GetETaskID(FindTask(nullptr)));
++  return ArosCurrentTaskId();
+ #else
+   return static_cast<int>(reinterpret_cast<intptr_t>(pthread_self()));
+ #endif

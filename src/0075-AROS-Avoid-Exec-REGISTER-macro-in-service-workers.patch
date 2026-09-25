@@ -1,0 +1,75 @@
+From a828a77ba4210a67cce466117ef1f17c74f199a5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:22:20 -0500
+Subject: [PATCH 075/638] [AROS] Avoid Exec REGISTER macro in service workers
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Service-worker registration objects compile under the native AROS headers.
+ROOT_CAUSE: exec/types.h defines REGISTER as the register storage-class keyword, rewriting Chromium's private REGISTER phase enumerator into invalid C++.
+FIX_REASON: Rename the private enumerator instead of undefining a public Exec macro needed by later AROS headers.
+SCOPE: ServiceWorkerRegisterJob phase declaration and its internal uses only.
+VALIDATION: service_worker_register_job.o, service_worker_job_coordinator.o, and service_worker_context_core.o compiled.
+RISK: Private enum spelling changes only; ordering and values remain unchanged.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../service_worker/service_worker_register_job.cc      | 10 +++++-----
+ .../service_worker/service_worker_register_job.h       |  2 +-
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/content/browser/service_worker/service_worker_register_job.cc b/content/browser/service_worker/service_worker_register_job.cc
+index 2f8b2b5052..3291c2c857 100644
+--- a/content/browser/service_worker/service_worker_register_job.cc
++++ b/content/browser/service_worker/service_worker_register_job.cc
+@@ -203,13 +203,13 @@ ServiceWorkerRegisterJob::Internal::~Internal() {}
+ 
+ void ServiceWorkerRegisterJob::set_registration(
+     scoped_refptr<ServiceWorkerRegistration> registration) {
+-  DCHECK(phase_ == START || phase_ == REGISTER) << phase_;
++  DCHECK(phase_ == START || phase_ == REGISTER_PHASE) << phase_;
+   DCHECK(!internal_.registration.get());
+   internal_.registration = std::move(registration);
+ }
+ 
+ ServiceWorkerRegistration* ServiceWorkerRegisterJob::registration() const {
+-  DCHECK(phase_ >= REGISTER || job_type_ == UPDATE_JOB) << phase_;
++  DCHECK(phase_ >= REGISTER_PHASE || job_type_ == UPDATE_JOB) << phase_;
+   return internal_.registration.get();
+ }
+ 
+@@ -233,11 +233,11 @@ void ServiceWorkerRegisterJob::SetPhase(Phase phase) {
+     case START:
+       DCHECK(phase_ == INITIAL) << phase_;
+       break;
+-    case REGISTER:
++    case REGISTER_PHASE:
+       DCHECK(phase_ == START) << phase_;
+       break;
+     case UPDATE:
+-      DCHECK(phase_ == START || phase_ == REGISTER) << phase_;
++      DCHECK(phase_ == START || phase_ == REGISTER_PHASE) << phase_;
+       break;
+     case INSTALL:
+       DCHECK(phase_ == UPDATE) << phase_;
+@@ -416,7 +416,7 @@ void ServiceWorkerRegisterJob::OnUpdateCheckFinished(
+ 
+ // Creates a new ServiceWorkerRegistration.
+ void ServiceWorkerRegisterJob::RegisterAndContinue() {
+-  SetPhase(REGISTER);
++  SetPhase(REGISTER_PHASE);
+ 
+   blink::mojom::ServiceWorkerRegistrationOptions options(
+       scope_, worker_script_type_, update_via_cache_);
+diff --git a/content/browser/service_worker/service_worker_register_job.h b/content/browser/service_worker/service_worker_register_job.h
+index 09f9998d0d..7aa29b0d7e 100644
+--- a/content/browser/service_worker/service_worker_register_job.h
++++ b/content/browser/service_worker/service_worker_register_job.h
+@@ -90,7 +90,7 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
+   enum Phase {
+     INITIAL,
+     START,
+-    REGISTER,
++    REGISTER_PHASE,
+     UPDATE,
+     INSTALL,
+     STORE,

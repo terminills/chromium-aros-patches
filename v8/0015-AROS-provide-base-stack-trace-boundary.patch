@@ -1,0 +1,78 @@
+From 09a34e0c04bb0afd3c5f957c8e1d7e86833f7d26 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 17:49:00 -0500
+Subject: [PATCH 15/28] AROS: provide base stack trace boundary
+
+The first extracted v8_monolith linked into v8.library with five unresolved StackTrace symbols because AROS had neither the POSIX implementation nor a platform replacement. Provide the API without host-only sigaction/backtrace support so normal V8 platform initialization remains linkable.
+
+AI_PHASE: v8-library-convergence
+
+AI_STATUS: native-link-correction
+
+AI_ASSUMPTION: stack dump installation is an optional capability on AROS during bring-up
+
+AI_VALIDATION: incremental v8_monolith rebuild and pc-x86_64-smp v8.library link
+
+AI_LIMITATIONS: stack capture and signal-triggered dumps intentionally remain unavailable; hosted runtime untested
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn                           |  5 ++++-
+ src/base/debug/stack_trace_aros.cc | 32 ++++++++++++++++++++++++++++++
+ 2 files changed, 36 insertions(+), 1 deletion(-)
+ create mode 100644 src/base/debug/stack_trace_aros.cc
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 8e9565d..bf62e23 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -6454,7 +6454,10 @@ v8_component("v8_libbase") {
+   }
+ 
+   if (is_aros) {
+-    sources += [ "src/base/platform/platform-aros.cc" ]
++    sources += [
++      "src/base/debug/stack_trace_aros.cc",
++      "src/base/platform/platform-aros.cc",
++    ]
+   } else if (is_linux || is_chromeos) {
+     sources += [
+       "src/base/debug/stack_trace_posix.cc",
+diff --git a/src/base/debug/stack_trace_aros.cc b/src/base/debug/stack_trace_aros.cc
+new file mode 100644
+index 0000000..374e5a0
+--- /dev/null
++++ b/src/base/debug/stack_trace_aros.cc
+@@ -0,0 +1,32 @@
++// Copyright 2026 the V8 project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "src/base/debug/stack_trace.h"
++
++#include <ostream>
++
++namespace v8 {
++namespace base {
++namespace debug {
++
++// AROS does not yet expose the POSIX sigaction/backtrace facilities used by
++// stack_trace_posix.cc. Keep the API available so embedders can use the normal
++// default platform without pulling in host-only signal handling.
++bool EnableInProcessStackDumping() {
++  return false;
++}
++
++void DisableSignalStackDump() {}
++
++StackTrace::StackTrace() : count_(0) {}
++
++void StackTrace::Print() const {}
++
++void StackTrace::OutputToStream(std::ostream* os) const {
++  static_cast<void>(os);
++}
++
++}  // namespace debug
++}  // namespace base
++}  // namespace v8

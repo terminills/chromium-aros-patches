@@ -1,0 +1,80 @@
+From 7a1ec4fba2a536c2bc23fcc8d91eb0c5ab3ce86c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 01:13:00 -0500
+Subject: [PATCH 134/638] [AROS] Wait for exposed DevTools page replies
+
+---
+ .../devtools/protocol/target_handler.cc       | 21 +++++++++++--------
+ 1 file changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index 01cc4a29f1..a334bdc3f1 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -247,17 +247,11 @@ class BrowserToPageConnector {
+     base::Value message(std::move(message_dict));
+     std::string json_message;
+     base::JSONWriter::Write(message, &json_message);
+-#if BUILDFLAG(IS_AROS)
+-    DCHECK(!page_dispatch_in_progress_);
+-    page_dispatch_in_progress_ = true;
+-#endif
+     page_host_->DispatchProtocolMessage(
+         page_host_client_.get(), base::as_bytes(base::make_span(json_message)));
+ #if BUILDFLAG(IS_AROS)
+-    page_dispatch_in_progress_ = false;
+     LOG(INFO) << "[Chromium:cdp-bridge] page command method=" << method
+               << " id=" << page_message_id_ - 1;
+-    MaybeSchedulePageEvaluation();
+ #endif
+   }
+ 
+@@ -268,7 +262,7 @@ class BrowserToPageConnector {
+   }
+ 
+   void MaybeSchedulePageEvaluation() {
+-    if (page_dispatch_in_progress_ || page_delivery_task_posted_ ||
++    if (active_page_evaluation_id_ >= 0 || page_delivery_task_posted_ ||
+         pending_page_evaluations_.empty()) {
+       return;
+     }
+@@ -282,13 +276,15 @@ class BrowserToPageConnector {
+ 
+   void DeliverNextPageEvaluation() {
+     page_delivery_task_posted_ = false;
+-    if (page_dispatch_in_progress_ || pending_page_evaluations_.empty()) {
++    if (active_page_evaluation_id_ >= 0 ||
++        pending_page_evaluations_.empty()) {
+       MaybeSchedulePageEvaluation();
+       return;
+     }
+ 
+     base::Value params = std::move(pending_page_evaluations_.front());
+     pending_page_evaluations_.pop_front();
++    active_page_evaluation_id_ = page_message_id_;
+     SendProtocolMessageToPage("Runtime.evaluate", std::move(params));
+   }
+ #endif
+@@ -304,6 +300,13 @@ class BrowserToPageConnector {
+       }
+ 
+       const base::Value::Dict& dict = value->GetDict();
++#if BUILDFLAG(IS_AROS)
++      std::optional<int> response_id = dict.FindInt("id");
++      if (response_id && *response_id == active_page_evaluation_id_) {
++        active_page_evaluation_id_ = -1;
++        MaybeSchedulePageEvaluation();
++      }
++#endif
+       // Make sure this is a binding call.
+       const std::string* method = dict.FindString("method");
+       if (!method || *method != "Runtime.bindingCalled") {
+@@ -391,7 +394,7 @@ class BrowserToPageConnector {
+   int page_message_id_ = 0;
+ #if BUILDFLAG(IS_AROS)
+   std::deque<base::Value> pending_page_evaluations_;
+-  bool page_dispatch_in_progress_ = false;
++  int active_page_evaluation_id_ = -1;
+   bool page_delivery_task_posted_ = false;
+ #endif
+   base::WeakPtrFactory<BrowserToPageConnector> weak_ptr_factory_{this};

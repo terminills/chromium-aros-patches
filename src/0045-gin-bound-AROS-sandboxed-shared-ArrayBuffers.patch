@@ -1,0 +1,63 @@
+From 5f6de1d3ca861caec2c3c7b3b64d66521de509bc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 12:49:57 -0500
+Subject: [PATCH 045/638] gin: bound AROS sandboxed shared ArrayBuffers
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Gin retained an unused sys/mman dependency and converted every POSIX shared-memory handle as an fd, but AROS regions are pointer-backed and cannot be aliased into V8's reserved sandbox before MMU support.
+
+FIX_REASON: Remove the dead mmap include and fail only sandboxed shared-ArrayBuffer mapping closed rather than forging a descriptor or placing backing memory outside V8's sandbox.
+
+SCOPE: gin/array_buffer.cc
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/gin/gin/array_buffer.o
+
+RISK: medium; ordinary ArrayBuffers remain enabled, while shared-memory-backed ArrayBuffers are unavailable on pre-MMU AROS until page aliasing exists.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gin/array_buffer.cc | 14 ++++++--------
+ 1 file changed, 6 insertions(+), 8 deletions(-)
+
+diff --git a/gin/array_buffer.cc b/gin/array_buffer.cc
+index 24be8adc3e..a7b410455b 100644
+--- a/gin/array_buffer.cc
++++ b/gin/array_buffer.cc
+@@ -17,14 +17,6 @@
+ #include "gin/per_isolate_data.h"
+ #include "v8/include/v8-initialization.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
+-#include <sys/mman.h>
+-
+-#ifndef MAP_ANONYMOUS
+-#define MAP_ANONYMOUS MAP_ANON
+-#endif
+-#endif  // BUILDFLAG(IS_POSIX)
+-
+ namespace gin {
+ 
+ static_assert(V8_ARRAY_BUFFER_INTERNAL_FIELD_COUNT == 2,
+@@ -157,6 +149,11 @@ class ArrayBufferSharedMemoryMapper : public base::SharedMemoryMapper {
+       bool write_allowed,
+       uint64_t offset,
+       size_t size) override {
++#if BUILDFLAG(IS_AROS)
++    // The pre-MMU AROS shared-region backend cannot alias its pointer-backed
++    // pages into V8's reserved sandbox address space.
++    return std::nullopt;
++#else
+     v8::VirtualAddressSpace* address_space = v8::V8::GetSandboxAddressSpace();
+     size_t allocation_granularity = address_space->allocation_granularity();
+ 
+@@ -190,6 +187,7 @@ class ArrayBufferSharedMemoryMapper : public base::SharedMemoryMapper {
+       return std::nullopt;
+ 
+     return base::make_span(reinterpret_cast<uint8_t*>(mapping), size);
++#endif
+   }
+ 
+   void Unmap(base::span<uint8_t> mapping) override {

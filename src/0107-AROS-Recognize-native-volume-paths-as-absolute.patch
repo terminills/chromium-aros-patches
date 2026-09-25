@@ -1,0 +1,80 @@
+From 8444dea4e12d4cda98e29de0f0d5ed3646eab4d4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 00:19:50 -0500
+Subject: [PATCH 107/638] [AROS] Recognize native volume paths as absolute
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: in-progress
+ROOT_CAUSE: FilePath only recognized leading-slash POSIX roots, so DIR_EXE values such as System:Developer/Chromium failed the headless browser-context absolute-path DCHECK.
+FIX_REASON: AmigaDOS volume, device, and assignment prefixes are syntactic roots and must be represented by the shared FilePath abstraction.
+SCOPE: base/files/file_path.cc; base/files/file_path_unittest.cc
+VALIDATION: file_path.o cross-compiled; unit cases cover SYS:, PROGDIR:, volume-relative tails, and retained leading-slash paths; hosted 0105 reached HeadlessBrowserContextImpl before the DCHECK.
+RISK: A colon is reserved as an AmigaDOS root delimiter, so colon-bearing names are intentionally classified as absolute on AROS.
+AI_DECISION_CHAIN: headless profile path DCHECK -> DIR_EXE native assignment -> FilePath AROS root semantics
+Continues: b962f96074
+---
+ base/files/file_path.cc          |  7 +++++++
+ base/files/file_path_unittest.cc | 17 +++++++++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/base/files/file_path.cc b/base/files/file_path.cc
+index ef8100cf8c..62b26754e5 100644
+--- a/base/files/file_path.cc
++++ b/base/files/file_path.cc
+@@ -94,6 +94,13 @@ bool IsPathAbsolute(StringPieceType path) {
+   // Look for a pair of leading separators.
+   return path.length() > 1 &&
+       FilePath::IsSeparator(path[0]) && FilePath::IsSeparator(path[1]);
++#elif BUILDFLAG(IS_AROS)
++  // AmigaDOS volume, device, and assignment names use a colon as their root
++  // delimiter (for example SYS:, PROGDIR:, and T:Chromium). A leading slash
++  // remains absolute for paths entering through the POSIX compatibility API.
++  return (!path.empty() && FilePath::IsSeparator(path[0])) ||
++         (path.find(FILE_PATH_LITERAL(':')) != StringType::npos &&
++          path.front() != FILE_PATH_LITERAL(':'));
+ #else  // FILE_PATH_USES_DRIVE_LETTERS
+   // Look for a separator in the first position.
+   return path.length() > 0 && FilePath::IsSeparator(path[0]);
+diff --git a/base/files/file_path_unittest.cc b/base/files/file_path_unittest.cc
+index 65552188b3..a2fe5936c4 100644
+--- a/base/files/file_path_unittest.cc
++++ b/base/files/file_path_unittest.cc
+@@ -417,13 +417,26 @@ TEST_F(FilePathTest, IsAbsoluteOrNetwork) {
+   } cases[] = {
+     { FPL(""),       false, false },
+     { FPL("a"),      false, false },
++#if BUILDFLAG(IS_AROS)
++    { FPL("c:"),     true,  false },
++    { FPL("c:a"),    true,  false },
++#else
+     { FPL("c:"),     false, false },
+     { FPL("c:a"),    false, false },
++#endif
+     { FPL("a/b"),    false, false },
+     { FPL("//"),     true,  true },
+     { FPL("//a"),    true,  true },
++#if BUILDFLAG(IS_AROS)
++    { FPL("c:a/b"),  true,  false },
++    { FPL("?:/a"),   true,  false },
++    { FPL("SYS:"),   true,  false },
++    { FPL("SYS:Developer/Chromium"), true, false },
++    { FPL("PROGDIR:headless_shell"), true, false },
++#else
+     { FPL("c:a/b"),  false, false },
+     { FPL("?:/a"),   false, false },
++#endif
+ #if defined(FILE_PATH_USES_DRIVE_LETTERS)
+     { FPL("/"),      false, false },
+     { FPL("/a"),     false, false },
+@@ -440,7 +453,11 @@ TEST_F(FilePathTest, IsAbsoluteOrNetwork) {
+     { FPL("/a"),     true,  false },
+     { FPL("/."),     true,  false },
+     { FPL("/.."),    true,  false },
++#if BUILDFLAG(IS_AROS)
++    { FPL("c:/"),    true,  false },
++#else
+     { FPL("c:/"),    false, false },
++#endif
+ #endif  // FILE_PATH_USES_DRIVE_LETTERS
+ #if defined(FILE_PATH_USES_WIN_SEPARATORS)
+     { FPL("a\\b"),   false, false },

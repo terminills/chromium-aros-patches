@@ -1,0 +1,31 @@
+From d1700ca4e47bbcd381e4d35c8bcee4b69ed064e1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 21:09:37 -0500
+Subject: [PATCH 13/28] build: avoid sparse V8 cages on pre-MMU AROS
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: complete
+ROOT_CAUSE: Hosted run 0124 cleared cppgc's cage but V8 process initialization then failed to reserve its minimum 8 GiB sandbox. Disabling only that sandbox would immediately expose the separate 4 GiB pointer-compression cage, while hosted AROS is already at its 4090 MB maximum and physically backs reservations.
+FIX_REASON: Default pointer compression off for target_os=aros. V8 consequently derives shared cage, external code space, process sandbox, and static roots off through its existing supported configuration graph, while retaining JIT and full-width pointers.
+SCOPE: BUILD.gn
+VALIDATION: Headless GN regeneration succeeded; target and host V8 Ninja graphs contain zero V8_COMPRESS_POINTERS, V8_ENABLE_SANDBOX, V8_EXTERNAL_CODE_SPACE, CPPGC_CAGED_HEAP, CPPGC_YOUNG_GENERATION, or CPPGC_POINTER_COMPRESSION definitions.
+RISK: This increases V8 heap pointer width and removes sandbox hardening until hosted memory and OPAL/MMU sparse virtual reservations exist; all dependent objects must be rebuilt because layouts change.
+AI_DECISION_CHAIN: run 0123 cppgc cage OOM -> uncaged cppgc -> run 0124 V8 sandbox OOM -> full-width uncaged V8 bridge
+---
+ BUILD.gn | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 7e855b1..8e9565d 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -472,7 +472,8 @@ if (v8_enable_snapshot_native_code_counters == "") {
+ }
+ if (v8_enable_pointer_compression == "") {
+   v8_enable_pointer_compression =
+-      v8_current_cpu == "arm64" || v8_current_cpu == "x64"
++      target_os != "aros" &&
++      (v8_current_cpu == "arm64" || v8_current_cpu == "x64")
+ }
+ 
+ # Toggle pointer compression for correctness fuzzing when building the

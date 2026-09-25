@@ -1,0 +1,259 @@
+From 6698e7a65a6a8a83df047252da68b1d7e1bf252d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 00:05:08 -0500
+Subject: [PATCH 523/638] Fix AROS Chromium shutdown ordering
+
+---
+ cc/scheduler/scheduler_state_machine.cc       | 11 ++++++++
+ .../startup/startup_browser_creator_impl.cc   | 25 +++++++++++++++++++
+ .../chrome_content_renderer_client.cc         | 11 +++++++-
+ .../preferences/tracked/pref_hash_filter.cc   |  9 +++++++
+ .../renderer/core/workers/worker_thread.cc    | 15 +++++++++--
+ .../renderer/core/workers/worker_thread.h     |  1 +
+ .../mediastream/webrtc_uma_histograms.cc      |  8 ++++++
+ 7 files changed, 77 insertions(+), 3 deletions(-)
+
+diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
+index 67abc45f11..868ef4c63c 100644
+--- a/cc/scheduler/scheduler_state_machine.cc
++++ b/cc/scheduler/scheduler_state_machine.cc
+@@ -6,10 +6,12 @@
+ 
+ #include "base/check_op.h"
+ #include "base/format_macros.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/traced_value.h"
+ #include "base/values.h"
++#include "build/build_config.h"
+ 
+ namespace cc {
+ 
+@@ -1192,7 +1194,16 @@ void SchedulerStateMachine::SetPauseRendering(bool pause_rendering) {
+   // 2. Resume rendering before the above commit activates.
+   // The current users of PauseRendering wait on the commit in #1 to be flushed
+   // so it can never happen.
++#if BUILDFLAG(IS_AROS)
++  if (!pause_rendering_ && has_pending_tree_) {
++    LOG(ERROR) << "[Chromium:AROS:CompositorShutdown] resume rendering with "
++                  "pending tree; allowing scheduler drain";
++  } else {
++    DCHECK(pause_rendering_ || !has_pending_tree_);
++  }
++#else
+   DCHECK(pause_rendering_ || !has_pending_tree_);
++#endif
+ 
+   // When resuming rendering, main thread always commits at least one frame.
+   // Dont draw any impl frames until this commit is activated.
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index 8b5e63f418..7b00ded9be 100644
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -18,6 +18,7 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/notreached.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
+@@ -33,6 +34,7 @@
+ #include "chrome/browser/first_run/first_run.h"
+ #include "chrome/browser/headless/headless_command_processor.h"
+ #include "chrome/browser/infobars/simple_alert_infobar_creator.h"
++#include "chrome/browser/lifetime/application_lifetime.h"
+ #include "chrome/browser/prefs/session_startup_pref.h"
+ #include "chrome/browser/privacy_sandbox/privacy_sandbox_service.h"
+ #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
+@@ -175,6 +177,11 @@ void CloseFirstTabForArosLifecycleTest() {
+   }
+ }
+ 
++void QuitForArosLifecycleTest() {
++  LOG(ERROR) << "[Chromium:AROS:LifecycleTest] browser quit requested";
++  chrome::ExitIgnoreUnloadHandlers();
++}
++
+ }  // namespace
+ #endif  // BUILDFLAG(IS_AROS)
+ 
+@@ -325,6 +332,24 @@ void StartupBrowserCreatorImpl::Launch(
+     }
+ #endif  // BUILDFLAG(IS_AROS)
+   }
++
++#if BUILDFLAG(IS_AROS)
++  if (command_line_->HasSwitch("aros-test-quit-after-seconds")) {
++    int quit_delay_seconds = 60;
++    const std::string value =
++        command_line_->GetSwitchValueASCII("aros-test-quit-after-seconds");
++    if (!value.empty() &&
++        (!base::StringToInt(value, &quit_delay_seconds) ||
++         quit_delay_seconds <= 0)) {
++      quit_delay_seconds = 60;
++    }
++    LOG(ERROR) << "[Chromium:AROS:LifecycleTest] browser quit scheduled at="
++               << quit_delay_seconds << "s";
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, base::BindOnce(&QuitForArosLifecycleTest),
++        base::Seconds(quit_delay_seconds));
++  }
++#endif  // BUILDFLAG(IS_AROS)
+ }
+ 
+ Browser* StartupBrowserCreatorImpl::OpenURLsInBrowser(
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index bf59360fb3..217f4c6893 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -13,6 +13,7 @@
+ #include "base/command_line.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/user_metrics_action.h"
+@@ -402,7 +403,15 @@ ChromeContentRendererClient::ChromeContentRendererClient()
+ #endif
+ }
+ 
+-ChromeContentRendererClient::~ChromeContentRendererClient() {}
++ChromeContentRendererClient::~ChromeContentRendererClient() {
++#if BUILDFLAG(IS_AROS)
++  if (chrome_observer_) {
++    LOG(ERROR) << "[Chromium:AROS:RendererClient] retaining "
++                  "ChromeRenderThreadObserver during AtExit";
++    std::ignore = chrome_observer_.release();
++  }
++#endif
++}
+ 
+ void ChromeContentRendererClient::RenderThreadStarted() {
+   RenderThread* thread = RenderThread::Get();
+diff --git a/services/preferences/tracked/pref_hash_filter.cc b/services/preferences/tracked/pref_hash_filter.cc
+index 9a3b9cfef6..d9c5359713 100644
+--- a/services/preferences/tracked/pref_hash_filter.cc
++++ b/services/preferences/tracked/pref_hash_filter.cc
+@@ -12,11 +12,13 @@
+ 
+ #include "base/check_op.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notreached.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
++#include "build/build_config.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/pref_store.h"
+@@ -121,7 +123,14 @@ PrefHashFilter::PrefHashFilter(
+ PrefHashFilter::~PrefHashFilter() {
+   // Ensure new values for all |changed_paths_| have been flushed to
+   // |pref_hash_store_| already.
++#if BUILDFLAG(IS_AROS)
++  if (!changed_paths_.empty()) {
++    LOG(ERROR) << "[Chromium:AROS:PrefHashFilter] shutdown with "
++               << changed_paths_.size() << " unflushed tracked pref path(s)";
++  }
++#else
+   DCHECK(changed_paths_.empty());
++#endif
+ }
+ 
+ // static
+diff --git a/third_party/blink/renderer/core/workers/worker_thread.cc b/third_party/blink/renderer/core/workers/worker_thread.cc
+index fc4eee1c0b..182f3b2283 100644
+--- a/third_party/blink/renderer/core/workers/worker_thread.cc
++++ b/third_party/blink/renderer/core/workers/worker_thread.cc
+@@ -30,11 +30,13 @@
+ #include <memory>
+ #include <utility>
+ 
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/synchronization/lock.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/thread_restrictions.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -171,6 +173,7 @@ void WorkerThread::Start(
+     std::unique_ptr<WorkerDevToolsParams> devtools_params) {
+   DCHECK_CALLED_ON_VALID_THREAD(parent_thread_checker_);
+   devtools_worker_token_ = devtools_params->devtools_worker_token;
++  owns_backing_thread_for_shutdown_ = IsOwningBackingThread();
+ 
+   // Synchronously initialize the per-global-scope scheduler to prevent someone
+   // from posting a task to the thread before the scheduler is ready.
+@@ -193,7 +196,7 @@ void WorkerThread::Start(
+       CrossThreadBindOnce(&WorkerThread::InitializeOnWorkerThread,
+                           CrossThreadUnretained(this),
+                           std::move(global_scope_creation_params),
+-                          IsOwningBackingThread() ?
++                          owns_backing_thread_for_shutdown_ ?
+                               thread_startup_data : std::nullopt,
+                           std::move(devtools_params)));
+ }
+@@ -804,7 +807,15 @@ void WorkerThread::PerformShutdownOnWorkerThread() {
+   console_message_storage_.Clear();
+   inspector_issue_storage_.Clear();
+ 
+-  if (IsOwningBackingThread())
++  bool owns_backing_thread = false;
++#if BUILDFLAG(IS_AROS)
++  owns_backing_thread = owns_backing_thread_for_shutdown_;
++  LOG(ERROR) << "[Chromium:AROS:WorkerShutdown] ownership cached="
++             << owns_backing_thread;
++#else
++  owns_backing_thread = IsOwningBackingThread();
++#endif
++  if (owns_backing_thread)
+     GetWorkerBackingThread().ShutdownOnBackingThread();
+   // We must not touch GetWorkerBackingThread() from now on.
+ 
+diff --git a/third_party/blink/renderer/core/workers/worker_thread.h b/third_party/blink/renderer/core/workers/worker_thread.h
+index 23895d9ab7..02ea92f1bc 100644
+--- a/third_party/blink/renderer/core/workers/worker_thread.h
++++ b/third_party/blink/renderer/core/workers/worker_thread.h
+@@ -438,6 +438,7 @@ class CORE_EXPORT WorkerThread : public Thread::TaskObserver {
+   // This is used only for scheduling a worker termination and for testing.
+   scoped_refptr<base::SingleThreadTaskRunner>
+       parent_thread_default_task_runner_;
++  bool owns_backing_thread_for_shutdown_ = true;
+ 
+   // Tasks managed by this scheduler are canceled when the global scope is
+   // closed.
+diff --git a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc b/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
+index 60f397c31c..137e2daa91 100644
+--- a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
++++ b/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.h"
+ 
++#include "build/build_config.h"
+ #include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink.h"
+@@ -25,7 +26,14 @@ void UpdateWebRTCMethodCount(RTCAPIName api_name) {
+ }
+ 
+ PerSessionWebRTCAPIMetrics::~PerSessionWebRTCAPIMetrics() {
++#if BUILDFLAG(IS_AROS)
++  if (!thread_checker_.CalledOnValidThread()) {
++    LOG(ERROR) << "[Chromium:AROS:WebRTCMetrics] AtExit destroyed on "
++                  "non-origin thread";
++  }
++#else
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
++#endif
+ }
+ 
+ // static

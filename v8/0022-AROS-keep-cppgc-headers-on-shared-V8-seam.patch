@@ -1,0 +1,46 @@
+From d7941d308a968b09633a146bc606cc4a59160b6f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 19:25:33 -0500
+Subject: [PATCH 22/28] AROS: keep cppgc headers on shared V8 seam
+
+When v8_use_aros_library is enabled, cppgc_headers no longer pulls v8_libbase and v8_libplatform implementation objects into consumers. Blink already reaches the generated ABI bridge through //v8:v8.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: build-boundary-correction
+
+AI_VALIDATION: complete Blink Platform archive passed 22128/22128 before audit exposed 39 v8_libbase and 10 v8_libplatform members
+
+AI_LIMITATIONS: focused archive must be regenerated and rebuilt to enumerate any newly exposed support-layer imports
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index ee46350..e6bb8d7 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -6849,10 +6849,17 @@ v8_header_set("cppgc_headers") {
+     sources += [ "include/cppgc/internal/caged-heap.h" ]
+   }
+ 
+-  deps = [
+-    ":v8_libbase",
+-    ":v8_libplatform",
+-  ]
++  if (is_aros && v8_use_aros_library) {
++    # AROS consumers reach V8 through v8.library's generated ABI import
++    # bridge. Keep this header-only target from pulling the support-layer
++    # implementations back into consumer archives.
++    deps = []
++  } else {
++    deps = [
++      ":v8_libbase",
++      ":v8_libplatform",
++    ]
++  }
+ 
+   public_deps = [ ":v8_config_headers" ]
+ }

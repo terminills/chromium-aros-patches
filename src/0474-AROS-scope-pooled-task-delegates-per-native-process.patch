@@ -1,0 +1,127 @@
+From 207e4c6125aa9ff8004b7db60a7da0956af91531 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 16:22:36 -0500
+Subject: [PATCH 474/638] AROS: scope pooled task delegates per native process
+
+Key the current PooledTaskRunnerDelegate by the existing Chromium command-line process identity. This preserves worker-task inheritance while allowing independently scheduled GPU, renderer, utility, and browser processes to own distinct delegates in the shared address space.
+
+
+
+---
+ .../pooled_task_runner_delegate.cc            | 74 +++++++++++++++++--
+ 1 file changed, 68 insertions(+), 6 deletions(-)
+
+diff --git a/base/task/thread_pool/pooled_task_runner_delegate.cc b/base/task/thread_pool/pooled_task_runner_delegate.cc
+index e0b85b3dc7..d5191faddb 100644
+--- a/base/task/thread_pool/pooled_task_runner_delegate.cc
++++ b/base/task/thread_pool/pooled_task_runner_delegate.cc
+@@ -4,8 +4,14 @@
+ 
+ #include "base/task/thread_pool/pooled_task_runner_delegate.h"
+ 
++#include <map>
++
++#include "base/command_line.h"
+ #include "base/debug/task_trace.h"
+ #include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ namespace internal {
+@@ -24,24 +30,80 @@ namespace {
+ // task runner's delegate is no longer the current delegate, i.e., a task runner
+ // is created in one unit test and posted to in a subsequent test, due to global
+ // state leaking between tests.
++#if BUILDFLAG(IS_AROS)
++
++struct PooledTaskRunnerDelegateProcessRegistry {
++  Lock lock;
++  std::map<const CommandLine*, PooledTaskRunnerDelegate*> delegates;
++};
++
++PooledTaskRunnerDelegateProcessRegistry&
++GetPooledTaskRunnerDelegateProcessRegistry() {
++  static NoDestructor<PooledTaskRunnerDelegateProcessRegistry> registry;
++  return *registry;
++}
++
++PooledTaskRunnerDelegate* GetCurrentDelegate() {
++  if (!CommandLine::InitializedForCurrentProcess()) {
++    return nullptr;
++  }
++
++  const CommandLine* const process_identity =
++      CommandLine::ForCurrentProcess();
++  auto& registry = GetPooledTaskRunnerDelegateProcessRegistry();
++  AutoLock lock(registry.lock);
++  const auto it = registry.delegates.find(process_identity);
++  return it != registry.delegates.end() ? it->second : nullptr;
++}
++
++void SetCurrentDelegate(PooledTaskRunnerDelegate* delegate) {
++  DCHECK(CommandLine::InitializedForCurrentProcess());
++  const CommandLine* const process_identity =
++      CommandLine::ForCurrentProcess();
++  auto& registry = GetPooledTaskRunnerDelegateProcessRegistry();
++  AutoLock lock(registry.lock);
++
++  if (delegate) {
++    DCHECK(!registry.delegates[process_identity]);
++    registry.delegates[process_identity] = delegate;
++  } else {
++    const auto it = registry.delegates.find(process_identity);
++    DCHECK(it != registry.delegates.end() && it->second);
++    registry.delegates.erase(it);
++  }
++}
++
++#else
++
+ PooledTaskRunnerDelegate* g_current_delegate = nullptr;
+ 
++PooledTaskRunnerDelegate* GetCurrentDelegate() {
++  return g_current_delegate;
++}
++
++void SetCurrentDelegate(PooledTaskRunnerDelegate* delegate) {
++  g_current_delegate = delegate;
++}
++
++#endif
++
+ }  // namespace
+ 
+ PooledTaskRunnerDelegate::PooledTaskRunnerDelegate() {
+-  DCHECK(!g_current_delegate);
+-  g_current_delegate = this;
++  DCHECK(!GetCurrentDelegate());
++  SetCurrentDelegate(this);
+ }
+ 
+ PooledTaskRunnerDelegate::~PooledTaskRunnerDelegate() {
+-  DCHECK(g_current_delegate);
+-  g_current_delegate = nullptr;
++  DCHECK(GetCurrentDelegate());
++  SetCurrentDelegate(nullptr);
+ }
+ 
+ // static
+ bool PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+     PooledTaskRunnerDelegate* delegate) {
+-  if (g_current_delegate && g_current_delegate != delegate) {
++  PooledTaskRunnerDelegate* const current_delegate = GetCurrentDelegate();
++  if (current_delegate && current_delegate != delegate) {
+     LOG(ERROR)
+         << "Stale pooled_task_runner_delegate_ - task not posted. This is\n"
+            "almost certainly caused by a previous test leaving a stale task\n"
+@@ -49,7 +111,7 @@ bool PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+            "global object to post a task to the stale task runner.\n"
+         << base::debug::StackTrace();
+   }
+-  return g_current_delegate == delegate;
++  return current_delegate == delegate;
+ }
+ 
+ }  // namespace internal

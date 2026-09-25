@@ -1,0 +1,39 @@
+From 09d62622091b59532b5a277adfab26a598f78ddf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:43:40 -0500
+Subject: [PATCH 022/638] gl: select EGL for the native AROS backend [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium's ui/gl component assumes EGL supplies its display types, binding declarations, and DisplayKey integration on supported platforms. AROS was omitted from use_egl, so the component compiled its EGL implementation sources without USE_EGL and produced a cascade of missing types and symbols.
+
+FIX_REASON: Enable the existing EGL backend for AROS rather than adding header guards around an internally EGL-based component. This aligns the browser graph with the Mesa/VirGL/RadeonSI stack while retaining runtime software or disabled-GPU operation for initial headless tests.
+
+SCOPE: ui/gl GN feature selection.
+
+VALIDATION: filtered GN regeneration succeeded; ninja -C out/aros-headless -j4 obj/ui/gl/gl/gl_display.o obj/ui/gl/gl/gl_display_manager.o
+
+RISK: medium; the graph now compiles additional EGL code whose final AROS loader and runtime integration still require link and boot validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/gl/features.gni | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ui/gl/features.gni b/ui/gl/features.gni
+index cd5c6d2de1..f81a3e5826 100644
+--- a/ui/gl/features.gni
++++ b/ui/gl/features.gni
+@@ -14,7 +14,8 @@ declare_args() {
+   # Should EGL support be compiled?
+   # Can be overriden to test during bring up of EGL support on other platforms.
+   use_egl =
+-      is_win || is_android || is_linux || is_chromeos || is_fuchsia || is_apple
++      is_win || is_android || is_aros || is_linux || is_chromeos ||
++      is_fuchsia || is_apple
+ 
+   # Should Dawn support be compiled to back the WebGPU implementation?
+   # Also controls linking Dawn dependencies in such as SPIRV-Tools/SPIRV-Cross.

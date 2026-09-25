@@ -1,0 +1,101 @@
+From cb0ca3628ed03f1861e31442d080d3b2fea2910b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 01:23:14 -0500
+Subject: [PATCH 616/638] aros: block instead of spin in the shared-memory
+ registry and PA page-table locks
+
+Hosted VS Code run 9 sat at 100% CPU for 10 minutes in
+base::subtle::UnmapArosSharedMemory's xchg/test/jne loop (perf: 99.5% on
+one instruction; guest log silent, no TaskBT probe ran).  RegistryGuard
+and LockPageAllocations spun on a std::atomic_flag with no way to yield.
+AROS schedules strictly by task priority and the hosted build has one
+CPU, so once a lower-priority thread was preempted inside the critical
+section, a higher-priority thread (the compositor unmapping a frame)
+spun forever and the holder never ran again.  Use a pthread mutex with
+the static initializer - it sleeps on an exec semaphore and is the
+primitive PartitionAlloc's own SpinningMutex already uses here.
+
+---
+ .../page_allocator_internals_aros.h             | 15 +++++++++++----
+ .../platform_shared_memory_region_aros.cc       | 17 +++++++++++------
+ 2 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index c0e196959c..abbed086b1 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -13,6 +13,8 @@
+ #include <cstring>
+ #include <limits>
+ 
++#include <pthread.h>
++
+ #pragma push_macro("SCHED_RR")
+ #undef SCHED_RR
+ #include <aros/kernel.h>
+@@ -101,16 +103,21 @@ struct PageAllocationRelease {
+   size_t exposed_length = 0;
+ };
+ 
+-std::atomic_flag s_pageAllocationLock = ATOMIC_FLAG_INIT;
++// A blocking mutex, not a spin: AROS schedules strictly by task priority and
++// the hosted build has one CPU, so a higher-priority thread spinning on a
++// flag that a preempted lower-priority thread still holds never lets the
++// holder run again (the whole guest sat at 100% in such a loop).  The
++// pthread mutex sleeps on an exec semaphore instead - the same primitive
++// PartitionAlloc's own SpinningMutex uses on this platform.
++pthread_mutex_t s_pageAllocationLock = PTHREAD_MUTEX_INITIALIZER;
+ PageAllocationRecord* s_pageAllocations = nullptr;
+ 
+ void LockPageAllocations() {
+-  while (s_pageAllocationLock.test_and_set(std::memory_order_acquire)) {
+-  }
++  pthread_mutex_lock(&s_pageAllocationLock);
+ }
+ 
+ void UnlockPageAllocations() {
+-  s_pageAllocationLock.clear(std::memory_order_release);
++  pthread_mutex_unlock(&s_pageAllocationLock);
+ }
+ 
+ bool TrackPageAllocation(uintptr_t exposed_base,
+diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
+index 811ed76285..12337fcb2a 100644
+--- a/base/memory/platform_shared_memory_region_aros.cc
++++ b/base/memory/platform_shared_memory_region_aros.cc
+@@ -7,6 +7,7 @@
+ #include <atomic>
+ #include <limits>
+ #include <new>
++#include <pthread.h>
+ #include <stdio.h>
+ 
+ #pragma push_macro("SCHED_RR")
+@@ -47,17 +48,21 @@ struct MappingData {
+   MappingData* next = nullptr;
+ };
+ 
+-std::atomic_flag g_registry_lock = ATOMIC_FLAG_INIT;
++// A blocking mutex, not a spin: AROS schedules strictly by task priority and
++// the hosted build has one CPU, so a higher-priority thread (the compositor
++// unmapping a frame) spinning on a flag that a preempted lower-priority
++// thread still holds never lets the holder run again - the whole guest sat
++// at 100% in UnmapArosSharedMemory's xchg/test/jne loop.  The pthread mutex
++// sleeps on an exec semaphore instead, the same primitive PartitionAlloc's
++// SpinningMutex uses on this platform.
++pthread_mutex_t g_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+ std::atomic_flag g_reported_exec_fallback = ATOMIC_FLAG_INIT;
+ MappingData* g_mappings = nullptr;
+ 
+ class RegistryGuard {
+  public:
+-  RegistryGuard() {
+-    while (g_registry_lock.test_and_set(std::memory_order_acquire)) {
+-    }
+-  }
+-  ~RegistryGuard() { g_registry_lock.clear(std::memory_order_release); }
++  RegistryGuard() { pthread_mutex_lock(&g_registry_lock); }
++  ~RegistryGuard() { pthread_mutex_unlock(&g_registry_lock); }
+ };
+ 
+ SharedRegionData* DataFor(ArosSharedMemoryHandle handle) {

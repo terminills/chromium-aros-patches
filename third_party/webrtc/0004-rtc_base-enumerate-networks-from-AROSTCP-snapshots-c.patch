@@ -1,0 +1,237 @@
+From 5d0eafdd8d938585f7cd731e3cf84f472bc8d50a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:10:29 -0500
+Subject: [PATCH 4/7] rtc_base: enumerate networks from AROSTCP snapshots
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: WebRTC built and called getifaddrs on every POSIX target, but AROS provides neither ifaddrs.h nor that enumeration API. A fake compatibility struct would duplicate native interface policy and leak AROS headers into WebRTC.
+
+FIX_REASON: Exclude the ifaddrs converter on AROS and construct WebRTC Network objects from Chromium's normalized AROSTCP snapshot, preserving prefixes, IPv6 scope, loopback classification, VPN overrides, ignore policy, and network-monitor metadata.
+
+SCOPE: rtc_base network implementation/header and GN dependency selection.
+
+VALIDATION: focused network.o compiles after the full graph failed on ifaddrs_converter.o; the Chromium adapter object compiles independently.
+
+RISK: medium; interface change notification still uses the provisional polling/event path and requires runtime validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ rtc_base/BUILD.gn   |   8 +++-
+ rtc_base/network.cc | 111 +++++++++++++++++++++++++++++++++++++++++++-
+ rtc_base/network.h  |   8 ++--
+ 3 files changed, 119 insertions(+), 8 deletions(-)
+
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index 26d693d..153856c 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -1175,7 +1175,7 @@ rtc_library("ifaddrs_converter") {
+     sources += [ "mac_ifaddrs_converter.cc" ]
+   }
+ 
+-  if (is_posix || is_fuchsia) {
++  if ((is_posix || is_fuchsia) && !is_aros) {
+     sources += [
+       "ifaddrs_converter.cc",
+       "ifaddrs_converter.h",
+@@ -1222,7 +1222,6 @@ rtc_library("network") {
+   ]
+   deps = [
+     ":checks",
+-    ":ifaddrs_converter",
+     ":ip_address",
+     ":logging",
+     ":macromagic",
+@@ -1242,6 +1241,11 @@ rtc_library("network") {
+     "system:rtc_export",
+     "third_party/sigslot",
+   ]
++  if (is_aros) {
++    deps += [ "//base" ]
++  } else {
++    deps += [ ":ifaddrs_converter" ]
++  }
+   absl_deps = [
+     "//third_party/abseil-cpp/absl/algorithm:container",
+     "//third_party/abseil-cpp/absl/base:core_headers",
+diff --git a/rtc_base/network.cc b/rtc_base/network.cc
+index 4be6eed..666dac9 100644
+--- a/rtc_base/network.cc
++++ b/rtc_base/network.cc
+@@ -13,7 +13,7 @@
+ #include "absl/strings/string_view.h"
+ #include "rtc_base/experiments/field_trial_parser.h"
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+ #include <net/if.h>
+ #endif  // WEBRTC_POSIX
+ 
+@@ -21,7 +21,7 @@
+ #include <iphlpapi.h>
+ 
+ #include "rtc_base/win32.h"
+-#elif !defined(__native_client__)
++#elif !defined(__native_client__) && !defined(__AROS__)
+ #include "rtc_base/ifaddrs_converter.h"
+ #endif
+ 
+@@ -44,6 +44,10 @@
+ #include "rtc_base/strings/string_builder.h"
+ #include "rtc_base/thread.h"
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
++
+ namespace rtc {
+ namespace {
+ using ::webrtc::SafeTask;
+@@ -581,6 +585,109 @@ bool BasicNetworkManager::CreateNetworks(
+   return false;
+ }
+ 
++#elif defined(__AROS__)
++
++bool BasicNetworkManager::CreateNetworks(
++    bool include_ignored,
++    std::vector<std::unique_ptr<Network>>* networks) const {
++  std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++  if (!base::aros::GetNetworkInterfaces(&interfaces)) {
++    RTC_LOG_ERR(LS_ERROR) << "AROSTCP failed to gather interface data";
++    return false;
++  }
++
++  std::map<std::string, Network*> current_networks;
++  for (const auto& interface : interfaces) {
++    if (!interface.is_up || !interface.is_running ||
++        (interface.family != AF_INET && interface.family != AF_INET6)) {
++      continue;
++    }
++
++    IPAddress address;
++    IPAddress mask;
++    if (interface.family == AF_INET) {
++      if (interface.address_length != sizeof(in_addr)) {
++        continue;
++      }
++      in_addr native_address = {};
++      memcpy(&native_address, interface.address.data(), sizeof(native_address));
++      address = IPAddress(native_address);
++      if (interface.has_netmask) {
++        in_addr native_mask = {};
++        memcpy(&native_mask, interface.netmask.data(), sizeof(native_mask));
++        mask = IPAddress(native_mask);
++      }
++    } else {
++      if (interface.address_length != sizeof(in6_addr)) {
++        continue;
++      }
++      in6_addr native_address = {};
++      memcpy(&native_address, interface.address.data(), sizeof(native_address));
++      address = IPAddress(native_address);
++      if (IsIgnoredIPv6(allow_mac_based_ipv6_, InterfaceAddress(address))) {
++        continue;
++      }
++      if (interface.has_netmask) {
++        in6_addr native_mask = {};
++        memcpy(&native_mask, interface.netmask.data(), sizeof(native_mask));
++        mask = IPAddress(native_mask);
++      }
++    }
++
++    const int prefix_length =
++        interface.has_netmask ? CountIPMaskBits(mask) : address.Size() * 8;
++    const IPAddress prefix = TruncateIP(address, prefix_length);
++    const InterfaceAddress interface_address(address);
++    const std::string key =
++        MakeNetworkKey(interface.name, prefix, prefix_length);
++    auto existing = current_networks.find(key);
++    if (existing != current_networks.end()) {
++      existing->second->AddIP(interface_address);
++      continue;
++    }
++
++    NetworkMonitorInterface::InterfaceInfo interface_info;
++    if (interface.is_loopback || IPIsLoopback(address)) {
++      interface_info = {
++          .adapter_type = ADAPTER_TYPE_LOOPBACK,
++          .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
++          .network_preference = NetworkPreference::NEUTRAL,
++          .available = true,
++      };
++    } else if (network_monitor_) {
++      interface_info = network_monitor_->GetInterfaceInfo(interface.name);
++    } else {
++      interface_info = {
++          .adapter_type = GetAdapterTypeFromName(interface.name),
++          .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
++          .network_preference = NetworkPreference::NEUTRAL,
++          .available = true,
++      };
++    }
++
++    if (interface_info.adapter_type != ADAPTER_TYPE_VPN &&
++        IsConfiguredVpn(prefix, prefix_length)) {
++      interface_info.underlying_type_for_vpn = interface_info.adapter_type;
++      interface_info.adapter_type = ADAPTER_TYPE_VPN;
++    }
++
++    auto network = CreateNetwork(interface.name, interface.name, prefix,
++                                 prefix_length, interface_info.adapter_type);
++    network->set_default_local_address_provider(this);
++    network->set_scope_id(interface.scope_id);
++    network->AddIP(interface_address);
++    network->set_ignored(!interface_info.available || IsIgnoredNetwork(*network));
++    network->set_underlying_type_for_vpn(
++        interface_info.underlying_type_for_vpn);
++    network->set_network_preference(interface_info.network_preference);
++    if (include_ignored || !network->ignored()) {
++      current_networks[key] = network.get();
++      networks->push_back(std::move(network));
++    }
++  }
++  return true;
++}
++
+ #elif defined(WEBRTC_POSIX)
+ NetworkMonitorInterface::InterfaceInfo BasicNetworkManager::GetInterfaceInfo(
+     struct ifaddrs* cursor) const {
+diff --git a/rtc_base/network.h b/rtc_base/network.h
+index 4a97a45..1136558 100644
+--- a/rtc_base/network.h
++++ b/rtc_base/network.h
+@@ -36,9 +36,9 @@
+ #include "rtc_base/third_party/sigslot/sigslot.h"
+ #include "rtc_base/thread_annotations.h"
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+ struct ifaddrs;
+-#endif  // defined(WEBRTC_POSIX)
++#endif  // defined(WEBRTC_POSIX) && !defined(__AROS__)
+ 
+ namespace rtc {
+ 
+@@ -317,7 +317,7 @@ class RTC_EXPORT BasicNetworkManager : public NetworkManagerBase,
+                                            const IPAddress& address) override;
+ 
+  protected:
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+   // Separated from CreateNetworks for tests.
+   void ConvertIfAddrs(ifaddrs* interfaces,
+                       IfAddrsConverter* converter,
+@@ -326,7 +326,7 @@ class RTC_EXPORT BasicNetworkManager : public NetworkManagerBase,
+       RTC_RUN_ON(thread_);
+   NetworkMonitorInterface::InterfaceInfo GetInterfaceInfo(
+       struct ifaddrs* cursor) const RTC_RUN_ON(thread_);
+-#endif  // defined(WEBRTC_POSIX)
++#endif  // defined(WEBRTC_POSIX) && !defined(__AROS__)
+ 
+   // Creates a network object for each network available on the machine.
+   bool CreateNetworks(bool include_ignored,

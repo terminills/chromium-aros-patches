@@ -1,0 +1,171 @@
+From 2f871d55b3041f359890b49b8d045e0bc3722c80 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 10:18:51 -0500
+Subject: [PATCH 486/638] AROS: scope tracing services per process
+
+Give each native AROS process independent traced-process, Perfetto process, and Perfetto task-runner state so child tracing requests cannot post through another process's thread pool.\n\nACD-Agent: codex\nACD-Job:\nACD-Scope: Chromium AROS process-scoped tracing services
+---
+ .../cpp/perfetto/perfetto_traced_process.cc   | 55 +++++++++++++++++++
+ .../tracing/public/cpp/traced_process_impl.cc | 35 ++++++++++++
+ 2 files changed, 90 insertions(+)
+
+diff --git a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
+index 636b8a84dc..5d2c9c5f82 100644
+--- a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
++++ b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
+@@ -4,11 +4,14 @@
+ 
+ #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
+ 
++#include <map>
++
+ #include "base/command_line.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/run_loop.h"
++#include "base/synchronization/lock.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/trace_event/trace_config.h"
+ #include "base/trace_event/trace_log.h"
+@@ -48,6 +51,21 @@
+ 
+ namespace tracing {
+ namespace {
++#if BUILDFLAG(IS_AROS)
++struct PerfettoProcessRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, PerfettoTracedProcess*> processes;
++  std::map<const base::CommandLine*, base::tracing::PerfettoTaskRunner*>
++      task_runners;
++};
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++#endif
++
+ #if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || \
+     BUILDFLAG(IS_FUCHSIA)
+ // Set to use the dummy producer for Chrome OS browser_tests and
+@@ -203,8 +221,26 @@ PerfettoTracedProcess::DataSourceBase::GetTaskRunner() {
+ 
+ // static
+ PerfettoTracedProcess* PerfettoTracedProcess::Get() {
++#if BUILDFLAG(IS_AROS)
++  const base::CommandLine* const process_identity =
++      GetCurrentProcessIdentity();
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local PerfettoTracedProcess* cached_instance = nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return cached_instance;
++
++  static base::NoDestructor<PerfettoProcessRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  PerfettoTracedProcess*& instance = registry->processes[process_identity];
++  if (!instance)
++    instance = new PerfettoTracedProcess();
++  cached_instance = instance;
++  return instance;
++#else
+   static base::NoDestructor<PerfettoTracedProcess> traced_process;
+   return traced_process.get();
++#endif
+ }
+ 
+ PerfettoTracedProcess::PerfettoTracedProcess()
+@@ -259,9 +295,28 @@ PerfettoTracedProcess::SetSystemProducerForTesting(
+ // is deleted.
+ // static
+ base::tracing::PerfettoTaskRunner* PerfettoTracedProcess::GetTaskRunner() {
++#if BUILDFLAG(IS_AROS)
++  const base::CommandLine* const process_identity =
++      GetCurrentProcessIdentity();
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local base::tracing::PerfettoTaskRunner* cached_task_runner = nullptr;
++  if (cached_task_runner && cached_identity == process_identity)
++    return cached_task_runner;
++
++  static base::NoDestructor<PerfettoProcessRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  base::tracing::PerfettoTaskRunner*& task_runner =
++      registry->task_runners[process_identity];
++  if (!task_runner)
++    task_runner = new base::tracing::PerfettoTaskRunner(nullptr);
++  cached_task_runner = task_runner;
++  return task_runner;
++#else
+   static base::NoDestructor<base::tracing::PerfettoTaskRunner> task_runner(
+       nullptr);
+   return task_runner.get();
++#endif
+ }
+ 
+ // static
+diff --git a/services/tracing/public/cpp/traced_process_impl.cc b/services/tracing/public/cpp/traced_process_impl.cc
+index a65a41e91b..eef525984d 100644
+--- a/services/tracing/public/cpp/traced_process_impl.cc
++++ b/services/tracing/public/cpp/traced_process_impl.cc
+@@ -4,12 +4,16 @@
+ 
+ #include "services/tracing/public/cpp/traced_process_impl.h"
+ 
++#include <map>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
++#include "build/build_config.h"
+ #include "services/tracing/public/cpp/base_agent.h"
+ #include "services/tracing/public/cpp/perfetto/producer_client.h"
+ #include "services/tracing/public/cpp/trace_event_agent.h"
+@@ -17,10 +21,41 @@
+ 
+ namespace tracing {
+ 
++namespace {
++
++#if BUILDFLAG(IS_AROS)
++struct TracedProcessRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, TracedProcessImpl*> instances;
++};
++#endif
++
++}  // namespace
++
+ // static
+ TracedProcessImpl* TracedProcessImpl::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  const base::CommandLine* const process_identity =
++      base::CommandLine::InitializedForCurrentProcess()
++          ? base::CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local TracedProcessImpl* cached_instance = nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return cached_instance;
++
++  static base::NoDestructor<TracedProcessRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  TracedProcessImpl*& instance = registry->instances[process_identity];
++  if (!instance)
++    instance = new TracedProcessImpl();
++  cached_instance = instance;
++  return instance;
++#else
+   static base::NoDestructor<TracedProcessImpl> traced_process;
+   return traced_process.get();
++#endif
+ }
+ 
+ TracedProcessImpl::TracedProcessImpl() {

@@ -1,0 +1,54 @@
+From 12856aa052ed872ae3170b162444f1f8f6672092 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 19:52:51 -0500
+Subject: [PATCH 622/638] aros: link libpthread after the objects so one
+ archive supplies every pthread_*
+
+chrome was carrying two libpthread copies. The toolchain lists the sysroot
+libpthread.a in extra_ldflags with -u pthread_mutex_unlock; the archive comes
+before the program's objects, so ld extracts only that member. collect-aros then
+satisfies the remaining pthread_* from the libpthread.a compiled into the
+crosstools as OBJLIBDIR - the hosted toolchain-build copy, which ignores
+--sysroot and dated from 09-06. That copy predates 70d3c739 (pthread_attr_t
+gained cpuaffinity), so its StarterFunc read ThreadInfo.tlsvalues at 0xe0 while
+the sysroot pthread_setspecific wrote at 0xe8: every key destructor at thread
+exit received the previous key's value. Chromium's key-4 destructor got emutls'
+untagged pointer, BoringSSL's key-5 destructor got Chromium's tagged one and
+took the Chrome_ChildIOThread #GP in thread_local_destructor.
+
+Adding pthread to base's libs puts -lpthread after the objects, so every
+pthread_* resolves from the sysroot archive and collect-aros never re-supplies.
+Verified: pthread_create 0x3c5 / StarterFunc 0x48e (sysroot sizes); HeavyBase
+renders with all exit destructors receiving their own key's value.
+
+Side effect worth knowing: the old pthread_create ignored the affinity attr,
+so --aros-pin-workers had never actually placed a thread off CPU 0 until now.
+
+---
+ base/BUILD.gn | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 7a3f228e2e..c65396828a 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1161,9 +1161,19 @@ component("base") {
+   if (is_aros) {
+     # debug.library for LoadSeg symbol lookup; liblinuxso (static, from the
+     # AROS SDK) for Linux ET_DYN objects such as the Widevine CDM.
++    #
++    # libpthread must be a lib (placed after the program's objects), not only
++    # the archive the toolchain names in extra_ldflags: that one precedes the
++    # objects, so ld extracts nothing from it beyond the -u member, and every
++    # other pthread_* symbol is left for collect-aros to satisfy from the
++    # libpthread.a compiled into the crosstools - a stale copy from a different
++    # build with a different ThreadInfo layout. The result was one binary with
++    # pthread_setspecific from the sysroot and StarterFunc from the old archive:
++    # every key destructor at thread exit received the previous key's value.
+     libs += [
+       "debug",
+       "linuxso",
++      "pthread",
+     ]
+   }
+ 

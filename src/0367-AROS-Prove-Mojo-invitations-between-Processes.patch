@@ -1,0 +1,239 @@
+From 0c92df0306e2bc4410f3f97bc16296a8ecd13a86 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 11:20:57 -0500
+Subject: [PATCH 367/638] [AROS] Prove Mojo invitations between Processes
+
+AI_PHASE: chromium-process-model
+AI_STATUS: cross-process-invitation-runtime-pass
+ROOT_CAUSE: Raw Channel traffic was proven across AROS Processes, but Chromium's real NodeController invitation and primordial-pipe bootstrap remained unverified.
+FIX_REASON: Add a focused AROS-only parent/child probe using LaunchProcess, OutgoingInvitation, IncomingInvitation, independent IO workers, named primordial pipe traffic, and native DOS termination after Mojo cleanup.
+SCOPE: mojo/core/BUILD.gn; mojo/core/invitation_aros_process_probe.cc
+VALIDATION: Hosted 16 GiB run reported child PASS, parent PASS invitation=1 primordial=2, collected child death, restored startup, and exited zero in 8.11 seconds.
+RISK: The probe uses FAST Mojo shutdown and records an unclean-node warning; browser/renderer roles must next prove their production lifecycle and service binding.
+AI_DECISION_CHAIN: direct Channel PASS -> full invitation -> primordial request/reply -> stdc threaded exit stall -> native DOS Exit after IO stop -> clean guest exit.
+Evidence:-invitation-aros-process-20260728
+Job:
+---
+ mojo/core/BUILD.gn                         |  11 ++
+ mojo/core/invitation_aros_process_probe.cc | 190 +++++++++++++++++++++
+ 2 files changed, 201 insertions(+)
+ create mode 100644 mojo/core/invitation_aros_process_probe.cc
+
+diff --git a/mojo/core/BUILD.gn b/mojo/core/BUILD.gn
+index 3b299c3753..826d934204 100644
+--- a/mojo/core/BUILD.gn
++++ b/mojo/core/BUILD.gn
+@@ -387,6 +387,17 @@ if (is_aros) {
+       "//mojo/public/cpp/platform",
+     ]
+   }
++
++  executable("invitation_aros_process_probe") {
++    testonly = true
++    sources = [ "invitation_aros_process_probe.cc" ]
++    deps = [
++      "//base",
++      "//mojo/core/embedder",
++      "//mojo/public/cpp/platform",
++      "//mojo/public/cpp/system",
++    ]
++  }
+ }
+ 
+ fuzzer_test("mojo_core_channel_fuzzer") {
+diff --git a/mojo/core/invitation_aros_process_probe.cc b/mojo/core/invitation_aros_process_probe.cc
+new file mode 100644
+index 0000000000..dd8f89898a
+--- /dev/null
++++ b/mojo/core/invitation_aros_process_probe.cc
+@@ -0,0 +1,190 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/at_exit.h"
++#include "base/base_paths.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/path_service.h"
++#include "base/process/launch.h"
++#include "base/process/process.h"
++#include "base/threading/thread.h"
++#include "mojo/core/embedder/configuration.h"
++#include "mojo/core/embedder/embedder.h"
++#include "mojo/core/embedder/scoped_ipc_support.h"
++#include "mojo/public/cpp/platform/platform_channel.h"
++#include "mojo/public/cpp/system/invitation.h"
++#include "mojo/public/cpp/system/message_pipe.h"
++#include "mojo/public/cpp/system/wait.h"
++
++#include <aros/debug.h>
++#include <proto/dos.h>
++#undef Read
++#undef Wait
++#undef Write
++
++namespace {
++
++constexpr char kChildSwitch[] = "aros-mojo-invitation-child";
++constexpr char kParentPayload[] = "primordial-browser-message";
++constexpr char kChildPayload[] = "primordial-renderer-reply";
++constexpr uint64_t kPipeName = 0x41524f53;
++
++mojo::core::Configuration ConfigurationFor(bool is_broker) {
++  mojo::core::Configuration configuration;
++  configuration.is_broker_process = is_broker;
++  configuration.disable_ipcz = true;
++  configuration.force_direct_shared_memory_allocation = true;
++  return configuration;
++}
++
++bool Write(const mojo::ScopedMessagePipeHandle& pipe,
++           std::string_view payload) {
++  return mojo::WriteMessageRaw(
++             pipe.get(), payload.data(), payload.size(), nullptr, 0,
++             MOJO_WRITE_MESSAGE_FLAG_NONE) == MOJO_RESULT_OK;
++}
++
++bool Read(const mojo::ScopedMessagePipeHandle& pipe,
++          std::string_view expected) {
++  if (mojo::Wait(pipe.get(), MOJO_HANDLE_SIGNAL_READABLE) != MOJO_RESULT_OK)
++    return false;
++  std::vector<uint8_t> payload;
++  std::vector<mojo::ScopedHandle> handles;
++  if (mojo::ReadMessageRaw(pipe.get(), &payload, &handles,
++                           MOJO_READ_MESSAGE_FLAG_NONE) != MOJO_RESULT_OK) {
++    return false;
++  }
++  return handles.empty() &&
++         std::string(payload.begin(), payload.end()) == expected;
++}
++
++int RunChild() {
++  mojo::PlatformChannelEndpoint endpoint =
++      mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
++          *base::CommandLine::ForCurrentProcess());
++  if (!endpoint.is_valid()) {
++    bug("[Mojo:AROS:InvitationProbe] CHILD FAIL endpoint\n");
++    return 50;
++  }
++
++  base::Thread io_thread("MojoChildIO");
++  if (!io_thread.StartWithOptions(
++          base::Thread::Options(base::MessagePumpType::IO, 0))) {
++    bug("[Mojo:AROS:InvitationProbe] CHILD FAIL IO thread\n");
++    return 51;
++  }
++  mojo::core::Init(ConfigurationFor(false));
++  int result = 0;
++  {
++    mojo::core::ScopedIPCSupport ipc_support(
++        io_thread.task_runner(),
++        mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST);
++    mojo::IncomingInvitation invitation =
++        mojo::IncomingInvitation::Accept(std::move(endpoint));
++    mojo::ScopedMessagePipeHandle pipe =
++        invitation.ExtractMessagePipe(kPipeName);
++    if (!pipe.is_valid() || !Read(pipe, kParentPayload) ||
++        !Write(pipe, kChildPayload)) {
++      bug("[Mojo:AROS:InvitationProbe] CHILD FAIL pipe\n");
++      result = 52;
++    } else {
++      bug("[Mojo:AROS:InvitationProbe] CHILD PASS pid=%ld\n",
++          static_cast<long>(base::GetCurrentProcId()));
++    }
++  }
++  bug("[Mojo:AROS:InvitationProbe] CHILD ipc-support released\n");
++  mojo::core::ShutDown();
++  bug("[Mojo:AROS:InvitationProbe] CHILD core shutdown\n");
++  io_thread.Stop();
++  bug("[Mojo:AROS:InvitationProbe] CHILD IO stopped; DOS exit\n");
++
++  // std::_Exit() is explicitly unsupported by AROS stdc.library in a
++  // threaded application: it jumps through stdc cleanup and can strand the
++  // process before Exec posts NP_NotifyOnDeath. Mojo has already released its
++  // IPC support and stopped its worker, so bypass C++ exit handlers through
++  // DOS Exit() and let the Process lifecycle complete normally.
++  ::Exit(result);
++  __builtin_unreachable();
++}
++
++int RunParent() {
++  base::FilePath executable;
++  if (!base::PathService::Get(base::FILE_EXE, &executable)) {
++    bug("[Mojo:AROS:InvitationProbe] PARENT FAIL executable\n");
++    return 53;
++  }
++
++  mojo::PlatformChannel transport;
++  base::CommandLine child_command(executable);
++  child_command.AppendSwitch(kChildSwitch);
++  base::LaunchOptions options;
++  options.current_directory = executable.DirName();
++  transport.PrepareToPassRemoteEndpoint(&options, &child_command);
++  base::Process child = base::LaunchProcess(child_command, options);
++  transport.RemoteProcessLaunchAttempted();
++  if (!child.IsValid()) {
++    bug("[Mojo:AROS:InvitationProbe] PARENT FAIL launch\n");
++    return 54;
++  }
++
++  base::Thread io_thread("MojoParentIO");
++  if (!io_thread.StartWithOptions(
++          base::Thread::Options(base::MessagePumpType::IO, 0))) {
++    bug("[Mojo:AROS:InvitationProbe] PARENT FAIL IO thread\n");
++    return 55;
++  }
++  mojo::core::Init(ConfigurationFor(true));
++  bool passed = false;
++  {
++    mojo::core::ScopedIPCSupport ipc_support(
++        io_thread.task_runner(),
++        mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST);
++    mojo::OutgoingInvitation invitation;
++    mojo::ScopedMessagePipeHandle pipe =
++        invitation.AttachMessagePipe(kPipeName);
++    mojo::OutgoingInvitation::Send(
++        std::move(invitation), child.Handle(),
++        transport.TakeLocalEndpoint());
++    passed = pipe.is_valid() && Write(pipe, kParentPayload) &&
++             Read(pipe, kChildPayload);
++  }
++  bug("[Mojo:AROS:InvitationProbe] PARENT ipc-support released\n");
++  mojo::core::ShutDown();
++  bug("[Mojo:AROS:InvitationProbe] PARENT core shutdown\n");
++  io_thread.Stop();
++  bug("[Mojo:AROS:InvitationProbe] PARENT IO stopped\n");
++
++  int child_exit = -1;
++  if (!child.WaitForExit(&child_exit) || child_exit != 0 || !passed) {
++    bug("[Mojo:AROS:InvitationProbe] PARENT FAIL pipe=%ld child=%ld\n",
++        static_cast<long>(passed), static_cast<long>(child_exit));
++    return 56;
++  }
++  bug("[Mojo:AROS:InvitationProbe] PASS parent=%ld child=%ld invitation=1 "
++      "primordial=2\n",
++      static_cast<long>(base::GetCurrentProcId()),
++      static_cast<long>(child.Pid()));
++  return 0;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  base::AtExitManager at_exit_manager;
++  if (!base::CommandLine::Init(argc, argv))
++    return 57;
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kChildSwitch))
++    return RunChild();
++
++  const int result = RunParent();
++  bug("[Mojo:AROS:InvitationProbe] PARENT DOS exit rc=%ld\n",
++      static_cast<long>(result));
++  ::Exit(result);
++  __builtin_unreachable();
++}

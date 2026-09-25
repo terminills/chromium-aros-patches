@@ -1,0 +1,63 @@
+From 34158058eece4c1ff17164e7bbb870bfe7034e11 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 18:00:19 -0500
+Subject: [PATCH 581/638] aros: num-tabs / num-windows crash keys
+
+Browser::OnTabStripModelChanged recounts open windows and tabs into
+crash keys so the system crash report's [Annotations] section says what
+the user had open.
+---
+ chrome/browser/ui/BUILD.gn   |  4 ++++
+ chrome/browser/ui/browser.cc | 17 +++++++++++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index da060fcc63..8439ba1329 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4213,6 +4213,10 @@ static_library("ui") {
+         "webui/browser_switch/browser_switch_ui.cc",
+         "webui/browser_switch/browser_switch_ui.h",
+       ]
++
++      # browser.cc keeps num-tabs / num-windows crash keys for the system
++      # crash report.
++      deps += [ "//components/crash/core/common:crash_key" ]
+     }
+   }
+ 
+diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
+index 4da538af01..89cb78bd1e 100644
+--- a/chrome/browser/ui/browser.cc
++++ b/chrome/browser/ui/browser.cc
+@@ -163,6 +163,9 @@
+ #include "components/captive_portal/core/buildflags.h"
+ #include "components/content_settings/browser/page_specific_content_settings.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
++#if BUILDFLAG(IS_AROS)
++#include "components/crash/core/common/crash_key.h"
++#endif
+ #include "components/custom_handlers/protocol_handler.h"
+ #include "components/custom_handlers/protocol_handler_registry.h"
+ #include "components/custom_handlers/register_protocol_handler_permission_request.h"
+@@ -1282,6 +1285,20 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
+                                      const TabStripSelectionChange& selection) {
+   TRACE_EVENT2("ui", "Browser::OnTabStripModelChanged", "tab_strip_model",
+                tab_strip_model, "change", change);
++#if BUILDFLAG(IS_AROS)
++  // Browser state for the system crash report: what the user had open.
++  // Cheap enough to recount on every tab-strip change, and a crash key is
++  // only ever read after the fact, so no observer bookkeeping is needed.
++  {
++    static crash_reporter::CrashKeyString<8> num_windows_key("num-windows");
++    static crash_reporter::CrashKeyString<8> num_tabs_key("num-tabs");
++    int tabs = 0;
++    for (Browser* browser : *BrowserList::GetInstance())
++      tabs += browser->tab_strip_model()->count();
++    num_windows_key.Set(base::NumberToString(BrowserList::GetInstance()->size()));
++    num_tabs_key.Set(base::NumberToString(tabs));
++  }
++#endif
+   switch (change.type()) {
+     case TabStripModelChange::kInserted: {
+       for (const auto& contents : change.GetInsert()->contents)

@@ -1,0 +1,83 @@
+From 7b48d030914c85ac1642dad170f18c3fe560c021 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 16:38:38 -0500
+Subject: [PATCH 12/43] cef: guard disabled library CDM flags
+
+Only evaluate ENABLE_CDM_HOST_VERIFICATION when ENABLE_LIBRARY_CDMS is true; Chromium omits the nested flag entirely when library CDMs are disabled.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: disabled-library-cdm-buildflags-contained
+
+AI_ASSUMPTION: out/aros-cef-bootstrap intentionally has enable_library_cdms=false
+
+AI_VALIDATION: build 20 reported missing BUILDFLAG_INTERNAL_ENABLE_CDM_HOST_VERIFICATION in both CEF content clients
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/20-libcef-static-handoff-boundary.log
+
+AI_DECISION_CHAIN:; out/aros-cef-bootstrap args.gn; b0a3da89
+---
+ libcef/common/alloy/alloy_content_client.cc       | 4 ++++
+ libcef/common/chrome/chrome_content_client_cef.cc | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/libcef/common/alloy/alloy_content_client.cc b/libcef/common/alloy/alloy_content_client.cc
+index cc682794..6e82bc27 100644
+--- a/libcef/common/alloy/alloy_content_client.cc
++++ b/libcef/common/alloy/alloy_content_client.cc
+@@ -38,9 +38,11 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+ #include "libcef/common/cdm_host_file_path.h"
+ #endif
++#endif
+ 
+ namespace {
+ 
+@@ -92,11 +94,13 @@ void AlloyContentClient::AddContentDecryptionModules(
+     RegisterCdmInfo(cdms);
+   }
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+   if (cdm_host_file_paths) {
+     cef::AddCdmHostFilePaths(cdm_host_file_paths);
+   }
+ #endif
++#endif
+ }
+ 
+ void AlloyContentClient::AddAdditionalSchemes(Schemes* schemes) {
+diff --git a/libcef/common/chrome/chrome_content_client_cef.cc b/libcef/common/chrome/chrome_content_client_cef.cc
+index 0dc601b8..59050828 100644
+--- a/libcef/common/chrome/chrome_content_client_cef.cc
++++ b/libcef/common/chrome/chrome_content_client_cef.cc
+@@ -10,9 +10,11 @@
+ #include "chrome/common/media/cdm_registration.h"
+ #include "media/media_buildflags.h"
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+ #include "libcef/common/cdm_host_file_path.h"
+ #endif
++#endif
+ 
+ ChromeContentClientCef::ChromeContentClientCef() = default;
+ ChromeContentClientCef::~ChromeContentClientCef() = default;
+@@ -24,11 +26,13 @@ void ChromeContentClientCef::AddContentDecryptionModules(
+     RegisterCdmInfo(cdms);
+   }
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+   if (cdm_host_file_paths) {
+     cef::AddCdmHostFilePaths(cdm_host_file_paths);
+   }
+ #endif
++#endif
+ }
+ 
+ void ChromeContentClientCef::AddAdditionalSchemes(Schemes* schemes) {

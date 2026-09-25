@@ -1,0 +1,122 @@
+From c3881457df5b5244436d448e0cc704b41360fab3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 14:01:19 -0500
+Subject: [PATCH 297/638] cef: apply upstream MIME guest hooks
+
+Apply CEF's matching MIME handler guest patch independently so CEF can provide custom guest views and observe attachment lifecycle.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-mime-guest-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch files are authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: patch_updater.py --reapply --patch=mime_handler_view_guest_1565_2727 completed without rejects
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/10-libcef-static-focused.log
+
+AI_DECISION_CHAIN:; 52dac911; b6b08fda40
+---
+ content/browser/web_contents/web_contents_view.h   |  2 +-
+ .../mime_handler_view/mime_handler_view_guest.cc   | 14 ++++++++++++++
+ .../mime_handler_view/mime_handler_view_guest.h    |  2 ++
+ .../mime_handler_view_guest_delegate.h             | 10 ++++++++++
+ 4 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/web_contents/web_contents_view.h b/content/browser/web_contents/web_contents_view.h
+index 285dc38950..326646bb58 100644
+--- a/content/browser/web_contents/web_contents_view.h
++++ b/content/browser/web_contents/web_contents_view.h
+@@ -26,7 +26,7 @@ struct DropData;
+ // The `WebContentsView` is an interface that is implemented by the platform-
+ // dependent web contents views. The `WebContents` uses this interface to talk
+ // to them.
+-class WebContentsView {
++class CONTENT_EXPORT WebContentsView {
+  public:
+   virtual ~WebContentsView() = default;
+ 
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc
+index cb8f896ebe..382394fb82 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc
+@@ -205,6 +205,8 @@ void MimeHandlerViewGuest::CreateWebContents(
+   WebContents::CreateParams params(browser_context(),
+                                    guest_site_instance.get());
+   params.guest_delegate = this;
++  if (delegate_)
++    delegate_->OverrideWebContentsCreateParams(&params);
+   std::move(callback).Run(std::move(owned_this),
+                           WebContents::CreateWithSessionStorage(
+                               params, owner_web_contents()
+@@ -213,6 +215,10 @@ void MimeHandlerViewGuest::CreateWebContents(
+ }
+ 
+ void MimeHandlerViewGuest::DidAttachToEmbedder() {
++  is_guest_attached_ = true;
++  if (delegate_)
++    delegate_->OnGuestAttached();
++
+   DCHECK(stream_->handler_url().SchemeIs(extensions::kExtensionScheme));
+   GetController().LoadURL(stream_->handler_url(), content::Referrer(),
+                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+@@ -483,6 +489,14 @@ void MimeHandlerViewGuest::DidFinishNavigation(
+   }
+ }
+ 
++void MimeHandlerViewGuest::WebContentsDestroyed() {
++  if (is_guest_attached_ && delegate_)
++    delegate_->OnGuestDetached();
++
++  // May delete |this|.
++  GuestView<MimeHandlerViewGuest>::WebContentsDestroyed();
++}
++
+ void MimeHandlerViewGuest::FuseBeforeUnloadControl(
+     mojo::PendingReceiver<mime_handler::BeforeUnloadControl> receiver) {
+   if (!pending_before_unload_control_)
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h
+index 1cf22ee486..0d173bdb7a 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h
+@@ -196,10 +196,12 @@ class MimeHandlerViewGuest
+   void ReadyToCommitNavigation(
+       content::NavigationHandle* navigation_handle) final;
+   void DidFinishNavigation(content::NavigationHandle* navigation_handle) final;
++  void WebContentsDestroyed() override;
+ 
+   std::unique_ptr<MimeHandlerViewGuestDelegate> delegate_;
+   std::unique_ptr<StreamContainer> stream_;
+ 
++  bool is_guest_attached_ = false;
+   bool is_guest_fullscreen_ = false;
+   bool is_embedder_fullscreen_ = false;
+   bool plugin_can_save_ = false;
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h
+index 7f59e79250..777b8a3cf1 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h
+@@ -7,6 +7,8 @@
+ 
+ #include <string>
+ 
++#include "content/public/browser/web_contents.h"
++
+ namespace content {
+ class RenderFrameHost;
+ struct ContextMenuParams;
+@@ -25,6 +27,14 @@ class MimeHandlerViewGuestDelegate {
+ 
+   virtual ~MimeHandlerViewGuestDelegate() {}
+ 
++  // Provides an opportunity to supply a custom view implementation.
++  virtual void OverrideWebContentsCreateParams(
++      content::WebContents::CreateParams* params) {}
++
++  // Called when a guest is attached or detached.
++  virtual void OnGuestAttached() {}
++  virtual void OnGuestDetached() {}
++
+   // Handles context menu, or returns false if unhandled.
+   //
+   // The `render_frame_host` represents the frame that requests the context menu

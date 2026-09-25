@@ -1,0 +1,35 @@
+From bcf68d21ce7be8b8e1f79f5b81dbb47a232931a1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:26:50 -0500
+Subject: [PATCH 192/638] web_applications: admit AROS to install metadata
+ [chromium] [aros]
+
+Statement:
+The generic desktop Web App install metadata type rejected AROS at compile time even though the platform now builds the same Chrome Web App model.
+
+Decision:
+Include AROS in the supported-platform invariant without changing the metadata representation or desktop behavior.
+
+Evidence:
+The chrome_devtools_manager_delegate object that includes this header is up to date after Ninja validation in out/aros-chrome.
+
+Chain:
+ first native upstream Chromium browser window.
+---
+ chrome/browser/web_applications/web_app_install_info.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/web_applications/web_app_install_info.h b/chrome/browser/web_applications/web_app_install_info.h
+index cefcf3af27..3490cc7b40 100644
+--- a/chrome/browser/web_applications/web_app_install_info.h
++++ b/chrome/browser/web_applications/web_app_install_info.h
+@@ -35,7 +35,8 @@
+ #include "url/gurl.h"
+ 
+ static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-              BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA));
++              BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++              BUILDFLAG(IS_AROS));
+ 
+ namespace web_app {
+ 

@@ -1,0 +1,32 @@
+From 667a1b66d03edd7ac7110c7f1012e765dc35940d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 24 Sep 2026 11:41:17 -0500
+Subject: [PATCH 638/638] aros: launch with the V8 code cache and script
+ streaming off
+
+v8.library is a separate AROS library with its own operator new/delete
+(stdc's heap), while the browser allocates through PartitionAlloc. Code
+cache consumption (ScriptCompiler::StartConsumingCodeCache) and script
+streaming hand V8 buffers the browser allocated, and V8 frees them into
+the wrong heap: TLSF traps in tlsf_freevec on the second launch with a
+warm profile. Keep both off until v8.library shares the browser's
+allocator; --v8-cache-options=none also keeps a cache already on disk
+from being read on the main thread.
+
+---
+ chrome/app/theme/aros/Chromium.info.src | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/chrome/app/theme/aros/Chromium.info.src b/chrome/app/theme/aros/Chromium.info.src
+index 0a7daff589..f60195c836 100644
+--- a/chrome/app/theme/aros/Chromium.info.src
++++ b/chrome/app/theme/aros/Chromium.info.src
+@@ -8,6 +8,8 @@ TOOLTYPE = "CHROME_ARG=--ozone-platform=aros"
+ TOOLTYPE = "CHROME_ARG=--no-first-run"
+ TOOLTYPE = "CHROME_ARG=--no-default-browser-check"
+ TOOLTYPE = "CHROME_ARG=--aros-spoof-platform=linux"
++TOOLTYPE = "CHROME_ARG=--v8-cache-options=none"
++TOOLTYPE = "CHROME_ARG=--disable-features=ConsumeCodeCacheOffThread,ScriptStreaming"
+ TOOLTYPE = "(CHROME_ARG=--aros-pin-workers)"
+ TOOLTYPE = "(CHROME_ARG=--user-data-dir=PROGDIR:Profiles)"
+ TOOLTYPE = "(CHROME_ARG=--incognito)"

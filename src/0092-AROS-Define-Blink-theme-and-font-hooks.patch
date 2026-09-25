@@ -1,0 +1,156 @@
+From 11cde1ad877d359692284bd641fc06599ebd5be0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:22:28 -0500
+Subject: [PATCH 092/638] [AROS] Define Blink theme and font hooks
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Blink has explicit AROS control-theme and character-font fallback implementations.
+ROOT_CAUSE: AROS selected neither a LayoutTheme::NativeTheme implementation nor the platform FontCache methods required by Blink.
+FIX_REASON: Use Blink's default control theme and Skia's active font manager for system-family state and per-character fallback, without importing Linux Fontconfig or reaching below Ozone into display HIDDs.
+SCOPE: Blink core layout source selection and platform font cache.
+VALIDATION: Filtered GN generation succeeded; both objects and libblink_core/libblink_platform build; nm confirms all four missing methods.
+RISK: Native AROS control styling and diskfont family discovery are not yet reflected; fallback quality depends on the configured Skia font manager.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ .../blink/renderer/core/layout/build.gni      |  4 ++
+ .../renderer/core/layout/layout_theme_aros.cc | 26 ++++++++
+ third_party/blink/renderer/platform/BUILD.gn  |  4 ++
+ .../platform/fonts/aros/font_cache_aros.cc    | 65 +++++++++++++++++++
+ 4 files changed, 99 insertions(+)
+ create mode 100644 third_party/blink/renderer/core/layout/layout_theme_aros.cc
+ create mode 100644 third_party/blink/renderer/platform/fonts/aros/font_cache_aros.cc
+
+diff --git a/third_party/blink/renderer/core/layout/build.gni b/third_party/blink/renderer/core/layout/build.gni
+index dc699fab25..cefaf9561b 100644
+--- a/third_party/blink/renderer/core/layout/build.gni
++++ b/third_party/blink/renderer/core/layout/build.gni
+@@ -680,6 +680,10 @@ if (is_linux || is_chromeos) {
+   ]
+ }
+ 
++if (is_aros) {
++  blink_core_sources_layout += [ "layout_theme_aros.cc" ]
++}
++
+ if (is_android) {
+   blink_core_sources_layout += [
+     "layout_theme_android.cc",
+diff --git a/third_party/blink/renderer/core/layout/layout_theme_aros.cc b/third_party/blink/renderer/core/layout/layout_theme_aros.cc
+new file mode 100644
+index 0000000000..177224d440
+--- /dev/null
++++ b/third_party/blink/renderer/core/layout/layout_theme_aros.cc
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/core/layout/layout_theme_default.h"
++
++#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
++
++namespace blink {
++namespace {
++
++class LayoutThemeAros final : public LayoutThemeDefault {
++ public:
++  static scoped_refptr<LayoutTheme> Create() {
++    return base::AdoptRef(new LayoutThemeAros());
++  }
++};
++
++}  // namespace
++
++LayoutTheme& LayoutTheme::NativeTheme() {
++  DEFINE_STATIC_REF(LayoutTheme, layout_theme, (LayoutThemeAros::Create()));
++  return *layout_theme;
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index cf452cf14c..f286c565ec 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1647,6 +1647,10 @@ component("platform") {
+     ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "fonts/aros/font_cache_aros.cc" ]
++  }
++
+   if (is_win) {
+     sources += [
+       "fonts/win/dwrite_font_format_support.cc",
+diff --git a/third_party/blink/renderer/platform/fonts/aros/font_cache_aros.cc b/third_party/blink/renderer/platform/fonts/aros/font_cache_aros.cc
+new file mode 100644
+index 0000000000..4fbc78bf07
+--- /dev/null
++++ b/third_party/blink/renderer/platform/fonts/aros/font_cache_aros.cc
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/platform/fonts/font_cache.h"
++
++#include <string>
++#include <utility>
++
++#include "skia/ext/font_utils.h"
++#include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
++
++namespace blink {
++namespace {
++
++AtomicString& MutableSystemFontFamily() {
++  DEFINE_THREAD_SAFE_STATIC_LOCAL(AtomicString, system_font_family, ());
++  return system_font_family;
++}
++
++}  // namespace
++
++// static
++const AtomicString& FontCache::SystemFontFamily() {
++  return MutableSystemFontFamily();
++}
++
++// static
++void FontCache::SetSystemFontFamily(const AtomicString& family_name) {
++  DCHECK(!family_name.empty());
++  MutableSystemFontFamily() = family_name;
++}
++
++const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
++    const FontDescription& font_description,
++    UChar32 character,
++    const SimpleFontData* font_data_to_substitute,
++    FontFallbackPriority fallback_priority) {
++  sk_sp<SkFontMgr> font_mgr(skia::DefaultFontMgr());
++  std::string family_name = font_description.Family().FamilyName().Utf8();
++  Bcp47Vector locales =
++      GetBcp47LocaleForRequest(font_description, fallback_priority);
++  sk_sp<SkTypeface> typeface(font_mgr->matchFamilyStyleCharacter(
++      family_name.c_str(), font_description.SkiaFontStyle(), locales.data(),
++      locales.size(), character));
++  if (!typeface) {
++    return nullptr;
++  }
++
++  bool synthetic_bold = font_description.IsSyntheticBold() &&
++                        !typeface->isBold() &&
++                        font_description.SyntheticBoldAllowed();
++  bool synthetic_italic = font_description.IsSyntheticItalic() &&
++                          !typeface->isItalic() &&
++                          font_description.SyntheticItalicAllowed();
++
++  const auto* font_data = MakeGarbageCollected<FontPlatformData>(
++      std::move(typeface), std::string(), font_description.EffectiveFontSize(),
++      synthetic_bold, synthetic_italic, font_description.TextRendering(),
++      ResolvedFontFeatures(), font_description.Orientation());
++
++  return FontDataFromFontPlatformData(font_data);
++}
++
++}  // namespace blink

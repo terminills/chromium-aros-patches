@@ -1,0 +1,52 @@
+From 4ba8590bab5d55e78714d88a5ac2e8a650a1e037 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 22:02:53 -0500
+Subject: [PATCH 424/638] [AROS] Define AROS processor topology
+
+Report no distinct efficiency-core class while preserving KrnGetCPUCount as the authoritative logical processor count. This keeps Chromium worker sizing capability-driven and removes the generic POSIX NOTIMPLEMENTED path.
+
+
+
+---
+ base/system/sys_info_aros.cc  | 8 ++++++++
+ base/system/sys_info_posix.cc | 4 ++--
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/base/system/sys_info_aros.cc b/base/system/sys_info_aros.cc
+index 6d21333528..16a2cc3dde 100644
+--- a/base/system/sys_info_aros.cc
++++ b/base/system/sys_info_aros.cc
+@@ -28,4 +28,12 @@ SysInfo::HardwareInfo SysInfo::GetHardwareInfoSync() {
+   return {.manufacturer = "AROS Development Team", .model = CPUModelName()};
+ }
+ 
++int SysInfo::NumberOfEfficientProcessorsImpl() {
++  // AROS currently exposes the number of schedulable logical processors, but
++  // not a heterogeneous CPU topology. Zero tells Chromium that no distinct
++  // efficiency-core class is known, so it derives utility-pool sizing from
++  // NumberOfProcessors() without inventing a topology.
++  return 0;
++}
++
+ }  // namespace base
+diff --git a/base/system/sys_info_posix.cc b/base/system/sys_info_posix.cc
+index 4e47e4ac2e..efcb038af9 100644
+--- a/base/system/sys_info_posix.cc
++++ b/base/system/sys_info_posix.cc
+@@ -305,7 +305,7 @@ size_t SysInfo::VMAllocationGranularity() {
+ #endif
+ }
+ 
+-#if !BUILDFLAG(IS_APPLE)
++#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+ // static
+ int SysInfo::NumberOfEfficientProcessorsImpl() {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+@@ -342,6 +342,6 @@ int SysInfo::NumberOfEfficientProcessorsImpl() {
+   return 0;
+ #endif
+ }
+-#endif  // !BUILDFLAG(IS_APPLE)
++#endif  // !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+ 
+ }  // namespace base

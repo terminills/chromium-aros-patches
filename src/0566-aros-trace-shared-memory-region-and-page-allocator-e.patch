@@ -1,0 +1,129 @@
+From f903f67ce4ccffd9c37a901922b4984758db71b5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 09:46:48 -0500
+Subject: [PATCH 566/638] aros: trace shared-memory region and page-allocator
+ events >= 64 KiB to the kernel log
+
+Diagnostic scaffolding for the VizCompositor gather_8888 fault: log
+shared-memory region create/destroy and PA alloc/free/decommit/
+set-access events so a faulting tile address can be matched against
+the page that owned it.
+---
+ .../page_allocator_internals_aros.h           | 30 +++++++++++++++++++
+ .../platform_shared_memory_region_aros.cc     | 18 +++++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 6e834843b0..1ee1414edf 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -285,6 +285,31 @@ void LogRetainedPageSuffix(uintptr_t address,
+   CloseLibrary(DebugBase);
+ }
+ 
++// Ownership trace for the viz gather_8888 trap: page-level events on ranges
++// large enough to hold a raster tile, so a faulting address can be matched
++// to the reservation, decommit or protection change that made it fault.
++constexpr size_t kTracePageEventSize = 64 * 1024;
++
++void TracePageEvent(const char* what,
++                    uintptr_t address,
++                    size_t length,
++                    unsigned long protection) {
++  if (length < kTracePageEventSize) {
++    return;
++  }
++  char line[160];
++  struct Library* DebugBase = OpenLibrary("debug.library", 0);
++  if (!DebugBase) {
++    return;
++  }
++  std::snprintf(line, sizeof(line),
++                "[Chromium:PA] %s address=%p len=%llu protection=0x%lx\n",
++                what, reinterpret_cast<void*>(address),
++                static_cast<unsigned long long>(length), protection);
++  ArosKPutStr(line);
++  CloseLibrary(DebugBase);
++}
++
+ }  // namespace
+ 
+ uintptr_t SystemAllocPagesInternal(
+@@ -378,6 +403,8 @@ uintptr_t SystemAllocPagesInternal(
+   SetProtection(KernelBase, reinterpret_cast<uintptr_t>(result), length,
+                 protection);
+   s_allocPageErrorCode = 0;
++  TracePageEvent(exec_owned ? "alloc-exec" : "alloc-kernel",
++                 reinterpret_cast<uintptr_t>(result), length, protection);
+   if (log_request) {
+     LogLargePageAllocation(hint, length, protection, available, largest,
+                            exec_owned ? "exec" : "kernel", result, 0);
+@@ -394,6 +421,7 @@ bool TrySetSystemPagesAccessInternal(
+     return false;
+   }
+   SetProtection(KernelBase, address, length, GetAccessFlags(accessibility));
++  TracePageEvent("set-access", address, length, GetAccessFlags(accessibility));
+   return true;
+ }
+ 
+@@ -407,6 +435,7 @@ void SetSystemPagesAccessInternal(
+ void FreePagesInternal(uintptr_t address, size_t length) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
++  TracePageEvent("free", address, length, 0);
+   PageAllocationRelease release = PreparePageAllocationRelease(address, length);
+   if (release.kind == PageAllocationReleaseKind::kRetainedSuffix) {
+     // AROS has no sparse virtual unmap yet. Preserve ownership of the original
+@@ -461,6 +490,7 @@ void DecommitSystemPagesInternal(
+     PageAccessibilityDisposition) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
++  TracePageEvent("decommit", address, length, 0);
+   SetProtection(KernelBase, address, length,
+                 static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
+   std::memset(reinterpret_cast<void*>(address), 0, length);
+diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
+index 23f0a9d4b0..04cdf8c1eb 100644
+--- a/base/memory/platform_shared_memory_region_aros.cc
++++ b/base/memory/platform_shared_memory_region_aros.cc
+@@ -7,6 +7,7 @@
+ #include <atomic>
+ #include <limits>
+ #include <new>
++#include <stdio.h>
+ 
+ #pragma push_macro("SCHED_RR")
+ #undef SCHED_RR
+@@ -69,8 +70,24 @@ bool IsValidRegion(const SharedRegionData* region) {
+          region->allocation_size >= region->size;
+ }
+ 
++// Ownership trace for the viz gather_8888 trap: every region large enough
++// to hold a raster tile is logged at creation and destruction so a faulting
++// pixel address can be matched to the region that held it.
++constexpr size_t kTraceRegionSize = 64 * 1024;
++
++void TraceRegion(const char* what, const SharedRegionData* region) {
++  if (region->allocation_size < kTraceRegionSize)
++    return;
++  char line[128];
++  snprintf(line, sizeof(line), "[Chromium:shm] %s memory=%p len=%zu refs=%zu\n",
++           what, region->memory, region->allocation_size,
++           region->references.load(std::memory_order_relaxed));
++  ArosKPutStr(line);
++}
++
+ void DestroyRegion(SharedRegionData* region) {
+   DCHECK(IsValidRegion(region));
++  TraceRegion("destroy", region);
+   region->magic = 0;
+   if (region->memory) {
+     if (region->kernel_pages) {
+@@ -150,6 +167,7 @@ ArosSharedMemoryHandle CreateArosSharedMemoryHandle(size_t size) {
+   region->allocation_size = allocation_size;
+   region->allocation_bytes = allocation_bytes;
+   region->kernel_pages = kernel_pages;
++  TraceRegion("create", region);
+ 
+   return {region, false};
+ }

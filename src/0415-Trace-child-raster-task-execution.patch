@@ -1,0 +1,224 @@
+From 9aac93edfdea2d09f50720f78f20eaabf929f996 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 13:38:10 -0500
+Subject: [PATCH 415/638] [AROS] Trace child raster task execution
+
+
+
+---
+ cc/raster/categorized_worker_pool.cc          | 40 +++++++++++++++++++
+ cc/raster/zero_copy_raster_buffer_provider.cc | 34 ++++++++++++++++
+ cc/tiles/tile_manager.cc                      | 17 ++++++++
+ 3 files changed, 91 insertions(+)
+
+diff --git a/cc/raster/categorized_worker_pool.cc b/cc/raster/categorized_worker_pool.cc
+index 201abcc324..0d0f3eec64 100644
+--- a/cc/raster/categorized_worker_pool.cc
++++ b/cc/raster/categorized_worker_pool.cc
+@@ -5,6 +5,7 @@
+ #include "cc/raster/categorized_worker_pool.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -14,6 +15,7 @@
+ #include "base/containers/contains.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+@@ -32,6 +34,16 @@
+ namespace cc {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++std::atomic<int> g_aros_raster_pool_log_count{0};
++
++bool ShouldLogArosRasterPoolTask() {
++  return g_aros_raster_pool_log_count.fetch_add(1,
++                                                 std::memory_order_relaxed) <
++         128;
++}
++#endif
++
+ BASE_FEATURE(kUseCompositorJob,
+              "UseCompositorJob",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -386,10 +398,25 @@ void CategorizedWorkerPoolImpl::RunTaskInCategoryWithLockAcquired(
+   // There may be more work available, so wake up another worker thread.
+   SignalHasReadyToRunTasksWithLockAcquired();
+ 
++#if BUILDFLAG(IS_AROS)
++  const bool log_aros_task = ShouldLogArosRasterPoolTask();
++  if (log_aros_task) {
++    LOG(ERROR) << "[AROS_RASTER_POOL] impl-start task="
++               << prioritized_task.task.get()
++               << " category=" << static_cast<int>(category);
++  }
++#endif
+   {
+     base::AutoUnlock unlock(lock_);
+     prioritized_task.task->RunOnWorkerThread();
+   }
++#if BUILDFLAG(IS_AROS)
++  if (log_aros_task) {
++    LOG(ERROR) << "[AROS_RASTER_POOL] impl-finish task="
++               << prioritized_task.task.get()
++               << " category=" << static_cast<int>(category);
++  }
++#endif
+ 
+   auto* task_namespace = prioritized_task.task_namespace.get();
+   work_queue_.CompleteTask(std::move(prioritized_task));
+@@ -547,7 +574,20 @@ void CategorizedWorkerPoolJob::Run(base::span<const TaskCategory> categories,
+         });
+ 
+     base::ScopedAllowBaseSyncPrimitives allow;
++#if BUILDFLAG(IS_AROS)
++    const bool log_aros_task = ShouldLogArosRasterPoolTask();
++    if (log_aros_task) {
++      LOG(ERROR) << "[AROS_RASTER_POOL] job-start task="
++                 << prioritized_task->task.get();
++    }
++#endif
+     prioritized_task->task->RunOnWorkerThread();
++#if BUILDFLAG(IS_AROS)
++    if (log_aros_task) {
++      LOG(ERROR) << "[AROS_RASTER_POOL] job-finish task="
++                 << prioritized_task->task.get();
++    }
++#endif
+ 
+     {
+       base::AutoLock lock(lock_);
+diff --git a/cc/raster/zero_copy_raster_buffer_provider.cc b/cc/raster/zero_copy_raster_buffer_provider.cc
+index 19f606b91e..ec88b0b65e 100644
+--- a/cc/raster/zero_copy_raster_buffer_provider.cc
++++ b/cc/raster/zero_copy_raster_buffer_provider.cc
+@@ -7,8 +7,10 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <utility>
+ 
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/trace_event/process_memory_dump.h"
+ #include "base/trace_event/trace_event.h"
+@@ -18,6 +20,7 @@
+ #include "components/viz/common/gpu/raster_context_provider.h"
+ #include "components/viz/common/resources/platform_color.h"
+ #include "components/viz/common/resources/shared_image_format_utils.h"
++#include "build/build_config.h"
+ #include "gpu/command_buffer/client/client_shared_image.h"
+ #include "gpu/command_buffer/client/shared_image_interface.h"
+ #include "gpu/command_buffer/common/shared_image_trace_utils.h"
+@@ -27,6 +30,10 @@
+ namespace cc {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++std::atomic<int> g_aros_zero_copy_playback_log_count{0};
++#endif
++
+ constexpr static auto kBufferUsage = gfx::BufferUsage::GPU_READ_CPU_READ_WRITE;
+ 
+ // Subclass for InUsePoolResource that holds ownership of a zero-copy backing
+@@ -112,6 +119,17 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+                 const GURL& url) override {
+     TRACE_EVENT0("cc", "ZeroCopyRasterBuffer::Playback");
+ 
++#if BUILDFLAG(IS_AROS)
++    const bool log_aros_playback =
++        g_aros_zero_copy_playback_log_count.fetch_add(
++            1, std::memory_order_relaxed) < 64;
++    if (log_aros_playback) {
++      LOG(ERROR) << "[AROS_ZERO_COPY] enter buffer=" << this
++                 << " has_image=" << !!backing_->shared_image
++                 << " size=" << resource_size_.ToString()
++                 << " rect=" << raster_full_rect.ToString();
++    }
++#endif
+     gpu::SharedImageInterface* sii = backing_->shared_image_interface;
+ 
+     // Create a MappableSI if necessary.
+@@ -126,6 +144,11 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+         LOG(ERROR) << "Creation of MappableSharedImage failed.";
+         return;
+       }
++#if BUILDFLAG(IS_AROS)
++      if (log_aros_playback) {
++        LOG(ERROR) << "[AROS_ZERO_COPY] image-created buffer=" << this;
++      }
++#endif
+     }
+ 
+     std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> mapping =
+@@ -136,6 +159,12 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+                               std::move(backing_->shared_image));
+       return;
+     }
++#if BUILDFLAG(IS_AROS)
++    if (log_aros_playback) {
++      LOG(ERROR) << "[AROS_ZERO_COPY] mapped buffer=" << this
++                 << " stride=" << mapping->Stride(0);
++    }
++#endif
+ 
+     // TODO(danakj): Implement partial raster with raster_dirty_rect.
+     RasterBufferProvider::PlaybackToMemory(
+@@ -143,6 +172,11 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+         raster_source, raster_full_rect, raster_full_rect, transform,
+         resource_color_space_,
+         /*gpu_compositing=*/true, playback_settings);
++#if BUILDFLAG(IS_AROS)
++    if (log_aros_playback) {
++      LOG(ERROR) << "[AROS_ZERO_COPY] playback-complete buffer=" << this;
++    }
++#endif
+   }
+ 
+   bool SupportsBackgroundThreadPriority() const override { return true; }
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index a35b4771ba..83d2601533 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -144,9 +144,20 @@ class RasterTaskImpl : public TileTask {
+ 
+     DCHECK(raster_source_);
+ 
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[AROS_RASTER_TASK] playback-enter task=" << this
++               << " tile_id=" << tile_id_
++               << " prepare_id=" << source_prepare_tiles_id_
++               << " rect=" << content_rect_.ToString();
++#endif
+     raster_buffer_->Playback(raster_source_.get(), content_rect_,
+                              invalid_content_rect_, new_content_id_,
+                              raster_transform_, playback_settings_, url_);
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[AROS_RASTER_TASK] playback-exit task=" << this
++               << " tile_id=" << tile_id_
++               << " prepare_id=" << source_prepare_tiles_id_;
++#endif
+   }
+ 
+   // Overridden from TileTask:
+@@ -156,6 +167,12 @@ class RasterTaskImpl : public TileTask {
+     // Here calling state().IsCanceled() is thread-safe, because this task is
+     // already concluded as FINISHED or CANCELLED and no longer will be worked
+     // upon by task graph runner.
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[AROS_RASTER_TASK] origin-complete task=" << this
++               << " tile_id=" << tile_id_
++               << " prepare_id=" << source_prepare_tiles_id_
++               << " canceled=" << state().IsCanceled();
++#endif
+     raster_buffer_ = nullptr;
+     tile_manager_->OnRasterTaskCompleted(tile_id_, std::move(resource_),
+                                          state().IsCanceled());

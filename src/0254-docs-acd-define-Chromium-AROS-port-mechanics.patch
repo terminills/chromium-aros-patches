@@ -1,0 +1,66 @@
+From a0b27b78903be1abc75fcabe682c286727cdf682 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 01:27:39 -0500
+Subject: [PATCH 254/638] docs(acd): define Chromium AROS port mechanics
+
+ROOT_CAUSE: Chromium AROS port knowledge was scattered across replay logs, generated GN args, and agent handoffs while the source worktree carries unrelated in-progress changes.
+
+FIX_REASON: Add a repository-level project definition for the Ozone/Intuition boundary, AROS debug.resource baseline, current GN build contract, hosted/native test separation, evidence requirements, and attributed gotchas.
+
+VALIDATION: jq empty .acd/project.json and git diff --check pass; only .acd/project.json is staged.
+
+SCOPE: .acd/project.json only; existing dirty Chromium source files and Git-link submodules remain unstaged and untouched.
+
+ACD_GATE:; relay v9 project-definition request.
+---
+ .acd/project.json | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+ create mode 100644 .acd/project.json
+
+diff --git a/.acd/project.json b/.acd/project.json
+new file mode 100644
+index 0000000000..cec532cb47
+--- /dev/null
++++ b/.acd/project.json
+@@ -0,0 +1,41 @@
++{
++  "format": "acd-project/1",
++  "name": "Chromium for AROS",
++  "brief": "Native Chromium 124 x86_64 AROS port. The product is Chromium running through the AROS Ozone/Intuition platform, not a wrapper browser; preserve direct evidence for every compatibility boundary.",
++  "debug": {
++    "guest": "Use AROS debug.resource / bug() markers for narrow startup boundaries. They are visible through the kernel console and Sashimi, and remain useful without OPAL; OPAL augments faults with ownership, allocation, object, message, and recent-step context.",
++    "hosted": "A private hosted clone is the fast diagnostic lane. Keep normal runtime and user startup untouched, give each replay a distinct logfile, and archive host logs as binary-capable data. Do not use boot-wide sysdebug=all merely to trace an application subsystem.",
++    "native": "Native QEMU failures must be classified separately from hosted behavior. Use unattended alerts and OPAL context where available; never infer a native regression from a mixed module/ISO build."
++  },
++  "structure": {
++    "platform": "ui/ozone/platform/aros/ holds the Ozone/Intuition bridge. Chromium views remain responsible for browser UI; the final window policy is a future product scope.",
++    "port_fixes": "AROS compatibility work spans base file/memory handling, Chrome startup, content process startup, and metrics. Existing dirty source paths are agent-owned work in progress and must not be bundled with unrelated changes.",
++    "evidence": "../test-artifacts/ contains append-only replay evidence outside this dirty Chromium Git worktree. Each artifact needs its raw log or screenshot, hashes where applicable, a scope statement, and hosted/native classification.",
++    "submodules": "ANGLE, Dawn, libjpeg-turbo, Skia, and WebRTC are separate Git links. Do not treat submodule dirtiness as a local source-file diff without inspecting its own status."
++  },
++  "build": {
++    "gn_args": "out/aros-chrome/args.gn: target_os=aros, target_cpu=x64, ozone_platform=aros, ozone_platform_aros=true, use_aura=true, toolkit_views=true, enable_rust=false, and ANGLE null backend enabled. The current sysroot path is a lab input, not a portable release default.",
++    "target": "Build from src/ with the existing out/aros-chrome GN directory. Preserve the generated args file and record the exact binary/hash staged into a private runtime.",
++    "abi": "AROS executable loading and library bases are platform contracts. Do not apply ELF or TLS shortcuts without an AROS loader/runtime replay; Chromium's scale exposes assumptions that ordinary tools do not."
++  },
++  "test": {
++    "minimum": "Verify a browser window, pointer and keyboard input, navigation, local modal/input behavior, and clean process/task visibility before interpreting GPU or media failures.",
++    "network": "Network setup belongs to AROSTCP Preferences and its persisted ENVARC configuration. A custom startup script is not a substitute for a configured guest network.",
++    "graphics": "Software rendering is a valid baseline. VirGL/Venus/llvmpipe/softpipe behavior must be recorded as explicit backend evidence; do not assume GPU absence from a single fallback.",
++    "evidence": "Screenshots that show a native Chromium window, browser processes in SysMon/TaskManager, or a fault dialog are first-class evidence and must be listed in the relay before moving to the next phase."
++  },
++  "gotchas": [
++    {
++      "from": "terminills 2026-07-17",
++      "note": "Hosted memory above 4090 MiB requires the bootstrap allocator fix to respect host pointer width; 32-bit hosts remain capped by addressability. Test the host-width guard, not only the 64-bit happy path."
++    },
++    {
++      "from": "terminills 2026-07-18",
++      "note": "debug.resource is the baseline observability path. OPAL enriches it, but Chromium/AROS diagnostics must still be meaningful when OPAL is not present."
++    },
++    {
++      "from": "codex 2026-07-18 JOB-0048",
++      "note": "Chromium's 1 GiB-scale ET_REL loader workload is sensitive to per-section allocation patterns. Record loader changes in a separate isolated AROS worktree and validate hosted and native independently."
++    }
++  ]
++}

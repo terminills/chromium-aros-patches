@@ -1,0 +1,136 @@
+From 4fc7cae63177f6a0fdee2c5935f9c777d7abffc6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 12:53:01 -0500
+Subject: [PATCH 36/43] AROS: scope CEF app manager per native process
+
+AROS processes share an address space, so the upstream C++ global aliases browser and child processes. Resolve CefAppManager through a registry keyed by the nearest NT_PROCESS ancestor, while worker tasks inherit their owning process state.
+
+Validation: run 53 removed the app_manager.cc !g_manager fatal and proceeded to spawn GPU, utility, and renderer children plus create the VS Code BrowserWindow.
+
+
+
+---
+ libcef/common/app_manager.cc | 79 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 79 insertions(+)
+
+diff --git a/libcef/common/app_manager.cc b/libcef/common/app_manager.cc
+index 0eadb244..ee84aef1 100644
+--- a/libcef/common/app_manager.cc
++++ b/libcef/common/app_manager.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "libcef/common/app_manager.h"
+ 
++#include <map>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "libcef/common/net/scheme_info.h"
+ #include "libcef/common/net/scheme_registration.h"
+ #include "libcef/common/scheme_registrar_impl.h"
+@@ -13,6 +18,11 @@
+ #include "content/public/browser/child_process_security_policy.h"
+ #include "content/public/common/content_switches.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+ #include "base/path_service.h"
+@@ -20,23 +30,92 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// AROS processes share one address space, so a C++ process-global singleton is
++// shared by the browser and every native child process. Chromium/CEF expects a
++// distinct CefAppManager in each process. Key the registry by the nearest
++// native Process ancestor so worker tasks inherit their process manager while
++// renderer/GPU processes retain independent state.
++struct CefAppManagerRegistry {
++  base::Lock lock;
++  std::map<struct Task*, CefAppManager*> managers;
++};
++
++CefAppManagerRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefAppManagerRegistry> registry;
++  return *registry;
++}
++
++struct Task* GetCurrentProcessTask() {
++  struct Task* task = FindTask(nullptr);
++  struct Task* const current = task;
++
++  // Parent chains are normally only one or two entries deep. Keep the walk
++  // bounded so corrupt task metadata cannot hang process startup.
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (task->tc_Node.ln_Type == NT_PROCESS) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  // A task without a Process ancestor still needs isolation from unrelated
++  // tasks. This fallback preserves the old one-manager-per-execution-context
++  // behavior instead of aliasing it to another process.
++  return current;
++}
++
++#else
++
+ CefAppManager* g_manager = nullptr;
+ 
++#endif
++
+ }  // namespace
+ 
+ // static
+ CefAppManager* CefAppManager::Get() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessTask());
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ CefAppManager::CefAppManager() {
+   // Only a single instance should exist.
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] =
++      registry.managers.emplace(GetCurrentProcessTask(), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefAppManager::~CefAppManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessTask());
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }
+ 
+ void CefAppManager::AddCustomScheme(const CefSchemeInfo* scheme_info) {

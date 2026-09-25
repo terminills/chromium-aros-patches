@@ -1,0 +1,110 @@
+From fcf8fd999a8887a05115c83cd25c290985dea2b5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 17:10:18 -0500
+Subject: [PATCH 030/638] snappy: add an audited AROS platform config
+
+AI_PHASE: chromium-aros-phase3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Snappy sent all non-Windows/non-macOS targets through its Linux generated headers, which advertised sys/mman.h and mmap on AROS.
+
+FIX_REASON: Select native AROS generated-style headers that preserve available compiler and POSIX facilities while explicitly disabling mmap and mmap-only tests.
+
+SCOPE: third_party/snappy/BUILD.gn and third_party/snappy/aros
+
+VALIDATION: Ninja rebuilt snappy-stubs-internal.o and snappy.o successfully for //build/toolchain/aros:x64.
+
+RISK: low; AROS uses Snappy's existing no-mmap fallback and retains core compression behavior.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/snappy/BUILD.gn                   |  8 ++++--
+ third_party/snappy/aros/config.h              | 27 +++++++++++++++++++
+ third_party/snappy/aros/snappy-stubs-public.h | 17 ++++++++++++
+ 3 files changed, 50 insertions(+), 2 deletions(-)
+ create mode 100644 third_party/snappy/aros/config.h
+ create mode 100644 third_party/snappy/aros/snappy-stubs-public.h
+
+diff --git a/third_party/snappy/BUILD.gn b/third_party/snappy/BUILD.gn
+index 6f87d4f904..cc7ed09ae5 100644
+--- a/third_party/snappy/BUILD.gn
++++ b/third_party/snappy/BUILD.gn
+@@ -9,7 +9,9 @@ config("snappy_config") {
+ 
+   # These OS-specific generated headers were made by running the configure
+   # script offline.
+-  if (is_win) {
++  if (is_aros) {
++    include_dirs += [ "aros" ]
++  } else if (is_win) {
+     include_dirs += [ "win32" ]
+   } else if (is_mac) {
+     include_dirs += [ "mac" ]
+@@ -37,7 +39,9 @@ static_library("snappy") {
+     "src/snappy.h",
+   ]
+ 
+-  if (is_win) {
++  if (is_aros) {
++    sources += [ "aros/snappy-stubs-public.h" ]
++  } else if (is_win) {
+     sources += [ "win32/snappy-stubs-public.h" ]
+   } else if (is_mac) {
+     sources += [ "mac/snappy-stubs-public.h" ]
+diff --git a/third_party/snappy/aros/config.h b/third_party/snappy/aros/config.h
+new file mode 100644
+index 0000000000..fe9ac0007a
+--- /dev/null
++++ b/third_party/snappy/aros/config.h
+@@ -0,0 +1,27 @@
++#ifndef THIRD_PARTY_SNAPPY_AROS_CONFIG_H_
++#define THIRD_PARTY_SNAPPY_AROS_CONFIG_H_
++
++#define HAVE_ATTRIBUTE_ALWAYS_INLINE 1
++#define HAVE_BUILTIN_CTZ 1
++#define HAVE_BUILTIN_EXPECT 1
++
++#define HAVE_FUNC_MMAP 0
++#define HAVE_FUNC_SYSCONF 1
++
++#define HAVE_LIBLZO2 0
++#define HAVE_LIBZ 0
++#define HAVE_LIBLZ4 0
++
++#define HAVE_SYS_MMAN_H 0
++#define HAVE_SYS_RESOURCE_H 1
++#define HAVE_SYS_TIME_H 1
++#define HAVE_SYS_UIO_H 1
++#define HAVE_UNISTD_H 1
++#define HAVE_WINDOWS_H 0
++
++#define SNAPPY_HAVE_SSSE3 0
++#define SNAPPY_HAVE_BMI2 0
++#define SNAPPY_HAVE_NEON 0
++#define SNAPPY_IS_BIG_ENDIAN 0
++
++#endif  // THIRD_PARTY_SNAPPY_AROS_CONFIG_H_
+diff --git a/third_party/snappy/aros/snappy-stubs-public.h b/third_party/snappy/aros/snappy-stubs-public.h
+new file mode 100644
+index 0000000000..42418597e2
+--- /dev/null
++++ b/third_party/snappy/aros/snappy-stubs-public.h
+@@ -0,0 +1,17 @@
++// Copyright 2011 Google Inc. All Rights Reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_SNAPPY_AROS_SNAPPY_STUBS_PUBLIC_H_
++#define THIRD_PARTY_SNAPPY_AROS_SNAPPY_STUBS_PUBLIC_H_
++
++#include <cstddef>
++#include <sys/uio.h>
++
++#define SNAPPY_MAJOR 1
++#define SNAPPY_MINOR 1
++#define SNAPPY_PATCHLEVEL 8
++#define SNAPPY_VERSION \
++  ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
++
++#endif  // THIRD_PARTY_SNAPPY_AROS_SNAPPY_STUBS_PUBLIC_H_

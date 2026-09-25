@@ -1,0 +1,66 @@
+From c8ccd49189c2d24bfd11daa18929a8de9858b779 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:05:54 -0500
+Subject: [PATCH 359/638] [AROS] Isolate shared-memory process test
+
+AI_PHASE: chromium-process-model
+AI_STATUS: focused-cross-process-test-target
+ROOT_CAUSE: The full base_unittests graph pulls POSIX FIFO and ELF shared-object helpers that AROS does not implement, hiding the shared-memory launch gate behind unrelated port backlog.
+FIX_REASON: Add an AROS-only focused SharedMemorySwitch test executable and exclude generic ELF helper data dependencies from the broad suite.
+SCOPE: base/BUILD.gn
+VALIDATION: out/aros-base-probe/aros_shared_memory_switch_unittests linked after 3657 actions at -j32; hosted execution is recorded in-aros-shmem-process-20260728.
+RISK: The focused target covers only the launch-transfer seam; the full base suite remains intentionally incomplete.
+AI_DECISION_CHAIN: full base suite helper link failure -> mkfifo compile backlog -> focused native target -> hosted four-child gate.
+Evidence:-aros-shmem-process-20260728
+Job:
+---
+ base/BUILD.gn | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index eb6779e98f..386dd9e1f6 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -3680,11 +3680,18 @@ test("base_unittests") {
+   ]
+ 
+   data_deps = [
+-    "//base/test:immediate_crash_test_helper",
+     "//base/test:test_child_process",
+-    "//base/test:test_shared_library",
+     "//testing/buildbot/filters:base_unittests_filters",
+   ]
++  if (!is_aros) {
++    # AROS libraries use native resident-library packaging rather than ELF
++    # shared objects. These two generic test helpers are not available until
++    # they are given native AROS library wrappers.
++    data_deps += [
++      "//base/test:immediate_crash_test_helper",
++      "//base/test:test_shared_library",
++    ]
++  }
+ 
+   if (is_android && enable_chrome_android_internal) {
+     data_deps += [ "//clank/build/bot/filters:base_unittests_filters" ]
+@@ -4280,6 +4287,21 @@ test("base_unittests") {
+   }
+ }
+ 
++if (is_aros && use_blink) {
++  # Keep the first real AROS Process hand-off proof independent of the broad
++  # base_unittests porting backlog. In particular, the full suite still
++  # contains POSIX FIFO and ELF shared-object tests which AROS does not expose.
++  test("aros_shared_memory_switch_unittests") {
++    sources = [ "memory/shared_memory_switch_unittest.cc" ]
++    deps = [
++      ":base",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//testing/gtest",
++    ]
++  }
++}
++
+ # Test that CFG is enabled in Rust code.
+ if (is_win && toolchain_has_rust) {
+   source_set("rust_cfg_win_test") {

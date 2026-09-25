@@ -1,0 +1,175 @@
+From 5aeeaffaed12335a0701e5e17aba834d86dc3207 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 17:01:17 -0500
+Subject: [PATCH 476/638] AROS: scope content clients per native process
+
+Keep browser, GPU, renderer, and utility ContentClient instances keyed by the inherited native-process CommandLine identity. AROS processes share an address space, so a scalar g_client allowed child initialization to replace the live browser client and crash later BrowserWindow construction.
+
+
+
+---
+ content/public/common/content_client.cc | 93 +++++++++++++++++++++++--
+ 1 file changed, 86 insertions(+), 7 deletions(-)
+
+diff --git a/content/public/common/content_client.cc b/content/public/common/content_client.cc
+index 617960a289..ccfb7bc8bd 100644
+--- a/content/public/common/content_client.cc
++++ b/content/public/common/content_client.cc
+@@ -4,11 +4,19 @@
+ 
+ #include "content/public/common/content_client.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#endif
++
++#include "base/command_line.h"
+ #include "base/memory/ref_counted_memory.h"
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/strings/string_piece.h"
+ #include "base/strings/utf_string_conversions.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/synchronization/lock.h"
++#endif
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+@@ -18,59 +26,130 @@
+ 
+ namespace content {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++struct ContentClientProcessState {
++  ContentClient* client = nullptr;
++  bool can_change_browser_client = true;
++};
++
++struct ContentClientProcessRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, ContentClientProcessState> states;
++};
++
++ContentClientProcessRegistry& GetContentClientProcessRegistry() {
++  static base::NoDestructor<ContentClientProcessRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++
++bool CanChangeBrowserClient() {
++  auto& registry = GetContentClientProcessRegistry();
++  base::AutoLock lock(registry.lock);
++  return registry.states[GetCurrentProcessIdentity()]
++      .can_change_browser_client;
++}
++
++void SetCanChangeBrowserClient(bool value) {
++  auto& registry = GetContentClientProcessRegistry();
++  base::AutoLock lock(registry.lock);
++  registry.states[GetCurrentProcessIdentity()].can_change_browser_client =
++      value;
++}
++
++}  // namespace
++#else
+ static ContentClient* g_client;
+ 
+ static bool g_can_change_browser_client = true;
++#endif
+ 
+ class InternalTestInitializer {
+  public:
+   static ContentBrowserClient* SetBrowser(ContentBrowserClient* b) {
++#if BUILDFLAG(IS_AROS)
++    CHECK(CanChangeBrowserClient())
++#else
+     CHECK(g_can_change_browser_client)
++#endif
+         << "The wrong ContentBrowserClient subclass is being used. In "
+            "content_browsertests, subclass "
+            "ContentBrowserTestContentBrowserClient.";
+-    ContentBrowserClient* rv = g_client->browser_;
+-    g_client->browser_ = b;
++    ContentClient* client = GetContentClient();
++    ContentBrowserClient* rv = client->browser_;
++    client->browser_ = b;
+     return rv;
+   }
+ 
+   static ContentRendererClient* SetRenderer(ContentRendererClient* r) {
+-    ContentRendererClient* rv = g_client->renderer_;
+-    g_client->renderer_ = r;
++    ContentClient* client = GetContentClient();
++    ContentRendererClient* rv = client->renderer_;
++    client->renderer_ = r;
+     return rv;
+   }
+ 
+   static ContentUtilityClient* SetUtility(ContentUtilityClient* u) {
+-    ContentUtilityClient* rv = g_client->utility_;
+-    g_client->utility_ = u;
++    ContentClient* client = GetContentClient();
++    ContentUtilityClient* rv = client->utility_;
++    client->utility_ = u;
+     return rv;
+   }
+ };
+ 
+ // static
+ void ContentClient::SetCanChangeContentBrowserClientForTesting(bool value) {
++#if BUILDFLAG(IS_AROS)
++  SetCanChangeBrowserClient(value);
++#else
+   g_can_change_browser_client = value;
++#endif
+ }
+ 
+ // static
+ void ContentClient::SetBrowserClientAlwaysAllowForTesting(
+     ContentBrowserClient* b) {
++#if BUILDFLAG(IS_AROS)
++  bool old = CanChangeBrowserClient();
++  SetCanChangeBrowserClient(true);
++  SetBrowserClientForTesting(b);  // IN-TEST
++  SetCanChangeBrowserClient(old);
++#else
+   bool old = g_can_change_browser_client;
+   g_can_change_browser_client = true;
+   SetBrowserClientForTesting(b);  // IN-TEST
+   g_can_change_browser_client = old;
++#endif
+ }
+ 
+ void SetContentClient(ContentClient* client) {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetContentClientProcessRegistry();
++  base::AutoLock lock(registry.lock);
++  registry.states[GetCurrentProcessIdentity()].client = client;
++#else
+   g_client = client;
++#endif
+ }
+ 
+ ContentClient* GetContentClient() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetContentClientProcessRegistry();
++  base::AutoLock lock(registry.lock);
++  return registry.states[GetCurrentProcessIdentity()].client;
++#else
+   return g_client;
++#endif
+ }
+ 
+ ContentClient* GetContentClientForTesting() {
+-  return g_client;
++  return GetContentClient();
+ }
+ 
+ ContentBrowserClient* SetBrowserClientForTesting(ContentBrowserClient* b) {

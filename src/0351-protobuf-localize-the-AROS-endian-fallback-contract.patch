@@ -1,0 +1,40 @@
+From e7a450523a1c28dfd1cf6760e03fb6d45b0752f0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:58:51 -0500
+Subject: [PATCH 351/638] protobuf: localize the AROS endian fallback contract
+
+Compile coded_stream.cc with Protobuf's existing generic-endian switch on AROS. This exposes and emits the two helpers in their implementation unit without changing the widely included public header or rebuilding unrelated consumers.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: localized-after-preserved-header-contract-failure
+
+AI_VALIDATION: eb636ac6b9 plus the first rebuild proved definitions are required; c4949d85e8 proved a header change would widen the rebuild and was preserved/reverted by 4282c6a47e
+
+AI_LIMITATIONS: focused object rebuild and native CEF link remain pending
+
+AI_EVIDENCE: out/aros-cef-bootstrap/test-artifacts/-cef-exact-44-fix-20260725/03-archive-rebuild.log
+
+AI_DECISION_CHAIN:; eb636ac6b9; c4949d85e8; 4282c6a47e
+---
+ .../protobuf/src/google/protobuf/io/coded_stream.cc        | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/third_party/protobuf/src/google/protobuf/io/coded_stream.cc b/third_party/protobuf/src/google/protobuf/io/coded_stream.cc
+index 89dc54eaea..169941e573 100644
+--- a/third_party/protobuf/src/google/protobuf/io/coded_stream.cc
++++ b/third_party/protobuf/src/google/protobuf/io/coded_stream.cc
+@@ -38,6 +38,13 @@
+ // will not cross the end of the buffer, since we can avoid a lot
+ // of branching in this case.
+ 
++#if defined(__AROS__)
++// Keep the generic helpers declared and emitted in this implementation unit.
++// Some full-Protobuf objects retain this call path after port_undef.inc, even
++// though the AROS target itself is little endian.
++#define PROTOBUF_DISABLE_LITTLE_ENDIAN_OPT_FOR_TEST
++#endif
++
+ #include <google/protobuf/io/coded_stream.h>
+ 
+ #include <limits.h>

@@ -1,0 +1,80 @@
+From b9398543bf2209c630320a22416bcef67a382599 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:15:33 -0500
+Subject: [PATCH 7/7] tracing: fall back from writev on AROS [perfetto] [aros]
+
+Statement:
+AROS exposes the iovec ABI in headers but does not export writev, leaving Perfetto's trace-file writer and target-side Chromium helpers with an unresolved symbol.
+
+Decision:
+Reuse Perfetto's existing sequential WriteAll implementation on AROS while retaining the native iovec layout and platform IOV_MAX when available.
+
+Evidence:
+The AROS generate_colors_info link failed solely on writev from tracing_service_impl.o. Both the target generate_colors_info executable and host generate_chrome_colors_info action now build successfully.
+
+Chain:
+ first native Chromium window; unblocks //chrome:chrome after Autofill survey registration.
+---
+ src/tracing/service/tracing_service_impl.cc | 24 +++++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/src/tracing/service/tracing_service_impl.cc b/src/tracing/service/tracing_service_impl.cc
+index 96b0c0d..1be9514 100644
+--- a/src/tracing/service/tracing_service_impl.cc
++++ b/src/tracing/service/tracing_service_impl.cc
+@@ -126,16 +126,20 @@ constexpr uint32_t kMaxTracingDurationMillis = 7 * 24 * kMillisPerHour;
+ constexpr uint32_t kGuardrailsMaxTracingBufferSizeKb = 128 * 1024;
+ constexpr uint32_t kGuardrailsMaxTracingDurationMillis = 24 * kMillisPerHour;
+ 
+-#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ struct iovec {
+   void* iov_base;  // Address
+   size_t iov_len;  // Block size
+ };
++#endif
+ 
+ // Simple implementation of writev. Note that this does not give the atomicity
+ // guarantees of a real writev, but we don't depend on these (we aren't writing
+ // to the same file from another thread).
+-ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
++ssize_t WriteV(int fd, const struct iovec* iov, int iovcnt) {
+   ssize_t total_size = 0;
+   for (int i = 0; i < iovcnt; ++i) {
+     ssize_t current_size = base::WriteAll(fd, iov[i].iov_base, iov[i].iov_len);
+@@ -146,10 +150,21 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+   return total_size;
+ }
+ 
++#ifndef IOV_MAX
+ #define IOV_MAX 1024  // Linux compatible limit.
++#endif
++
++#define PERFETTO_WRITEV WriteV
+ 
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) ||
+-        // PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
++        // PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) ||
++        // PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#define PERFETTO_WRITEV writev
++#endif
+ 
+ // Partially encodes a CommitDataRequest in an int32 for the purposes of
+ // metatracing. Note that it encodes only the bottom 10 bits of the producer id
+@@ -2599,7 +2614,8 @@ bool TracingServiceImpl::WriteIntoFile(TracingSession* tracing_session,
+   constexpr size_t kIOVMax = IOV_MAX;
+   for (size_t i = 0; i < num_iovecs; i += kIOVMax) {
+     int iov_batch_size = static_cast<int>(std::min(num_iovecs - i, kIOVMax));
+-    ssize_t wr_size = PERFETTO_EINTR(writev(fd, &iovecs[i], iov_batch_size));
++    ssize_t wr_size =
++        PERFETTO_EINTR(PERFETTO_WRITEV(fd, &iovecs[i], iov_batch_size));
+     if (wr_size <= 0) {
+       PERFETTO_PLOG("writev() failed");
+       stop_writing_into_file = true;

@@ -1,0 +1,49 @@
+From 1d242e186b81f9f749e6bf9805449074ebb7cf69 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 08:59:22 -0500
+Subject: [PATCH 06/28] deoptimizer: contain the AROS REGISTER macro
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: exec/types.h defines REGISTER as the C++ register keyword, corrupting V8's TranslationOpcode::REGISTER enum and every generated switch expansion.
+
+FIX_REASON: Temporarily undefine REGISTER only while translation-opcode.h declares and expands its opcode list, then restore the Exec macro for subsequent AROS headers.
+
+SCOPE: src/deoptimizer/translation-opcode.h
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/v8/v8_base_without_compiler/api.o
+
+RISK: low; push_macro/pop_macro preserves both V8's serialized opcode identity and the surrounding AROS preprocessor state.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/deoptimizer/translation-opcode.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/deoptimizer/translation-opcode.h b/src/deoptimizer/translation-opcode.h
+index 5c5996a..0908627 100644
+--- a/src/deoptimizer/translation-opcode.h
++++ b/src/deoptimizer/translation-opcode.h
+@@ -7,6 +7,11 @@
+ 
+ #include "src/base/macros.h"
+ 
++#if V8_OS_AROS
++#pragma push_macro("REGISTER")
++#undef REGISTER
++#endif
++
+ namespace v8 {
+ namespace internal {
+ 
+@@ -132,4 +137,8 @@ inline std::ostream& operator<<(std::ostream& out, TranslationOpcode opcode) {
+ }  // namespace internal
+ }  // namespace v8
+ 
++#if V8_OS_AROS
++#pragma pop_macro("REGISTER")
++#endif
++
+ #endif  // V8_DEOPTIMIZER_TRANSLATION_OPCODE_H_

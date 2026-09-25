@@ -1,0 +1,35 @@
+From ecc5f1919437a03d6e95dfe12c0213b9a7f3d1d1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:32:13 -0500
+Subject: [PATCH 166/638] content: retain numeric AROS signal diagnostics
+ [chromium] [aros]
+
+Statement: BrowserTestBase should still identify a terminating signal on AROS even though the C library does not expose POSIX strsignal().
+
+Decision: Format the signal number on AROS and retain strsignal() on supported POSIX targets; stack-trace behavior is unchanged.
+
+Evidence: browser_test_base.o failed because strsignal was undeclared.
+
+Validation: ninja -C out/aros-windowed -j48 obj/content/test/test_support/browser_test_base.o
+
+Chain:; ACD-chromium-aros-native-crash-reporting
+---
+ content/public/test/browser_test_base.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/content/public/test/browser_test_base.cc b/content/public/test/browser_test_base.cc
+index 20b1520701..5c0879b243 100644
+--- a/content/public/test/browser_test_base.cc
++++ b/content/public/test/browser_test_base.cc
+@@ -171,7 +171,11 @@ void SignalHandler(int signal) {
+           switches::kDisableInProcessStackTraces) &&
+       g_browser_process_pid == base::GetCurrentProcId()) {
+     std::string message("BrowserTestBase received signal: ");
++#if BUILDFLAG(IS_AROS)
++    message += base::NumberToString(signal);
++#else
+     message += strsignal(signal);
++#endif
+     message += ". Backtrace:\n";
+     logging::RawLog(logging::LOGGING_ERROR, message.c_str());
+     auto stack_trace = base::debug::StackTrace();

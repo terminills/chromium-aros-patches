@@ -1,0 +1,33 @@
+From 06c359ea370463dfd5b142386a03f0719997273a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 14:46:15 -0500
+Subject: [PATCH 445/638] aros: isolate native caption controls without battery
+ backend
+
+Reapply only the Intuition caption-button policy over the proven painting baseline. This supplies the missing caption-only quadrant; the Power HIDD battery backend remains reverted.
+
+
+
+---
+ chrome/browser/ui/views/frame/opaque_browser_frame_view.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+index 677e4de829..992c24861d 100644
+--- a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
++++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+@@ -485,7 +485,14 @@ gfx::Size OpaqueBrowserFrameView::GetBrowserViewMinimumSize() const {
+ }
+ 
+ bool OpaqueBrowserFrameView::ShouldShowCaptionButtons() const {
++#if BUILDFLAG(IS_AROS)
++  // Intuition owns the native close, depth, and zoom gadgets. Keep Chromium's
++  // tab strip and toolbar, but do not duplicate window controls in the client
++  // area or install competing caption-button hit targets.
++  return false;
++#else
+   return GetShowWindowTitleBar();
++#endif
+ }
+ 
+ bool OpaqueBrowserFrameView::IsRegularOrGuestSession() const {

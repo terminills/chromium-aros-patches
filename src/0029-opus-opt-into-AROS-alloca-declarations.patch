@@ -1,0 +1,41 @@
+From fa57e99a2cfcfab6fd8d0648ecd33739b1ecfc99 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:55:27 -0500
+Subject: [PATCH 029/638] opus: opt into AROS alloca declarations
+
+AI_PHASE: chromium-aros-phase1
+
+AI_STATUS: complete
+
+ROOT_CAUSE: AROS intentionally feature-gates alloca() while Opus only defined HAVE_ALLOCA_H, leaving its C11 SSE translation units without a declaration.
+
+FIX_REASON: Use AROS's narrow __AROS_ENABLE_ALLOCA__ contract in the Opus private config instead of enabling broad GNU extensions or disabling optimized sources.
+
+SCOPE: third_party/opus/BUILD.gn
+
+VALIDATION: Ninja rebuilt NSQ_sse4_1.o, NSQ_del_dec_sse4_1.o, and VAD_sse4_1.o successfully for //build/toolchain/aros:x64.
+
+RISK: low; AROS-only preprocessor opt-in maps alloca to the compiler builtin.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/opus/BUILD.gn | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/third_party/opus/BUILD.gn b/third_party/opus/BUILD.gn
+index ace5bda8af..27a61876be 100644
+--- a/third_party/opus/BUILD.gn
++++ b/third_party/opus/BUILD.gn
+@@ -47,6 +47,12 @@ config("opus_private_config") {
+ 
+   cflags = []
+ 
++  if (is_aros) {
++    # AROS exposes alloca() only to explicit users so that including alloca.h
++    # does not enable unrelated GNU extensions.
++    defines += [ "__AROS_ENABLE_ALLOCA__" ]
++  }
++
+   if (is_win) {
+     defines += [ "inline=__inline" ]
+ 

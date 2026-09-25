@@ -1,0 +1,151 @@
+From 1aa1655517b56bd9009f3bede0ec27adb1c45eed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 18:56:23 -0500
+Subject: [PATCH 516/638] AROS: keep profile caches beside Chromium
+
+---
+ chrome/common/chrome_paths_aros.cc             |  7 +++++--
+ .../visitedlink/browser/visitedlink_writer.cc  | 18 ++++++++++++++++--
+ sql/database.cc                                | 10 ++++++++++
+ sql/recovery.cc                                | 18 ++++++++++++++++++
+ 4 files changed, 49 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
+index 74cb3fdd93..4a1e6f215d 100644
+--- a/chrome/common/chrome_paths_aros.cc
++++ b/chrome/common/chrome_paths_aros.cc
+@@ -12,7 +12,6 @@ namespace chrome {
+ namespace {
+ 
+ constexpr char kUserDataDirectory[] = "ENVARC:Chromium";
+-constexpr char kUserCacheDirectory[] = "T:Chromium";
+ constexpr char kVolatileUserDirectory[] = "RAM:";
+ 
+ }  // namespace
+@@ -31,7 +30,11 @@ void GetUserCacheDirectory(const base::FilePath& profile_dir,
+     return;
+   }
+ 
+-  base::FilePath cache_dir(kUserCacheDirectory);
++  base::FilePath cache_dir;
++  if (!base::PathService::Get(base::DIR_CACHE, &cache_dir)) {
++    return;
++  }
++
+   if (!user_data_dir.AppendRelativePath(profile_dir, &cache_dir)) {
+     return;
+   }
+diff --git a/components/visitedlink/browser/visitedlink_writer.cc b/components/visitedlink/browser/visitedlink_writer.cc
+index 1c472728dd..d14274c80d 100644
+--- a/components/visitedlink/browser/visitedlink_writer.cc
++++ b/components/visitedlink/browser/visitedlink_writer.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/visitedlink/browser/visitedlink_writer.h"
+ 
++#include <errno.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -63,6 +64,14 @@ bool VisitedLinkWriter::fail_table_creation_for_testing_ = false;
+ 
+ namespace {
+ 
++bool ShouldPersistVisitedLinksToDisk(bool requested) {
++#if BUILDFLAG(IS_AROS)
++  return false;
++#else
++  return requested;
++#endif
++}
++
+ // Fills the given salt structure with some quasi-random values
+ // It is not necessary to generate a cryptographically strong random string,
+ // only that it be reasonably different for different users.
+@@ -77,6 +86,11 @@ void AsyncOpen(base::ScopedFILE* file, const base::FilePath& filename) {
+   DCHECK(file);
+   DCHECK(!*file);
+   file->reset(base::OpenFile(filename, "wb+"));
++#if BUILDFLAG(IS_AROS)
++  LOG_IF(ERROR, !*file) << "[Chromium:AROS:VisitedLinks] open failed path='"
++                        << filename.value() << "' errno=" << errno << " "
++                        << strerror(errno);
++#endif
+   DLOG_IF(ERROR, !*file) << "Failed to open file " << filename.value();
+ }
+ 
+@@ -235,7 +249,7 @@ VisitedLinkWriter::VisitedLinkWriter(content::BrowserContext* browser_context,
+     : browser_context_(browser_context),
+       delegate_(delegate),
+       listener_(std::make_unique<VisitedLinkEventListener>(browser_context)),
+-      persist_to_disk_(persist_to_disk) {}
++      persist_to_disk_(ShouldPersistVisitedLinksToDisk(persist_to_disk)) {}
+ 
+ VisitedLinkWriter::VisitedLinkWriter(Listener* listener,
+                                      VisitedLinkDelegate* delegate,
+@@ -245,7 +259,7 @@ VisitedLinkWriter::VisitedLinkWriter(Listener* listener,
+                                      int32_t default_table_size)
+     : delegate_(delegate),
+       listener_(listener),
+-      persist_to_disk_(persist_to_disk),
++      persist_to_disk_(ShouldPersistVisitedLinksToDisk(persist_to_disk)),
+       database_name_override_(filename),
+       table_size_override_(default_table_size),
+       suppress_rebuild_(suppress_rebuild) {
+diff --git a/sql/database.cc b/sql/database.cc
+index 60d33e1fe3..cc7b6cecd3 100644
+--- a/sql/database.cc
++++ b/sql/database.cc
+@@ -1076,6 +1076,16 @@ bool Database::Raze() {
+ #endif
+ 
+   SqliteResultCode sqlite_result_code = BackupDatabaseForRaze(null_db.db_, db_);
++#if BUILDFLAG(IS_AROS)
++  if (sqlite_result_code != SqliteResultCode::kDone) {
++    LOG(ERROR) << "[Chromium:AROS:SQLite] raze backup failed path='"
++               << DbPath().AsUTF8Unsafe()
++               << "' result=" << static_cast<int>(sqlite_result_code)
++               << " extended=" << sqlite3_extended_errcode(db_)
++               << " system_errno=" << sqlite3_system_errno(db_)
++               << " message='" << sqlite3_errmsg(db_) << "'";
++  }
++#endif
+ 
+   // The destination database was locked.
+   if (sqlite_result_code == SqliteResultCode::kBusy)
+diff --git a/sql/recovery.cc b/sql/recovery.cc
+index a180a60237..eaa929d764 100644
+--- a/sql/recovery.cc
++++ b/sql/recovery.cc
+@@ -71,6 +71,11 @@ bool Recovery::RecoverIfPossible(Database* database,
+   auto result = Recovery::RecoverDatabase(database, strategy);
+   if (!IsSqliteSuccessCode(result)) {
+     DLOG(ERROR) << "Database recovery failed with result code: " << result;
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR) << "[Chromium:AROS:SQLite] recovery failed path='"
++                << database->DbPath(InternalApiToken()).AsUTF8Unsafe()
++                << "' result=" << static_cast<int>(result);
++#endif
+   }
+ 
+   return true;
+@@ -330,6 +335,19 @@ SqliteResultCode Recovery::ReplaceOriginalWithRecoveredDb() {
+ 
+     DVLOG(1) << "sqlite3_backup_step() failed: "
+              << sqlite3_errmsg(db_->db(InternalApiToken()));
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:SQLite] recovery backup failed path='"
++               << db_->DbPath(InternalApiToken()).AsUTF8Unsafe()
++               << "' recovery_path='"
++               << recovery_database_path_.AsUTF8Unsafe()
++               << "' result=" << static_cast<int>(sqlite_result_code)
++               << " extended="
++               << sqlite3_extended_errcode(db_->db(InternalApiToken()))
++               << " system_errno="
++               << sqlite3_system_errno(db_->db(InternalApiToken()))
++               << " message='"
++               << sqlite3_errmsg(db_->db(InternalApiToken())) << "'";
++#endif
+     SetRecoveryFailed(Result::kFailedBackupRun, sqlite_result_code);
+     return sqlite_result_code;
+   }

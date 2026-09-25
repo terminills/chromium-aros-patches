@@ -1,0 +1,53 @@
+From 57569ff82299ebaf2c8c122d081f4ef322432235 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:11:54 -0500
+Subject: [PATCH 629/638] aros: record both pinned-run wedge signatures on
+ --aros-pin-workers
+
+tset9 was post-mortemed (spinlock PI self-deadlock); tset7 was not. Its
+serial ends with CPU 0's scheduler reporting the current task out of
+stack limits with a name pointing into code - a corrupted ThisTask -
+right after thread 18 was placed on CPU 1. Say so rather than fold it
+into the decoded one.
+
+
+---
+ base/base_switches.cc | 24 ++++++++++++++----------
+ 1 file changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index ee1e78763d..9d1ac431d8 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -206,17 +206,21 @@ const char kArosCpuLimit[] = "aros-cpu-limit";
+ // on one core. Placement is the whole difference (see
+ // aros-adt-src/CHROMIUM-SMP-ROADMAP.md).
+ //
+-// OFF BY DEFAULT, deliberately. The first run whose threads really landed on
++// OFF BY DEFAULT, deliberately. The first runs whose threads really landed on
+ // CPUs 1-3 (2026-09-20, after the libpthread link fix in base/BUILD.gn made
+-// the affinity attribute reach exec at all) wedged the guest within a minute:
+-// exec's Wait() holds the task's own tc_SpinLock while it contends the
+-// TaskWait list lock, and KrnSpinLock's priority-inheritance branch answers
+-// contention with SetTaskPri(self), which takes that same non-recursive lock
+-// (arch/all-pc/kernel/spinlock.c:68, rom/exec/settaskpri.c:79). Until that is
+-// fixed in the kernel, switching this on trades a working single-core browser
+-// for a hung multi-core one. Keeping it a flag means this build is never
+-// worse than the last one, and multicore can be exercised the moment the
+-// kernel side lands - without another rebuild.
++// the affinity attribute reach exec at all) wedged the guest within a minute,
++// twice, with two signatures. Decoded from a live post-mortem: exec's Wait()
++// holds the task's own tc_SpinLock while it contends the TaskWait list lock,
++// and KrnSpinLock's priority-inheritance branch answers contention with
++// SetTaskPri(self), which takes that same non-recursive lock
++// (arch/all-pc/kernel/spinlock.c:68, rom/exec/settaskpri.c:79). Not yet
++// decoded: CPU 0's scheduler reporting its current task "went out of stack
++// limits" with a Task whose name points into code, right after the 18th
++// thread was placed on CPU 1 - a corrupted ThisTask, not a stack overflow.
++// Until the kernel side is fixed, switching this on trades a working
++// single-core browser for a hung multi-core one. Keeping it a flag means this
++// build is never worse than the last one, and multicore can be exercised the
++// moment the kernel side lands - without another rebuild.
+ const char kArosPinWorkers[] = "aros-pin-workers";
+ 
+ // Let the thread pool choose WHICH worker to wake by the load on that worker's

@@ -1,0 +1,196 @@
+From f73490cee561aa5130e9576fbcb335f8f829cac3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:45:45 -0500
+Subject: [PATCH 001/638] build: add the native AROS cross target [chromium]
+ [aros]
+
+AI_PHASE: chromium-target-bootstrap
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium 124 had no target_os=aros identity, compiler policy, or host-Linux/target-AROS toolchain split, so GN could not describe even the smallest native AROS executable.
+
+FIX_REASON: Add the AROS build flag, target configuration, x86-64 cross toolchain, compiler policy, and a minimal smoke executable. The target remains AROS-specific instead of inheriting Linux kernel assumptions through target_os aliases.
+
+SCOPE: build/build_config.h, build/config/BUILDCONFIG.gn, build/config/aros, build/config/compiler/BUILD.gn, and build/toolchain/aros.
+
+VALIDATION: GN generated the AROS target graph and the native toolchain smoke executable compiled with the pinned x86_64-aros cross compiler.
+
+RISK: low; all target behavior is gated by target_os=aros.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ build/build_config.h                 | 11 +++++++-
+ build/config/BUILDCONFIG.gn          |  4 +++
+ build/config/aros/BUILD.gn           |  9 ++++++
+ build/config/aros/toolchain_smoke.cc | 13 +++++++++
+ build/config/compiler/BUILD.gn       |  5 ++--
+ build/toolchain/aros/BUILD.gn        | 42 ++++++++++++++++++++++++++++
+ 6 files changed, 81 insertions(+), 3 deletions(-)
+ create mode 100644 build/config/aros/BUILD.gn
+ create mode 100644 build/config/aros/toolchain_smoke.cc
+ create mode 100644 build/toolchain/aros/BUILD.gn
+
+diff --git a/build/build_config.h b/build/build_config.h
+index 65a246520a..7c9ec1d90d 100644
+--- a/build/build_config.h
++++ b/build/build_config.h
+@@ -75,6 +75,8 @@
+ #else
+ #define OS_MAC 1
+ #endif  // defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
++#elif defined(__AROS__)
++#define OS_AROS 1
+ #elif defined(__linux__)
+ #if !defined(OS_CHROMEOS)
+ // Do not define OS_LINUX on Chrome OS build.
+@@ -125,7 +127,8 @@
+ 
+ // For access to standard POSIXish features, use OS_POSIX instead of a
+ // more specific macro.
+-#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_ASMJS) ||  \
++#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_AROS) ||   \
++    defined(OS_ASMJS) ||                                           \
+     defined(OS_FREEBSD) || defined(OS_IOS) || defined(OS_LINUX) ||  \
+     defined(OS_CHROMEOS) || defined(OS_MAC) || defined(OS_NACL) ||  \
+     defined(OS_NETBSD) || defined(OS_OPENBSD) || defined(OS_QNX) || \
+@@ -146,6 +149,12 @@
+ #define BUILDFLAG_INTERNAL_IS_ANDROID() (0)
+ #endif
+ 
++#if defined(OS_AROS)
++#define BUILDFLAG_INTERNAL_IS_AROS() (1)
++#else
++#define BUILDFLAG_INTERNAL_IS_AROS() (0)
++#endif
++
+ #if defined(OS_APPLE)
+ #define BUILDFLAG_INTERNAL_IS_APPLE() (1)
+ #else
+diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
+index 26a23e459a..c38243c39f 100644
+--- a/build/config/BUILDCONFIG.gn
++++ b/build/config/BUILDCONFIG.gn
+@@ -268,6 +268,9 @@ if (target_os == "android") {
+   _default_toolchain = "//build/toolchain/aix:$target_cpu"
+ } else if (target_os == "zos") {
+   _default_toolchain = "//build/toolchain/zos:$target_cpu"
++} else if (target_os == "aros") {
++  assert(target_cpu == "x64", "The initial AROS port supports x64 only.")
++  _default_toolchain = "//build/toolchain/aros:$target_cpu"
+ } else {
+   assert(false, "Unsupported target_os: $target_os")
+ }
+@@ -299,6 +302,7 @@ if (custom_toolchain != "") {
+ # current_os value directly.
+ 
+ is_android = current_os == "android"
++is_aros = current_os == "aros"
+ is_chromeos = current_os == "chromeos"
+ is_fuchsia = current_os == "fuchsia"
+ is_ios = current_os == "ios"
+diff --git a/build/config/aros/BUILD.gn b/build/config/aros/BUILD.gn
+new file mode 100644
+index 0000000000..f84fde0a12
+--- /dev/null
++++ b/build/config/aros/BUILD.gn
+@@ -0,0 +1,9 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++assert(is_aros)
++
++executable("toolchain_smoke") {
++  sources = [ "toolchain_smoke.cc" ]
++}
+diff --git a/build/config/aros/toolchain_smoke.cc b/build/config/aros/toolchain_smoke.cc
+new file mode 100644
+index 0000000000..6acabae06c
+--- /dev/null
++++ b/build/config/aros/toolchain_smoke.cc
+@@ -0,0 +1,13 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <exec/types.h>
++#include <stdio.h>
++
++int main() {
++  static_assert(sizeof(IPTR) == 8,
++                "The Chromium AROS target requires 64-bit IPTR");
++  puts("Chromium AROS x86-64 toolchain smoke: PASS");
++  return 0;
++}
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+index bd7dd25175..59c46e1b69 100644
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -380,7 +380,7 @@ config("compiler") {
+           cflags += [ "-fstack-protector" ]
+         }
+       } else if ((is_posix && !is_chromeos && !is_nacl) || is_fuchsia) {
+-        if (current_os != "aix") {
++        if (current_os != "aix" && !is_aros) {
+           # Not available on aix.
+           cflags += [ "-fstack-protector" ]
+         }
+@@ -2328,7 +2328,8 @@ if (is_win) {
+         "-Wl,-no_function_starts",
+       ]
+     }
+-  } else if (current_os != "aix" && current_os != "zos") {
++  } else if (current_os != "aix" && current_os != "aros" &&
++             current_os != "zos") {
+     # Non-Mac Posix flags.
+     # Aix does not support these.
+ 
+diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
+new file mode 100644
+index 0000000000..dc4e6c0a7e
+--- /dev/null
++++ b/build/toolchain/aros/BUILD.gn
+@@ -0,0 +1,42 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//build/toolchain/gcc_toolchain.gni")
++
++declare_args() {
++  aros_toolchain_root = ""
++  aros_sysroot = ""
++}
++
++assert(aros_toolchain_root != "",
++       "Set aros_toolchain_root to the AROS cross-toolchain directory.")
++
++_toolprefix = "$aros_toolchain_root/x86_64-aros-"
++_sysroot_flag = ""
++if (aros_sysroot != "") {
++  _sysroot_flag = " --sysroot=$aros_sysroot"
++}
++
++gcc_toolchain("x64") {
++  cc = "${_toolprefix}gcc"
++  cxx = "${_toolprefix}g++"
++  ar = "${_toolprefix}ar"
++  ld = cxx
++  readelf = "${_toolprefix}readelf"
++  nm = "${_toolprefix}nm"
++
++  extra_cppflags =
++      "-m64 -mcmodel=large -mno-red-zone -mno-ms-bitfields" +
++      " -fno-asynchronous-unwind-tables -fno-omit-frame-pointer" + _sysroot_flag
++  extra_ldflags = "-m64 -mcmodel=large" + _sysroot_flag
++
++  toolchain_args = {
++    current_cpu = "x64"
++    current_os = "aros"
++    is_clang = false
++    use_remoteexec = false
++    use_goma = false
++    use_sysroot = false
++  }
++}

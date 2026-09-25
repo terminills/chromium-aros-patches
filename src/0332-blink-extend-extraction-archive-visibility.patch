@@ -1,0 +1,35 @@
+From 41ac368ad4fabcffd5c4ae257ec1b8f31bd1d956 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 19:11:33 -0500
+Subject: [PATCH 332/638] blink: extend extraction archive visibility
+
+Respect Blink Platform's nonempty file-level visibility default when admitting the focused root extraction target. GN rejects replacing that inherited list directly.
+
+AI_PHASE: chromium-blink-platform-library
+
+AI_STATUS: first-complete-archive-gn-failure-corrected
+
+AI_VALIDATION: gn gen failed exactly at BUILD.gn:1879 with 'Replacing nonempty list'
+
+AI_EVIDENCE: out/aros-blink-platform/test-artifacts/-blink-platform-library-20260725/01-complete-archive-gn-root-extra-deps.log
+
+AI_LIMITATIONS: dependency graph generation and archive build still require replay
+
+AI_DECISION_CHAIN:; c59604b96e
+---
+ third_party/blink/renderer/platform/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index 5614b39934..cb24eb8e97 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1876,7 +1876,7 @@ if (is_aros && aros_blink_platform_library_only) {
+   # until the AROS import bridge has been proven independently.
+   static_library("aros_blink_platform_archive") {
+     complete_static_lib = true
+-    visibility = [ "//:gn_all" ]
++    visibility += [ "//:gn_all" ]
+     deps = [ ":platform" ]
+   }
+ }

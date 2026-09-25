@@ -1,0 +1,94 @@
+From 734b95be212bbccf4eba105b579aebc16212702c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:01:52 -0500
+Subject: [PATCH 061/638] sync_device_info: define native AROS metadata
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Sync device-info now builds a complete AROS metadata provider.
+
+ROOT_CAUSE: The component had explicit unknown-OS compile stops and no AROS definition for its platform-specific personalizable-name hook.
+
+FIX_REASON: Report the protocol's TYPE_OTHER and unknown OS values because it has no AROS enum, retain the truthful desktop form factor, and let the common SysInfo fallback provide a network-independent name.
+
+SCOPE: components/sync_device_info build selection, common platform mapping, and new AROS name provider.
+
+VALIDATION: The full sync_device_info archive built; nm shows one resolved GetPersonalizableDeviceNameInternal definition.
+
+RISK: Synced peers see an unknown OS until the shared Sync wire schema gains an AROS value; device form factor and browser version remain available.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/sync_device_info/BUILD.gn               |  4 ++++
+ .../sync_device_info/local_device_info_util.cc     |  7 ++++++-
+ .../local_device_info_util_aros.cc                 | 14 ++++++++++++++
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+ create mode 100644 components/sync_device_info/local_device_info_util_aros.cc
+
+diff --git a/components/sync_device_info/BUILD.gn b/components/sync_device_info/BUILD.gn
+index a5dd5cb4fa..5c0da645ed 100644
+--- a/components/sync_device_info/BUILD.gn
++++ b/components/sync_device_info/BUILD.gn
+@@ -73,6 +73,10 @@ static_library("sync_device_info") {
+     sources += [ "local_device_info_util_linux.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "local_device_info_util_aros.cc" ]
++  }
++
+   if (is_fuchsia) {
+     sources += [ "local_device_info_util_fuchsia.cc" ]
+   }
+diff --git a/components/sync_device_info/local_device_info_util.cc b/components/sync_device_info/local_device_info_util.cc
+index 24e436902e..7e5a1fae50 100644
+--- a/components/sync_device_info/local_device_info_util.cc
++++ b/components/sync_device_info/local_device_info_util.cc
+@@ -84,6 +84,8 @@ sync_pb::SyncEnums::DeviceType GetLocalDeviceType() {
+   return sync_pb::SyncEnums_DeviceType_TYPE_CROS;
+ #elif BUILDFLAG(IS_LINUX)
+   return sync_pb::SyncEnums_DeviceType_TYPE_LINUX;
++#elif BUILDFLAG(IS_AROS)
++  return sync_pb::SyncEnums_DeviceType_TYPE_OTHER;
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+   switch (ui::GetDeviceFormFactor()) {
+     case ui::DEVICE_FORM_FACTOR_TABLET:
+@@ -109,6 +111,9 @@ DeviceInfo::OsType GetLocalDeviceOSType() {
+   return DeviceInfo::OsType::kChromeOsLacros;
+ #elif BUILDFLAG(IS_LINUX)
+   return DeviceInfo::OsType::kLinux;
++#elif BUILDFLAG(IS_AROS)
++  // Sync's wire protocol has no AROS OS value.
++  return DeviceInfo::OsType::kUnknown;
+ #elif BUILDFLAG(IS_ANDROID)
+   return DeviceInfo::OsType::kAndroid;
+ #elif BUILDFLAG(IS_IOS)
+@@ -126,7 +131,7 @@ DeviceInfo::OsType GetLocalDeviceOSType() {
+ 
+ DeviceInfo::FormFactor GetLocalDeviceFormFactor() {
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+   return DeviceInfo::FormFactor::kDesktop;
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+   return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+diff --git a/components/sync_device_info/local_device_info_util_aros.cc b/components/sync_device_info/local_device_info_util_aros.cc
+new file mode 100644
+index 0000000000..7ff467caa9
+--- /dev/null
++++ b/components/sync_device_info/local_device_info_util_aros.cc
+@@ -0,0 +1,14 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <string>
++
++namespace syncer {
++
++std::string GetPersonalizableDeviceNameInternal() {
++  // The common caller falls back to SysInfo without requiring AROSTCP state.
++  return std::string();
++}
++
++}  // namespace syncer

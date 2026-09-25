@@ -1,0 +1,31 @@
+From 827efe278bd144650d3dafce588bd858f6d1f934 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 31 Jul 2026 03:49:03 -0500
+Subject: [PATCH 35/43] aros: include profile bootstrap in CEF runtime
+
+CEF compiles ChromeMainDelegate directly and therefore bypasses the chrome/app target that owns the AROS profile-directory implementation. Add the implementation to the CEF AROS source set so the coherent resident archive does not leave EnsureArosUserDataDirectory undefined.
+
+
+
+---
+ BUILD.gn | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 150bfb13..9155ec29 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -953,6 +953,13 @@ source_set("libcef_static") {
+   ]
+ 
+   if (is_aros) {
++    # CEF compiles ChromeMainDelegate directly instead of consuming the
++    # chrome/app target, so include its AROS profile bootstrap alongside it.
++    sources += [
++      "//chrome/app/aros_user_data_dir.cc",
++      "//chrome/app/aros_user_data_dir.h",
++    ]
++
+     # Crashpad is not available on AROS. crash_reporting.cc keeps the public
+     # CEF hooks as no-ops, so do not pull the Crashpad client implementation
+     # (and its unsupported platform base) into the resident archive.

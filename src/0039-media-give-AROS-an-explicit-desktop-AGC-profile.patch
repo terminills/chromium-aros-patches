@@ -1,0 +1,46 @@
+From 441b2a810a7cfc1573369042bb14025537866d0b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:47:57 -0500
+Subject: [PATCH 039/638] media: give AROS an explicit desktop AGC profile
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: WebRTC audio processing rejected AROS because automatic gain control had no platform policy.
+
+FIX_REASON: Select the desktop AGC2 digital profile and retain the feature-controlled input-volume adjustment override for future native audio backends.
+
+SCOPE: media/webrtc/helpers.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/media/webrtc/webrtc/helpers.o
+
+RISK: low; this configures Chromium's processing graph without claiming a native capture implementation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ media/webrtc/helpers.cc | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/media/webrtc/helpers.cc b/media/webrtc/helpers.cc
+index e8ef7cee81..004dfaf54a 100644
+--- a/media/webrtc/helpers.cc
++++ b/media/webrtc/helpers.cc
+@@ -41,14 +41,15 @@ void ConfigAutomaticGainControl(const AudioProcessingSettings& settings,
+     return;
+   }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+   const bool kInputVolumeAdjustmentOverrideAllowed = true;
+ #elif BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+   const bool kInputVolumeAdjustmentOverrideAllowed = false;
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_AROS) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+   // Use AGC2 digital and input volume controller.
+   // TODO(crbug.com/1375239): Remove `kWebRtcAllowInputVolumeAdjustment` safely.
+   if (kInputVolumeAdjustmentOverrideAllowed &&

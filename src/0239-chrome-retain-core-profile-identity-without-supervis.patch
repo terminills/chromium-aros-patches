@@ -1,0 +1,47 @@
+From ecce1b88b4a59677652e8b494960afeceae13ecc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 14:35:23 -0500
+Subject: [PATCH 239/638] chrome: retain core profile identity without
+ supervision [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chrome's generic profile model writes prefs::kSupervisedUserId even when Family Link services are compiled out, but the disabled build registered no storage for that core identity field and PrefService aborted during profile creation.
+
+FIX_REASON: Register only the profile.managed_user_id string in the disabled branch while retaining the full supervised-user registration behind ENABLE_SUPERVISED_USERS. This preserves the profile identity contract without claiming Family Link support.
+
+SCOPE: chrome/browser/prefs/browser_prefs.cc
+
+VALIDATION: ninja -C out/aros-chrome -j48 chrome completed; the merged 23-section image crossed the prior unregistered-pref fatal in hosted AROS, initialized native Ozone/Intuition at 1280x1024, started browser workers and IO pumps, and opened bsdsocket.library.
+
+RISK: Supervised-user services remain disabled as intended; this adds only their independently consumed profile identity preference.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap; ACD-chromium-aros-native-window-system;
+---
+ chrome/browser/prefs/browser_prefs.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index 5eef5cdedd..9ee0cbd7e4 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -172,6 +172,7 @@
+ #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
+ #include "components/supervised_user/core/browser/supervised_user_preferences.h"
+ #include "components/supervised_user/core/common/buildflags.h"
++#include "components/supervised_user/core/common/pref_names.h"
+ #include "components/sync/base/pref_names.h"
+ #include "components/sync/service/glue/sync_transport_data_prefs.h"
+ #include "components/sync/service/sync_prefs.h"
+@@ -1852,6 +1853,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+ 
+ #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
+   supervised_user::RegisterProfilePrefs(registry);
++#else
++  // The profile model uses this identity field independently of Family Link.
++  registry->RegisterStringPref(prefs::kSupervisedUserId, std::string());
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_FEED_V2)

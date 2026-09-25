@@ -1,0 +1,32 @@
+From b0a3da89d0da67e3f2acf3a4cd454941cd2b0242 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 16:38:13 -0500
+Subject: [PATCH 11/43] cef: complete null client certificate backend
+
+Include the abstract ClientCertStore definition so AROS can return an empty unique_ptr without instantiating deletion against an incomplete type.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-client-cert-null-backend-complete
+
+AI_VALIDATION: build 20 reached unique_ptr static_assert for incomplete net::ClientCertStore
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/20-libcef-static-handoff-boundary.log
+
+AI_DECISION_CHAIN:; f6a23f37
+---
+ libcef/browser/alloy/alloy_content_browser_client.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libcef/browser/alloy/alloy_content_browser_client.cc b/libcef/browser/alloy/alloy_content_browser_client.cc
+index 8701d621..2e2c0d9b 100644
+--- a/libcef/browser/alloy/alloy_content_browser_client.cc
++++ b/libcef/browser/alloy/alloy_content_browser_client.cc
+@@ -139,6 +139,7 @@
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "mojo/public/cpp/bindings/self_owned_associated_receiver.h"
+ #include "net/base/auth.h"
++#include "net/ssl/client_cert_store.h"
+ #include "net/ssl/ssl_cert_request_info.h"
+ #include "net/ssl/ssl_private_key.h"
+ #include "pdf/pdf_features.h"

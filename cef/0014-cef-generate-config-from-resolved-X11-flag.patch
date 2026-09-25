@@ -1,0 +1,92 @@
+From 41f982c758de1bb00db61c254e526ebb1d365515 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 16:46:09 -0500
+Subject: [PATCH 14/43] cef: generate config from resolved X11 flag
+
+Pass GN's resolved ozone_platform_x11 value to make_config_header instead of inferring it from only the local args.gn, which can import the actual platform settings.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-cef-cursor-abi-config-corrected
+
+AI_ASSUMPTION: imported GN args are authoritative and may not be textually repeated in the consuming args.gn
+
+AI_VALIDATION: unit invocation proves false omits CEF_X11 and true emits it; build 21 showed the wrong unsigned-long ABI against BitmapCursor pointer data
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/21-libcef-static-after-crashpad-content-main.log
+
+AI_DECISION_CHAIN:; out/aros-blink-platform/args.gn; 3f48602a
+---
+ BUILD.gn                    |  1 +
+ tools/make_config_header.py | 23 +++++++++++++++--------
+ 2 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 609ea86d..82fd9bb5 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1491,6 +1491,7 @@ action("make_config_header") {
+   outputs = [ "$root_out_dir/includes/include/cef_config.h" ]
+ 
+   args = rebase_path(outputs + [ "$root_out_dir/args.gn" ], root_build_dir)
++  args += [ ozone_platform_x11 ? "true" : "false" ]
+ }
+ 
+ # Generate pack files and associated CEF header files.
+diff --git a/tools/make_config_header.py b/tools/make_config_header.py
+index e5d98ed3..49a59bb5 100644
+--- a/tools/make_config_header.py
++++ b/tools/make_config_header.py
+@@ -8,7 +8,7 @@ from file_util import *
+ import sys
+ 
+ 
+-def make_config_header(gn_config):
++def make_config_header(gn_config, ozone_platform_x11=None):
+   """ Creates the header file contents for the cef build configuration. """
+ 
+   if not path_exists(gn_config):
+@@ -17,11 +17,11 @@ def make_config_header(gn_config):
+   defines = []
+ 
+   if sys.platform.startswith('linux'):
+-    lines = read_file(gn_config).split("\n")
++    if ozone_platform_x11 is None:
++      lines = read_file(gn_config).split("\n")
++      ozone_platform_x11 = 'ozone_platform_x11=false' not in lines
+ 
+-    # All Linux builds use Ozone, and the X11 platform is enabled by default.
+-    # Check if the config is explicitly disabling it.
+-    if not 'ozone_platform_x11=false' in lines:
++    if ozone_platform_x11:
+       defines.append('#define CEF_X11 1')
+ 
+   result = get_copyright(full=True, translator=False) + \
+@@ -43,9 +43,9 @@ $DEFINES$
+   return result
+ 
+ 
+-def write_config_header(output, gn_config):
++def write_config_header(output, gn_config, ozone_platform_x11=None):
+   output = os.path.abspath(output)
+-  result = make_config_header(gn_config)
++  result = make_config_header(gn_config, ozone_platform_x11)
+   return write_file_if_changed(output, result)
+ 
+ 
+@@ -53,7 +53,14 @@ def main(argv):
+   if len(argv) < 3:
+     print(("Usage:\n  %s <output_header_file> <input_args_gn_file>" % argv[0]))
+     sys.exit(-1)
+-  write_config_header(argv[1], argv[2])
++
++  ozone_platform_x11 = None
++  if len(argv) >= 4:
++    if argv[3] not in ('true', 'false'):
++      raise ValueError('Expected true or false for ozone_platform_x11')
++    ozone_platform_x11 = argv[3] == 'true'
++
++  write_config_header(argv[1], argv[2], ozone_platform_x11)
+ 
+ 
+ if '__main__' == __name__:

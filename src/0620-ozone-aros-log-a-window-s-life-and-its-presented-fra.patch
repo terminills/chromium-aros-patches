@@ -1,0 +1,122 @@
+From da46aa7d4006f424fa65a7de145c051ca31cde8d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 17 Sep 2026 04:01:42 -0500
+Subject: [PATCH 620/638] ozone/aros: log a window's life and its
+ presented-frame count at VLOG(1)
+
+Show/Hide/Close/PrepareForShutdown and the destructor log the widget and
+its Intuition window; PresentPixels counts the frames presented into the
+window and logs the first four and every 64th, and the count is printed
+when the window is hidden or destroyed. A dropped present (no window, no
+RastPort, no pixels) and a present for a widget with no in-process window
+are logged too.
+
+Written for the two-window paint freeze: with these lines the log showed
+window 0 presenting 62 frames into a window that showed none of them,
+which put the fault in the window system rather than in the compositor.
+---
+ ui/ozone/platform/aros/aros_window.cc         | 20 +++++++++++++++++++
+ ui/ozone/platform/aros/aros_window.h          |  3 +++
+ ui/ozone/platform/aros/aros_window_manager.cc |  2 ++
+ 3 files changed, 25 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 3415471a84..e0eaf9953d 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -465,6 +465,8 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+ 
+ ArosWindow::~ArosWindow() {
+   shutting_down_ = true;
++  VLOG(1) << "[Chromium:Ozone:AROS] destroying widget=" << widget_
++          << " native=" << window_ << " presented=" << presented_frames_;
+   if (window_) {
+     ReturnIntuitionActivationToOwner();
+     DisableNativeEvents();
+@@ -479,6 +481,8 @@ ArosWindow::~ArosWindow() {
+ }
+ 
+ void ArosWindow::Show(bool inactive) {
++  VLOG(1) << "[Chromium:Ozone:AROS] Show(inactive=" << inactive
++          << ") widget=" << widget_ << " native=" << window_;
+   if (window_) {
+     ShowWindow(window_, nullptr);
+     if (!inactive && activatable_) {
+@@ -490,6 +494,8 @@ void ArosWindow::Show(bool inactive) {
+ }
+ 
+ void ArosWindow::Hide() {
++  VLOG(1) << "[Chromium:Ozone:AROS] Hide() widget=" << widget_
++          << " native=" << window_ << " presented=" << presented_frames_;
+   if (window_) {
+     ReturnIntuitionActivationToOwner();
+     HideWindow(window_);
+@@ -498,6 +504,8 @@ void ArosWindow::Hide() {
+ }
+ 
+ void ArosWindow::Close() {
++  VLOG(1) << "[Chromium:Ozone:AROS] Close() widget=" << widget_
++          << " native=" << window_;
+   delegate_->OnClosed();
+ }
+ 
+@@ -506,6 +514,8 @@ bool ArosWindow::IsVisible() const {
+ }
+ 
+ void ArosWindow::PrepareForShutdown() {
++  VLOG(1) << "[Chromium:Ozone:AROS] PrepareForShutdown() widget=" << widget_
++          << " native=" << window_;
+   shutting_down_ = true;
+   DisableNativeEvents();
+ }
+@@ -1074,6 +1084,8 @@ bool ArosWindow::PresentPixels(const void* pixels,
+                                const gfx::Size& pixel_size,
+                                const gfx::Rect& damage) {
+   if (!window_ || !window_->RPort || !pixels || row_bytes == 0) {
++    VLOG(1) << "[Chromium:Ozone:AROS] present dropped widget=" << widget_
++            << " native=" << window_ << " pixels=" << pixels;
+     return false;
+   }
+ 
+@@ -1084,6 +1096,14 @@ bool ArosWindow::PresentPixels(const void* pixels,
+   gfx::Rect clipped = damage;
+   clipped.Intersect(gfx::Rect(pixel_size));
+   clipped.Intersect(gfx::Rect(client_width, client_height));
++  ++presented_frames_;
++  if (presented_frames_ <= 4 || presented_frames_ % 64 == 0) {
++    VLOG(1) << "[Chromium:Ozone:AROS] present #" << presented_frames_
++            << " widget=" << widget_ << " size=" << pixel_size.ToString()
++            << " damage=" << damage.ToString()
++            << " clipped=" << clipped.ToString() << " client=" << client_width
++            << "x" << client_height;
++  }
+   if (clipped.IsEmpty()) {
+     return true;
+   }
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 409bd7e30f..80e0353808 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -134,6 +134,9 @@ class ArosWindow : public PlatformWindow {
+   RAW_PTR_EXCLUSION struct BitMap* backing_bitmap_ = nullptr;
+   std::unique_ptr<struct RastPort> backing_rast_port_;
+   gfx::Size backing_size_;
++  // Frames presented into the Intuition window; the first few and every
++  // 64th are logged at VLOG(1) so a window that stops painting shows up.
++  uint64_t presented_frames_ = 0;
+   scoped_refptr<PlatformCursor> cursor_;
+   gfx::Rect bounds_;
+   std::optional<gfx::Rect> restored_bounds_;
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 587954c324..1dd04c13fd 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -329,6 +329,8 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+   if (it != windows_.end()) {
+     return it->second->PresentPixels(pixels, row_bytes, pixel_size, damage);
+   }
++  VLOG(1) << "[Chromium:Ozone:AROS] present widget=" << widget
++          << " has no in-process window; forwarding to the presentation port";
+ 
+   // Initialize this private reply port on the compositor task that actually
+   // waits for presentation completion. CreateMsgPort() records the calling

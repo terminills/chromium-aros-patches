@@ -1,0 +1,88 @@
+From 2030b266a0f2f9e1bf26a90ae8394fcc39114e93 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:08:29 -0500
+Subject: [PATCH 623/638] aros: include AROS headers after Chromium headers in
+ two more *_aros.cc
+
+proto/dos.h and proto/exec.h define Info, Seek, Read, Write, DeleteFile,
+Insert, SysBase and DOSBase as macros. Pulled in before base/files/file.h,
+base/logging.h or url/url_canon.h they rewrite identically named members
+in those headers; every other *_aros.cc in the port already orders the
+AROS block last. base_paths_aros.cc and select_file_dialog_aros.cc were
+the two that did not, and broke as soon as base/command_line.h (which
+the SMP switches need) was reached through them.
+
+
+---
+ base/base_paths_aros.cc                     | 12 +++++++----
+ ui/shell_dialogs/select_file_dialog_aros.cc | 22 ++++++++++++---------
+ 2 files changed, 21 insertions(+), 13 deletions(-)
+
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+index eb8f782cea..478add49df 100644
+--- a/base/base_paths_aros.cc
++++ b/base/base_paths_aros.cc
+@@ -8,15 +8,19 @@
+ 
+ #include <string>
+ 
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/path_service.h"
++
++// AROS headers last: proto/dos.h defines Info, Seek, Read, Write and
++// DeleteFile as inline-call macros, which rewrite the identically named
++// members and functions in base/files/file.h and file_util.h if they are
++// pulled in first. Every other *_aros.cc in this port orders it this way.
+ #include <dos/dos.h>
+ #include <exec/tasks.h>
+ #include <proto/dos.h>
+ #include <proto/exec.h>
+ 
+-#include "base/files/file_path.h"
+-#include "base/files/file_util.h"
+-#include "base/path_service.h"
+-
+ namespace base {
+ namespace {
+ 
+diff --git a/ui/shell_dialogs/select_file_dialog_aros.cc b/ui/shell_dialogs/select_file_dialog_aros.cc
+index 8b2ac7a88f..af1d6a78b0 100644
+--- a/ui/shell_dialogs/select_file_dialog_aros.cc
++++ b/ui/shell_dialogs/select_file_dialog_aros.cc
+@@ -6,15 +6,6 @@
+ 
+ #include <utility>
+ 
+-#include <dos/dos.h>
+-#include <libraries/asl.h>
+-#include <proto/asl.h>
+-#include <proto/dos.h>
+-#include <proto/exec.h>
+-// libraries/asl.h forward-declares WBArg for fr_ArgList; multi-select reads
+-// wa_Lock/wa_Name, so the definition has to come from here.
+-#include <workbench/startup.h>
+-
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/strings/string_util.h"
+@@ -26,6 +17,19 @@
+ #include "ui/shell_dialogs/select_file_policy.h"
+ #include "ui/shell_dialogs/selected_file_info.h"
+ 
++// AROS headers last: proto/exec.h and proto/dos.h define SysBase, DOSBase,
++// Insert and friends as macros, which rewrite identically named members in
++// url/url_canon.h, base/logging.h and base/debug/crash_logging.h when pulled
++// in first. Every other *_aros.cc in this port orders it this way.
++#include <dos/dos.h>
++// libraries/asl.h forward-declares WBArg for fr_ArgList; multi-select reads
++// wa_Lock/wa_Name, so the definition has to come from here.
++#include <workbench/startup.h>
++#include <libraries/asl.h>
++#include <proto/asl.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++
+ namespace ui {
+ namespace {
+ 

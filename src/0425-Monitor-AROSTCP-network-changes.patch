@@ -1,0 +1,324 @@
+From 6be0f25ede3342fe9f5dc224d38f48f4c87183dc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 22:27:43 -0500
+Subject: [PATCH 425/638] [AROS] Monitor AROSTCP network changes
+
+Replace the generic NOTIMPLEMENTED fallback with an asynchronous AROS notifier that fingerprints real AROSTCP interfaces and DNS configuration. Poll blocking socket-library queries off-sequence and notify Chromium observers only when the captured state changes.
+
+
+
+---
+ net/BUILD.gn                             |   2 +
+ net/base/network_change_notifier.cc      |   4 +
+ net/base/network_change_notifier_aros.cc | 196 +++++++++++++++++++++++
+ net/base/network_change_notifier_aros.h  |  63 ++++++++
+ 4 files changed, 265 insertions(+)
+ create mode 100644 net/base/network_change_notifier_aros.cc
+ create mode 100644 net/base/network_change_notifier_aros.h
+
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index e376feabd1..2d1472348e 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1346,6 +1346,8 @@ component("net") {
+ 
+   if (is_aros) {
+     sources += [
++      "base/network_change_notifier_aros.cc",
++      "base/network_change_notifier_aros.h",
+       "base/network_interfaces_aros.cc",
+       "base/platform_mime_util_aros.cc",
+       "cert/test_root_certs_builtin.cc",
+diff --git a/net/base/network_change_notifier.cc b/net/base/network_change_notifier.cc
+index 80e55b1a7b..8fbe6ae2f7 100644
+--- a/net/base/network_change_notifier.cc
++++ b/net/base/network_change_notifier.cc
+@@ -33,6 +33,8 @@
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "net/base/network_change_notifier_win.h"
++#elif BUILDFLAG(IS_AROS)
++#include "net/base/network_change_notifier_aros.h"
+ #elif BUILDFLAG(IS_LINUX)
+ #include "net/base/network_change_notifier_linux.h"
+ #elif BUILDFLAG(IS_APPLE)
+@@ -312,6 +314,8 @@ std::unique_ptr<NetworkChangeNotifier> NetworkChangeNotifier::CreateIfNeeded(
+       std::make_unique<NetworkChangeNotifierWin>();
+   network_change_notifier->WatchForAddressChange();
+   return network_change_notifier;
++#elif BUILDFLAG(IS_AROS)
++  return std::make_unique<NetworkChangeNotifierAros>(initial_type);
+ #elif BUILDFLAG(IS_ANDROID)
+   // Fallback to use NetworkChangeNotifierPassive if
+   // NetworkChangeNotifierFactory is not set. Currently used for tests and when
+diff --git a/net/base/network_change_notifier_aros.cc b/net/base/network_change_notifier_aros.cc
+new file mode 100644
+index 0000000000..1c34a26d2f
+--- /dev/null
++++ b/net/base/network_change_notifier_aros.cc
+@@ -0,0 +1,196 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/base/network_change_notifier_aros.h"
++
++#include <algorithm>
++#include <tuple>
++#include <utility>
++#include <vector>
++
++#include "base/aros/socket_library.h"
++#include "base/containers/span.h"
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "net/base/ip_address.h"
++
++namespace net {
++
++namespace {
++
++constexpr base::TimeDelta kPollInterval = base::Seconds(2);
++
++template <typename T>
++void AppendValue(std::string* output, const T& value) {
++  output->append(reinterpret_cast<const char*>(&value), sizeof(value));
++}
++
++void AppendString(std::string* output, const std::string& value) {
++  const size_t size = value.size();
++  AppendValue(output, size);
++  output->append(value);
++}
++
++void AppendInterface(std::string* output,
++                     const base::aros::NetworkInterfaceInfo& interface) {
++  AppendString(output, interface.name);
++  AppendValue(output, interface.index);
++  AppendValue(output, interface.flags);
++  AppendValue(output, interface.scope_id);
++  AppendValue(output, interface.family);
++  AppendValue(output, interface.address_length);
++  output->append(reinterpret_cast<const char*>(interface.address.data()),
++                 interface.address.size());
++  AppendValue(output, interface.has_netmask);
++  output->append(reinterpret_cast<const char*>(interface.netmask.data()),
++                 interface.netmask.size());
++  AppendValue(output, interface.is_up);
++  AppendValue(output, interface.is_running);
++  AppendValue(output, interface.is_loopback);
++}
++
++bool InterfaceLess(const base::aros::NetworkInterfaceInfo& left,
++                   const base::aros::NetworkInterfaceInfo& right) {
++  return std::tie(left.name, left.index, left.flags, left.scope_id, left.family,
++                  left.address_length, left.address, left.has_netmask,
++                  left.netmask, left.is_up, left.is_running, left.is_loopback) <
++         std::tie(right.name, right.index, right.flags, right.scope_id,
++                  right.family, right.address_length, right.address,
++                  right.has_netmask, right.netmask, right.is_up,
++                  right.is_running, right.is_loopback);
++}
++
++bool IsConnectedInterface(const base::aros::NetworkInterfaceInfo& interface) {
++  if (!interface.is_up || !interface.is_running || interface.is_loopback ||
++      interface.address_length == 0 ||
++      interface.address_length > interface.address.size()) {
++    return false;
++  }
++
++  const IPAddress address(
++      base::span(interface.address).first(interface.address_length));
++  return address.IsValid() && !address.IsZero() && !address.IsLoopback();
++}
++
++}  // namespace
++
++NetworkChangeNotifierAros::NetworkChangeNotifierAros(
++    ConnectionType initial_type)
++    : connection_type_(initial_type) {
++  SchedulePoll(base::TimeDelta());
++}
++
++NetworkChangeNotifierAros::~NetworkChangeNotifierAros() {
++  weak_factory_.InvalidateWeakPtrs();
++  ClearGlobalPointer();
++}
++
++NetworkChangeNotifier::ConnectionType
++NetworkChangeNotifierAros::GetCurrentConnectionType() const {
++  base::AutoLock lock(connection_lock_);
++  return connection_type_;
++}
++
++// static
++NetworkChangeNotifierAros::PollResult
++NetworkChangeNotifierAros::CaptureSnapshot() {
++  PollResult result;
++
++  std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++  if (base::aros::GetNetworkInterfaces(&interfaces)) {
++    result.interfaces_valid = true;
++    result.interface_count = interfaces.size();
++    std::sort(interfaces.begin(), interfaces.end(), InterfaceLess);
++
++    bool connected = false;
++    for (const auto& interface : interfaces) {
++      AppendInterface(&result.interface_fingerprint, interface);
++      connected |= IsConnectedInterface(interface);
++    }
++    result.connection_type = connected ? CONNECTION_UNKNOWN : CONNECTION_NONE;
++  }
++
++  std::vector<std::string> name_servers;
++  if (base::aros::GetConfiguredNameServers(&name_servers)) {
++    result.dns_valid = true;
++    result.dns_server_count = name_servers.size();
++    std::sort(name_servers.begin(), name_servers.end());
++    for (const std::string& name_server : name_servers) {
++      AppendString(&result.dns_fingerprint, name_server);
++    }
++  }
++
++  return result;
++}
++
++void NetworkChangeNotifierAros::SchedulePoll(base::TimeDelta delay) {
++  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&NetworkChangeNotifierAros::Poll,
++                     weak_factory_.GetWeakPtr()),
++      delay);
++}
++
++void NetworkChangeNotifierAros::Poll() {
++  const bool posted = base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&NetworkChangeNotifierAros::CaptureSnapshot),
++      base::BindOnce(&NetworkChangeNotifierAros::OnPollResult,
++                     weak_factory_.GetWeakPtr()));
++  if (!posted) {
++    LOG(WARNING) << "[Chromium:AROS:NetworkChange] poll task rejected";
++  }
++}
++
++void NetworkChangeNotifierAros::OnPollResult(PollResult result) {
++  if (result.interfaces_valid) {
++    bool connection_type_changed = false;
++    {
++      base::AutoLock lock(connection_lock_);
++      connection_type_changed = connection_type_ != result.connection_type;
++      connection_type_ = result.connection_type;
++    }
++
++    if (!have_interface_snapshot_) {
++      LOG(INFO) << "[Chromium:AROS:NetworkChange] initialized interfaces="
++                << result.interface_count
++                << " connection_type=" << result.connection_type;
++      have_interface_snapshot_ = true;
++    } else if (interface_fingerprint_ != result.interface_fingerprint) {
++      LOG(INFO) << "[Chromium:AROS:NetworkChange] interfaces changed count="
++                << result.interface_count
++                << " connection_type=" << result.connection_type;
++      NotifyObserversOfIPAddressChange();
++      if (connection_type_changed) {
++        NotifyObserversOfConnectionTypeChange();
++      }
++    }
++    interface_fingerprint_ = std::move(result.interface_fingerprint);
++  } else {
++    LOG(WARNING) << "[Chromium:AROS:NetworkChange] interface snapshot failed";
++  }
++
++  if (result.dns_valid) {
++    if (!have_dns_snapshot_) {
++      LOG(INFO) << "[Chromium:AROS:NetworkChange] initialized dns_servers="
++                << result.dns_server_count;
++      have_dns_snapshot_ = true;
++    } else if (dns_fingerprint_ != result.dns_fingerprint) {
++      LOG(INFO) << "[Chromium:AROS:NetworkChange] DNS configuration changed";
++      NotifyObserversOfDNSChange();
++    }
++    dns_fingerprint_ = std::move(result.dns_fingerprint);
++  } else {
++    LOG(WARNING) << "[Chromium:AROS:NetworkChange] DNS snapshot failed";
++  }
++
++  SchedulePoll(kPollInterval);
++}
++
++}  // namespace net
+diff --git a/net/base/network_change_notifier_aros.h b/net/base/network_change_notifier_aros.h
+new file mode 100644
+index 0000000000..b86ecedef5
+--- /dev/null
++++ b/net/base/network_change_notifier_aros.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef NET_BASE_NETWORK_CHANGE_NOTIFIER_AROS_H_
++#define NET_BASE_NETWORK_CHANGE_NOTIFIER_AROS_H_
++
++#include <string>
++
++#include "base/memory/weak_ptr.h"
++#include "base/synchronization/lock.h"
++#include "base/time/time.h"
++#include "net/base/net_export.h"
++#include "net/base/network_change_notifier.h"
++
++namespace net {
++
++// Observes AROSTCP interface and DNS configuration by taking inexpensive,
++// asynchronous snapshots. AROSTCP does not expose a route-socket-style change
++// stream, so polling is the native truthful boundary rather than a passive
++// notifier that never reports changes.
++class NET_EXPORT_PRIVATE NetworkChangeNotifierAros
++    : public NetworkChangeNotifier {
++ public:
++  explicit NetworkChangeNotifierAros(ConnectionType initial_type);
++  NetworkChangeNotifierAros(const NetworkChangeNotifierAros&) = delete;
++  NetworkChangeNotifierAros& operator=(const NetworkChangeNotifierAros&) =
++      delete;
++  ~NetworkChangeNotifierAros() override;
++
++  ConnectionType GetCurrentConnectionType() const override;
++
++ private:
++  struct PollResult {
++    bool interfaces_valid = false;
++    bool dns_valid = false;
++    size_t interface_count = 0;
++    size_t dns_server_count = 0;
++    ConnectionType connection_type = CONNECTION_UNKNOWN;
++    std::string interface_fingerprint;
++    std::string dns_fingerprint;
++  };
++
++  static PollResult CaptureSnapshot();
++
++  void SchedulePoll(base::TimeDelta delay);
++  void Poll();
++  void OnPollResult(PollResult result);
++
++  mutable base::Lock connection_lock_;
++  ConnectionType connection_type_ GUARDED_BY(connection_lock_);
++
++  bool have_interface_snapshot_ = false;
++  bool have_dns_snapshot_ = false;
++  std::string interface_fingerprint_;
++  std::string dns_fingerprint_;
++
++  base::WeakPtrFactory<NetworkChangeNotifierAros> weak_factory_{this};
++};
++
++}  // namespace net
++
++#endif  // NET_BASE_NETWORK_CHANGE_NOTIFIER_AROS_H_

@@ -1,0 +1,101 @@
+From 7dfaad6050cb321fba7dac73b6f62e0196e1b36c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 16:48:28 -0500
+Subject: [PATCH 446/638] ozone: map native AROS cursor states
+
+Use Intuition's configured pointer and busy pointer directly, create a genuinely blank pointerclass sprite for cursor:none, and retain Chromium bitmap-backed pointerclass objects for text, link, move, and resize shapes.
+
+
+
+---
+ ui/ozone/platform/aros/aros_window.cc         | 37 +++++++++++++++----
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 19 +++++++---
+ 2 files changed, 43 insertions(+), 13 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 53d2c3101e..db3b44563a 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -613,11 +613,35 @@ void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
+ 
+   scoped_refptr<BitmapCursor> bitmap_cursor =
+       BitmapCursor::FromPlatformCursor(cursor_);
+-  if (bitmap_cursor->type() == mojom::CursorType::kNone) {
+-    cursor_object_ = NewObject(
+-        nullptr,
+-        const_cast<UBYTE*>(reinterpret_cast<const UBYTE*>("pointerclass")),
+-        TAG_DONE);
++  const mojom::CursorType type = bitmap_cursor->type();
++
++  if (type == mojom::CursorType::kPointer) {
++    // ResetNativeCursor() already restored the screen's configured pointer.
++    return;
++  }
++
++  if (type == mojom::CursorType::kWait ||
++      type == mojom::CursorType::kProgress) {
++    SetWindowPointer(window_, WA_BusyPointer, TRUE, TAG_DONE);
++    return;
++  }
++
++  if (type == mojom::CursorType::kNone) {
++    // An empty pointerclass object creates a dummy visible sprite. Supply a
++    // cleared two-plane sprite instead so CSS cursor:none and pointer lock
++    // actually hide the native pointer.
++    cursor_bitmap_ =
++        AllocBitMap(16, 1, 2, BMF_CLEAR | BMF_DISPLAYABLE,
++                    window_->WScreen->RastPort.BitMap);
++    if (cursor_bitmap_) {
++      cursor_object_ = NewObject(
++          nullptr,
++          const_cast<UBYTE*>(
++              reinterpret_cast<const UBYTE*>("pointerclass")),
++          POINTERA_BitMap, reinterpret_cast<IPTR>(cursor_bitmap_),
++          POINTERA_WordWidth, 1, POINTERA_XOffset, 0, POINTERA_YOffset, 0,
++          TAG_DONE);
++    }
+   } else if (!bitmap_cursor->bitmaps().empty()) {
+     const SkBitmap& bitmap = bitmap_cursor->bitmap();
+     if (!bitmap.isNull() && bitmap.width() > 0 && bitmap.height() > 0 &&
+@@ -649,9 +673,6 @@ void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
+ 
+   if (cursor_object_) {
+     SetWindowPointer(window_, WA_Pointer, cursor_object_, TAG_DONE);
+-  } else if (bitmap_cursor->type() == mojom::CursorType::kWait ||
+-             bitmap_cursor->type() == mojom::CursorType::kProgress) {
+-    SetWindowPointer(window_, WA_BusyPointer, TRUE, TAG_DONE);
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 56ee4de20e..5106f89c33 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -43,13 +43,22 @@ class ArosCursorFactory : public BitmapCursorFactory {
+ 
+   scoped_refptr<PlatformCursor> GetDefaultCursor(
+       mojom::CursorType type) override {
+-    if (type == mojom::CursorType::kNone) {
+-      return BitmapCursorFactory::GetDefaultCursor(type);
++    switch (type) {
++      case mojom::CursorType::kPointer:
++      case mojom::CursorType::kNone:
++      case mojom::CursorType::kWait:
++      case mojom::CursorType::kProgress:
++        // These shapes have direct Intuition representations. Preserve the
++        // cursor type without manufacturing an Aura bitmap so ArosWindow can
++        // select the screen pointer, hidden pointer, or busy pointer.
++        return BitmapCursorFactory::GetDefaultCursor(type);
++      default:
++        break;
+     }
+ 
+-    // AROS installs custom pointerclass objects rather than looking up
+-    // server-side cursor names. Returning null asks CursorLoader to provide
+-    // Chromium's Aura bitmap for every standard cursor shape.
++    // Intuition has no public lookup API for the remaining standard shapes.
++    // Returning null asks CursorLoader for Chromium's bitmap; ArosWindow then
++    // installs that bitmap through the native AROS pointerclass.
+     return nullptr;
+   }
+ };

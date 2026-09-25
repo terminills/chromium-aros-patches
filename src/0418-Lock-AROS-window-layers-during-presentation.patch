@@ -1,0 +1,71 @@
+From 78f6cc92f3bf919be4462c5450d03651ca8fe879 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 14:18:36 -0500
+Subject: [PATCH 418/638] [AROS] Lock AROS window layers during
+ presentation
+
+Serialize the live-window ClipBlit and direct WritePixelArray fallback with layers.library. Offscreen backing-store writes remain unlocked, while native RastPort mutation can no longer race Intuition window movement or refresh clipping.
+
+
+
+---
+ ui/ozone/platform/aros/aros_window.cc | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 7f30e3b4ce..ff539d42dc 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -31,6 +31,7 @@
+ #include <proto/exec.h>
+ #include <proto/graphics.h>
+ #include <proto/intuition.h>
++#include <proto/layers.h>
+ 
+ namespace ui {
+ 
+@@ -43,6 +44,28 @@ constexpr ULONG kWindowEventMask =
+     IDCMP_REFRESHWINDOW | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW |
+     IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_RAWKEY;
+ 
++class ScopedArosLayerLock {
++ public:
++  explicit ScopedArosLayerLock(struct RastPort* rast_port)
++      : layer_(rast_port ? rast_port->Layer : nullptr) {
++    if (layer_) {
++      LockLayer(0, layer_);
++    }
++  }
++
++  ScopedArosLayerLock(const ScopedArosLayerLock&) = delete;
++  ScopedArosLayerLock& operator=(const ScopedArosLayerLock&) = delete;
++
++  ~ScopedArosLayerLock() {
++    if (layer_) {
++      UnlockLayer(layer_);
++    }
++  }
++
++ private:
++  struct Layer* const layer_;
++};
++
+ int PositiveOrDefault(int value, int fallback) {
+   return value > 0 ? value : fallback;
+ }
+@@ -878,6 +901,7 @@ bool ArosWindow::PresentPixels(const void* pixels,
+   const bool allocated_backing_store =
+       backing_size_ != pixel_size || !backing_rast_port_;
+   if (!EnsureNativeBackingStore(pixel_size)) {
++    ScopedArosLayerLock layer_lock(window_->RPort);
+     SetDrMd(window_->RPort, JAM1);
+     const LONG written = WritePixelArray(
+         const_cast<void*>(pixels), clipped.x(), clipped.y(), row_bytes,
+@@ -969,6 +993,7 @@ bool ArosWindow::BlitNativeBackingStore(const gfx::Rect& damage) {
+     return true;
+   }
+ 
++  ScopedArosLayerLock layer_lock(window_->RPort);
+   ClipBlit(backing_rast_port_.get(), clipped.x(), clipped.y(), window_->RPort,
+            window_->BorderLeft + clipped.x(), window_->BorderTop + clipped.y(),
+            clipped.width(), clipped.height(), 0xC0);

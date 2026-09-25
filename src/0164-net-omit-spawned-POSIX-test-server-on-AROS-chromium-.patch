@@ -1,0 +1,32 @@
+From 71739ec85a0039a520f7f8785cca73c68e1dccfe Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:24:06 -0500
+Subject: [PATCH 164/638] net: omit spawned POSIX test server on AROS
+ [chromium] [aros]
+
+Statement: AROS content_shell needs Chromium networking, but not the deprecated Python spawned-test-server implementation selected through the broad net:test_support archive.
+
+Decision: Exclude only LocalTestServer's POSIX backend on AROS. Production net code and the native embedded test server remain available.
+
+Evidence: The windowed build failed because local_test_server_posix.cc requires poll.h, which AROS does not provide.
+
+Validation: gn gen out/aros-windowed --root-target=//content/shell:content_shell; the local_test_server_posix.o target is absent.
+
+Chain:; ACD-chromium-aros-network-substrate
+---
+ net/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index 0289cf8a0e..e376feabd1 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -2080,7 +2080,7 @@ static_library("test_support") {
+       "test/spawned_test_server/remote_test_server_spawner_request.cc",
+       "test/spawned_test_server/remote_test_server_spawner_request.h",
+     ]
+-  } else if (!is_ios) {
++  } else if (!is_ios && !is_aros) {
+     sources += [
+       "test/spawned_test_server/local_test_server.cc",
+       "test/spawned_test_server/local_test_server.h",

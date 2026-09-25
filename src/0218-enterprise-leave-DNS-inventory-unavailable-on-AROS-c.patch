@@ -1,0 +1,43 @@
+From 60ca3331ad31092305c238527b3acceaa918a999 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:19:31 -0500
+Subject: [PATCH 218/638] enterprise: leave DNS inventory unavailable on AROS
+ [chromium] [aros]
+
+Statement:
+The enterprise context signal treated every POSIX target as exposing the libresolv res_state ABI. AROS provides network access through bsdsocket.library but has no resolv.h contract for enumerating configured DNS servers.
+
+Decision:
+Keep the enterprise context fetcher and return its existing empty DNS-server vector on AROS, while leaving normal Chromium DNS/networking untouched. Do not fabricate configuration or import Linux resolver internals.
+
+Evidence:
+context_info_fetcher.o compiles in out/aros-chrome without resolv.h.
+
+Chain:
+Records an explicit telemetry capability boundary while advancing.
+---
+ chrome/browser/enterprise/signals/context_info_fetcher.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/enterprise/signals/context_info_fetcher.cc b/chrome/browser/enterprise/signals/context_info_fetcher.cc
+index 3ceb8d6581..fad481b6df 100644
+--- a/chrome/browser/enterprise/signals/context_info_fetcher.cc
++++ b/chrome/browser/enterprise/signals/context_info_fetcher.cc
+@@ -30,7 +30,7 @@
+ #include "content/public/browser/site_isolation_policy.h"
+ #include "device_management_backend.pb.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include "net/dns/public/resolv_reader.h"
+ #include "net/dns/public/scoped_res_state.h"
+ #endif
+@@ -315,7 +315,7 @@ ScopedUfwConfigPathForTesting::~ScopedUfwConfigPathForTesting() {
+ 
+ std::vector<std::string> ContextInfoFetcher::GetDnsServers() {
+   std::vector<std::string> dns_addresses;
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   std::unique_ptr<net::ScopedResState> res = net::ResolvReader().GetResState();
+   if (res) {
+     std::optional<std::vector<net::IPEndPoint>> nameservers =

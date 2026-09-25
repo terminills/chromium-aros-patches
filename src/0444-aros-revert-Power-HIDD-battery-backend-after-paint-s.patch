@@ -1,0 +1,275 @@
+From f1302549bafdced89dfbe4155f13f506d9407a3f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 14:34:57 -0500
+Subject: [PATCH 444/638] aros: revert Power HIDD battery backend after paint
+ stall
+
+The caption-revert control retained the Power HIDD manager but still failed to deliver a first cross-process canvas. Restore the proven default battery manager before replaying the last-known-good display path.
+
+Commit 0a5c973762 remains the durable failed implementation for redesign around an asynchronous or separate-task Power HIDD query.
+
+---
+ services/device/battery/BUILD.gn              |   2 -
+ .../battery/battery_status_manager_aros.cc    | 240 ------------------
+ 2 files changed, 242 deletions(-)
+ delete mode 100644 services/device/battery/battery_status_manager_aros.cc
+
+diff --git a/services/device/battery/BUILD.gn b/services/device/battery/BUILD.gn
+index 3b7c61695e..7a6b39cc72 100644
+--- a/services/device/battery/BUILD.gn
++++ b/services/device/battery/BUILD.gn
+@@ -48,8 +48,6 @@ if (!is_android) {
+         "battery_status_manager_linux.cc",
+         "battery_status_manager_linux.h",
+       ]
+-    } else if (is_aros) {
+-      sources += [ "battery_status_manager_aros.cc" ]
+     } else if (is_mac) {
+       sources += [ "battery_status_manager_mac.cc" ]
+       frameworks = [
+diff --git a/services/device/battery/battery_status_manager_aros.cc b/services/device/battery/battery_status_manager_aros.cc
+deleted file mode 100644
+index ca705395f5..0000000000
+--- a/services/device/battery/battery_status_manager_aros.cc
++++ /dev/null
+@@ -1,240 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "services/device/battery/battery_status_manager.h"
+-
+-#include <algorithm>
+-#include <cmath>
+-#include <limits>
+-#include <memory>
+-#include <optional>
+-#include <string_view>
+-
+-#include "base/functional/bind.h"
+-#include "base/location.h"
+-#include "base/time/time.h"
+-#include "base/timer/timer.h"
+-
+-#define __OOP_NOATTRBASES__
+-#include <aros/asmcall.h>
+-#include <hidd/hidd.h>
+-#include <hidd/power.h>
+-#include <hidd/telemetry.h>
+-#include <oop/oop.h>
+-#include <proto/oop.h>
+-#include <utility/hooks.h>
+-
+-namespace device {
+-
+-namespace {
+-
+-OOP_AttrBase HiddPowerAB;
+-OOP_AttrBase HiddTelemetryAB;
+-
+-struct PowerObjects {
+-  OOP_Object* battery = nullptr;
+-  OOP_Object* ac_adapter = nullptr;
+-};
+-
+-AROS_UFH3(BOOL,
+-          FindPowerObjects,
+-          AROS_UFHA(struct Hook*, hook, A0),
+-          AROS_UFHA(OOP_Object*, object, A2),
+-          AROS_UFHA(APTR, message, A1)) {
+-  AROS_USERFUNC_INIT
+-
+-  auto* objects = static_cast<PowerObjects*>(hook->h_Data);
+-  IPTR type = vHW_PowerType_Unknown;
+-
+-  if (OOP_GetAttr(object, aHidd_Power_Type, &type)) {
+-    if (type == vHW_PowerType_Battery && !objects->battery)
+-      objects->battery = object;
+-    if (type == vHW_PowerType_AC && !objects->ac_adapter)
+-      objects->ac_adapter = object;
+-  }
+-
+-  if (!objects->battery || !objects->ac_adapter)
+-    HW_EnumDrivers(object, hook, message);
+-
+-  return objects->battery && objects->ac_adapter;
+-
+-  AROS_USERFUNC_EXIT
+-}
+-
+-struct TelemetryEntry {
+-  const char* id = nullptr;
+-  LONG value = 0;
+-};
+-
+-bool FindTelemetryEntry(OOP_Object* battery,
+-                        std::string_view wanted_id,
+-                        TelemetryEntry* result) {
+-  IPTR count = 0;
+-  if (!OOP_GetAttr(battery, aHidd_Telemetry_EntryCount, &count))
+-    return false;
+-
+-  for (ULONG index = 0; index < count; ++index) {
+-    TelemetryEntry entry;
+-    struct TagItem tags[] = {
+-        {tHidd_Telemetry_EntryID, reinterpret_cast<IPTR>(&entry.id)},
+-        {tHidd_Telemetry_EntryValue, reinterpret_cast<IPTR>(&entry.value)},
+-        {TAG_DONE, 0},
+-    };
+-    if (HIDD_Telemetry_GetEntryAttribs(battery, index, tags) && entry.id &&
+-        wanted_id == entry.id) {
+-      *result = entry;
+-      return true;
+-    }
+-  }
+-  return false;
+-}
+-
+-PowerObjects EnumeratePowerObjects() {
+-  PowerObjects objects;
+-  OOP_Object* root = static_cast<OOP_Object*>(
+-      OOP_NewObject(nullptr, CLID_HW_Root, nullptr));
+-  if (!root)
+-    return objects;
+-
+-  struct Hook hook = {};
+-  hook.h_Entry = reinterpret_cast<APTR>(FindPowerObjects);
+-  hook.h_Data = &objects;
+-  HW_EnumDrivers(root, &hook, nullptr);
+-  return objects;
+-}
+-
+-mojom::BatteryStatus ReadBatteryStatus() {
+-  mojom::BatteryStatus status;
+-  const PowerObjects objects = EnumeratePowerObjects();
+-  if (!objects.battery)
+-    return status;
+-
+-  IPTR battery_state = vHW_PowerState_NotPresent;
+-  OOP_GetAttr(objects.battery, aHidd_Power_State, &battery_state);
+-
+-  IPTR ac_state = vHW_PowerState_NotPresent;
+-  if (objects.ac_adapter)
+-    OOP_GetAttr(objects.ac_adapter, aHidd_Power_State, &ac_state);
+-
+-  TelemetryEntry charge;
+-  TelemetryEntry remaining;
+-  TelemetryEntry full;
+-  TelemetryEntry rate;
+-  const bool have_charge =
+-      FindTelemetryEntry(objects.battery, "Charge", &charge);
+-  const bool have_remaining =
+-      FindTelemetryEntry(objects.battery, "Capacity", &remaining);
+-  const bool have_full =
+-      FindTelemetryEntry(objects.battery, "Full Capacity", &full);
+-  const bool have_rate = FindTelemetryEntry(objects.battery, "Rate", &rate);
+-
+-  if (have_charge)
+-    status.level = std::clamp(static_cast<double>(charge.value) / 100.0, 0.0,
+-                              1.0);
+-  else if (have_remaining && have_full && full.value > 0)
+-    status.level =
+-        std::clamp(static_cast<double>(remaining.value) / full.value, 0.0, 1.0);
+-
+-  status.charging = ac_state == vHW_PowerState_Charging ||
+-                    battery_state == vHW_PowerState_Charging;
+-
+-  const bool usable_rate = have_rate && rate.value > 0;
+-  if (status.charging) {
+-    if (status.level < 1.0) {
+-      status.charging_time = std::numeric_limits<double>::infinity();
+-      if (usable_rate && have_remaining && have_full &&
+-          full.value > remaining.value) {
+-        status.charging_time =
+-            static_cast<double>(full.value - remaining.value) * 3600.0 /
+-            rate.value;
+-      }
+-    }
+-  } else {
+-    status.charging_time = std::numeric_limits<double>::infinity();
+-    if (usable_rate && have_remaining && remaining.value > 0) {
+-      status.discharging_time =
+-          static_cast<double>(remaining.value) * 3600.0 / rate.value;
+-    }
+-  }
+-
+-  return status;
+-}
+-
+-bool StatusesEqual(const mojom::BatteryStatus& lhs,
+-                   const mojom::BatteryStatus& rhs) {
+-  return lhs.charging == rhs.charging &&
+-         lhs.charging_time == rhs.charging_time &&
+-         lhs.discharging_time == rhs.discharging_time &&
+-         lhs.level == rhs.level;
+-}
+-
+-class BatteryStatusManagerAros : public BatteryStatusManager {
+- public:
+-  explicit BatteryStatusManagerAros(
+-      const BatteryStatusService::BatteryUpdateCallback& callback)
+-      : callback_(callback) {}
+-
+-  BatteryStatusManagerAros(const BatteryStatusManagerAros&) = delete;
+-  BatteryStatusManagerAros& operator=(const BatteryStatusManagerAros&) = delete;
+-
+-  ~BatteryStatusManagerAros() override { StopListeningBatteryChange(); }
+-
+- private:
+-  bool StartListeningBatteryChange() override {
+-    if (listening_)
+-      return true;
+-
+-    HiddPowerAB = OOP_ObtainAttrBase(IID_Hidd_Power);
+-    HiddTelemetryAB = OOP_ObtainAttrBase(IID_Hidd_Telemetry);
+-    if (!HiddPowerAB || !HiddTelemetryAB) {
+-      StopListeningBatteryChange();
+-      return false;
+-    }
+-
+-    listening_ = true;
+-    Poll();
+-    timer_.Start(FROM_HERE, base::Seconds(10), this,
+-                 &BatteryStatusManagerAros::Poll);
+-    return true;
+-  }
+-
+-  void StopListeningBatteryChange() override {
+-    timer_.Stop();
+-    last_status_.reset();
+-    listening_ = false;
+-
+-    if (HiddTelemetryAB) {
+-      OOP_ReleaseAttrBase(IID_Hidd_Telemetry);
+-      HiddTelemetryAB = 0;
+-    }
+-    if (HiddPowerAB) {
+-      OOP_ReleaseAttrBase(IID_Hidd_Power);
+-      HiddPowerAB = 0;
+-    }
+-  }
+-
+-  void Poll() {
+-    mojom::BatteryStatus status = ReadBatteryStatus();
+-    if (last_status_ && StatusesEqual(*last_status_, status))
+-      return;
+-
+-    last_status_ = status;
+-    callback_.Run(status);
+-  }
+-
+-  const BatteryStatusService::BatteryUpdateCallback callback_;
+-  base::RepeatingTimer timer_;
+-  std::optional<mojom::BatteryStatus> last_status_;
+-  bool listening_ = false;
+-};
+-
+-}  // namespace
+-
+-// static
+-std::unique_ptr<BatteryStatusManager> BatteryStatusManager::Create(
+-    const BatteryStatusService::BatteryUpdateCallback& callback) {
+-  return std::make_unique<BatteryStatusManagerAros>(callback);
+-}
+-
+-}  // namespace device

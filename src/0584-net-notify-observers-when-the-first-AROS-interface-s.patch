@@ -1,0 +1,33 @@
+From 6b57cb414551fd4544b068d1f7202d5ae1ed5acc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 19:55:23 -0500
+Subject: [PATCH 584/638] net: notify observers when the first AROS interface
+ snapshot changes the connection type
+
+The notifier starts as CONNECTION_NONE and NetworkChangeManager copies that
+before the first poll lands, so renderers kept navigator.onLine=false for
+the life of the process; sites that gate playback on it never started.
+---
+ net/base/network_change_notifier_aros.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/net/base/network_change_notifier_aros.cc b/net/base/network_change_notifier_aros.cc
+index 1c34a26d2f..3a0f7f95c3 100644
+--- a/net/base/network_change_notifier_aros.cc
++++ b/net/base/network_change_notifier_aros.cc
+@@ -162,6 +162,15 @@ void NetworkChangeNotifierAros::OnPollResult(PollResult result) {
+                 << result.interface_count
+                 << " connection_type=" << result.connection_type;
+       have_interface_snapshot_ = true;
++      // The notifier is created with CONNECTION_NONE (the browser's default
++      // initial type) and NetworkChangeManager copies that in its
++      // constructor, before this first snapshot lands.  Without a change
++      // notification every renderer keeps the NONE it was handed in
++      // OnInitialConnectionType and navigator.onLine stays false for the
++      // life of the process.
++      if (connection_type_changed) {
++        NotifyObserversOfConnectionTypeChange();
++      }
+     } else if (interface_fingerprint_ != result.interface_fingerprint) {
+       LOG(INFO) << "[Chromium:AROS:NetworkChange] interfaces changed count="
+                 << result.interface_count

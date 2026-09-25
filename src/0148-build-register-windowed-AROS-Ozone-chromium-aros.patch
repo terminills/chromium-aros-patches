@@ -1,0 +1,140 @@
+From 2082167ff25a54477cb222325842ab2fafb88cfb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 19:25:36 -0500
+Subject: [PATCH 148/638] build: register windowed AROS Ozone [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS defaulted to the headless Ozone platform and disabled Aura/Views, so Chromium's native window graph was unreachable; enabling Views also selected desktop library-CDM packaging and a GRIT invariant that had no AROS capability classification.
+
+FIX_REASON: Register ozone_platform_aros as the native AROS default, enable Aura and Views, classify AROS as a desktop Views resource target, and keep library CDMs off until AROS has a supported native CDM loading path.
+
+SCOPE: Ozone/UI build identity plus the two capability guards exposed by windowed content_shell generation; existing explicit headless builds remain selectable.
+
+VALIDATION: gn gen out/aros-windowed --root-target=//content/shell:content_shell generated 13,547 targets, and ninja -C out/aros-windowed ui/ozone:ozone completed successfully.
+
+RISK: low; behavior changes only for target_os=aros and unsupported CDM packaging remains fail-closed.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ build/config/ozone.gni   | 18 ++++++++++++------
+ build/config/ui.gni      |  5 +++--
+ media/media_options.gni  |  2 +-
+ tools/grit/grit_args.gni |  2 +-
+ ui/ozone/BUILD.gn        |  5 +++++
+ 5 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/build/config/ozone.gni b/build/config/ozone.gni
+index 8a3bc28c3a..c4b9c446d7 100644
+--- a/build/config/ozone.gni
++++ b/build/config/ozone.gni
+@@ -9,7 +9,7 @@ import("//build/toolchain/toolchain.gni")
+ declare_args() {
+   # Indicates if Ozone is enabled. Ozone is a low-level library layer for Linux
+   # that does not require X11.
+-  use_ozone = is_chromeos || is_fuchsia || is_linux
++  use_ozone = is_chromeos || is_fuchsia || is_linux || is_aros
+ }
+ 
+ declare_args() {
+@@ -42,6 +42,9 @@ declare_args() {
+   # Compile the 'cast' platform.
+   ozone_platform_cast = false
+ 
++  # Compile the native AROS Intuition platform.
++  ozone_platform_aros = false
++
+   # Compile the 'drm' platform.
+   ozone_platform_drm = false
+ 
+@@ -88,6 +91,9 @@ declare_args() {
+       ozone_platform = "x11"
+       ozone_platform_wayland = true
+       ozone_platform_x11 = true
++    } else if (is_aros) {
++      ozone_platform = "aros"
++      ozone_platform_aros = true
+     } else if (is_fuchsia) {
+       ozone_platform = "flatland"
+       ozone_platform_flatland = true
+@@ -109,11 +115,11 @@ _ozone_extra_directory = get_path_info(ozone_extra_path, "dir")
+ ozone_external_platform_visibility = [ "$_ozone_extra_directory/*" ]
+ 
+ if (is_a_target_toolchain) {
+-  assert(
+-      use_ozone || !(ozone_platform_cast || ozone_platform_drm ||
+-                         ozone_platform_flatland || ozone_platform_headless ||
+-                         ozone_platform_x11 || ozone_platform_wayland),
+-      "Must set use_ozone to select ozone platforms")
++  assert(use_ozone || !(ozone_platform_aros || ozone_platform_cast ||
++                            ozone_platform_drm || ozone_platform_flatland ||
++                            ozone_platform_headless || ozone_platform_x11 ||
++                            ozone_platform_wayland),
++         "Must set use_ozone to select ozone platforms")
+ }
+ 
+ # TODO(petermcneeley): Backwards compatiblity support for VM images.
+diff --git a/build/config/ui.gni b/build/config/ui.gni
+index 1ad21d73ff..79a651241c 100644
+--- a/build/config/ui.gni
++++ b/build/config/ui.gni
+@@ -25,12 +25,13 @@ import("//build/config/ozone.gni")
+ declare_args() {
+   # Indicates if Aura is enabled. Aura is a low-level windowing library, sort
+   # of a replacement for GDI or GTK.
+-  use_aura = is_win || is_linux || is_chromeos || is_fuchsia
++  use_aura = is_win || is_linux || is_chromeos || is_fuchsia || is_aros
+ }
+ 
+ declare_args() {
+   # True means the UI is built using the "views" framework.
+-  toolkit_views = is_mac || is_win || is_linux || is_chromeos || is_fuchsia
++  toolkit_views =
++      is_mac || is_win || is_linux || is_chromeos || is_fuchsia || is_aros
+ 
+   use_glib =
+       is_linux && !is_castos &&
+diff --git a/media/media_options.gni b/media/media_options.gni
+index e55171c4d1..65ad9e35c8 100644
+--- a/media/media_options.gni
++++ b/media/media_options.gni
+@@ -229,7 +229,7 @@ declare_args() {
+   # media/cdm/api/content_decryption_module.h. If true, the actually library CDM
+   # will be hosted in the mojo CDM service running in the CDM (utility) process.
+   # Used for all desktop platforms.
+-  enable_library_cdms = toolkit_views && !is_castos
++  enable_library_cdms = toolkit_views && !is_castos && !is_aros
+ }
+ 
+ # Use another declare_args() to allow dependence on `enable_library_cdms`.
+diff --git a/tools/grit/grit_args.gni b/tools/grit/grit_args.gni
+index 79d613489b..f2094758df 100644
+--- a/tools/grit/grit_args.gni
++++ b/tools/grit/grit_args.gni
+@@ -15,7 +15,7 @@ devtools_grd_path_no_ext = get_path_info(devtools_grd_path, "dir") + "/" +
+ # Prefer using this (and excluding specific platforms) when a resource applies
+ # to (most) desktop platforms.
+ assert(toolkit_views ==
+-       (is_chromeos || is_fuchsia || is_linux || is_mac || is_win))
++       (is_aros || is_chromeos || is_fuchsia || is_linux || is_mac || is_win))
+ 
+ # Variables that are passed to grit with the -D flag.
+ 
+diff --git a/ui/ozone/BUILD.gn b/ui/ozone/BUILD.gn
+index bf3c5ce36b..23d76bb634 100644
+--- a/ui/ozone/BUILD.gn
++++ b/ui/ozone/BUILD.gn
+@@ -39,6 +39,11 @@ if (ozone_platform_headless) {
+   ozone_platform_deps += [ "platform/headless" ]
+ }
+ 
++if (ozone_platform_aros) {
++  ozone_platforms += [ "aros" ]
++  ozone_platform_deps += [ "platform/aros" ]
++}
++
+ if (ozone_platform_drm) {
+   ozone_platforms += [ "drm" ]
+   ozone_platform_deps += [ "platform/drm:gbm" ]

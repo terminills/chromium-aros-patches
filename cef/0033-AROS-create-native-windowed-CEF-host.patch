@@ -1,0 +1,104 @@
+From 98f44ba1762558feaacb645447dbb271c45f2923 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 27 Jul 2026 23:09:08 -0500
+Subject: [PATCH 33/43] AROS: create native windowed CEF host
+
+AI_PHASE: electron-visible-shell
+
+AI_STATUS: archive-clean-runtime-pending
+
+ROOT_CAUSE: CefBrowserPlatformDelegateNativeLinux compiled host-window creation only for Ozone/X11; on AROS CreateHostWindow returned success without constructing a Widget or PlatformWindow.
+
+FIX_REASON: Create a top-level Aura widget for AROS with no native parent, letting the existing Ozone backend open the Intuition window; retain child-control behavior for X11 and Windows parents.
+
+SCOPE: CEF native browser host creation and generic delegate-view top-level selection only.
+
+VALIDATION: capped -j32 //cef:libcef rebuild passed 1804/1804 after the source change.
+
+AI_LIMITATIONS: native cef.library re-engulf and hosted visual lifecycle replay remain pending.
+
+AI_DECISION_CHAIN:; browser-created log plus empty desktop; missing IS_AROS host-window branch; use existing Aura/Ozone path.
+
+Evidence:-electron-visible-shell-20260727/06-first-windowed-run-verdict.txt
+
+Job:
+---
+ .../browser_platform_delegate_native_linux.cc | 23 +++++++++++++++++++
+ libcef/browser/native/window_delegate_view.cc | 13 +++++++----
+ 2 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/libcef/browser/native/browser_platform_delegate_native_linux.cc b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+index f1dc70a4..1643219d 100644
+--- a/libcef/browser/native/browser_platform_delegate_native_linux.cc
++++ b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+@@ -89,6 +89,24 @@ bool CefBrowserPlatformDelegateNativeLinux::CreateHostWindow() {
+   window_x11_->Show();
+ #endif  // BUILDFLAG(IS_OZONE_X11)
+ 
++#if BUILDFLAG(IS_AROS)
++  // AROS is an Ozone platform, but not Ozone/X11.  Let Aura create the
++  // top-level PlatformWindow so the AROS Ozone backend can open the native
++  // Intuition window.
++  host_window_created_ = true;
++  browser_->AddRef();
++
++  CefWindowDelegateView* delegate_view = new CefWindowDelegateView(
++      GetBackgroundColor(), false, GetBoundsChangedCallback(),
++      GetWidgetDeleteCallback());
++  delegate_view->SetTitle(
++      CefString(&window_info_.window_name).ToString16());
++  delegate_view->Init(gfx::kNullAcceleratedWidget, web_contents_, rect);
++
++  window_widget_ = delegate_view->GetWidget();
++  window_widget_->Show();
++#endif  // BUILDFLAG(IS_AROS)
++
+   // As an additional requirement on Linux, we must set the colors for the
+   // render widgets in webkit.
+   auto prefs = web_contents_->GetMutableRendererPrefs();
+@@ -120,6 +138,11 @@ void CefBrowserPlatformDelegateNativeLinux::CloseHostWindow() {
+     window_x11_->Close();
+   }
+ #endif
++#if BUILDFLAG(IS_AROS)
++  if (window_widget_) {
++    window_widget_->Close();
++  }
++#endif
+ }
+ 
+ CefWindowHandle CefBrowserPlatformDelegateNativeLinux::GetHostWindowHandle()
+diff --git a/libcef/browser/native/window_delegate_view.cc b/libcef/browser/native/window_delegate_view.cc
+index 13b30590..bccb0e16 100644
+--- a/libcef/browser/native/window_delegate_view.cc
++++ b/libcef/browser/native/window_delegate_view.cc
+@@ -33,6 +33,8 @@ void CefWindowDelegateView::Init(gfx::AcceleratedWidget parent_widget,
+   SetCanResize(true);
+ 
+   views::Widget* widget = new views::Widget;
++  const bool top_level =
++      parent_widget == gfx::kNullAcceleratedWidget;
+ 
+   // See CalculateWindowStylesFromInitParams in
+   // ui/views/widget/widget_hwnd_utils.cc for the conversion of |params| to
+@@ -41,14 +43,15 @@ void CefWindowDelegateView::Init(gfx::AcceleratedWidget parent_widget,
+   params.parent_widget = parent_widget;
+   params.bounds = bounds;
+   params.delegate = this;
+-  // Set the WS_CHILD flag.
+-  params.child = true;
+-  // Set the WS_VISIBLE flag.
+-  params.type = views::Widget::InitParams::TYPE_CONTROL;
++  // Windows and X11 provide a native parent window. AROS asks Aura/Ozone to
++  // create the native top-level window directly.
++  params.child = !top_level;
++  params.type = top_level ? views::Widget::InitParams::TYPE_WINDOW
++                          : views::Widget::InitParams::TYPE_CONTROL;
+   // Don't set the WS_EX_COMPOSITED flag.
+   params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
+   // Tell Aura not to draw the window frame on resize.
+-  params.remove_standard_frame = true;
++  params.remove_standard_frame = !top_level;
+   // Cause WidgetDelegate::CanActivate to return true. See comments in
+   // AlloyBrowserHostImpl::PlatformSetFocus.
+   params.activatable = views::Widget::InitParams::Activatable::kYes;

@@ -1,0 +1,34 @@
+From 45232d66a90bb9a8d6070f97bdaa3cf2f47f31af Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:42:09 -0500
+Subject: [PATCH 196/638] message_center: enable desktop notifications on AROS
+ [chromium] [aros]
+
+Statement:
+The full Chrome graph classified AROS as message-center-disabled and selected a dummy implementation reserved for Android and Fuchsia, despite the native port already using Views.
+
+Decision:
+Enable Chromium's complete desktop message center on AROS, including notification state and Views popup surfaces.
+
+Evidence:
+ui/message_center/message_center/message_center.o builds successfully after GN regenerates the AROS graph.
+
+Chain:
+ first native upstream Chromium browser window.
+---
+ ui/base/ui_features.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ui/base/ui_features.gni b/ui/base/ui_features.gni
+index afdb756a35..ca5fff65d7 100644
+--- a/ui/base/ui_features.gni
++++ b/ui/base/ui_features.gni
+@@ -27,7 +27,7 @@ declare_args() {
+ 
+   # Whether the message center should be included for displaying notifications.
+   enable_message_center =
+-      is_win || is_mac || is_linux || is_chromeos || is_fuchsia
++      is_win || is_mac || is_linux || is_chromeos || is_fuchsia || is_aros
+ 
+   enable_hidpi = !is_android
+ }

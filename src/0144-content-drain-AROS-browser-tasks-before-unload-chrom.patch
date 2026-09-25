@@ -1,0 +1,50 @@
+From f660d1f93bf105cea21d5f5dc07e24674102f495 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 14:29:10 -0500
+Subject: [PATCH 144/638] content: drain AROS browser tasks before unload
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: ThreadPoolInstance::Shutdown intentionally permits CONTINUE_ON_SHUTDOWN workers and pooled single-thread runners to survive. Once collect-aros restored pthread's EXIT hook, AROS correctly refused to unload headless_shell while artifact 50 still showed twelve pool tasks plus MemoryInfra waiting.
+
+FIX_REASON: After every browser subsystem has stopped posting work, join all ThreadPool groups and pooled single-thread runners, then stop the leaky MemoryInfra thread through the final-shutdown API. This supplies the process-wide task termination that AROS cannot inherit from a host process boundary.
+
+SCOPE: Final BrowserMainLoop teardown on AROS only; normal shutdown semantics on other platforms are unchanged.
+
+VALIDATION: browser_main_loop.o and the new MemoryDumpManager API compiled successfully in the 166/166 touched-target build; OPAL artifact 50 maps each targeted task to the drained owners.
+
+RISK: medium; JoinForTesting is intentionally final and forbids later task posting, so it is placed after PostDestroyThreads and guarded to AROS.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/browser/browser_main_loop.cc | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
+index e9608c7322..40087ce5a3 100644
+--- a/content/browser/browser_main_loop.cc
++++ b/content/browser/browser_main_loop.cc
+@@ -1288,6 +1288,20 @@ void BrowserMainLoop::ShutdownThreadsAndCleanUp() {
+     TRACE_EVENT0("shutdown", "BrowserMainLoop::Subsystem:PostDestroyThreads");
+     parts_->PostDestroyThreads();
+   }
++
++#if BUILDFLAG(IS_AROS)
++  // AROS unloads an executable's code as soon as its main task returns.
++  // Shutdown() intentionally permits CONTINUE_ON_SHUTDOWN workers to remain
++  // alive, so join the pool after every browser subsystem has stopped posting
++  // work. This also drains its single-thread task runners before pthread's
++  // process-exit hook verifies that no task can execute unloaded code.
++  LOG(INFO) << "[Chromium:shutdown] joining AROS ThreadPool workers";
++  base::ThreadPoolInstance::Get()->JoinForTesting();
++  LOG(INFO) << "[Chromium:shutdown] AROS ThreadPool workers joined";
++  LOG(INFO) << "[Chromium:shutdown] stopping AROS MemoryInfra thread";
++  base::trace_event::MemoryDumpManager::GetInstance()->ShutdownForProcessExit();
++  LOG(INFO) << "[Chromium:shutdown] AROS MemoryInfra thread stopped";
++#endif
+ }
+ 
+ media::AudioManager* BrowserMainLoop::audio_manager() const {

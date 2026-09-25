@@ -1,0 +1,54 @@
+From 0c76a83580dc12c527b34757f34ba9555cf4aa23 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:18:57 -0500
+Subject: [PATCH 433/638] [AROS] Retire AROS thread-priority trace
+
+Remove the bounded priority-report probe while retaining the native SetTaskPri mapping. The diagnostic checkpoint remains available in history.
+
+---
+ base/threading/platform_thread_posix.cc | 17 +----------------
+ 1 file changed, 1 insertion(+), 16 deletions(-)
+
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index 3e8efbeb63..ff8f0a7dcc 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -13,7 +13,6 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
+-#include <atomic>
+ #include <memory>
+ #include <tuple>
+ 
+@@ -41,6 +40,7 @@
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <sys/syscall.h>
++#include <atomic>
+ #endif
+ 
+ #if BUILDFLAG(IS_FUCHSIA)
+@@ -395,22 +395,7 @@ void SetCurrentThreadTypeImpl(ThreadType thread_type,
+   struct Task* task = FindTask(nullptr);
+   if (task) {
+     const int nice_setting = internal::ThreadTypeToNiceValue(thread_type);
+-    const int old_priority = task->tc_Node.ln_Pri;
+     SetTaskPri(task, static_cast<BYTE>(-nice_setting));
+-    static std::atomic<uint32_t> aros_priority_reports{0};
+-    const uint32_t report = aros_priority_reports.fetch_add(1);
+-    if (report < 128) {
+-      LOG(ERROR) << "[AROS_PRIORITY] task=" << task
+-                 << " name="
+-                 << (task->tc_Node.ln_Name ? task->tc_Node.ln_Name
+-                                           : "<unnamed>")
+-                 << " thread_type=" << static_cast<int>(thread_type)
+-                 << " pump_type=" << static_cast<int>(pump_type_hint)
+-                 << " old_exec_priority=" << old_priority
+-                 << " requested_exec_priority=" << -nice_setting
+-                 << " actual_exec_priority="
+-                 << static_cast<int>(task->tc_Node.ln_Pri);
+-    }
+   }
+ #elif BUILDFLAG(IS_NACL)
+   NOTIMPLEMENTED();

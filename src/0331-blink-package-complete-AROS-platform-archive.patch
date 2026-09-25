@@ -1,0 +1,59 @@
+From c59604b96e18c5a16ea7692fb0c6475a9f524547 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 19:10:47 -0500
+Subject: [PATCH 331/638] blink: package complete AROS platform archive
+
+Wrap Chromium's existing Blink Platform component in an AROS-only complete static archive for native-library extraction. Normal Chromium consumers remain on the unchanged :platform target until the resident library and import bridge are proven.
+
+AI_PHASE: chromium-blink-platform-library
+
+AI_STATUS: complete-archive-assumption-checkpoint
+
+AI_ASSUMPTION: GN complete_static_lib can capture Blink Platform's static dependency closure while preserving external v8.library imports
+
+AI_VALIDATION: GN formatting and source diff checks pass; focused archive build intentionally follows this checkpoint
+
+AI_LIMITATIONS: archive generation, native resident link, consumer import surface, and runtime validation remain pending
+
+AI_DECISION_CHAIN:; 53bce9af16; 6a6eabe55b
+---
+ BUILD.gn                                     |  3 ++-
+ third_party/blink/renderer/platform/BUILD.gn | 11 +++++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 550582bf67..1e7cfe71a7 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -105,7 +105,8 @@ group("gn_all") {
+     assert(use_blink)
+     assert(!aros_cef_library_only)
+     assert(!aros_v8_library_only)
+-    deps = [ "//third_party/blink/renderer/platform" ]
++    deps =
++        [ "//third_party/blink/renderer/platform:aros_blink_platform_archive" ]
+     deps += root_extra_deps
+   } else if (is_aros && aros_v8_library_only) {
+     assert(!aros_cef_library_only)
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index b036bcdedc..5614b39934 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1870,6 +1870,17 @@ component("platform") {
+   configs += blink_symbols_config
+ }
+ 
++if (is_aros && aros_blink_platform_library_only) {
++  # Native blink_platform.library engulfs this archive from its original GN
++  # output tree. Keep the ordinary :platform target unchanged for Chromium
++  # until the AROS import bridge has been proven independently.
++  static_library("aros_blink_platform_archive") {
++    complete_static_lib = true
++    visibility = [ "//:gn_all" ]
++    deps = [ ":platform" ]
++  }
++}
++
+ static_library("test_support") {
+   visibility += [
+     "//third_party/blink/*",

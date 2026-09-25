@@ -1,0 +1,34 @@
+From 801f63f63e7c13d7a9f60c9634bac3f6ae6912b7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:55:02 -0500
+Subject: [PATCH 185/638] extensions: use desktop keybindings on AROS
+ [chromium] [aros]
+
+Statement:
+The full Chrome extensions graph stopped at a compile-time unsupported-platform branch while selecting the manifest command keybinding vocabulary.
+
+Decision:
+Classify AROS with Chromium's portable Linux desktop accelerator schema. AROS uses the same Ctrl/Alt command model and does not need a private extension manifest token.
+
+Evidence:
+obj/extensions/common/common/command.o builds successfully in out/aros-chrome after the change.
+
+Chain:
+Advances toward the first native upstream Chrome window.
+---
+ extensions/common/command.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/extensions/common/command.cc b/extensions/common/command.cc
+index 42f32c1b8f..e45b1b90ce 100644
+--- a/extensions/common/command.cc
++++ b/extensions/common/command.cc
+@@ -283,7 +283,7 @@ std::string Command::CommandPlatform() {
+   return values::kKeybindingPlatformMac;
+ #elif BUILDFLAG(IS_CHROMEOS)
+   return values::kKeybindingPlatformChromeOs;
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   return values::kKeybindingPlatformLinux;
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // TODO(crbug.com/1312215): Change this once we decide what string should be

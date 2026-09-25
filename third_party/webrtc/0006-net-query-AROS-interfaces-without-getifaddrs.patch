@@ -1,0 +1,105 @@
+From 3ad746d6af4043c99ad341b26fd06a61154f10d2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:29:49 -0500
+Subject: [PATCH 6/7] net: query AROS interfaces without getifaddrs
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: WebRTC classified AROS as generic POSIX and included ifaddrs.h, but AROSTCP does not provide getifaddrs.
+
+FIX_REASON: Reuse Chromium's task-safe AROS interface snapshot and declare the //base dependency instead of duplicating native ioctl enumeration.
+
+SCOPE: rtc_base/net_test_helpers.cc, rtc_base/BUILD.gn
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/third_party/webrtc/rtc_base/net_test_helpers/net_test_helpers.o
+
+RISK: low; generic POSIX and Windows paths are unchanged, while AROS now reports only active configured families.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ rtc_base/BUILD.gn            |  3 +++
+ rtc_base/net_test_helpers.cc | 34 ++++++++++++++++++++++++++++++++--
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index 153856c..686cec2 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -895,6 +895,9 @@ rtc_library("net_test_helpers") {
+   if (is_android) {
+     deps += [ ":ifaddrs_android" ]
+   }
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+   if (is_win) {
+     deps += [
+       ":win32",
+diff --git a/rtc_base/net_test_helpers.cc b/rtc_base/net_test_helpers.cc
+index 806d7de..eeb4907 100644
+--- a/rtc_base/net_test_helpers.cc
++++ b/rtc_base/net_test_helpers.cc
+@@ -12,6 +12,11 @@
+ 
+ #include <memory>
+ #include <string>
++#include <vector>
++
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ 
+ #if defined(WEBRTC_WIN)
+ #include <ws2spi.h>
+@@ -23,15 +28,38 @@
+ #include <arpa/inet.h>
+ #if defined(WEBRTC_ANDROID)
+ #include "rtc_base/ifaddrs_android.h"
+-#else
++#elif !defined(__AROS__)
+ #include <ifaddrs.h>
+ #endif
+ #endif  // defined(WEBRTC_POSIX) && !defined(__native_client__)
+ 
+ namespace rtc {
+ 
++#if defined(__AROS__)
++namespace {
++
++bool HasAddressFamily(int family) {
++  std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++  if (!base::aros::GetNetworkInterfaces(&interfaces)) {
++    return false;
++  }
++
++  for (const auto& interface : interfaces) {
++    if (interface.is_up && interface.is_running &&
++        interface.family == family) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++#endif
++
+ bool HasIPv4Enabled() {
+-#if defined(WEBRTC_POSIX) && !defined(__native_client__)
++#if defined(__AROS__)
++  return HasAddressFamily(AF_INET);
++#elif defined(WEBRTC_POSIX) && !defined(__native_client__)
+   bool has_ipv4 = false;
+   struct ifaddrs* ifa;
+   if (getifaddrs(&ifa) < 0) {
+@@ -90,6 +118,8 @@ bool HasIPv6Enabled() {
+     }
+   }
+   return false;
++#elif defined(__AROS__)
++  return HasAddressFamily(AF_INET6);
+ #elif defined(WEBRTC_POSIX) && !defined(__native_client__)
+   bool has_ipv6 = false;
+   struct ifaddrs* ifa;

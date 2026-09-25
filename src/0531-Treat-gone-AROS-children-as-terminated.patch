@@ -1,0 +1,62 @@
+From e10d36252266433b2ceb75d5b4822a453c60db38 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 03:59:21 -0500
+Subject: [PATCH 531/638] Treat gone AROS children as terminated
+
+---
+ base/process/process_posix.cc | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
+index 622b7bdb50..805637b732 100644
+--- a/base/process/process_posix.cc
++++ b/base/process/process_posix.cc
+@@ -38,6 +38,15 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++bool ArosKillFailureMeansProcessGone(int saved_errno) {
++  // Hosted AROS can report an already-returned child task as either ESRCH or,
++  // through the current PosixC signal bridge, a failed kill() with errno left
++  // at 0. Both mean there is no signalable target left for Chromium to retire.
++  return saved_errno == ESRCH || saved_errno == 0;
++}
++#endif
++
+ bool WaitpidWithTimeout(base::ProcessHandle handle,
+                         int* status,
+                         base::TimeDelta wait) {
+@@ -351,6 +360,10 @@ bool Process::Terminate(int exit_code, bool wait) const {
+   if (maybe_compromised) {
+     // Forcibly terminate the process immediately.
+     const bool was_killed = kill(process_, SIGKILL) == 0;
++#if BUILDFLAG(IS_AROS)
++    if (!was_killed && ArosKillFailureMeansProcessGone(errno))
++      return true;
++#endif
+ #if BUILDFLAG(IS_CHROMEOS)
+     if (was_killed)
+       CleanUpProcessAsync();
+@@ -361,6 +374,10 @@ bool Process::Terminate(int exit_code, bool wait) const {
+ 
+   // Terminate process giving it a chance to clean up.
+   if (kill(process_, SIGTERM) != 0) {
++#if BUILDFLAG(IS_AROS)
++    if (ArosKillFailureMeansProcessGone(errno))
++      return true;
++#endif
+     DPLOG(ERROR) << "Unable to terminate process " << process_;
+     return false;
+   }
+@@ -373,6 +390,10 @@ bool Process::Terminate(int exit_code, bool wait) const {
+     return true;
+   }
+   if (kill(process_, SIGKILL) != 0) {
++#if BUILDFLAG(IS_AROS)
++    if (ArosKillFailureMeansProcessGone(errno))
++      return true;
++#endif
+     DPLOG(ERROR) << "Unable to kill process " << process_;
+     return false;
+   }

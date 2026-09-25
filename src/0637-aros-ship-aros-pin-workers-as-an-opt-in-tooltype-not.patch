@@ -1,0 +1,36 @@
+From c051da0a481f0be528d229f5306fdb69b8ca4937 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 22 Sep 2026 13:39:37 -0500
+Subject: [PATCH 637/638] aros: ship --aros-pin-workers as an opt-in tooltype,
+ not the icon default
+
+On an 8-vCPU KVM guest the pinned layout loses on every axis of the
+smoothness probe (jank.html boxes=48): decode=12 pinned 10.0 fps / worst
+933 ms vs unpinned 20.0 fps / worst 117 ms; decode=60 pinned 10.0 fps and
+214 decodes vs unpinned 20.0 fps and 381 decodes. Capping the spread to 3
+cores (--aros-pin-workers=3) still gives 12 fps. At 4 vCPUs pinned holds
+20 fps, the same as 1 vCPU. So spreading the workers off CPU 0 has a
+measured cost at >=8 cores and no measured gain anywhere yet; the demo
+machine has 32 logical CPUs. Keep the switch one bracket away in the icon
+until bare metal says otherwise.
+
+Evidence: aros-adt-pc-x86_64-clean/qemu-test/evidence-alpha10 (a10cli8,
+a10pin0, a10pin3, a10dec0, a10dec8).
+
+---
+ chrome/app/theme/aros/Chromium.info.src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/app/theme/aros/Chromium.info.src b/chrome/app/theme/aros/Chromium.info.src
+index 245b732025..0a7daff589 100644
+--- a/chrome/app/theme/aros/Chromium.info.src
++++ b/chrome/app/theme/aros/Chromium.info.src
+@@ -8,7 +8,7 @@ TOOLTYPE = "CHROME_ARG=--ozone-platform=aros"
+ TOOLTYPE = "CHROME_ARG=--no-first-run"
+ TOOLTYPE = "CHROME_ARG=--no-default-browser-check"
+ TOOLTYPE = "CHROME_ARG=--aros-spoof-platform=linux"
+-TOOLTYPE = "CHROME_ARG=--aros-pin-workers"
++TOOLTYPE = "(CHROME_ARG=--aros-pin-workers)"
+ TOOLTYPE = "(CHROME_ARG=--user-data-dir=PROGDIR:Profiles)"
+ TOOLTYPE = "(CHROME_ARG=--incognito)"
+ TOOLTYPE = "(CHROME_ARG=--start-fullscreen)"

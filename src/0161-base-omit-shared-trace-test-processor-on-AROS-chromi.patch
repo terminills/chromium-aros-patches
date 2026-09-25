@@ -1,0 +1,47 @@
+From d8d1cfb8183203091991e40b32cc64103807c440 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:01:21 -0500
+Subject: [PATCH 161/638] base: omit shared trace test processor on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: base test support always links its Perfetto SQL trace processor as a shared library, even in static builds, but AROS shared-library linkage pulled executable startup symbols main and KPutStr.
+FIX_REASON: Retain Perfetto test support and all production tracing while excluding only the dynamically isolated test trace-processor wrapper and its generated SQL inputs on AROS.
+VALIDATION: GN regenerated 18110 targets; obj/base/test/libtest_support.a builds and content_shell no longer depends on libtest_trace_processor.so.
+RISK: AROS cannot run base tests that require the SQL trace-processor wrapper until a native shared-library isolation contract exists.
+---
+ base/test/BUILD.gn | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/base/test/BUILD.gn b/base/test/BUILD.gn
+index 4c0357370d..158aa383e5 100644
+--- a/base/test/BUILD.gn
++++ b/base/test/BUILD.gn
+@@ -190,15 +190,17 @@ static_library("test_support") {
+ 
+   if (enable_base_tracing) {
+     public_deps += [ "//third_party/perfetto:perfetto_test_support" ]
+-    public_deps += [ ":test_trace_processor" ]
+-    sources += [
+-      "test_trace_processor.cc",
+-      "test_trace_processor.h",
+-    ]
+-    deps += [
+-      ":amalgamated_perfetto_sql_stdlib",
+-      ":gen_cc_chrome_track_event_descriptor",
+-    ]
++    if (!is_aros) {
++      public_deps += [ ":test_trace_processor" ]
++      sources += [
++        "test_trace_processor.cc",
++        "test_trace_processor.h",
++      ]
++      deps += [
++        ":amalgamated_perfetto_sql_stdlib",
++        ":gen_cc_chrome_track_event_descriptor",
++      ]
++    }
+     if (is_ios) {
+       deps += [
+         ":test_trace_processor+bundle",

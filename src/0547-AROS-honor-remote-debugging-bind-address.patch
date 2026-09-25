@@ -1,0 +1,98 @@
+From 14a9a6ea2bbda307500db8bbc6cb0c9ac500ec76 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 10:09:25 -0500
+Subject: [PATCH 547/638] AROS: honor remote debugging bind address
+
+---
+ .../devtools/remote_debugging_server.cc       | 34 +++++++++++++++----
+ 1 file changed, 28 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/devtools/remote_debugging_server.cc b/chrome/browser/devtools/remote_debugging_server.cc
+index 000bd675bc..054ec00324 100644
+--- a/chrome/browser/devtools/remote_debugging_server.cc
++++ b/chrome/browser/devtools/remote_debugging_server.cc
+@@ -10,6 +10,7 @@
+ #include "base/lazy_instance.h"
+ #include "base/path_service.h"
+ #include "base/strings/string_number_conversions.h"
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+@@ -35,18 +36,33 @@ base::LazyInstance<bool>::Leaky g_tethering_enabled = LAZY_INSTANCE_INITIALIZER;
+ const uint16_t kMinTetheringPort = 9333;
+ const uint16_t kMaxTetheringPort = 9444;
+ const int kBackLog = 10;
++#if BUILDFLAG(IS_AROS)
++const char kRemoteDebuggingAddress[] = "remote-debugging-address";
++#endif
+ 
+ class TCPServerSocketFactory
+     : public content::DevToolsSocketFactory {
+  public:
+-  explicit TCPServerSocketFactory(uint16_t port)
+-      : port_(port), last_tethering_port_(kMinTetheringPort) {}
++  TCPServerSocketFactory(uint16_t port, std::string address)
++      : address_(std::move(address)),
++        port_(port),
++        last_tethering_port_(kMinTetheringPort) {}
+ 
+   TCPServerSocketFactory(const TCPServerSocketFactory&) = delete;
+   TCPServerSocketFactory& operator=(const TCPServerSocketFactory&) = delete;
+ 
+  private:
+-  std::unique_ptr<net::ServerSocket> CreateLocalHostServerSocket(int port) {
++  std::unique_ptr<net::ServerSocket> CreateServerSocket(int port) {
++    if (!address_.empty()) {
++      auto socket = std::make_unique<net::TCPServerSocket>(
++          nullptr, net::NetLogSource());
++      if (socket->ListenWithAddressAndPort(address_, port, kBackLog) ==
++          net::OK) {
++        return socket;
++      }
++      return nullptr;
++    }
++
+     std::unique_ptr<net::ServerSocket> socket(
+         new net::TCPServerSocket(nullptr, net::NetLogSource()));
+     if (socket->ListenWithAddressAndPort(
+@@ -59,7 +75,7 @@ class TCPServerSocketFactory
+ 
+   // content::DevToolsSocketFactory.
+   std::unique_ptr<net::ServerSocket> CreateForHttpServer() override {
+-    return CreateLocalHostServerSocket(port_);
++    return CreateServerSocket(port_);
+   }
+ 
+   std::unique_ptr<net::ServerSocket> CreateForTethering(
+@@ -71,7 +87,7 @@ class TCPServerSocketFactory
+       last_tethering_port_ = kMinTetheringPort;
+     uint16_t port = ++last_tethering_port_;
+     *name = base::NumberToString(port);
+-    return CreateLocalHostServerSocket(port);
++    return CreateServerSocket(port);
+   }
+ 
+   std::string address_;
+@@ -100,6 +116,11 @@ RemoteDebuggingServer::RemoteDebuggingServer() {
+   if (!base::StringToInt(port_str, &port) || port < 0 || port >= 65535)
+     return;
+ 
++  std::string address;
++#if BUILDFLAG(IS_AROS)
++  address = command_line.GetSwitchValueASCII(kRemoteDebuggingAddress);
++#endif
++
+   base::FilePath output_dir;
+   if (!port) {
+     // The client requested an ephemeral port. Must write the selected
+@@ -118,7 +139,8 @@ RemoteDebuggingServer::RemoteDebuggingServer() {
+     }
+   }
+   content::DevToolsAgentHost::StartRemoteDebuggingServer(
+-      std::make_unique<TCPServerSocketFactory>(port), output_dir,
++      std::make_unique<TCPServerSocketFactory>(port, std::move(address)),
++      output_dir,
+       debug_frontend_dir);
+ }
+ 

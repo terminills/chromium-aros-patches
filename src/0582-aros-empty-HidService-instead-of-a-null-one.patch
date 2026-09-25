@@ -1,0 +1,137 @@
+From 9e7d1d6c290db9476d260abe9e0d1dfceb5abbd8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 18:39:04 -0500
+Subject: [PATCH 582/638] aros: empty HidService instead of a null one
+
+HidService::Create() returned nullptr on AROS, so the first HidManager
+bind (FIDO security-key discovery on accounts.google.com sign-in)
+dereferenced null in HidManagerImpl. HidServiceAros enumerates nothing
+and refuses connections; enumeration completes in the constructor so
+GetDevices() answers empty instead of pending forever.
+---
+ services/device/hid/BUILD.gn            |  7 +++++
+ services/device/hid/hid_service.cc      |  4 +++
+ services/device/hid/hid_service_aros.cc | 30 +++++++++++++++++++++
+ services/device/hid/hid_service_aros.h  | 36 +++++++++++++++++++++++++
+ 4 files changed, 77 insertions(+)
+ create mode 100644 services/device/hid/hid_service_aros.cc
+ create mode 100644 services/device/hid/hid_service_aros.h
+
+diff --git a/services/device/hid/BUILD.gn b/services/device/hid/BUILD.gn
+index 7421facd4c..5b63cce168 100644
+--- a/services/device/hid/BUILD.gn
++++ b/services/device/hid/BUILD.gn
+@@ -82,6 +82,13 @@ source_set("hid") {
+       "hid_service_fuchsia.h",
+     ]
+   }
++
++  if (is_aros) {
++    sources += [
++      "hid_service_aros.cc",
++      "hid_service_aros.h",
++    ]
++  }
+ }
+ 
+ fuzzer_test("hid_report_descriptor_fuzzer") {
+diff --git a/services/device/hid/hid_service.cc b/services/device/hid/hid_service.cc
+index a1b322c44b..dcd908f296 100644
+--- a/services/device/hid/hid_service.cc
++++ b/services/device/hid/hid_service.cc
+@@ -26,6 +26,8 @@
+ #include "services/device/hid/hid_service_win.h"
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #include "services/device/hid/hid_service_fuchsia.h"
++#elif BUILDFLAG(IS_AROS)
++#include "services/device/hid/hid_service_aros.h"
+ #endif
+ 
+ namespace device {
+@@ -74,6 +76,8 @@ std::unique_ptr<HidService> HidService::Create() {
+   return std::make_unique<HidServiceWin>();
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return std::make_unique<HidServiceFuchsia>();
++#elif BUILDFLAG(IS_AROS)
++  return std::make_unique<HidServiceAros>();
+ #else
+   return nullptr;
+ #endif
+diff --git a/services/device/hid/hid_service_aros.cc b/services/device/hid/hid_service_aros.cc
+new file mode 100644
+index 0000000000..f50b2b49d5
+--- /dev/null
++++ b/services/device/hid/hid_service_aros.cc
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/device/hid/hid_service_aros.h"
++
++#include "services/device/hid/hid_connection.h"
++
++namespace device {
++
++HidServiceAros::HidServiceAros() {
++  // Nothing to enumerate: let GetDevices() answer with an empty list
++  // right away instead of leaving callers pending forever.
++  FirstEnumerationComplete();
++}
++
++HidServiceAros::~HidServiceAros() = default;
++
++void HidServiceAros::Connect(const std::string& device_id,
++                             bool allow_protected_reports,
++                             bool allow_fido_reports,
++                             ConnectCallback callback) {
++  std::move(callback).Run(nullptr);
++}
++
++base::WeakPtr<HidService> HidServiceAros::GetWeakPtr() {
++  return weak_factory_.GetWeakPtr();
++}
++
++}  // namespace device
+diff --git a/services/device/hid/hid_service_aros.h b/services/device/hid/hid_service_aros.h
+new file mode 100644
+index 0000000000..edad509cbc
+--- /dev/null
++++ b/services/device/hid/hid_service_aros.h
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef SERVICES_DEVICE_HID_HID_SERVICE_AROS_H_
++#define SERVICES_DEVICE_HID_HID_SERVICE_AROS_H_
++
++#include "services/device/hid/hid_service.h"
++
++namespace device {
++
++// AROS has no HID (raw report) backend yet. This service enumerates no
++// devices and refuses connections, so callers such as FIDO security-key
++// discovery see an empty bus instead of a null HidService.
++class HidServiceAros : public HidService {
++ public:
++  HidServiceAros();
++  ~HidServiceAros() override;
++
++  HidServiceAros(const HidServiceAros&) = delete;
++  HidServiceAros& operator=(const HidServiceAros&) = delete;
++
++ private:
++  // HidService implementation.
++  void Connect(const std::string& device_id,
++               bool allow_protected_reports,
++               bool allow_fido_reports,
++               ConnectCallback callback) override;
++  base::WeakPtr<HidService> GetWeakPtr() override;
++
++  base::WeakPtrFactory<HidServiceAros> weak_factory_{this};
++};
++
++}  // namespace device
++
++#endif  // SERVICES_DEVICE_HID_HID_SERVICE_AROS_H_

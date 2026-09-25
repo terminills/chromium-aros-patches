@@ -1,0 +1,109 @@
+From 93c1d87af7b418a88625b5b213bb96851d3704dd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 16:13:30 -0500
+Subject: [PATCH 473/638] AROS: stop thread pool inheritance at native process
+ boundary
+
+Key each ThreadPoolInstance by Chromium command-line process identity. Worker tasks still inherit their owner through the existing command-line registry, while spawned GPU, renderer, and utility processes no longer cross into the browser pool through their raw Exec parent chain.
+
+
+
+---
+ base/task/thread_pool/thread_pool_instance.cc | 53 +++++++++----------
+ 1 file changed, 24 insertions(+), 29 deletions(-)
+
+diff --git a/base/task/thread_pool/thread_pool_instance.cc b/base/task/thread_pool/thread_pool_instance.cc
+index 024ffbcf5d..7badc96a39 100644
+--- a/base/task/thread_pool/thread_pool_instance.cc
++++ b/base/task/thread_pool/thread_pool_instance.cc
+@@ -9,6 +9,7 @@
+ #include <string_view>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
+ #include "base/synchronization/lock.h"
+@@ -29,12 +30,15 @@ namespace {
+ 
+ #if BUILDFLAG(IS_AROS)
+ 
+-// Native AROS processes share an address space but retain independent process
+-// and worker-task trees. Register each pool against the task that creates it,
+-// then let workers inherit it through their parent chain.
++// Native AROS processes share an address space but retain independent Chromium
++// process identities. CommandLine already maps worker tasks to the command line
++// registered by their owning native process, so use that stable identity here
++// as well. Walking the raw Exec parent chain is insufficient: a spawned child
++// process is itself a descendant of the browser task and must not inherit the
++// browser's pool.
+ struct ThreadPoolProcessRegistry {
+   Lock lock;
+-  std::map<struct Task*, ThreadPoolInstance*> pools;
++  std::map<const CommandLine*, ThreadPoolInstance*> pools;
+ };
+ 
+ ThreadPoolProcessRegistry& GetThreadPoolProcessRegistry() {
+@@ -43,46 +47,37 @@ ThreadPoolProcessRegistry& GetThreadPoolProcessRegistry() {
+ }
+ 
+ ThreadPoolInstance* GetThreadPoolForCurrentTask() {
+-  auto& registry = GetThreadPoolProcessRegistry();
+-  AutoLock lock(registry.lock);
+-
+-  struct Task* task = FindTask(nullptr);
+-  for (size_t depth = 0; task && depth < 64; ++depth) {
+-    const auto it = registry.pools.find(task);
+-    if (it != registry.pools.end()) {
+-      return it->second;
+-    }
+-
+-    struct ETask* etask = GetETask(task);
+-    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  if (!CommandLine::InitializedForCurrentProcess()) {
++    return nullptr;
+   }
+ 
+-  return nullptr;
++  const CommandLine* const process_identity =
++      CommandLine::ForCurrentProcess();
++  auto& registry = GetThreadPoolProcessRegistry();
++  AutoLock lock(registry.lock);
++  const auto it = registry.pools.find(process_identity);
++  return it != registry.pools.end() ? it->second : nullptr;
+ }
+ 
+ void SetThreadPoolForCurrentTask(
+     std::unique_ptr<ThreadPoolInstance> thread_pool) {
+   auto& registry = GetThreadPoolProcessRegistry();
+   ThreadPoolInstance* old_thread_pool = nullptr;
++  DCHECK(CommandLine::InitializedForCurrentProcess());
++  const CommandLine* const process_identity =
++      CommandLine::ForCurrentProcess();
+   {
+     AutoLock lock(registry.lock);
+-    struct Task* task = FindTask(nullptr);
+ 
+     if (thread_pool) {
+-      ThreadPoolInstance*& slot = registry.pools[task];
++      ThreadPoolInstance*& slot = registry.pools[process_identity];
+       old_thread_pool = slot;
+       slot = thread_pool.release();
+     } else {
+-      for (size_t depth = 0; task && depth < 64; ++depth) {
+-        const auto it = registry.pools.find(task);
+-        if (it != registry.pools.end()) {
+-          old_thread_pool = it->second;
+-          registry.pools.erase(it);
+-          break;
+-        }
+-
+-        struct ETask* etask = GetETask(task);
+-        task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++      const auto it = registry.pools.find(process_identity);
++      if (it != registry.pools.end()) {
++        old_thread_pool = it->second;
++        registry.pools.erase(it);
+       }
+     }
+   }

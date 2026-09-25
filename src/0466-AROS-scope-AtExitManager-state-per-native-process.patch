@@ -1,0 +1,229 @@
+From 18b778513ef824fae8dcdf32e244e458c6ab4e8b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 14:00:20 -0500
+Subject: [PATCH 466/638] AROS: scope AtExitManager state per native process
+
+AROS processes share an address space, so Chromium's global AtExitManager stack and disable flag alias browser and child processes. Resolve both through a registry keyed by the nearest NT_PROCESS ancestor while worker tasks inherit their owning process state.
+
+Validation: run 62 removed the base/at_exit.cc g_top_manager fatal; the GPU child advanced into AlloyMainDelegate::BasicStartupComplete and exposed the next null dereference.
+
+
+
+---
+ base/at_exit.cc | 133 +++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 108 insertions(+), 25 deletions(-)
+
+diff --git a/base/at_exit.cc b/base/at_exit.cc
+index a71988fc44..00fb35798b 100644
+--- a/base/at_exit.cc
++++ b/base/at_exit.cc
+@@ -4,46 +4,125 @@
+ 
+ #include "base/at_exit.h"
+ 
++#include "build/build_config.h"
++
+ #include <stddef.h>
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#endif
+ #include <ostream>
+ #include <utility>
+ 
+ #include "base/check_op.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#endif
+ #include "base/notreached.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ namespace base {
+ 
++namespace {
++
++#if BUILDFLAG(IS_AROS)
++
++struct AtExitProcessState {
++  AtExitManager* top_manager = nullptr;
++  bool disable_managers = false;
++};
++
++struct AtExitProcessRegistry {
++  Lock lock;
++  std::map<struct Task*, AtExitProcessState> states;
++};
++
++AtExitProcessRegistry& GetAtExitProcessRegistry() {
++  static NoDestructor<AtExitProcessRegistry> registry;
++  return *registry;
++}
++
++struct Task* GetCurrentProcessTask() {
++  struct Task* task = FindTask(nullptr);
++  struct Task* const current = task;
++
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (task->tc_Node.ln_Type == NT_PROCESS) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return current;
++}
++
++AtExitProcessState& GetCurrentProcessState() {
++  auto& registry = GetAtExitProcessRegistry();
++  AutoLock lock(registry.lock);
++  return registry.states[GetCurrentProcessTask()];
++}
++
++AtExitManager*& GetTopManager() {
++  return GetCurrentProcessState().top_manager;
++}
++
++bool& GetDisableManagers() {
++  return GetCurrentProcessState().disable_managers;
++}
++
++#else
++
+ // Keep a stack of registered AtExitManagers.  We always operate on the most
+ // recent, and we should never have more than one outside of testing (for a
+ // statically linked version of this library).  Testing may use the shadow
+ // version of the constructor, and if we are building a dynamic library we may
+ // end up with multiple AtExitManagers on the same process.  We don't protect
+ // this for thread-safe access, since it will only be modified in testing.
+-static AtExitManager* g_top_manager = nullptr;
++AtExitManager* g_top_manager = nullptr;
++
++bool g_disable_managers = false;
++
++AtExitManager*& GetTopManager() {
++  return g_top_manager;
++}
++
++bool& GetDisableManagers() {
++  return g_disable_managers;
++}
++
++#endif
+ 
+-static bool g_disable_managers = false;
++}  // namespace
+ 
+-AtExitManager::AtExitManager() : next_manager_(g_top_manager) {
++AtExitManager::AtExitManager() : next_manager_(GetTopManager()) {
++  AtExitManager*& top_manager = GetTopManager();
+ // If multiple modules instantiate AtExitManagers they'll end up living in this
+ // module... they have to coexist.
+ #if !defined(COMPONENT_BUILD)
+-  DCHECK(!g_top_manager);
++  DCHECK(!top_manager);
+ #endif
+-  g_top_manager = this;
++  top_manager = this;
+ }
+ 
+ AtExitManager::~AtExitManager() {
+-  if (!g_top_manager) {
++  AtExitManager*& top_manager = GetTopManager();
++  if (!top_manager) {
+     NOTREACHED() << "Tried to ~AtExitManager without an AtExitManager";
+     return;
+   }
+-  DCHECK_EQ(this, g_top_manager);
++  DCHECK_EQ(this, top_manager);
+ 
+-  if (!g_disable_managers)
++  if (!GetDisableManagers())
+     ProcessCallbacksNow();
+-  g_top_manager = next_manager_;
++  top_manager = next_manager_;
+ }
+ 
+ // static
+@@ -54,21 +133,23 @@ void AtExitManager::RegisterCallback(AtExitCallbackType func, void* param) {
+ 
+ // static
+ void AtExitManager::RegisterTask(base::OnceClosure task) {
+-  if (!g_top_manager) {
++  AtExitManager* const top_manager = GetTopManager();
++  if (!top_manager) {
+     NOTREACHED() << "Tried to RegisterCallback without an AtExitManager";
+     return;
+   }
+ 
+-  AutoLock lock(g_top_manager->lock_);
++  AutoLock lock(top_manager->lock_);
+ #if DCHECK_IS_ON()
+-  DCHECK(!g_top_manager->processing_callbacks_);
++  DCHECK(!top_manager->processing_callbacks_);
+ #endif
+-  g_top_manager->stack_.push(std::move(task));
++  top_manager->stack_.push(std::move(task));
+ }
+ 
+ // static
+ void AtExitManager::ProcessCallbacksNow() {
+-  if (!g_top_manager) {
++  AtExitManager* const top_manager = GetTopManager();
++  if (!top_manager) {
+     NOTREACHED() << "Tried to ProcessCallbacksNow without an AtExitManager";
+     return;
+   }
+@@ -78,10 +159,10 @@ void AtExitManager::ProcessCallbacksNow() {
+   // handle it gracefully in release builds so we don't deadlock.
+   base::stack<base::OnceClosure> tasks;
+   {
+-    AutoLock lock(g_top_manager->lock_);
+-    tasks.swap(g_top_manager->stack_);
++    AutoLock lock(top_manager->lock_);
++    tasks.swap(top_manager->stack_);
+ #if DCHECK_IS_ON()
+-    g_top_manager->processing_callbacks_ = true;
++    top_manager->processing_callbacks_ = true;
+ #endif
+   }
+ 
+@@ -95,21 +176,23 @@ void AtExitManager::ProcessCallbacksNow() {
+   }
+ 
+ #if DCHECK_IS_ON()
+-  AutoLock lock(g_top_manager->lock_);
++  AutoLock lock(top_manager->lock_);
+   // Expect that all callbacks have been run.
+-  DCHECK(g_top_manager->stack_.empty());
+-  g_top_manager->processing_callbacks_ = false;
++  DCHECK(top_manager->stack_.empty());
++  top_manager->processing_callbacks_ = false;
+ #endif
+ }
+ 
+ void AtExitManager::DisableAllAtExitManagers() {
+-  AutoLock lock(g_top_manager->lock_);
+-  g_disable_managers = true;
++  AtExitManager* const top_manager = GetTopManager();
++  AutoLock lock(top_manager->lock_);
++  GetDisableManagers() = true;
+ }
+ 
+-AtExitManager::AtExitManager(bool shadow) : next_manager_(g_top_manager) {
+-  DCHECK(shadow || !g_top_manager);
+-  g_top_manager = this;
++AtExitManager::AtExitManager(bool shadow) : next_manager_(GetTopManager()) {
++  AtExitManager*& top_manager = GetTopManager();
++  DCHECK(shadow || !top_manager);
++  top_manager = this;
+ }
+ 
+ }  // namespace base

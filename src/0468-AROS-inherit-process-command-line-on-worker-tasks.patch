@@ -1,0 +1,87 @@
+From 036d3d2e317040e161e9ffda1bf429b56d90621a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 14:32:45 -0500
+Subject: [PATCH 468/638] AROS: inherit process command line on worker tasks
+
+Walk task.resource ancestry to the first registered command line so pthread-backed Exec Processes inherit their logical Chromium process owner while native child processes retain their own registration. Run 65 preserved the direct-lookup MemoryInfra failure that motivated this follow-up.
+
+
+
+---
+ base/command_line.cc | 28 ++++++++++++++--------------
+ 1 file changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/base/command_line.cc b/base/command_line.cc
+index 2b20572ee0..3adcd18fa1 100644
+--- a/base/command_line.cc
++++ b/base/command_line.cc
+@@ -66,20 +66,20 @@ CommandLineProcessRegistry& GetCommandLineProcessRegistry() {
+   return *registry;
+ }
+ 
+-struct Task* GetCurrentProcessTask() {
+-  struct Task* task = FindTask(nullptr);
+-  struct Task* const current = task;
+-
++CommandLine* FindCommandLineForTask(
++    const CommandLineProcessRegistry& registry,
++    struct Task* task) {
+   for (size_t depth = 0; task && depth < 64; ++depth) {
+-    if (task->tc_Node.ln_Type == NT_PROCESS) {
+-      return task;
++    const auto it = registry.command_lines.find(task);
++    if (it != registry.command_lines.end() && it->second) {
++      return it->second;
+     }
+ 
+     struct ETask* etask = GetETask(task);
+     task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
+   }
+ 
+-  return current;
++  return nullptr;
+ }
+ 
+ #endif
+@@ -295,7 +295,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+   auto& registry = GetCommandLineProcessRegistry();
+   AutoLock lock(registry.lock);
+   CommandLine*& command_line =
+-      registry.command_lines[GetCurrentProcessTask()];
++      registry.command_lines[FindTask(nullptr)];
+   if (command_line) {
+ #else
+   if (current_process_commandline_) {
+@@ -328,7 +328,7 @@ void CommandLine::Reset() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetCommandLineProcessRegistry();
+   AutoLock lock(registry.lock);
+-  const auto it = registry.command_lines.find(GetCurrentProcessTask());
++  const auto it = registry.command_lines.find(FindTask(nullptr));
+   DCHECK(it != registry.command_lines.end() && it->second);
+   delete it->second;
+   registry.command_lines.erase(it);
+@@ -344,9 +344,10 @@ CommandLine* CommandLine::ForCurrentProcess() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetCommandLineProcessRegistry();
+   AutoLock lock(registry.lock);
+-  const auto it = registry.command_lines.find(GetCurrentProcessTask());
+-  DCHECK(it != registry.command_lines.end() && it->second);
+-  return it != registry.command_lines.end() ? it->second : nullptr;
++  CommandLine* const command_line =
++      FindCommandLineForTask(registry, FindTask(nullptr));
++  DCHECK(command_line);
++  return command_line;
+ #else
+   DCHECK(current_process_commandline_);
+   return current_process_commandline_;
+@@ -358,8 +359,7 @@ bool CommandLine::InitializedForCurrentProcess() {
+ #if BUILDFLAG(IS_AROS)
+   auto& registry = GetCommandLineProcessRegistry();
+   AutoLock lock(registry.lock);
+-  const auto it = registry.command_lines.find(GetCurrentProcessTask());
+-  return it != registry.command_lines.end() && it->second;
++  return FindCommandLineForTask(registry, FindTask(nullptr)) != nullptr;
+ #else
+   return !!current_process_commandline_;
+ #endif

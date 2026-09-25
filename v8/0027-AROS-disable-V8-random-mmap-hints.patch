@@ -1,0 +1,48 @@
+From 4dcd8e2e8656de1698478e4991555ed58ccd2d7c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 16:44:29 -0500
+Subject: [PATCH 27/28] AROS: disable V8 random mmap hints
+
+---
+ src/base/platform/platform-posix.cc | 4 ++++
+ src/utils/allocation.cc             | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 37110bc..98c8c3d 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -530,6 +530,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
+ 
+ // static
+ void* OS::GetRandomMmapAddr() {
++#if V8_OS_AROS
++  return nullptr;
++#else
+   uintptr_t raw_addr;
+   {
+     MutexGuard guard(rng_mutex.Pointer());
+@@ -623,6 +626,7 @@ void* OS::GetRandomMmapAddr() {
+ #endif
+ #endif
+   return reinterpret_cast<void*>(raw_addr);
++#endif
+ }
+ 
+ // TODO(bbudge) Move Cygwin and Fuchsia stuff into platform-specific files.
+diff --git a/src/utils/allocation.cc b/src/utils/allocation.cc
+index dc8a369..4101c27 100644
+--- a/src/utils/allocation.cc
++++ b/src/utils/allocation.cc
+@@ -158,7 +158,11 @@ size_t AllocatePageSize() {
+ size_t CommitPageSize() { return GetPlatformPageAllocator()->CommitPageSize(); }
+ 
+ void* GetRandomMmapAddr() {
++#if V8_OS_AROS
++  return nullptr;
++#else
+   return GetPlatformPageAllocator()->GetRandomMmapAddr();
++#endif
+ }
+ 
+ void* AllocatePages(v8::PageAllocator* page_allocator, void* hint, size_t size,

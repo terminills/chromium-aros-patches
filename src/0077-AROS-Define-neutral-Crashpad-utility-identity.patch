@@ -1,0 +1,57 @@
+From 2305641016b5b4ee2854be29056a00d57672e936 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 16:40:25 -0500
+Subject: [PATCH 077/638] [AROS] Define neutral Crashpad utility identity
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Crashpad's platform-neutral range and metrics utilities compile for AROS.
+ROOT_CAUSE: Crashpad's exhaustive OS tables rejected AROS before defining VMAddress, VMSize, or a metrics suffix.
+FIX_REASON: Use fixed 64-bit cross-bitness range types and a distinct AROS label without claiming native crash-handler support.
+SCOPE: Crashpad address_types.h and metrics.cc utility contracts only.
+VALIDATION: Crashpad range_set.o and metrics.o compiled with the AROS headless toolchain.
+RISK: Native Crashpad capture/handler functionality remains unsupported and outside this change.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ third_party/crashpad/crashpad/util/misc/address_types.h | 7 +++++++
+ third_party/crashpad/crashpad/util/misc/metrics.cc      | 2 ++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/third_party/crashpad/crashpad/util/misc/address_types.h b/third_party/crashpad/crashpad/util/misc/address_types.h
+index c43d36cdf8..920c6d9c73 100644
+--- a/third_party/crashpad/crashpad/util/misc/address_types.h
++++ b/third_party/crashpad/crashpad/util/misc/address_types.h
+@@ -29,6 +29,8 @@
+ #include "util/linux/address_types.h"
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #include <zircon/types.h>
++#elif BUILDFLAG(IS_AROS)
++// Platform-neutral Crashpad utilities need no AROS system declaration here.
+ #else
+ #error "Unhandled OS type"
+ #endif
+@@ -65,6 +67,11 @@ using VMSize = LinuxVMSize;
+ using VMAddress = zx_vaddr_t;
+ using VMSize = size_t;
+ 
++#elif BUILDFLAG(IS_AROS)
++
++using VMAddress = uint64_t;
++using VMSize = uint64_t;
++
+ #endif
+ 
+ //! \brief Type used to represent an offset from a VMAddress, potentially
+diff --git a/third_party/crashpad/crashpad/util/misc/metrics.cc b/third_party/crashpad/crashpad/util/misc/metrics.cc
+index de63434dde..6a87516562 100644
+--- a/third_party/crashpad/crashpad/util/misc/metrics.cc
++++ b/third_party/crashpad/crashpad/util/misc/metrics.cc
+@@ -29,6 +29,8 @@
+ #define METRICS_OS_NAME "Linux"
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #define METRICS_OS_NAME "Fuchsia"
++#elif BUILDFLAG(IS_AROS)
++#define METRICS_OS_NAME "AROS"
+ #endif
+ 
+ namespace crashpad {

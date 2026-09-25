@@ -1,0 +1,158 @@
+From 18e0ad7a14746cf3b33dc7623653bc365a9ad712 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 00:42:33 -0500
+Subject: [PATCH 108/638] [AROS] Use timer.device for socket-free pump waits
+
+---
+ base/message_loop/message_pump_aros.cc | 71 ++++++++++++++++++++++++--
+ base/message_loop/message_pump_aros.h  |  6 +++
+ 2 files changed, 72 insertions(+), 5 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index aba8e071d1..eaab4a686e 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -16,6 +16,9 @@
+ #include "base/logging.h"
+ #include "base/trace_event/trace_event.h"
+ 
++#include <devices/timer.h>
++#include <exec/io.h>
++#include <exec/ports.h>
+ #include <exec/tasks.h>
+ #include <proto/exec.h>
+ 
+@@ -52,14 +55,38 @@ MessagePumpAROS::MessagePumpAROS() {
+   CHECK_GE(wakeup_signal_, 0);
+   wakeup_mask_ = uint32_t{1} << wakeup_signal_;
+ 
+-  LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec message pump task="
+-            << pump_task_ << " signal=" << wakeup_signal_;
++  timer_port_ = CreateMsgPort();
++  CHECK(timer_port_);
++  timer_request_ = reinterpret_cast<timerequest*>(
++      CreateIORequest(timer_port_, sizeof(*timer_request_)));
++  CHECK(timer_request_);
++  CHECK_EQ(OpenDevice(TIMERNAME, UNIT_MICROHZ,
++                      reinterpret_cast<IORequest*>(timer_request_), 0),
++           0);
++
++  LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec/timer.device pump task="
++            << pump_task_ << " wake-signal=" << wakeup_signal_
++            << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit);
+ }
+ 
+ MessagePumpAROS::~MessagePumpAROS() {
+   while (!controllers_.empty()) {
+     controllers_.back()->StopWatchingFileDescriptor();
+   }
++  if (timer_request_) {
++    IORequest* const request = reinterpret_cast<IORequest*>(timer_request_);
++    if (timer_pending_) {
++      if (!CheckIO(request)) {
++        AbortIO(request);
++      }
++      WaitIO(request);
++    }
++    CloseDevice(request);
++    DeleteIORequest(request);
++  }
++  if (timer_port_) {
++    DeleteMsgPort(timer_port_);
++  }
+   if (wakeup_signal_ >= 0) {
+     FreeSignal(wakeup_signal_);
+   }
+@@ -143,10 +170,13 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+     }
+ 
+     delegate->BeforeWait();
+-    if (next_work_info.delayed_run_time.is_max()) {
+-      WaitForSocketEvents(TimeDelta(), true);
++    const bool wait_indefinitely = next_work_info.delayed_run_time.is_max();
++    const TimeDelta delay =
++        wait_indefinitely ? TimeDelta() : next_work_info.remaining_delay();
++    if (controllers_.empty()) {
++      WaitForIdleEvents(delay, wait_indefinitely);
+     } else {
+-      WaitForSocketEvents(next_work_info.remaining_delay(), false);
++      WaitForSocketEvents(delay, wait_indefinitely);
+     }
+   }
+ }
+@@ -164,6 +194,36 @@ void MessagePumpAROS::ScheduleWork() {
+ void MessagePumpAROS::ScheduleDelayedWork(
+     const Delegate::NextWorkInfo& next_work_info) {}
+ 
++void MessagePumpAROS::WaitForIdleEvents(TimeDelta timeout,
++                                        bool wait_indefinitely) {
++  if (wait_indefinitely) {
++    Wait(wakeup_mask_);
++    return;
++  }
++
++  timeout = std::max(timeout, TimeDelta());
++  const int64_t seconds = std::min<int64_t>(timeout.InSeconds(), 100000000);
++  timer_request_->tr_node.io_Command = TR_ADDREQUEST;
++  timer_request_->tr_node.io_Flags = 0;
++  timer_request_->tr_time.tv_secs = seconds;
++  timer_request_->tr_time.tv_micro =
++      (timeout - Seconds(seconds)).InMicroseconds() %
++      Time::kMicrosecondsPerSecond;
++
++  IORequest* const request = reinterpret_cast<IORequest*>(timer_request_);
++  timer_pending_ = true;
++  SendIO(request);
++
++  const uint32_t timer_mask = uint32_t{1} << timer_port_->mp_SigBit;
++  const uint32_t signals = Wait(wakeup_mask_ | timer_mask);
++  if (!(signals & timer_mask) && !CheckIO(request)) {
++    AbortIO(request);
++  }
++  WaitIO(request);
++  SetSignal(0, timer_mask);
++  timer_pending_ = false;
++}
++
+ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+                                           bool wait_indefinitely) {
+   fd_set read_fds;
+@@ -187,6 +247,7 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+     }
+     max_fd = std::max(max_fd, controller->fd_);
+   }
++  DCHECK_GE(max_fd, 0);
+ 
+   struct timeval timeout_value = {};
+   struct timeval* timeout_pointer = nullptr;
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 05d75edfe0..064cc819fb 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -17,6 +17,8 @@
+ #include "base/threading/thread_checker.h"
+ 
+ struct Task;
++struct MsgPort;
++struct timerequest;
+ 
+ namespace base {
+ 
+@@ -83,6 +85,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   };
+ 
+   bool WaitForSocketEvents(TimeDelta timeout, bool wait_indefinitely);
++  void WaitForIdleEvents(TimeDelta timeout, bool wait_indefinitely);
+   void DispatchController(const ReadyRegistration& ready);
+   void UnregisterController(FdWatchController* controller);
+ 
+@@ -90,6 +93,9 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   RAW_PTR_EXCLUSION Task* pump_task_ = nullptr;
+   int wakeup_signal_ = -1;
+   uint32_t wakeup_mask_ = 0;
++  RAW_PTR_EXCLUSION MsgPort* timer_port_ = nullptr;
++  RAW_PTR_EXCLUSION timerequest* timer_request_ = nullptr;
++  bool timer_pending_ = false;
+   std::vector<raw_ptr<FdWatchController>> controllers_;
+   uint64_t next_generation_ = 1;
+   ThreadChecker watch_file_descriptor_caller_checker_;

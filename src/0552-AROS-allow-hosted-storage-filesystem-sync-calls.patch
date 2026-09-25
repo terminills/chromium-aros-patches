@@ -1,0 +1,160 @@
+From f36b5e53015a0f731d2ee07e0de3f0c92b07af2f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 10 Aug 2026 21:15:41 -0500
+Subject: [PATCH 552/638] AROS: allow hosted storage filesystem sync calls
+
+AROS hosted Chromium runs the storage service through the shared process model, while FilesystemProxy still performs synchronous storage.mojom.Directory calls by contract. Add an explicit AROS-only ScopedAllowSyncCallForArosHostedStorage and use it around the restricted FilesystemProxy remote calls instead of disabling Mojo sync-call checks globally.
+
+Evidence: ninja -C out/aros-cef-bootstrap -j32 obj/cef/libcef.a passed; make -j32 workbench-libs-cef-blink passed. Hosted VS Code replay no longer hits sync_call_restrictions.cc(83), reaches the renderer external probe and state.vscdb open, then exposes the next blocker: TLSF corruption during Mojo/ipcz parcel teardown.
+---
+ .../public/cpp/filesystem/filesystem_proxy.cc | 24 ++++++++++++++++++-
+ .../cpp/bindings/sync_call_restrictions.h     | 21 ++++++++++++++++
+ 2 files changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/components/services/storage/public/cpp/filesystem/filesystem_proxy.cc b/components/services/storage/public/cpp/filesystem/filesystem_proxy.cc
+index 22933e2035..64437c6310 100644
+--- a/components/services/storage/public/cpp/filesystem/filesystem_proxy.cc
++++ b/components/services/storage/public/cpp/filesystem/filesystem_proxy.cc
+@@ -17,11 +17,20 @@
+ #include "build/build_config.h"
+ #include "components/services/storage/public/cpp/filesystem/filesystem_impl.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
+ 
+ namespace storage {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++#define AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL() \
++  mojo::SyncCallRestrictions::ScopedAllowSyncCallForArosHostedStorage \
++      scoped_allow_sync_call_for_aros_hosted_storage
++#else
++#define AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL() static_cast<void>(0)
++#endif
++
+ class LocalFileLockImpl : public FilesystemProxy::FileLock {
+  public:
+   LocalFileLockImpl(base::FilePath path, base::File lock)
+@@ -94,6 +103,7 @@ bool FilesystemProxy::PathExists(const base::FilePath& path) {
+     return base::PathExists(MaybeMakeAbsolute(path));
+ 
+   bool exists = false;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->PathExists(MakeRelative(path), &exists);
+   return exists;
+ }
+@@ -110,6 +120,7 @@ FilesystemProxy::GetDirectoryEntries(const base::FilePath& path,
+ 
+   base::File::Error error = base::File::FILE_ERROR_IO;
+   std::vector<base::FilePath> entries;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->GetEntries(MakeRelative(path), mode, &error, &entries);
+   if (error != base::File::FILE_OK)
+     return base::unexpected(error);
+@@ -188,6 +199,7 @@ base::FileErrorOr<base::File> FilesystemProxy::OpenFile(
+ 
+   base::File::Error error = base::File::FILE_ERROR_IO;
+   base::File file;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->OpenFile(MakeRelative(path), mode, read_access,
+                               write_access, &error, &file);
+   if (error != base::File::FILE_OK)
+@@ -203,6 +215,7 @@ base::File::Error FilesystemProxy::CreateDirectory(const base::FilePath& path) {
+     return base::File::FILE_OK;
+   }
+ 
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->CreateDirectory(MakeRelative(path), &error);
+   return error;
+ }
+@@ -214,6 +227,7 @@ bool FilesystemProxy::DeleteFile(const base::FilePath& path) {
+   }
+ 
+   bool success = false;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->DeleteFile(MakeRelative(path), &success);
+   return success;
+ }
+@@ -228,6 +242,7 @@ std::optional<base::File::Info> FilesystemProxy::GetFileInfo(
+   }
+ 
+   std::optional<base::File::Info> info;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->GetFileInfo(MakeRelative(path), &info);
+   return info;
+ }
+@@ -237,8 +252,10 @@ std::optional<FilesystemProxy::PathAccessInfo> FilesystemProxy::GetPathAccess(
+   mojom::PathAccessInfoPtr info;
+   if (!remote_directory_)
+     info = FilesystemImpl::GetPathAccessLocal(MaybeMakeAbsolute(path));
+-  else
++  else {
++    AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+     remote_directory_->GetPathAccess(MakeRelative(path), &info);
++  }
+ 
+   if (!info)
+     return std::nullopt;
+@@ -257,6 +274,7 @@ base::File::Error FilesystemProxy::RenameFile(const base::FilePath& old_path,
+     return base::File::FILE_OK;
+   }
+ 
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->RenameFile(MakeRelative(old_path), MakeRelative(new_path),
+                                 &error);
+   return error;
+@@ -274,6 +292,7 @@ FilesystemProxy::LockFile(const base::FilePath& path) {
+ 
+   mojo::PendingRemote<mojom::FileLock> remote_lock;
+   base::File::Error error = base::File::FILE_ERROR_IO;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   if (!remote_directory_->LockFile(MakeRelative(path), &error, &remote_lock))
+     return base::unexpected(error);
+   if (error != base::File::FILE_OK)
+@@ -287,6 +306,7 @@ bool FilesystemProxy::SetOpenedFileLength(base::File* file, uint64_t length) {
+     return file->SetLength(length);
+ 
+   bool success = false;
++  AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL();
+   remote_directory_->SetOpenedFileLength(std::move(*file), length, &success,
+                                          file);
+   return success;
+@@ -321,3 +341,5 @@ base::FilePath FilesystemProxy::MaybeMakeAbsolute(
+ }
+ 
+ }  // namespace storage
++
++#undef AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL
+diff --git a/mojo/public/cpp/bindings/sync_call_restrictions.h b/mojo/public/cpp/bindings/sync_call_restrictions.h
+index 36a734d647..9d6eecd95a 100644
+--- a/mojo/public/cpp/bindings/sync_call_restrictions.h
++++ b/mojo/public/cpp/bindings/sync_call_restrictions.h
+@@ -167,6 +167,27 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) SyncCallRestrictions {
+     base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait_;
+ #endif
+   };
++
++#if BUILDFLAG(IS_AROS)
++ public:
++  // AROS hosted Chromium currently runs the storage service through the shared
++  // process model, but the storage FilesystemProxy API is still synchronous by
++  // contract. Keep this exception explicit and scoped to that porting bridge.
++  class ScopedAllowSyncCallForArosHostedStorage {
++   public:
++    ScopedAllowSyncCallForArosHostedStorage() = default;
++
++    ScopedAllowSyncCallForArosHostedStorage(
++        const ScopedAllowSyncCallForArosHostedStorage&) = delete;
++    ScopedAllowSyncCallForArosHostedStorage& operator=(
++        const ScopedAllowSyncCallForArosHostedStorage&) = delete;
++
++    ~ScopedAllowSyncCallForArosHostedStorage() = default;
++
++   private:
++    ScopedAllowSyncCall scoped_allow_sync_call_;
++  };
++#endif  // BUILDFLAG(IS_AROS)
+ };
+ 
+ class ScopedAllowSyncCallForTesting {

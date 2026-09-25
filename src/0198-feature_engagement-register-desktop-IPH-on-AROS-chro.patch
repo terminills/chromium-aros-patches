@@ -1,0 +1,167 @@
+From b5abedbb524607d53231f45394ed37dd53c99b4e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:56:26 -0500
+Subject: [PATCH 198/638] feature_engagement: register desktop IPH on AROS
+ [chromium] [aros]
+
+Statement:
+Chrome's desktop password and help surfaces reference the desktop in-product-help feature set, but AROS was absent from its declarations, definitions, registry, variations, and configurations.
+
+Decision:
+Admit AROS to the complete desktop IPH feature set instead of disabling individual call sites, preserving upstream help behavior and feature wiring.
+
+Evidence:
+The AROS cross build compiles feature_constants.o, feature_list.o, feature_configurations.o, and passwords_private_delegate_impl.o together after this change.
+
+Chain:
+; first native Chromium window; desktop feature completeness.
+---
+ .../public/feature_configurations.cc                   |  6 +++---
+ .../feature_engagement/public/feature_constants.cc     |  5 +++--
+ .../feature_engagement/public/feature_constants.h      |  5 +++--
+ components/feature_engagement/public/feature_list.cc   |  5 +++--
+ components/feature_engagement/public/feature_list.h    | 10 ++++++----
+ 5 files changed, 18 insertions(+), 13 deletions(-)
+
+diff --git a/components/feature_engagement/public/feature_configurations.cc b/components/feature_engagement/public/feature_configurations.cc
+index f4b8db01f9..141051c4df 100644
+--- a/components/feature_engagement/public/feature_configurations.cc
++++ b/components/feature_engagement/public/feature_configurations.cc
+@@ -113,7 +113,7 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
+ 
+ #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   if (kIPHPasswordsAccountStorageFeature.name == feature->name) {
+     std::optional<FeatureConfig> config = FeatureConfig();
+     config->valid = true;
+@@ -637,7 +637,7 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
+   }
+ 
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ 
+ #if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+   if (kIPHiOSPasswordPromoDesktopFeature.name == feature->name) {
+@@ -1966,7 +1966,7 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
+   }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   if (kIPHDeepScanPromptRemovalFeature.name == feature->name) {
+     std::optional<FeatureConfig> config = FeatureConfig();
+     config->valid = true;
+diff --git a/components/feature_engagement/public/feature_constants.cc b/components/feature_engagement/public/feature_constants.cc
+index 0413588e92..6cee0290e6 100644
+--- a/components/feature_engagement/public/feature_constants.cc
++++ b/components/feature_engagement/public/feature_constants.cc
+@@ -18,7 +18,7 @@ BASE_FEATURE(kIPHDemoMode, "IPH_DemoMode", base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kIPHDummyFeature, "IPH_Dummy", base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kIPHBatterySaverModeFeature,
+              "IPH_BatterySaverMode",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -175,7 +175,8 @@ BASE_FEATURE(kIPHBackNavigationMenuFeature,
+              "IPH_BackNavigationMenu",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kIPHAdaptiveButtonInTopToolbarCustomizationNewTabFeature,
+diff --git a/components/feature_engagement/public/feature_constants.h b/components/feature_engagement/public/feature_constants.h
+index 6181512701..f541ec4d63 100644
+--- a/components/feature_engagement/public/feature_constants.h
++++ b/components/feature_engagement/public/feature_constants.h
+@@ -20,7 +20,7 @@ BASE_DECLARE_FEATURE(kIPHDemoMode);
+ BASE_DECLARE_FEATURE(kIPHDummyFeature);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ BASE_DECLARE_FEATURE(kIPHBatterySaverModeFeature);
+ BASE_DECLARE_FEATURE(kIPHCompanionSidePanelFeature);
+ BASE_DECLARE_FEATURE(kIPHCompanionSidePanelRegionSearchFeature);
+@@ -75,7 +75,8 @@ BASE_DECLARE_FEATURE(kIPHWebUiHelpBubbleTestFeature);
+ BASE_DECLARE_FEATURE(kIPHPriceTrackingInSidePanelFeature);
+ BASE_DECLARE_FEATURE(kIPHBackNavigationMenuFeature);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ // All the features declared for Android below that are also used in Java,
+ // should also be declared in:
+diff --git a/components/feature_engagement/public/feature_list.cc b/components/feature_engagement/public/feature_list.cc
+index 86102b68cc..421fe5751a 100644
+--- a/components/feature_engagement/public/feature_list.cc
++++ b/components/feature_engagement/public/feature_list.cc
+@@ -147,7 +147,7 @@ const base::Feature* const kAllFeatures[] = {
+     &kIPHiOSOverflowMenuCustomizationFeature,
+ #endif  // BUILDFLAG(IS_IOS)
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+     &kIPHBatterySaverModeFeature,
+     &kIPHCompanionSidePanelFeature,
+     &kIPHCompanionSidePanelRegionSearchFeature,
+@@ -201,7 +201,8 @@ const base::Feature* const kAllFeatures[] = {
+     &kIPHPriceTrackingInSidePanelFeature,
+     &kIPHBackNavigationMenuFeature,
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+diff --git a/components/feature_engagement/public/feature_list.h b/components/feature_engagement/public/feature_list.h
+index 6181675f2d..b41cf04357 100644
+--- a/components/feature_engagement/public/feature_list.h
++++ b/components/feature_engagement/public/feature_list.h
+@@ -266,7 +266,7 @@ DEFINE_VARIATION_PARAM(kIPHiOSOverflowMenuCustomizationFeature,
+ #endif  // BUILDFLAG(IS_IOS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ DEFINE_VARIATION_PARAM(kIPHBatterySaverModeFeature, "IPH_BatterySaverMode");
+ DEFINE_VARIATION_PARAM(kIPHCompanionSidePanelFeature, "IPH_CompanionSidePanel");
+ DEFINE_VARIATION_PARAM(kIPHCompanionSidePanelRegionSearchFeature,
+@@ -360,7 +360,8 @@ DEFINE_VARIATION_PARAM(kIPHPriceTrackingInSidePanelFeature,
+                        "IPH_PriceTrackingInSidePanel");
+ DEFINE_VARIATION_PARAM(kIPHBackNavigationMenuFeature, "IPH_BackNavigationMenu");
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+@@ -599,7 +600,7 @@ constexpr flags_ui::FeatureEntry::FeatureVariation
+         VARIATION_ENTRY(kIPHiOSPromoGenericDefaultBrowserFeature),
+         VARIATION_ENTRY(kIPHiOSOverflowMenuCustomizationFeature),
+ #elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+         VARIATION_ENTRY(kIPHBatterySaverModeFeature),
+         VARIATION_ENTRY(kIPHCompanionSidePanelFeature),
+         VARIATION_ENTRY(kIPHCompanionSidePanelRegionSearchFeature),
+@@ -653,7 +654,8 @@ constexpr flags_ui::FeatureEntry::FeatureVariation
+         VARIATION_ENTRY(kIPHPriceTrackingInSidePanelFeature),
+         VARIATION_ENTRY(kIPHBackNavigationMenuFeature),
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \

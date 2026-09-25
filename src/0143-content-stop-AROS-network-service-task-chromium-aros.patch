@@ -1,0 +1,51 @@
+From c2ea3d698d355c3cfd8b7721534fafed43d96005 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 14:28:42 -0500
+Subject: [PATCH 143/638] content: stop AROS network service task [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: The in-process NetworkService uses a NoDestructor base::Thread and ShutDownNetworkService only released service objects and task-runner references. Conventional process exit kills that dedicated thread; OPAL artifact 50 proved it remained waiting when AROS reached executable unload.
+
+FIX_REASON: On AROS, stop the dedicated NetworkService thread after its queued service deletion and task-runner release. base::Thread::Stop drains prior work, joins the task, and leaves the object restartable for RestartNetworkService.
+
+SCOPE: AROS branch of ShutDownNetworkService only; network service behavior and lifetime on other platforms are unchanged.
+
+VALIDATION: network_service_instance_impl.o compiled successfully for out/aros-headless; the implementation was checked against base::Thread's documented Stop-then-restart contract.
+
+RISK: low; shutdown gains a synchronous join on AROS, and repeated network-service restart remains supported by the underlying Thread object.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/browser/network_service_instance_impl.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/content/browser/network_service_instance_impl.cc b/content/browser/network_service_instance_impl.cc
+index 91094abcb4..e89784218e 100644
+--- a/content/browser/network_service_instance_impl.cc
++++ b/content/browser/network_service_instance_impl.cc
+@@ -20,6 +20,7 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_forward.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -795,6 +796,13 @@ void ShutDownNetworkService() {
+     g_in_process_instance = nullptr;
+   }
+   GetNetworkTaskRunnerStorage().reset();
++#if BUILDFLAG(IS_AROS)
++  if (base::FeatureList::IsEnabled(kNetworkServiceDedicatedThread)) {
++    LOG(INFO) << "[Chromium:shutdown] stopping AROS NetworkService thread";
++    GetNetworkServiceDedicatedThread().Stop();
++    LOG(INFO) << "[Chromium:shutdown] AROS NetworkService thread stopped";
++  }
++#endif
+ }
+ 
+ void RestartNetworkService() {

@@ -1,0 +1,37 @@
+From c84152b6841d4a63888e98dd3f984d9f9e580109 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:52:09 -0500
+Subject: [PATCH 041/638] blink: include CodePointIterator where tracing needs
+ it
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Perfetto's range-support detection instantiates String::begin(), but atomic_string.cc only saw a forward declaration of CodePointIterator; GCC rejects the incomplete return type.
+
+FIX_REASON: Include the owned iterator definition at the tracing call site instead of relying on Clang-tolerated transitive completeness.
+
+SCOPE: third_party/blink/renderer/platform/wtf/text/atomic_string.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/third_party/blink/renderer/platform/wtf/wtf/atomic_string.o
+
+RISK: low; declaration ownership only, with no generated or platform-specific behavior change.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/blink/renderer/platform/wtf/text/atomic_string.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/third_party/blink/renderer/platform/wtf/text/atomic_string.cc b/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
+index 0b94246284..3b87a00d14 100644
+--- a/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
++++ b/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
+@@ -28,6 +28,7 @@
+ #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+ #include "third_party/blink/renderer/platform/wtf/text/atomic_string_table.h"
+ #include "third_party/blink/renderer/platform/wtf/text/case_map.h"
++#include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
+ #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
+ 

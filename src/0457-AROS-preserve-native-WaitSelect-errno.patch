@@ -1,0 +1,40 @@
+From f2b15df4443a47fa29ea99702a36fe26146fef5f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 01:38:31 -0500
+Subject: [PATCH 457/638] AROS: preserve native WaitSelect errno
+
+When WaitSelect fails before its configured PosixC errno pointer reflects the error, read the SocketBase-native errno value. This keeps the message pump's retry and diagnostic decisions tied to the actual AROSTCP failure.
+
+
+
+---
+ base/aros/socket_library.cc | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/base/aros/socket_library.cc b/base/aros/socket_library.cc
+index 4499d638d5..6159593b23 100644
+--- a/base/aros/socket_library.cc
++++ b/base/aros/socket_library.cc
+@@ -328,10 +328,18 @@ int SocketWaitSelect(int descriptor_count,
+                      struct timeval* timeout,
+                      uint32_t* signal_mask) {
+   Library* const library = CurrentSocketLibrary();
+-  return library ? __WaitSelect_WB(library, descriptor_count, read_descriptors,
+-                                   write_descriptors, exception_descriptors,
+-                                   timeout, signal_mask)
+-                 : -1;
++  if (!library) {
++    return -1;
++  }
++  const int result = __WaitSelect_WB(
++      library, descriptor_count, read_descriptors, write_descriptors,
++      exception_descriptors, timeout, signal_mask);
++  if (result < 0 && errno == 0) {
++    // Preserve the native SocketBase error even when a task-local PosixC errno
++    // pointer was not accepted or was replaced after this base was opened.
++    errno = __Errno_WB(library);
++  }
++  return result;
+ }
+ 
+ bool GetConfiguredNameServers(std::vector<std::string>* name_servers) {

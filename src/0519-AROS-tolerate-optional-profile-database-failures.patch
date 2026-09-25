@@ -1,0 +1,495 @@
+From 7388da9398aba726777599ee112cb4c2b8fec7b1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 20:45:09 -0500
+Subject: [PATCH 519/638] AROS: tolerate optional profile database failures
+
+---
+ base/base_paths_aros.cc                        | 10 ++++++++--
+ base/files/file_util_posix.cc                  |  7 +++++--
+ base/system/sys_info_posix.cc                  | 13 ++++++++++++-
+ chrome/app/aros_user_data_dir.cc               | 14 +++-----------
+ chrome/app/chrome_main_delegate.cc             | 11 ++++++++++-
+ chrome/browser/dips/dips_database.cc           |  7 +++++++
+ .../addresses/address_autofill_table.cc        |  3 +++
+ .../webdata/autocomplete/autocomplete_table.cc |  3 +++
+ .../webdata/autofill_sync_metadata_table.cc    |  3 +++
+ .../autofill_wallet_usage_data_sync_bridge.cc  | 18 ++++++++++++++----
+ .../payments/payments_autofill_table.cc        |  3 +++
+ .../opt_out_blocklist/sql/opt_out_store_sql.cc | 14 ++++++++++++++
+ components/favicon/core/favicon_database.cc    |  8 +++++++-
+ components/history_embeddings/sql_database.cc  |  8 ++++++++
+ .../omnibox/browser/shortcuts_database.cc      |  9 ++++++++-
+ .../webdata/plus_address_table.cc              |  3 +++
+ components/search_engines/keyword_table.cc     |  3 +++
+ .../shared_storage/shared_storage_database.cc  | 16 +++++++++++++++-
+ .../public/webdata/token_service_table.cc      |  3 +++
+ 19 files changed, 132 insertions(+), 24 deletions(-)
+
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+index 03ce026c93..c7f21f6145 100644
+--- a/base/base_paths_aros.cc
++++ b/base/base_paths_aros.cc
+@@ -70,9 +70,15 @@ bool PathProviderPosix(int key, FilePath* result) {
+       *result = path.DirName().DirName();
+       return true;
+     }
+-    case DIR_CACHE:
+-      *result = FilePath("T:Chromium");
++    case DIR_CACHE: {
++      FilePath path;
++      if (GetExecutablePath(&path)) {
++        *result = path.DirName().Append("Cache");
++      } else {
++        *result = FilePath("PROGDIR:Cache");
++      }
+       return true;
++    }
+     case DIR_USER_DESKTOP:
+       return false;
+   }
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index fa4bb46df7..31c766591e 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -941,11 +941,14 @@ bool CreateDirectoryAndGetError(const FilePath& full_path,
+     // two processes are trying to create the same file system tree at the same
+     // time. Check to see if it exists and make sure it is a directory.
+     int saved_errno = errno;
++#if BUILDFLAG(IS_AROS)
++    if (saved_errno == EEXIST)
++      continue;
++#endif
+     if (!DirectoryExists(subpath)) {
+ #if BUILDFLAG(IS_AROS)
+       LOG(ERROR) << "[Chromium:AROS:Files] mkdir failed for '"
+-                 << subpath.value() << "': " << strerror(saved_errno) << " ("
+-                 << saved_errno << ")";
++                 << subpath.value() << "': errno=" << saved_errno;
+ #endif
+       if (error)
+         *error = File::OSErrorToFileError(saved_errno);
+diff --git a/base/system/sys_info_posix.cc b/base/system/sys_info_posix.cc
+index efcb038af9..87003e4628 100644
+--- a/base/system/sys_info_posix.cc
++++ b/base/system/sys_info_posix.cc
+@@ -102,8 +102,19 @@ bool GetDiskSpaceInfo(const base::FilePath& path,
+                       int64_t* available_bytes,
+                       int64_t* total_bytes) {
+   struct statvfs stats;
+-  if (HANDLE_EINTR(statvfs(path.value().c_str(), &stats)) != 0)
++  if (HANDLE_EINTR(statvfs(path.value().c_str(), &stats)) != 0) {
++#if BUILDFLAG(IS_AROS)
++    constexpr int64_t kFallbackTotalBytes = 4LL * 1024 * 1024 * 1024;
++    constexpr int64_t kFallbackAvailableBytes = 3LL * 1024 * 1024 * 1024;
++    if (available_bytes)
++      *available_bytes = kFallbackAvailableBytes;
++    if (total_bytes)
++      *total_bytes = kFallbackTotalBytes;
++    return true;
++#else
+     return false;
++#endif
++  }
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   const bool zero_size_means_unlimited =
+diff --git a/chrome/app/aros_user_data_dir.cc b/chrome/app/aros_user_data_dir.cc
+index 04ce050e9c..c9c735af74 100644
+--- a/chrome/app/aros_user_data_dir.cc
++++ b/chrome/app/aros_user_data_dir.cc
+@@ -4,23 +4,15 @@
+ 
+ #include "chrome/app/aros_user_data_dir.h"
+ 
++#include "base/files/file_util.h"
+ #include "base/logging.h"
+ 
+-// Keep the classic Amiga library-call macros local to this translation unit.
+-// Names such as Close, Exit, Lock, and Write collide with Chromium C++ APIs.
+-#include <dos/dos.h>
+-#include <proto/dos.h>
+-
+ bool EnsureArosUserDataDirectory(const base::FilePath& path) {
+-  BPTR lock = Lock(path.value().c_str(), ACCESS_READ);
+-  if (!lock)
+-    lock = CreateDir(path.value().c_str());
+-  if (!lock) {
++  if (!base::DirectoryExists(path) && !base::CreateDirectory(path)) {
+     LOG(ERROR) << "[Chromium:AROS:Profile] failed to create user data "
+                   "directory '"
+-               << path.value() << "', IoErr=" << IoErr();
++               << path.value() << "'";
+     return false;
+   }
+-  UnLock(lock);
+   return true;
+ }
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 487c65f9a4..63d145359c 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -678,7 +678,8 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+   // its POSIX-facing validation.
+   if (user_data_dir.empty())
+     chrome::GetDefaultUserDataDirectory(&user_data_dir);
+-  EnsureArosUserDataDirectory(user_data_dir);
++  const bool aros_user_data_dir_ready =
++      EnsureArosUserDataDirectory(user_data_dir);
+ 
+   // Native volume and assignment paths cannot be canonicalized by the POSIX
+   // realpath implementation. Relative values still resolve against
+@@ -690,10 +691,18 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+ 
+   bool user_data_dir_override_succeeded = true;
+   if (!user_data_dir.empty()) {
++#if BUILDFLAG(IS_AROS)
++    user_data_dir_override_succeeded =
++        aros_user_data_dir_ready &&
++        base::PathService::OverrideAndCreateIfNeeded(
++            chrome::DIR_USER_DATA, user_data_dir,
++            user_data_dir_is_absolute, false);
++#else
+     user_data_dir_override_succeeded =
+         base::PathService::OverrideAndCreateIfNeeded(
+             chrome::DIR_USER_DATA, user_data_dir,
+             user_data_dir_is_absolute, true);
++#endif
+ #if BUILDFLAG(IS_AROS)
+     if (!user_data_dir_override_succeeded) {
+       PLOG(ERROR) << "[Chromium:AROS:Profile] failed to create or override '"
+diff --git a/chrome/browser/dips/dips_database.cc b/chrome/browser/dips/dips_database.cc
+index 871b7c7af9..9ea70ed498 100644
+--- a/chrome/browser/dips/dips_database.cc
++++ b/chrome/browser/dips/dips_database.cc
+@@ -12,6 +12,7 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/strings/strcat.h"
+@@ -26,6 +27,7 @@
+ #include "sql/meta_table.h"
+ #include "sql/statement.h"
+ #include "sql/transaction.h"
++#include "build/build_config.h"
+ 
+ namespace {
+ 
+@@ -138,7 +140,12 @@ void DIPSDatabase::DatabaseErrorCallback(int extended_error,
+ 
+   // The default handling is to assert on debug and to ignore on release.
+   if (!sql::Database::IsExpectedSqliteError(extended_error)) {
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR) << "[Chromium:AROS:SQLite] DIPS database error ignored: "
++                << db_->GetErrorMessage();
++#else
+     DLOG(FATAL) << db_->GetErrorMessage();
++#endif
+   }
+ }
+ 
+diff --git a/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc b/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc
+index 3fd8c97be9..d8983723b5 100644
+--- a/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc
++++ b/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc
+@@ -459,6 +459,9 @@ AddressAutofillTable::~AddressAutofillTable() = default;
+ 
+ // static
+ AddressAutofillTable* AddressAutofillTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<AddressAutofillTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/autofill/core/browser/webdata/autocomplete/autocomplete_table.cc b/components/autofill/core/browser/webdata/autocomplete/autocomplete_table.cc
+index 9fd63d50e1..49c042b55f 100644
+--- a/components/autofill/core/browser/webdata/autocomplete/autocomplete_table.cc
++++ b/components/autofill/core/browser/webdata/autocomplete/autocomplete_table.cc
+@@ -75,6 +75,9 @@ AutocompleteTable::~AutocompleteTable() = default;
+ 
+ // static
+ AutocompleteTable* AutocompleteTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<AutocompleteTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/autofill/core/browser/webdata/autofill_sync_metadata_table.cc b/components/autofill/core/browser/webdata/autofill_sync_metadata_table.cc
+index 64fe16ce18..8f70b33e38 100644
+--- a/components/autofill/core/browser/webdata/autofill_sync_metadata_table.cc
++++ b/components/autofill/core/browser/webdata/autofill_sync_metadata_table.cc
+@@ -43,6 +43,9 @@ AutofillSyncMetadataTable::~AutofillSyncMetadataTable() = default;
+ // static
+ AutofillSyncMetadataTable* AutofillSyncMetadataTable::FromWebDatabase(
+     WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<AutofillSyncMetadataTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc b/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
+index c6f0692f3d..04b1370695 100644
+--- a/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
++++ b/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
+@@ -55,8 +55,11 @@ AutofillWalletUsageDataSyncBridge::AutofillWalletUsageDataSyncBridge(
+     AutofillWebDataBackend* web_data_backend)
+     : ModelTypeSyncBridge(std::move(change_processor)),
+       web_data_backend_(web_data_backend) {
+-  DCHECK(web_data_backend_);
+-  DCHECK(GetAutofillTable());
++  if (!web_data_backend_ || !GetAutofillTable() || !GetSyncMetadataStore()) {
++    this->change_processor()->ReportError(
++        {FROM_HERE, "Failed to load Autofill table."});
++    return;
++  }
+ 
+   LoadMetadata();
+ }
+@@ -199,12 +202,18 @@ bool AutofillWalletUsageDataSyncBridge::IsEntityDataValid(
+ }
+ 
+ PaymentsAutofillTable* AutofillWalletUsageDataSyncBridge::GetAutofillTable() {
++  if (!web_data_backend_) {
++    return nullptr;
++  }
+   return PaymentsAutofillTable::FromWebDatabase(
+       web_data_backend_->GetDatabase());
+ }
+ 
+ AutofillSyncMetadataTable*
+ AutofillWalletUsageDataSyncBridge::GetSyncMetadataStore() {
++  if (!web_data_backend_) {
++    return nullptr;
++  }
+   return AutofillSyncMetadataTable::FromWebDatabase(
+       web_data_backend_->GetDatabase());
+ }
+@@ -233,8 +242,9 @@ AutofillWalletUsageDataSyncBridge::GetDataAndFilter(
+     base::RepeatingCallback<bool(const std::string&)> filter) {
+   std::vector<std::unique_ptr<VirtualCardUsageData>>
+       virtual_card_usage_data_list;
+-  if (!GetAutofillTable()->GetAllVirtualCardUsageData(
+-          &virtual_card_usage_data_list)) {
++  PaymentsAutofillTable* table = GetAutofillTable();
++  if (!table ||
++      !table->GetAllVirtualCardUsageData(&virtual_card_usage_data_list)) {
+     change_processor()->ReportError(
+         {FROM_HERE,
+          "Failed to load Autofill Wallet usage data data from table."});
+diff --git a/components/autofill/core/browser/webdata/payments/payments_autofill_table.cc b/components/autofill/core/browser/webdata/payments/payments_autofill_table.cc
+index 80469e48f9..beb74c0b46 100644
+--- a/components/autofill/core/browser/webdata/payments/payments_autofill_table.cc
++++ b/components/autofill/core/browser/webdata/payments/payments_autofill_table.cc
+@@ -434,6 +434,9 @@ PaymentsAutofillTable::~PaymentsAutofillTable() = default;
+ 
+ // static
+ PaymentsAutofillTable* PaymentsAutofillTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<PaymentsAutofillTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc b/components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc
+index 24af20af13..b690e3ce5f 100644
+--- a/components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc
++++ b/components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc
+@@ -189,6 +189,9 @@ BlocklistData::AllowedTypesAndVersions GetStoredEntries(sql::Database* db) {
+       db->GetUniqueStatement(kSqlLoadEnabledTypesVersions));
+ 
+   BlocklistData::AllowedTypesAndVersions stored_entries;
++  if (!statement.is_valid())
++    return stored_entries;
++
+   while (statement.Step()) {
+     int type = statement.ColumnInt(0);
+     int version = statement.ColumnInt(1);
+@@ -268,6 +271,11 @@ void LoadBlockListFromDataBase(
+       " FROM " OPT_OUT_TABLE_NAME " ORDER BY host_name, time DESC";
+ 
+   sql::Statement statement(db->GetUniqueStatement(kSql));
++  if (!statement.is_valid()) {
++    runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback),
++                                               std::move(blocklist_data)));
++    return;
++  }
+ 
+   int count = 0;
+   while (statement.Step()) {
+@@ -308,6 +316,12 @@ void LoadBlockListSync(sql::Database* db,
+   if (!db->is_open())
+     InitDatabase(db, path);
+ 
++  if (!db->is_open()) {
++    runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback),
++                                               std::move(blocklist_data)));
++    return;
++  }
++
+   LoadBlockListFromDataBase(db, std::move(blocklist_data), runner,
+                             std::move(callback));
+ }
+diff --git a/components/favicon/core/favicon_database.cc b/components/favicon/core/favicon_database.cc
+index 8bbb3f9ac4..8f830af5fd 100644
+--- a/components/favicon/core/favicon_database.cc
++++ b/components/favicon/core/favicon_database.cc
+@@ -217,8 +217,14 @@ void DatabaseErrorCallback(sql::Database* db,
+   }
+ 
+   // The default handling is to assert on debug and to ignore on release.
+-  if (!sql::Database::IsExpectedSqliteError(extended_error))
++  if (!sql::Database::IsExpectedSqliteError(extended_error)) {
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR) << "[Chromium:AROS:SQLite] favicon database error ignored: "
++                << db->GetErrorMessage();
++#else
+     DLOG(FATAL) << db->GetErrorMessage();
++#endif
++  }
+ }
+ 
+ }  // namespace
+diff --git a/components/history_embeddings/sql_database.cc b/components/history_embeddings/sql_database.cc
+index b51928a891..f9f0ce6178 100644
+--- a/components/history_embeddings/sql_database.cc
++++ b/components/history_embeddings/sql_database.cc
+@@ -5,7 +5,9 @@
+ #include "components/history_embeddings/sql_database.h"
+ 
+ #include "base/files/file_path.h"
++#include "base/logging.h"
+ #include "base/sequence_checker.h"
++#include "build/build_config.h"
+ #include "components/history_embeddings/passages_util.h"
+ #include "components/history_embeddings/proto/history_embeddings.pb.h"
+ #include "sql/init_status.h"
+@@ -315,7 +317,13 @@ void SqlDatabase::DatabaseErrorCallback(int extended_error,
+   // This is because database errors happen in the wild due to faulty hardware,
+   // or are sometimes transitory, and we want Chrome to carry on when possible.
+   if (!sql::Database::IsExpectedSqliteError(extended_error)) {
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR)
++        << "[Chromium:AROS:SQLite] history embeddings database error ignored: "
++        << db_.GetErrorMessage();
++#else
+     DLOG(FATAL) << db_.GetErrorMessage();
++#endif
+   }
+ }
+ 
+diff --git a/components/omnibox/browser/shortcuts_database.cc b/components/omnibox/browser/shortcuts_database.cc
+index aaf4b7964a..5dbe4d5e5e 100644
+--- a/components/omnibox/browser/shortcuts_database.cc
++++ b/components/omnibox/browser/shortcuts_database.cc
+@@ -13,6 +13,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/time/time.h"
+ #include "base/uuid.h"
++#include "build/build_config.h"
+ #include "components/omnibox/browser/autocomplete_match_type.h"
+ #include "components/omnibox/common/omnibox_features.h"
+ #include "sql/meta_table.h"
+@@ -75,8 +76,14 @@ void DatabaseErrorCallback(sql::Database* db,
+   }
+ 
+   // The default handling is to assert on debug and to ignore on release.
+-  if (!sql::Database::IsExpectedSqliteError(extended_error))
++  if (!sql::Database::IsExpectedSqliteError(extended_error)) {
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR) << "[Chromium:AROS:SQLite] shortcuts database error ignored: "
++                << db->GetErrorMessage();
++#else
+     DLOG(FATAL) << db->GetErrorMessage();
++#endif
++  }
+ }
+ 
+ }  // namespace
+diff --git a/components/plus_addresses/webdata/plus_address_table.cc b/components/plus_addresses/webdata/plus_address_table.cc
+index d51ed585b4..40dc8c64cb 100644
+--- a/components/plus_addresses/webdata/plus_address_table.cc
++++ b/components/plus_addresses/webdata/plus_address_table.cc
+@@ -94,6 +94,9 @@ PlusAddressTable::~PlusAddressTable() = default;
+ 
+ // static
+ PlusAddressTable* PlusAddressTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<PlusAddressTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/search_engines/keyword_table.cc b/components/search_engines/keyword_table.cc
+index d421aca3b8..c17c45288f 100644
+--- a/components/search_engines/keyword_table.cc
++++ b/components/search_engines/keyword_table.cc
+@@ -196,6 +196,9 @@ KeywordTable::KeywordTable() {
+ KeywordTable::~KeywordTable() {}
+ 
+ KeywordTable* KeywordTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<KeywordTable*>(db->GetTable(GetKey()));
+ }
+ 
+diff --git a/components/services/storage/shared_storage/shared_storage_database.cc b/components/services/storage/shared_storage/shared_storage_database.cc
+index 7505905eaa..81d6e4786d 100644
+--- a/components/services/storage/shared_storage/shared_storage_database.cc
++++ b/components/services/storage/shared_storage/shared_storage_database.cc
+@@ -18,6 +18,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/time/default_clock.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
+ #include "components/services/storage/shared_storage/shared_storage_database_migrations.h"
+ #include "components/services/storage/shared_storage/shared_storage_options.h"
+@@ -1295,14 +1296,27 @@ void SharedStorageDatabase::DatabaseErrorCallback(int extended_error,
+     base::UmaHistogramBoolean("Storage.SharedStorage.Database.Destruction",
+                               success);
+     if (!success) {
++#if BUILDFLAG(IS_AROS)
++      DLOG(ERROR) << "[Chromium:AROS:SQLite] shared storage database "
++                     "destruction failed after catastrophic error:\n"
++                  << db_.GetErrorMessage();
++#else
+       DLOG(FATAL) << "Database destruction failed after catastrophic error:\n"
+                   << db_.GetErrorMessage();
++#endif
+     }
+   }
+ 
+   // The default handling is to assert on debug and to ignore on release.
+-  if (!sql::Database::IsExpectedSqliteError(extended_error))
++  if (!sql::Database::IsExpectedSqliteError(extended_error)) {
++#if BUILDFLAG(IS_AROS)
++    DLOG(ERROR) << "[Chromium:AROS:SQLite] shared storage database error "
++                   "ignored: "
++                << db_.GetErrorMessage();
++#else
+     DLOG(FATAL) << db_.GetErrorMessage();
++#endif
++  }
+ }
+ 
+ SharedStorageDatabase::InitStatus SharedStorageDatabase::InitImpl() {
+diff --git a/components/signin/public/webdata/token_service_table.cc b/components/signin/public/webdata/token_service_table.cc
+index 0467e4ebef..4189f79f73 100644
+--- a/components/signin/public/webdata/token_service_table.cc
++++ b/components/signin/public/webdata/token_service_table.cc
+@@ -33,6 +33,9 @@ enum ReadOneTokenResult {
+ }  // namespace
+ 
+ TokenServiceTable* TokenServiceTable::FromWebDatabase(WebDatabase* db) {
++  if (!db) {
++    return nullptr;
++  }
+   return static_cast<TokenServiceTable*>(db->GetTable(GetKey()));
+ }
+ 

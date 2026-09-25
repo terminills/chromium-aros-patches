@@ -1,0 +1,59 @@
+From ec3f3f5878a74f014b63d3c6b332e19db8778f75 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:33:00 -0500
+Subject: [PATCH 019/638] gfx: fail closed for AROS native pixmap Mojo traits
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Ozone enables NativePixmapPlane Mojo traits on AROS, but the platform has no native pixmap backing-handle type. The serializer returned no value and the reader accepted metadata after discarding an unrecognized handle, creating undefined behavior and a false transport contract.
+
+FIX_REASON: Return an invalid PlatformHandle with a debug-resource-visible diagnostic and reject all AROS native pixmap plane deserialization. This matches the explicit CloneHandleForIPC capability boundary while keeping unrelated typed shared-region transport available.
+
+SCOPE: ui/gfx NativePixmapPlane Mojo serialization traits.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ui/gfx/mojom/native_handle_types_mojom_traits/native_handle_types_mojom_traits.o; missing-return warning eliminated.
+
+RISK: low for software headless rendering; native GPU pixmap transport remains unavailable by design.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/gfx/mojom/native_handle_types_mojom_traits.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ui/gfx/mojom/native_handle_types_mojom_traits.cc b/ui/gfx/mojom/native_handle_types_mojom_traits.cc
+index c0349e8c8a..6069d7669e 100644
+--- a/ui/gfx/mojom/native_handle_types_mojom_traits.cc
++++ b/ui/gfx/mojom/native_handle_types_mojom_traits.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "ui/gfx/mojom/native_handle_types_mojom_traits.h"
+ 
++#include "base/logging.h"
+ #include "build/build_config.h"
+ 
+ namespace mojo {
+@@ -16,6 +17,11 @@ mojo::PlatformHandle StructTraits<
+   return mojo::PlatformHandle(std::move(plane.fd));
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return mojo::PlatformHandle(std::move(plane.vmo));
++#elif BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "AROS native pixmap Mojo transport is not implemented"
++             << " (stride=" << plane.stride << ", offset=" << plane.offset
++             << ", size=" << plane.size << ")";
++  return mojo::PlatformHandle();
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ }
+ 
+@@ -36,6 +42,9 @@ bool StructTraits<
+   if (!handle.is_handle())
+     return false;
+   out->vmo = zx::vmo(handle.TakeHandle());
++#elif BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "AROS received an unsupported native pixmap plane";
++  return false;
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ 
+   return true;

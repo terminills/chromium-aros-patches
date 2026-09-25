@@ -1,0 +1,44 @@
+From 35a278897fa08a1be8adc13c72fae8ceca010c01 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 19:34:46 -0500
+Subject: [PATCH 11/28] base: mirror AROS fatal output to debug.resource
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted Chromium run 0121 reaches process-commands-posted, then V8 worker thread 19 aborts; V8_Fatal writes its reason only through stderr, which remains trapped behind an AROS C-runtime requester and is absent from the serial debug log.
+FIX_REASON: On AROS, format a copied va_list into a bounded buffer and mirror it through kprintf before preserving the existing vfprintf(stderr) path.
+SCOPE: src/base/platform/platform-posix.cc
+VALIDATION: obj/v8/v8_libbase/platform-posix.o cross-compiled; hosted artifacts 23 and 24 show the Caught Signal requester and FailureMessage marker while debug.resource lacks the fatal reason.
+RISK: Low; non-AROS platforms are unchanged, stderr remains authoritative, and AROS fatal fragments are truncated to 2047 bytes per call only in the debug mirror.
+AI_DECISION_CHAIN: resource packs load -> browser command posted -> V8 worker abort hidden in stderr -> mirror fatal text to debug.resource
+---
+ src/base/platform/platform-posix.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 2a97d91..2a0f3c1 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #if V8_OS_AROS
+ #include <exec/memory.h>
++#include <proto/arossupport.h>
+ #include <proto/exec.h>
+ #undef Allocate
+ #undef Remove
+@@ -1206,6 +1207,14 @@ void OS::VPrintError(const char* format, va_list args) {
+ #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
+   __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
+ #else
++#if V8_OS_AROS
++  char debug_message[2048];
++  va_list debug_args;
++  va_copy(debug_args, args);
++  vsnprintf(debug_message, sizeof(debug_message), format, debug_args);
++  va_end(debug_args);
++  kprintf("[V8:stderr] %s", debug_message);
++#endif
+   vfprintf(stderr, format, args);
+ #endif
+ }

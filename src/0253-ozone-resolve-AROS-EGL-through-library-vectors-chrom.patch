@@ -1,0 +1,189 @@
+From 2fc1a526d47c6a8eebf36a9fc9841292844713e1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 23:40:43 -0500
+Subject: [PATCH 253/638] ozone: resolve AROS EGL through library vectors
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-5-gpu-bridge
+
+AI_STATUS: object-build-validated, hosted-runtime-pending
+
+ROOT_CAUSE: The AROS Ozone resolver called the executable's direct eglGetProcAddress symbol. Chromium also links ANGLE, whose strong EGL symbol won over AROS libEGL.a weak stubs, so a launch logged egl.library while actually entering ANGLE's egl::Display and aborting in AsyncWorkerPool before Mesa/Gallium surface creation.
+
+FIX_REASON: Open egl.library v2 explicitly, return its published core EGL LVO vectors, and call its eglGetProcAddress LVO for extension and GL names. Remove the unused static AROS EGL archive dependency so symbol-name collisions cannot choose the backend. Explicit ANGLE selections remain available through Chromium's ANGLE path.
+
+SCOPE: ui/ozone/platform/aros EGL client resolver and build dependency only. No Mesa, Gallium, VirGL, Venus, or renderer policy bypass.
+
+HOSTED_NATIVE: Shared AROS library ABI path for hosted and native x86_64. Hosted replay is next; native SMP validation remains required after hosted stability.
+
+VALIDATION: git diff --check; GN regeneration passed; ar_os_egl_library.o and gl_ozone_egl_aros.o compiled successfully; object disassembly proves OpenLibrary plus LVO vector lookup and no direct eglGetProcAddress relocation.
+
+RISK: Medium. Chromium now depends on egl.library v2 at runtime and keeps its open for process lifetime because resolved function vectors remain cached.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ ui/ozone/platform/aros/BUILD.gn             |  1 -
+ ui/ozone/platform/aros/aros_egl_library.cc  | 97 +++++++++++++++++++--
+ ui/ozone/platform/aros/aros_egl_library.h   |  2 +
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc |  5 +-
+ 4 files changed, 97 insertions(+), 8 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+index be59acff10..450824255f 100644
+--- a/ui/ozone/platform/aros/BUILD.gn
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -44,7 +44,6 @@ source_set("aros") {
+   ]
+ 
+   libs = [
+-    "EGL",
+     "cybergraphics",
+     "graphics",
+     "intuition",
+diff --git a/ui/ozone/platform/aros/aros_egl_library.cc b/ui/ozone/platform/aros/aros_egl_library.cc
+index a0dc4a0d58..c083d21f8e 100644
+--- a/ui/ozone/platform/aros/aros_egl_library.cc
++++ b/ui/ozone/platform/aros/aros_egl_library.cc
+@@ -4,16 +4,103 @@
+ 
+ #include "ui/ozone/platform/aros/aros_egl_library.h"
+ 
+-#include <EGL/egl.h>
++#include <cstring>
+ 
+-#ifdef eglGetProcAddress
+-#undef eglGetProcAddress
+-#endif
++#include <EGL/egl.h>
++#include <defines/egl_LVO.h>
++#include <exec/libraries.h>
++#include <proto/exec.h>
+ 
+ namespace ui {
++namespace {
++
++struct EglCoreEntry {
++  const char* name;
++  unsigned int lvo;
++};
++
++#define AROS_EGL_CORE_ENTRY(name) \
++  { #name, LVO##name }
++
++constexpr EglCoreEntry kEglCoreEntries[] = {
++    AROS_EGL_CORE_ENTRY(eglGetError),
++    AROS_EGL_CORE_ENTRY(eglGetDisplay),
++    AROS_EGL_CORE_ENTRY(eglInitialize),
++    AROS_EGL_CORE_ENTRY(eglTerminate),
++    AROS_EGL_CORE_ENTRY(eglQueryString),
++    AROS_EGL_CORE_ENTRY(eglGetConfigs),
++    AROS_EGL_CORE_ENTRY(eglChooseConfig),
++    AROS_EGL_CORE_ENTRY(eglGetConfigAttrib),
++    AROS_EGL_CORE_ENTRY(eglCreateWindowSurface),
++    AROS_EGL_CORE_ENTRY(eglCreatePbufferSurface),
++    AROS_EGL_CORE_ENTRY(eglCreatePixmapSurface),
++    AROS_EGL_CORE_ENTRY(eglDestroySurface),
++    AROS_EGL_CORE_ENTRY(eglQuerySurface),
++    AROS_EGL_CORE_ENTRY(eglBindAPI),
++    AROS_EGL_CORE_ENTRY(eglQueryAPI),
++    AROS_EGL_CORE_ENTRY(eglWaitClient),
++    AROS_EGL_CORE_ENTRY(eglReleaseThread),
++    AROS_EGL_CORE_ENTRY(eglCreatePbufferFromClientBuffer),
++    AROS_EGL_CORE_ENTRY(eglSurfaceAttrib),
++    AROS_EGL_CORE_ENTRY(eglBindTexImage),
++    AROS_EGL_CORE_ENTRY(eglReleaseTexImage),
++    AROS_EGL_CORE_ENTRY(eglSwapInterval),
++    AROS_EGL_CORE_ENTRY(eglCreateContext),
++    AROS_EGL_CORE_ENTRY(eglDestroyContext),
++    AROS_EGL_CORE_ENTRY(eglMakeCurrent),
++    AROS_EGL_CORE_ENTRY(eglGetCurrentContext),
++    AROS_EGL_CORE_ENTRY(eglGetCurrentSurface),
++    AROS_EGL_CORE_ENTRY(eglGetCurrentDisplay),
++    AROS_EGL_CORE_ENTRY(eglQueryContext),
++    AROS_EGL_CORE_ENTRY(eglWaitGL),
++    AROS_EGL_CORE_ENTRY(eglWaitNative),
++    AROS_EGL_CORE_ENTRY(eglSwapBuffers),
++    AROS_EGL_CORE_ENTRY(eglCopyBuffers),
++    AROS_EGL_CORE_ENTRY(eglGetProcAddress),
++};
++
++#undef AROS_EGL_CORE_ENTRY
++
++struct Library* GetEGLLibrary() {
++  // Chromium retains the resolved vectors for process lifetime, so the
++  // matching library open intentionally has process lifetime as well.
++  static struct Library* const egl_base = OpenLibrary("egl.library", 2);
++  return egl_base;
++}
++
++gl::GLFunctionPointerType GetEGLVector(struct Library* egl_base,
++                                       unsigned int lvo) {
++  return reinterpret_cast<gl::GLFunctionPointerType>(
++      reinterpret_cast<APTR*>(egl_base)[-static_cast<int>(lvo)]);
++}
++
++}  // namespace
++
++bool InitializeArosEGLLibrary() {
++  return GetEGLLibrary() != nullptr;
++}
++
++const void* GetArosEGLLibraryBase() {
++  return GetEGLLibrary();
++}
+ 
+ gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name) {
+-  return reinterpret_cast<gl::GLFunctionPointerType>(eglGetProcAddress(name));
++  struct Library* egl_base = GetEGLLibrary();
++  if (!egl_base || !name) {
++    return nullptr;
++  }
++
++  for (const auto& entry : kEglCoreEntries) {
++    if (std::strcmp(name, entry.name) == 0) {
++      return GetEGLVector(egl_base, entry.lvo);
++    }
++  }
++
++  using GetProcAddressFunction =
++      __eglMustCastToProperFunctionPointerType (*)(const char*);
++  auto get_proc_address = reinterpret_cast<GetProcAddressFunction>(
++      GetEGLVector(egl_base, LVOeglGetProcAddress));
++  return reinterpret_cast<gl::GLFunctionPointerType>(get_proc_address(name));
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_egl_library.h b/ui/ozone/platform/aros/aros_egl_library.h
+index c2e342cf43..fa341361d0 100644
+--- a/ui/ozone/platform/aros/aros_egl_library.h
++++ b/ui/ozone/platform/aros/aros_egl_library.h
+@@ -9,6 +9,8 @@
+ 
+ namespace ui {
+ 
++bool InitializeArosEGLLibrary();
++const void* GetArosEGLLibraryBase();
+ gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name);
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index 783fe4db5d..9addca7414 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -54,13 +54,14 @@ gl::EGLDisplayPlatform GLOzoneEGLAros::GetNativeDisplay() {
+ bool GLOzoneEGLAros::LoadGLES2Bindings(
+     const gl::GLImplementationParts& implementation) {
+   if (implementation.gl != gl::kGLImplementationEGLGLES2 ||
+-      !GetArosEGLProcAddress("eglGetDisplay")) {
++      !InitializeArosEGLLibrary() || !GetArosEGLProcAddress("eglGetDisplay")) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable";
+     return false;
+   }
+ 
+   gl::SetGLGetProcAddressProc(&GetArosEGLProcAddress);
+-  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using egl.library entry points";
++  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using egl.library LVO entry points"
++            << " base=" << GetArosEGLLibraryBase();
+   return true;
+ }
+ 

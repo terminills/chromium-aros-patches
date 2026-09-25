@@ -1,0 +1,34 @@
+From ad3be61497e0804f61d19af2cccc9fc5345e6b78 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:01:12 -0500
+Subject: [PATCH 187/638] tflite: select the disabled mmap backend on AROS
+ [chromium] [aros]
+
+Statement:
+AROS defined TFLITE_MMAP_DISABLED but the TFLite target still compiled mmap_allocation.cc and required unavailable sys/mman APIs.
+
+Decision:
+Select TFLite's existing mmap_allocation_disabled.cc backend on AROS, matching the declared capability and retaining heap-backed model loading.
+
+Evidence:
+obj/third_party/tflite/tflite/mmap_allocation_disabled.o builds after GN regeneration in out/aros-chrome.
+
+Chain:
+Complements 5478d28cb0 and advances.
+---
+ third_party/tflite/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/tflite/BUILD.gn b/third_party/tflite/BUILD.gn
+index 5a06fdb090..a59d490619 100644
+--- a/third_party/tflite/BUILD.gn
++++ b/third_party/tflite/BUILD.gn
+@@ -701,7 +701,7 @@ tflite_static_library("tflite") {
+     ]
+   }
+ 
+-  if (is_win) {
++  if (is_win || is_aros) {
+     sources += [ "src/tensorflow/lite/mmap_allocation_disabled.cc" ]
+   } else {
+     sources += [ "src/tensorflow/lite/mmap_allocation.cc" ]

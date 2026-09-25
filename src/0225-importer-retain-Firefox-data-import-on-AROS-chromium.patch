@@ -1,0 +1,130 @@
+From f7444b1c745eaf6d54002e95a242d1b70209a6b7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:56:07 -0500
+Subject: [PATCH 225/638] importer: retain Firefox data import on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: The desktop Firefox importer was portable, but Chromium also selected its NSS password decryptor for every non-Mac, non-Fuchsia, non-ChromeOS target. AROS provides no NSS decryptor, causing nss_decryptor.h to intentionally stop the full Chrome build.
+
+FIX_REASON: Keep Firefox history, bookmarks, and form-data import enabled. Exclude only the NSS password implementation and its invocation on AROS, and remove PASSWORDS from the detected profile service mask so the UI never promises unsupported decryption.
+
+SCOPE: chrome/utility/BUILD.gn, chrome/utility/importer/firefox_importer.cc, chrome/utility/importer/firefox_importer.h, and chrome/browser/importer/importer_list.cc.
+
+VALIDATION: GN regenerated successfully; out/aros-chrome firefox_importer.o and importer_list.o compile; generated utility.ninja contains no nss_decryptor object; git diff --cached --check passes.
+
+RISK: low; changes are AROS-only and retain every Firefox import service that does not require NSS.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ chrome/browser/importer/importer_list.cc    |  7 ++++---
+ chrome/utility/BUILD.gn                     |  4 ++--
+ chrome/utility/importer/firefox_importer.cc | 15 +++++++++------
+ chrome/utility/importer/firefox_importer.h  |  3 ++-
+ 4 files changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/chrome/browser/importer/importer_list.cc b/chrome/browser/importer/importer_list.cc
+index 0919ea2f5a..3705e800b5 100644
+--- a/chrome/browser/importer/importer_list.cc
++++ b/chrome/browser/importer/importer_list.cc
+@@ -139,10 +139,11 @@ void DetectFirefoxProfiles(const std::string locale,
+       firefox.app_path = app_path;
+     firefox.services_supported =
+         importer::HISTORY | importer::FAVORITES | importer::AUTOFILL_FORM_DATA;
+-#if !BUILDFLAG(IS_MAC)
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_AROS)
+     // Passwords are imported by loading the NSS DLLs into the Chromium process.
+-    // Restrictive code signing prevents that from ever working again in modern
+-    // macOSes, so don't promise an import service that can't be delivered.
++    // Restrictive code signing on macOS and the lack of an NSS decryptor on
++    // AROS prevent that, so don't promise an import service that cannot be
++    // delivered.
+     firefox.services_supported |= importer::PASSWORDS;
+ #endif
+     firefox.locale = locale;
+diff --git a/chrome/utility/BUILD.gn b/chrome/utility/BUILD.gn
+index a7c1dd9153..14d090f791 100644
+--- a/chrome/utility/BUILD.gn
++++ b/chrome/utility/BUILD.gn
+@@ -111,9 +111,9 @@ static_library("utility") {
+         "importer/safari_importer.mm",
+       ]
+     }
+-    if (!is_mac && !is_fuchsia && !is_chromeos) {
++    if (!is_mac && !is_fuchsia && !is_chromeos && !is_aros) {
+       # NSS decryptor is not needed on ChromeOS. Additionally, it depends on
+-      # system NSS that is unavailable on MacOS/Fuchsia.
++      # system NSS that is unavailable on MacOS/Fuchsia/AROS.
+       sources += [
+         "importer/nss_decryptor.cc",
+         "importer/nss_decryptor.h",
+diff --git a/chrome/utility/importer/firefox_importer.cc b/chrome/utility/importer/firefox_importer.cc
+index 65099f45e5..e2a63ab4e4 100644
+--- a/chrome/utility/importer/firefox_importer.cc
++++ b/chrome/utility/importer/firefox_importer.cc
+@@ -27,9 +27,10 @@
+ #include "sql/statement.h"
+ #include "url/gurl.h"
+ 
+-#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA) && \
++    !BUILDFLAG(IS_AROS)
+ #include "chrome/utility/importer/nss_decryptor.h"
+-#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#endif
+ 
+ namespace {
+ 
+@@ -150,13 +151,14 @@ void FirefoxImporter::StartImport(const importer::SourceProfile& source_profile,
+     ImportBookmarks();
+     bridge_->NotifyItemEnded(importer::FAVORITES);
+   }
+-#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA) && \
++    !BUILDFLAG(IS_AROS)
+   if ((items & importer::PASSWORDS) && !cancelled()) {
+     bridge_->NotifyItemStarted(importer::PASSWORDS);
+     ImportPasswords();
+     bridge_->NotifyItemEnded(importer::PASSWORDS);
+   }
+-#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#endif
+   if ((items & importer::AUTOFILL_FORM_DATA) && !cancelled()) {
+     bridge_->NotifyItemStarted(importer::AUTOFILL_FORM_DATA);
+     ImportAutofillFormData();
+@@ -375,7 +377,8 @@ void FirefoxImporter::ImportBookmarks() {
+   }
+ }
+ 
+-#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA) && \
++    !BUILDFLAG(IS_AROS)
+ void FirefoxImporter::ImportPasswords() {
+   // Initializes NSS3.
+   NSSDecryptor decryptor;
+@@ -401,7 +404,7 @@ void FirefoxImporter::ImportPasswords() {
+     }
+   }
+ }
+-#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#endif
+ 
+ void FirefoxImporter::ImportHomepage() {
+   GURL home_page = GetHomepage(source_path_);
+diff --git a/chrome/utility/importer/firefox_importer.h b/chrome/utility/importer/firefox_importer.h
+index 708d25dbf1..fcdca14d77 100644
+--- a/chrome/utility/importer/firefox_importer.h
++++ b/chrome/utility/importer/firefox_importer.h
+@@ -61,7 +61,8 @@ class FirefoxImporter : public Importer {
+ 
+   FRIEND_TEST_ALL_PREFIXES(FirefoxImporterTest, ImportBookmarksV25);
+   void ImportBookmarks();
+-#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA) && \
++    !BUILDFLAG(IS_AROS)
+   void ImportPasswords();
+ #endif
+   void ImportHistory();

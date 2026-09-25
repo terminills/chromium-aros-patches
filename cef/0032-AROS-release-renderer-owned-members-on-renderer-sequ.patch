@@ -1,0 +1,48 @@
+From 6ecec3333c1c76c340ad9468df69f1b2cef38f7b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 26 Jul 2026 05:11:38 -0500
+Subject: [PATCH 32/43] AROS: release renderer-owned members on renderer
+ sequence
+
+AI_PHASE: cef-osr-browser
+
+AI_STATUS: archive-clean-runtime-pending
+
+ROOT_CAUSE: AlloyContentRendererClient outlives the in-process render thread, so VisitedLinkReader and other renderer-created members were destroyed later on the UI sequence; VisitedLinkReader then failed Mojo InterfaceEndpointClient sequence validation.
+
+FIX_REASON: Release all render-thread-created Alloy members from WillDestroyCurrentMessageLoop before reporting single-process cleanup complete.
+
+VALIDATION: corrected prior replay rendered and closed, destroyed the in-process renderer without the extension-client trap, then isolated VisitedLinkReader wrong-sequence destruction; grouped obj/cef/libcef.a rebuild passed.
+
+AI_LIMITATIONS: native resident relink and clean hosted shutdown replay remain pending.
+
+AI_DECISION_CHAIN:; aa68073e; b1147a0c; 08-runtime VisitedLinkReader failure
+
+Evidence:-cef-final-runtime-20260726/failure-renderer-owned-members
+
+Job:
+---
+ libcef/renderer/alloy/alloy_content_renderer_client.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/libcef/renderer/alloy/alloy_content_renderer_client.cc b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+index 5bc44917..3e36740e 100644
+--- a/libcef/renderer/alloy/alloy_content_renderer_client.cc
++++ b/libcef/renderer/alloy/alloy_content_renderer_client.cc
+@@ -552,6 +552,16 @@ void AlloyContentRendererClient::WillDestroyCurrentMessageLoop() {
+     extensions_renderer_client_.reset();
+   }
+ 
++  // These objects are created and used on the render thread. In single-process
++  // mode the AlloyContentRendererClient itself outlives that thread, so release
++  // them here instead of later from the UI-thread-owned main delegate.
++  spellcheck_.reset();
++  visited_link_slave_.reset();
++  web_cache_impl_.reset();
++  observer_.reset();
++  render_manager_.reset();
++  render_task_runner_.reset();
++
+   base::AutoLock lock_scope(single_process_cleanup_lock_);
+   single_process_cleanup_complete_ = true;
+ }

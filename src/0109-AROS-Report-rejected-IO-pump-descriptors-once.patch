@@ -1,0 +1,72 @@
+From ab68390d4b1c787a5b9da3ab2a69130758443bb1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 11:16:26 -0500
+Subject: [PATCH 109/638] [AROS] Report rejected IO pump descriptors once
+
+---
+ base/message_loop/message_pump_aros.cc | 22 ++++++++++++++++++++--
+ base/message_loop/message_pump_aros.h  |  1 +
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index eaab4a686e..2d3b9142c4 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -128,6 +128,10 @@ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+     controller->persistent_ = controller->persistent_ || persistent;
+     controller->watcher_ = delegate;
+     controller->generation_ = next_generation_++;
++    wait_select_error_reported_ = false;
++    LOG(INFO) << "[Chromium:IO] updated watch task=" << pump_task_
++              << " fd=" << fd << " mode=" << controller->mode_
++              << " persistent=" << controller->persistent_;
+     return true;
+   }
+ 
+@@ -138,6 +142,10 @@ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+   controller->persistent_ = persistent;
+   controller->generation_ = next_generation_++;
+   controllers_.push_back(controller);
++  wait_select_error_reported_ = false;
++  LOG(INFO) << "[Chromium:IO] registered watch task=" << pump_task_
++            << " fd=" << fd << " mode=" << mode
++            << " persistent=" << persistent;
+   return true;
+ }
+ 
+@@ -266,11 +274,21 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+                              watch_write ? &write_fds : nullptr, nullptr,
+                              timeout_pointer, &signal_mask);
+   if (result < 0) {
+-    if (errno != EINTR) {
+-      LOG(ERROR) << "[Chromium:IO] WaitSelect failed errno=" << errno;
++    if (errno != EINTR && !wait_select_error_reported_) {
++      LOG(ERROR) << "[Chromium:IO] WaitSelect failed task=" << pump_task_
++                 << " errno=" << errno << " nfds=" << max_fd + 1
++                 << " watches=" << controllers_.size();
++      for (const auto& controller : controllers_) {
++        LOG(ERROR) << "[Chromium:IO] rejected watch fd=" << controller->fd_
++                   << " mode=" << controller->mode_
++                   << " persistent=" << controller->persistent_;
++      }
++      wait_select_error_reported_ = true;
+     }
++    WaitForIdleEvents(Milliseconds(10), false);
+     return false;
+   }
++  wait_select_error_reported_ = false;
+   if (result == 0) {
+     return false;
+   }
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 064cc819fb..36b3a2a9df 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -98,6 +98,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   bool timer_pending_ = false;
+   std::vector<raw_ptr<FdWatchController>> controllers_;
+   uint64_t next_generation_ = 1;
++  bool wait_select_error_reported_ = false;
+   ThreadChecker watch_file_descriptor_caller_checker_;
+ };
+ 

@@ -1,0 +1,61 @@
+From dee9618753197cceb5f1c379a430f9fc8d116b86 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 05:24:10 -0500
+Subject: [PATCH 399/638] [AROS] Guard compositor remote connection probes
+
+Runtime 41 established that AsyncLayerTreeFrameSink can be associated-only. Query is_connected() only when the corresponding regular or associated remote is bound, preserving the per-instance diagnostic without violating Mojo's API precondition.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic-fix
+
+AI_OBSERVED: Associated-only sink creation made regular Remote::is_connected trigger Check failed: is_bound().
+
+AI_FIX_REASON: Short-circuit each connection query behind its own is_bound state.
+
+AI_SCOPE: cc/mojo_embedder/async_layer_tree_frame_sink.cc only.
+
+AI_VALIDATION: git diff --check; runtime41 failure committed 20744f1465; rebuild/runtime pending.
+
+AI_DECISION_CHAIN: runtime41 bound-state CHECK -> guarded diagnostic -> unchanged solid-page rerun.
+---
+ cc/mojo_embedder/async_layer_tree_frame_sink.cc | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.cc b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+index de44de5a12..6b82179c23 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.cc
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+@@ -177,11 +177,14 @@ bool AsyncLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
+              << " regular=" << aros_had_regular_pipe
+              << " associated=" << aros_had_associated_pipe
+              << " regular_bound=" << compositor_frame_sink_.is_bound()
+-             << " regular_connected=" << compositor_frame_sink_.is_connected()
++             << " regular_connected="
++             << (compositor_frame_sink_.is_bound() &&
++                 compositor_frame_sink_.is_connected())
+              << " associated_bound="
+              << compositor_frame_sink_associated_.is_bound()
+              << " associated_connected="
+-             << compositor_frame_sink_associated_.is_connected()
++             << (compositor_frame_sink_associated_.is_bound() &&
++                 compositor_frame_sink_associated_.is_connected())
+              << " direct_receiver="
+              << absl::holds_alternative<DirectClientReceiver>(client_receiver_);
+ #endif
+@@ -254,11 +257,13 @@ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+                << " software_resources=" << software_resource_count
+                << " regular_bound=" << compositor_frame_sink_.is_bound()
+                << " regular_connected="
+-               << compositor_frame_sink_.is_connected()
++               << (compositor_frame_sink_.is_bound() &&
++                   compositor_frame_sink_.is_connected())
+                << " associated_bound="
+                << compositor_frame_sink_associated_.is_bound()
+                << " associated_connected="
+-               << compositor_frame_sink_associated_.is_connected();
++               << (compositor_frame_sink_associated_.is_bound() &&
++                   compositor_frame_sink_associated_.is_connected());
+   }
+ #endif
+ 

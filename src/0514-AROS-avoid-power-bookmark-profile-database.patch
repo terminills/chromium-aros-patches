@@ -1,0 +1,52 @@
+From fc34663b4b8865c20a69e8d065c0d2cd183e9169 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 16:44:35 -0500
+Subject: [PATCH 514/638] AROS: avoid power bookmark profile database
+
+---
+ .../browser_sync/sync_api_component_factory_impl.cc      | 1 +
+ .../power_bookmarks/core/power_bookmark_service.cc       | 9 +++++++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/components/browser_sync/sync_api_component_factory_impl.cc b/components/browser_sync/sync_api_component_factory_impl.cc
+index 0e1a50dd19..46fb480ffd 100644
+--- a/components/browser_sync/sync_api_component_factory_impl.cc
++++ b/components/browser_sync/sync_api_component_factory_impl.cc
+@@ -347,6 +347,7 @@ SyncApiComponentFactoryImpl::CreateCommonDataTypeControllers(
+ 
+     if (!disabled_types.Has(syncer::POWER_BOOKMARK) &&
+         power_bookmark_service_ &&
++        !BUILDFLAG(IS_AROS) &&
+         base::FeatureList::IsEnabled(power_bookmarks::kPowerBookmarkBackend)) {
+       // TODO(crbug.com/1426496): Support transport mode for POWER_BOOKMARK.
+       controllers.push_back(std::make_unique<ModelTypeController>(
+diff --git a/components/power_bookmarks/core/power_bookmark_service.cc b/components/power_bookmarks/core/power_bookmark_service.cc
+index 6f5f228c8c..acdbe7d699 100644
+--- a/components/power_bookmarks/core/power_bookmark_service.cc
++++ b/components/power_bookmarks/core/power_bookmark_service.cc
+@@ -7,6 +7,7 @@
+ #include "base/feature_list.h"
+ #include "base/ranges/algorithm.h"
+ #include "base/task/sequenced_task_runner.h"
++#include "build/build_config.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/power_bookmarks/common/power.h"
+ #include "components/power_bookmarks/common/power_overview.h"
+@@ -35,11 +36,15 @@ PowerBookmarkService::PowerBookmarkService(
+ 
+   backend_ = std::make_unique<PowerBookmarkBackend>(
+       database_dir, frontend_task_runner, weak_ptr_factory_.GetWeakPtr());
++#if BUILDFLAG(IS_AROS)
++  const bool use_database = false;
++#else
++  const bool use_database = base::FeatureList::IsEnabled(kPowerBookmarkBackend);
++#endif
+   backend_task_runner_->PostTask(
+       FROM_HERE,
+       base::BindOnce(&PowerBookmarkBackend::Init,
+-                     base::Unretained(backend_.get()),
+-                     base::FeatureList::IsEnabled(kPowerBookmarkBackend)));
++                     base::Unretained(backend_.get()), use_database));
+ }
+ 
+ PowerBookmarkService::~PowerBookmarkService() {

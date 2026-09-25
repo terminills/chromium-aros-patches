@@ -1,0 +1,44 @@
+From 3c3d61f235fa8f4f8a365cca3fe9f8c9ac7bb71f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:49:01 -0500
+Subject: [PATCH 167/638] views: include generic Ozone desktop host on AROS
+ [chromium] [aros]
+
+Statement: Desktop Aura selected the generic Ozone native-widget path on AROS, but its platform host and menu defaults were omitted from the Views source graph.
+
+Decision: Compile DesktopWindowTreeHostPlatform and the generic Ozone menu configuration for AROS. Linux-specific event filters and drag/drop behavior remain excluded.
+
+Evidence: The complete content_shell link lacked the DesktopWindowTreeHost factory, open-window statics, and both MenuConfig platform initializers.
+
+Validation: menu_config_linux.o and desktop_window_tree_host_platform.o compile in out/aros-windowed.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ ui/views/BUILD.gn | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/ui/views/BUILD.gn b/ui/views/BUILD.gn
+index ebc3920648..bf27e4cce3 100644
+--- a/ui/views/BUILD.gn
++++ b/ui/views/BUILD.gn
+@@ -640,6 +640,11 @@ component("views") {
+     }
+   }
+ 
++  if (is_aros) {
++    # This is the generic Ozone menu configuration despite its filename.
++    sources += [ "controls/menu/menu_config_linux.cc" ]
++  }
++
+   if (is_chromeos) {
+     public += [ "controls/views_text_services_context_menu_chromeos.h" ]
+     sources += [
+@@ -918,7 +923,7 @@ component("views") {
+           "//ui/base:hit_test",
+         ]
+       }
+-      if (is_linux || is_chromeos_lacros || is_fuchsia) {
++      if (is_linux || is_chromeos_lacros || is_fuchsia || is_aros) {
+         public += [
+           "widget/desktop_aura/desktop_window_tree_host_platform.h",
+           "widget/desktop_aura/window_move_client_platform.h",

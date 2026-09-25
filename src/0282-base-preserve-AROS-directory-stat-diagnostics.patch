@@ -1,0 +1,49 @@
+From faa895ef06cdf849c7b889d06d62cb55d3ebbaed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:40:18 -0500
+Subject: [PATCH 282/638] base: preserve AROS directory stat diagnostics
+
+Record the exact errno and returned mode when profile-directory classification fails during bring-up. Keep the normal DirectoryExists result unchanged.
+
+AI_PHASE: chromium-aros-filesystem-bringup
+
+AI_STATUS: diagnostic-checkpoint
+
+AI_ASSUMPTION: directory creation stalls require durable classification evidence at the Chromium boundary
+
+AI_VALIDATION: focused blink_platform build completed 15781/15781 with this diagnostic compiled
+
+AI_LIMITATIONS: this is diagnostic instrumentation and does not itself correct a filesystem failure
+
+AI_DECISION_CHAIN:
+---
+ base/files/file_util_posix.cc | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index d73975c257..78d1cee56f 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -551,8 +551,20 @@ bool PathIsWritable(const FilePath& path) {
+ 
+ bool DirectoryExists(const FilePath& path) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+-  stat_wrapper_t file_info;
+-  if (File::Stat(path.value().c_str(), &file_info) != 0)
++  stat_wrapper_t file_info = {};
++  const int stat_result = File::Stat(path.value().c_str(), &file_info);
++#if BUILDFLAG(IS_AROS)
++  if (stat_result != 0) {
++    PLOG(ERROR) << "[Chromium:AROS:Files] stat failed for '"
++                << path.value() << "'";
++  } else if (!S_ISDIR(file_info.st_mode)) {
++    LOG(ERROR) << "[Chromium:AROS:Files] stat classified '" << path.value()
++               << "' as mode=" << file_info.st_mode
++               << ", stat_size=" << sizeof(file_info)
++               << ", mode_offset=" << offsetof(stat_wrapper_t, st_mode);
++  }
++#endif
++  if (stat_result != 0)
+     return false;
+   return S_ISDIR(file_info.st_mode);
+ }

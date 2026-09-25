@@ -1,0 +1,175 @@
+From 6e8bc10902149d2bf1f1c1d04fa31dc8a613731d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 21:30:54 -0500
+Subject: [PATCH 634/638] aros: size the PartitionAlloc regular pool from the
+ memory free at startup
+
+On AROS a pool is physically backed and, until exec has an aligned allocator,
+costs twice its size (the over-reserve that aligns it cannot be trimmed). A
+fixed 1 GiB regular pool is therefore a fixed 2 GiB bite out of the machine
+for every Chromium process, which capped a 12 GiB guest at browser + one
+child: the third process found a largest free block of 1.18 GiB and
+PA_CHECKed tset12).
+
+Enable PA_CONFIG_DYNAMICALLY_SELECT_POOL_SIZE for AROS - the same runtime
+pool-size machinery iOS test processes use - and choose the regular pool as
+the largest power of two at or below min(free / 4, largest / 2), clamped to
+[128 MiB, kRegularPoolSize]. The browser, first in, still gets the maximum;
+each child takes a share of what is left, so the guest degrades to smaller
+renderers instead of to none. The BRP pool stays at its fixed size (nothing
+is allocated from it on AROS). The choice is cached, since Init() and
+UninitForTesting() must agree and AvailMem() moves once the pools exist, and
+logged as "[Chromium:PA] regular-pool size=... free=... largest=..." on the
+serial console.
+
+GLUE_CORE_POOLS and ENABLE_POINTER_COMPRESSION are off in this build, which is
+what the runtime-size path requires; the iOS-only #error becomes an
+iOS-or-AROS one.
+
+---
+ .../partition_address_space.cc                | 88 ++++++++++++++++++-
+ .../partition_alloc/partition_alloc_config.h  |  8 +-
+ 2 files changed, 91 insertions(+), 5 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+index 732df68ad6..185d66236d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+@@ -31,6 +31,19 @@
+ #include <windows.h>
+ #endif  // BUILDFLAG(IS_WIN)
+ 
++#if BUILDFLAG(IS_AROS)
++#include <algorithm>
++#include <cstdio>
++
++#include <exec/memory.h>
++#include <proto/exec.h>
++// inline/exec.h spells every exec call as a macro; this one collides with
++// AddressPoolManager::Remove() below. AvailMem is the only exec call here.
++#undef Remove
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif  // BUILDFLAG(IS_AROS)
++
+ #if PA_CONFIG(ENABLE_SHADOW_METADATA) || BUILDFLAG(ENABLE_THREAD_ISOLATION)
+ #include <sys/mman.h>
+ #endif
+@@ -88,9 +101,74 @@ std::ptrdiff_t PartitionAddressSpace::brp_pool_shadow_offset_ = 0;
+ #endif
+ 
+ #if PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
+-#if !BUILDFLAG(IS_IOS)
+-#error Dynamic pool size is only supported on iOS.
+-#endif
++#if BUILDFLAG(IS_AROS)
++
++namespace {
++
++// The regular pool is sized from the memory free when the process starts.
++//
++// On AROS a pool is physically backed (see kPoolMaxSize), and until exec has
++// an aligned allocator it costs twice its size: AllocPagesWithAlignOffset
++// over-reserves to align the pool to itself and cannot give the slack back
++// (JOB-0104 exec-allocmemaligned-proposal.md). A fixed 1 GiB regular pool is
++// therefore a fixed 2 GiB bite out of the machine for every process, which is
++// what capped a 12 GiB guest at browser + one child (JOB-0104 tset12): the
++// third process found a largest free block of 1.18 GiB and PA_CHECKed.
++//
++// So: the largest power of two at or below a quarter of free memory, which
++// keeps the pool's 2x reservation at or below half of what is free, and at or
++// below half of the largest free block, which is what the over-reserve needs
++// in one piece. The browser, first in, still gets kRegularPoolSize; each child
++// takes a share of what is left, so the guest degrades to smaller renderers
++// instead of to none. Below kMinRegularPoolSize a renderer cannot do useful
++// work anyway; the pool reservation then fails and the process dies in
++// HandlePoolAllocFailure, which is JOB-0095's sad tab once the browser can
++// see a child die.
++//
++// The result is cached: Init() and UninitForTesting() must see the same size,
++// and a second AvailMem() after the pools are reserved would see less.
++constexpr size_t kMinRegularPoolSize = kGiB / 8;
++constexpr size_t kFreeMemoryDivisor = 4;
++
++size_t ArosRegularPoolSize(size_t max_size) {
++  static size_t cached = 0;
++  if (cached) {
++    return cached;
++  }
++
++  const IPTR free_bytes = AvailMem(MEMF_PUBLIC);
++  const IPTR largest = AvailMem(MEMF_PUBLIC | MEMF_LARGEST);
++  const size_t budget =
++      std::min(static_cast<size_t>(free_bytes) / kFreeMemoryDivisor,
++               static_cast<size_t>(largest) / 2);
++  size_t size = std::bit_floor(budget);
++  size = std::clamp(size, kMinRegularPoolSize, max_size);
++
++  // Fixed buffer, KPutStr: no allocation inside the allocator.
++  char line[160];
++  std::snprintf(line, sizeof(line),
++                "[Chromium:PA] regular-pool size=%llu free=%llu largest=%llu\n",
++                static_cast<unsigned long long>(size),
++                static_cast<unsigned long long>(free_bytes),
++                static_cast<unsigned long long>(largest));
++  ArosKPutStr(line);
++
++  cached = size;
++  return size;
++}
++
++}  // namespace
++
++PA_ALWAYS_INLINE size_t PartitionAddressSpace::RegularPoolSize() {
++  return ArosRegularPoolSize(kRegularPoolSize);
++}
++PA_ALWAYS_INLINE size_t PartitionAddressSpace::BRPPoolSize() {
++  // Nothing is allocated from the BRP pool on AROS (see kBRPPoolSize); it is
++  // already as small as it needs to be.
++  return kBRPPoolSize;
++}
++
++#elif BUILDFLAG(IS_IOS)
+ 
+ namespace {
+ bool IsIOSTestProcess() {
+@@ -133,6 +211,10 @@ PA_ALWAYS_INLINE size_t PartitionAddressSpace::RegularPoolSize() {
+ PA_ALWAYS_INLINE size_t PartitionAddressSpace::BRPPoolSize() {
+   return IsIOSTestProcess() ? kBRPPoolSizeForIOSTestProcess : kBRPPoolSize;
+ }
++
++#else
++#error Dynamic pool size is only supported on iOS and AROS.
++#endif  // BUILDFLAG(IS_AROS) / BUILDFLAG(IS_IOS)
+ #endif  // PA_CONFIG(DYNAMICALLY_SELECT_POOL_SIZE)
+ 
+ void PartitionAddressSpace::Init() {
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
+index bd5eb9d1e1..7f755aac92 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_config.h
+@@ -43,18 +43,22 @@ static_assert(sizeof(void*) != 8, "");
+ #define PA_CONFIG_STARSCAN_NEON_SUPPORTED() 0
+ #endif
+ 
+-#if BUILDFLAG(HAS_64_BIT_POINTERS) && BUILDFLAG(IS_IOS)
++#if BUILDFLAG(HAS_64_BIT_POINTERS) && (BUILDFLAG(IS_IOS) || BUILDFLAG(IS_AROS))
+ // Allow PA to select an alternate pool size at run-time before initialization,
+ // rather than using a single constexpr value.
+ //
+ // This is needed on iOS because iOS test processes can't handle large pools
+ // (see crbug.com/1250788).
+ //
++// On AROS the pools are physically backed, so the pool size is the process's
++// RAM footprint; the regular pool is sized from the memory free when the
++// process starts (see partition_address_space.cc).
++//
+ // This setting is specific to 64-bit, as 32-bit has a different implementation.
+ #define PA_CONFIG_DYNAMICALLY_SELECT_POOL_SIZE() 1
+ #else
+ #define PA_CONFIG_DYNAMICALLY_SELECT_POOL_SIZE() 0
+-#endif  // BUILDFLAG(HAS_64_BIT_POINTERS) && BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(HAS_64_BIT_POINTERS) && (IS_IOS || IS_AROS)
+ 
+ #if BUILDFLAG(HAS_64_BIT_POINTERS) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID))

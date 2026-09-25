@@ -1,0 +1,346 @@
+From 86a1787a5df6362490930d9761daec1fc1d56f29 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 5 Aug 2026 06:08:29 -0500
+Subject: [PATCH 506/638] content: quarantine retiring AROS renderers
+
+Treat channel error and fast shutdown as one idempotent renderer-retirement transition. A timeout requests termination but never authorizes replacement; the host continues polling until the Exec child task is independently gone and its Mojo reader and ports have fully retired.
+
+This prevents latency during failure cleanup from accumulating replacement children, reader tasks, and retained channel memory.
+
+
+
+---
+ content/browser/child_process_launcher.cc     |   7 +
+ content/browser/child_process_launcher.h      |   6 +
+ .../browser/child_process_launcher_helper.cc  |  11 ++
+ .../browser/child_process_launcher_helper.h   |   7 +
+ .../renderer_host/render_process_host_impl.cc | 155 ++++++++++++++++++
+ .../renderer_host/render_process_host_impl.h  |  18 ++
+ 6 files changed, 204 insertions(+)
+
+diff --git a/content/browser/child_process_launcher.cc b/content/browser/child_process_launcher.cc
+index f534d18533..1f9ca846f4 100644
+--- a/content/browser/child_process_launcher.cc
++++ b/content/browser/child_process_launcher.cc
+@@ -191,6 +191,13 @@ const base::Process& ChildProcessLauncher::GetProcess() const {
+   return process_.process;
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++bool ChildProcessLauncher::IsArosMojoRetired() const {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  return process_.aros_mojo_retirement.IsRetired();
++}
++#endif
++
+ ChildProcessTerminationInfo ChildProcessLauncher::GetChildTerminationInfo(
+     bool known_dead) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+diff --git a/content/browser/child_process_launcher.h b/content/browser/child_process_launcher.h
+index 7d449854cb..05c1e23456 100644
+--- a/content/browser/child_process_launcher.h
++++ b/content/browser/child_process_launcher.h
+@@ -246,6 +246,12 @@ class CONTENT_EXPORT ChildProcessLauncher {
+   // more discussion of Linux implementation details.
+   ChildProcessTerminationInfo GetChildTerminationInfo(bool known_dead);
+ 
++#if BUILDFLAG(IS_AROS)
++  // True only after both native Mojo endpoints and their reader tasks have
++  // retired. Process exit alone is not sufficient on AROS.
++  bool IsArosMojoRetired() const;
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+   // Changes whether the render process runs in the background or not.  Only
+   // call this after the process has started.
+diff --git a/content/browser/child_process_launcher_helper.cc b/content/browser/child_process_launcher_helper.cc
+index 725d2966c9..198db53ecd 100644
+--- a/content/browser/child_process_launcher_helper.cc
++++ b/content/browser/child_process_launcher_helper.cc
+@@ -161,6 +161,10 @@ ChildProcessLauncherHelper::Process::~Process() = default;
+ 
+ ChildProcessLauncherHelper::Process::Process(Process&& other)
+     : process(std::move(other.process))
++#if BUILDFLAG(IS_AROS)
++      ,
++      aros_mojo_retirement(std::move(other.aros_mojo_retirement))
++#endif
+ #if BUILDFLAG(USE_ZYGOTE)
+       ,
+       zygote(other.zygote)
+@@ -336,6 +340,13 @@ void ChildProcessLauncherHelper::PostLaunchOnLauncherThread(
+     {
+       DCHECK(mojo_channel_);
+       DCHECK(mojo_channel_->local_endpoint().is_valid());
++#if BUILDFLAG(IS_AROS)
++      process.aros_mojo_retirement =
++          mojo::CreateArosChannelRetirementObserver(
++              mojo_channel_->local_endpoint()
++                  .platform_handle()
++                  .GetArosChannel());
++#endif
+       mojo::OutgoingInvitation::Send(
+           std::move(invitation), process.process.Handle(),
+           mojo_channel_->TakeLocalEndpoint(), process_error_callback_);
+diff --git a/content/browser/child_process_launcher_helper.h b/content/browser/child_process_launcher_helper.h
+index e6f3e324a3..17464ff096 100644
+--- a/content/browser/child_process_launcher_helper.h
++++ b/content/browser/child_process_launcher_helper.h
+@@ -23,6 +23,9 @@
+ #include "content/public/common/result_codes.h"
+ #include "content/public/common/zygote/zygote_buildflags.h"
+ #include "mojo/public/cpp/platform/platform_channel.h"
++#if BUILDFLAG(IS_AROS)
++#include "mojo/public/cpp/platform/aros_channel.h"
++#endif
+ #include "mojo/public/cpp/system/invitation.h"
+ #include "ppapi/buildflags/buildflags.h"
+ 
+@@ -115,6 +118,10 @@ class ChildProcessLauncherHelper
+ 
+     base::Process process;
+ 
++#if BUILDFLAG(IS_AROS)
++    mojo::ArosChannelRetirementObserver aros_mojo_retirement;
++#endif
++
+ #if BUILDFLAG(USE_ZYGOTE)
+     raw_ptr<ZygoteCommunication> zygote = nullptr;
+ #endif  // BUILDFLAG(USE_ZYGOTE)
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index ddeef4098e..639cda09ea 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -317,6 +317,15 @@ namespace {
+ 
+ using perfetto::protos::pbzero::ChromeTrackEvent;
+ 
++#if BUILDFLAG(IS_AROS)
++constexpr base::TimeDelta kArosRendererRetirementPollInterval =
++    base::Milliseconds(100);
++constexpr base::TimeDelta kArosRendererRetirementGracePeriod =
++    base::Seconds(15);
++constexpr base::TimeDelta kArosRendererQuarantinePollInterval =
++    base::Seconds(1);
++#endif
++
+ // Stores the maximum number of renderer processes the content module can
+ // create. Only applies if it is set to a non-zero value.
+ size_t g_max_renderer_count_override = 0;
+@@ -3830,6 +3839,20 @@ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
+ }
+ 
+ void RenderProcessHostImpl::OnChannelError() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return;
++
++  // A dead Exec task is only one half of AROS child retirement.  Its Mojo
++  // reader thread and endpoint state may still be unwinding, so never let the
++  // timing of this callback bypass the retirement barrier and authorize a
++  // replacement early.
++  if (child_process_launcher_) {
++    BeginArosRendererRetirement();
++    return;
++  }
++#endif
++
+   ChildProcessTerminationInfo info =
+       GetChildTerminationInfo(true /* already_dead */);
+   ProcessDied(info);
+@@ -4897,6 +4920,100 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
+   return info;
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++void RenderProcessHostImpl::BeginArosRendererRetirement() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  DCHECK(child_process_launcher_);
++
++  // Channel error, fast shutdown, and process observation can converge on the
++  // same renderer.  Retirement is a single lifecycle transition: do not reset
++  // its grace period or enqueue another poll chain when a second signal
++  // arrives while the first retirement is still in progress.
++  if (aros_retirement_started_)
++    return;
++
++  aros_retirement_started_ = true;
++  aros_retirement_deadline_ =
++      base::TimeTicks::Now() + kArosRendererRetirementGracePeriod;
++
++  LOG(ERROR) << "[Chromium:AROS:RendererRetirement] channel closed; closing "
++                "IPC and suppressing replacement until task and transport "
++                "retire "
++             << "host=" << id_;
++
++  // Closing the channel starts the AROS Mojo reader's shutdown.  Keep the
++  // launcher and this host alive until the child task is independently
++  // observed as terminated; a channel failure is not proof of task death.
++  ResetIPC();
++
++  // ResetIPC() invalidates instance_weak_factory_, so obtain the WeakPtr only
++  // after the old IPC generation has been torn down.
++  ScheduleArosRendererRetirementPoll(kArosRendererRetirementPollInterval);
++}
++
++void RenderProcessHostImpl::ScheduleArosRendererRetirementPoll(
++    base::TimeDelta delay) {
++  GetUIThreadTaskRunner({})->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(
++          &RenderProcessHostImpl::PollForArosRendererRetirement,
++          instance_weak_factory_.GetWeakPtr()),
++      delay);
++}
++
++void RenderProcessHostImpl::PollForArosRendererRetirement() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!aros_retirement_started_ || !child_process_launcher_)
++    return;
++
++  ChildProcessTerminationInfo info =
++      GetChildTerminationInfo(false /* already_dead */);
++  if (info.status != base::TERMINATION_STATUS_STILL_RUNNING) {
++    if (!child_process_launcher_->IsArosMojoRetired()) {
++      LOG(ERROR) << "[Chromium:AROS:RendererRetirement] renderer task gone; "
++                    "waiting for Mojo readers and endpoints host="
++                 << id_;
++      ScheduleArosRendererRetirementPoll(
++          kArosRendererQuarantinePollInterval);
++      return;
++    }
++    if (fast_shutdown_started_) {
++      info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
++      info.exit_code = 0;
++    }
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] renderer task gone; "
++                  "replacement may proceed host="
++               << id_ << " status=" << info.status
++               << " exit_code=" << info.exit_code;
++    ProcessDied(info);
++    return;
++  }
++
++  const bool grace_expired =
++      base::TimeTicks::Now() >= aros_retirement_deadline_;
++  if (grace_expired && !aros_termination_requested_) {
++    aros_termination_requested_ = true;
++    const bool requested =
++        child_process_launcher_->Terminate(RESULT_CODE_HUNG);
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] grace expired; "
++                  "termination requested="
++               << requested << " host=" << id_
++               << "; replacement remains suppressed";
++  }
++
++  if (grace_expired && !aros_retirement_quarantined_) {
++    aros_retirement_quarantined_ = true;
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] renderer quarantined "
++                  "until task death is confirmed host="
++               << id_;
++  }
++
++  ScheduleArosRendererRetirementPoll(
++      grace_expired ? kArosRendererQuarantinePollInterval
++                    : kArosRendererRetirementPollInterval);
++}
++#endif
++
+ void RenderProcessHostImpl::ProcessDied(
+     const ChildProcessTerminationInfo& termination_info) {
+   TRACE_EVENT0("content", "RenderProcessHostImpl::ProcessDied");
+@@ -4919,6 +5036,13 @@ void RenderProcessHostImpl::ProcessDied(
+   // it has died.
+   ResetIPC();
+ 
++#if BUILDFLAG(IS_AROS)
++  aros_retirement_started_ = false;
++  aros_retirement_quarantined_ = false;
++  aros_termination_requested_ = false;
++  aros_retirement_deadline_ = base::TimeTicks();
++#endif
++
+   UpdateProcessPriority();
+ 
+   // RenderProcessExited relies on the exit code set during shutdown.
+@@ -4956,6 +5080,36 @@ void RenderProcessHostImpl::FastShutdown() {
+   // to fast shutdown.
+   fast_shutdown_started_ = true;
+ 
++#if BUILDFLAG(IS_AROS)
++  // A channel error may already have placed this renderer behind the
++  // retirement barrier.  Fast shutdown joins that in-flight retirement; it
++  // must not start a second poll chain or publish a second death event.
++  if (aros_retirement_started_) {
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] fast shutdown joined "
++                  "existing retirement host="
++               << id_;
++    return;
++  }
++
++  // Closing a renderer's IPC does not synchronously retire its AROS task or
++  // Mojo transport. Publishing a synthetic clean exit here allowed a
++  // replacement renderer to start while the old reader was still alive. The
++  // task may already have disappeared by the time this runs, but that still
++  // does not prove transport retirement.
++  if (child_process_launcher_) {
++    LOG(ERROR) << "[Chromium:AROS:RendererRetirement] fast shutdown requested; "
++                  "waiting for confirmed task and transport retirement host="
++               << id_;
++    BeginArosRendererRetirement();
++    return;
++  }
++
++  // A host without a launcher has no child or Mojo transport to retire.
++  ChildProcessTerminationInfo termination_info;
++  termination_info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
++  termination_info.exit_code = 0;
++  ProcessDied(termination_info);
++#else
+   // Tell observers that the process exited cleanly, even though it will be
+   // destroyed a little bit later. Observers shouldn't rely on this process
+   // anymore.
+@@ -4964,6 +5118,7 @@ void RenderProcessHostImpl::FastShutdown() {
+   termination_info.exit_code = 0;
+ 
+   ProcessDied(termination_info);
++#endif
+ }
+ 
+ void RenderProcessHostImpl::ResetIPC() {
+diff --git a/content/browser/renderer_host/render_process_host_impl.h b/content/browser/renderer_host/render_process_host_impl.h
+index 574aa5aa50..762d3bfe21 100644
+--- a/content/browser/renderer_host/render_process_host_impl.h
++++ b/content/browser/renderer_host/render_process_host_impl.h
+@@ -998,6 +998,14 @@ class CONTENT_EXPORT RenderProcessHostImpl
+   // on this flag.
+   ChildProcessTerminationInfo GetChildTerminationInfo(bool already_dead);
+ 
++#if BUILDFLAG(IS_AROS)
++  // A renderer channel may close before its AROS task exits. Keep the host
++  // unavailable for reuse until the launcher confirms task termination.
++  void BeginArosRendererRetirement();
++  void ScheduleArosRendererRetirementPoll(base::TimeDelta delay);
++  void PollForArosRendererRetirement();
++#endif
++
+   // Handle termination of our process.
+   void ProcessDied(const ChildProcessTerminationInfo& termination_info);
+ 
+@@ -1192,6 +1200,16 @@ class CONTENT_EXPORT RenderProcessHostImpl
+   // True after ProcessDied(), until the next call to Init().
+   bool is_dead_ = false;
+ 
++#if BUILDFLAG(IS_AROS)
++  // A channel failure starts retirement but does not prove process death.
++  // These fields keep the old generation authoritative until the launcher
++  // observes that its task is gone.
++  bool aros_retirement_started_ = false;
++  bool aros_retirement_quarantined_ = false;
++  bool aros_termination_requested_ = false;
++  base::TimeTicks aros_retirement_deadline_;
++#endif
++
+   // Stores the time at which the last successful call to Init happened.
+   base::TimeTicks last_init_time_;
+ 

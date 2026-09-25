@@ -1,0 +1,155 @@
+From 7ae62ff943fa1333dede950affb87128f2b7a21a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 00:10:45 -0500
+Subject: [PATCH 556/638] sql: trace SandboxedVfs file operations on AROS
+
+VLOG(1) lines for open/delete/access and per-file read/write/truncate/
+size/lock, so a SQLite 'not a database' can be tied to the descriptor
+sequence that produced it. AROS-only, off unless --v=1.
+---
+ sql/sandboxed_vfs.cc      | 18 ++++++++++++++++++
+ sql/sandboxed_vfs_file.cc | 33 +++++++++++++++++++++++++++++++++
+ sql/sandboxed_vfs_file.h  |  4 ++++
+ 3 files changed, 55 insertions(+)
+
+diff --git a/sql/sandboxed_vfs.cc b/sql/sandboxed_vfs.cc
+index 790e3b2c44..40f7dfd5c9 100644
+--- a/sql/sandboxed_vfs.cc
++++ b/sql/sandboxed_vfs.cc
+@@ -165,6 +165,12 @@ int SandboxedVfs::Open(const char* full_path,
+                        int* granted_flags) {
+   base::FilePath file_path = base::FilePath::FromUTF8Unsafe(full_path);
+   base::File file = delegate_->OpenFile(file_path, requested_flags);
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] open path='" << file_path.value()
++          << "' flags=0x" << std::hex << requested_flags << std::dec
++          << " valid=" << file.IsValid() << " created=" << file.created()
++          << " length=" << (file.IsValid() ? file.GetLength() : -1);
++#endif
+   if (!file.IsValid()) {
+     // TODO(pwnall): Figure out if we can remove the fallback to read-only.
+     if (!(requested_flags & SQLITE_OPEN_READWRITE)) {
+@@ -191,8 +197,16 @@ int SandboxedVfs::Open(const char* full_path,
+ 
+ int SandboxedVfs::Delete(const char* full_path, int sync_dir) {
+   DCHECK(full_path);
++#if BUILDFLAG(IS_AROS)
++  const int aros_result = delegate_->DeleteFile(
++      base::FilePath::FromUTF8Unsafe(full_path), sync_dir == 1);
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] delete path='" << full_path
++          << "' result=" << aros_result;
++  return aros_result;
++#else
+   return delegate_->DeleteFile(base::FilePath::FromUTF8Unsafe(full_path),
+                                sync_dir == 1);
++#endif
+ }
+ 
+ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
+@@ -218,6 +232,10 @@ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
+       NOTREACHED() << "Unsupported xAccess flags: " << flags;
+       return SQLITE_ERROR;
+   }
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] access path='" << full_path
++          << "' flags=" << flags << " result=" << result;
++#endif
+   return SQLITE_OK;
+ }
+ 
+diff --git a/sql/sandboxed_vfs_file.cc b/sql/sandboxed_vfs_file.cc
+index fbfbbfffcc..8b9d4f00dc 100644
+--- a/sql/sandboxed_vfs_file.cc
++++ b/sql/sandboxed_vfs_file.cc
+@@ -164,6 +164,17 @@ int SandboxedVfsFile::Read(void* buffer, int size, sqlite3_int64 offset) {
+   DCHECK_GE(size, 0);
+   DCHECK_GE(offset, 0);
+ 
++#if BUILDFLAG(IS_AROS)
++  const int aros_result = ReadImpl(buffer, size, offset);
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] read path='" << file_path_.value()
++          << "' offset=" << offset << " size=" << size
++          << " lock=" << sqlite_lock_mode_ << " result=" << aros_result;
++  return aros_result;
++}
++
++int SandboxedVfsFile::ReadImpl(void* buffer, int size, sqlite3_int64 offset) {
++#endif  // BUILDFLAG(IS_AROS)
++
+ #if DCHECK_IS_ON()
+   // See http://www.sqlite.org/fileformat2.html#database_header
+   constexpr int kSqliteDatabaseHeaderOffset = 0;
+@@ -234,6 +245,11 @@ int SandboxedVfsFile::Write(const void* buffer,
+ 
+   int bytes_written = file_.Write(offset, data, size);
+   DCHECK_LE(bytes_written, size);
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] write path='" << file_path_.value()
++          << "' offset=" << offset << " size=" << size
++          << " written=" << bytes_written;
++#endif
+   if (bytes_written >= size)
+     return SQLITE_OK;
+ 
+@@ -246,8 +262,17 @@ int SandboxedVfsFile::Write(const void* buffer,
+ }
+ 
+ int SandboxedVfsFile::Truncate(sqlite3_int64 size) {
++#if BUILDFLAG(IS_AROS)
++  const bool aros_truncated = file_.SetLength(size);
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] truncate path='"
++          << file_path_.value() << "' size=" << size
++          << " ok=" << aros_truncated;
++  if (aros_truncated)
++    return SQLITE_OK;
++#else
+   if (file_.SetLength(size))
+     return SQLITE_OK;
++#endif
+ 
+   // On macOS < 10.15, the default sandbox blocks ftruncate(), so we have to use
+   // a sync mojo IPC to ask the browser process to call ftruncate() for us.
+@@ -284,6 +309,10 @@ int SandboxedVfsFile::Sync(int flags) {
+ 
+ int SandboxedVfsFile::FileSize(sqlite3_int64* result_size) {
+   int64_t length = file_.GetLength();
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] size path='" << file_path_.value()
++          << "' length=" << length;
++#endif
+   if (length < 0) {
+     vfs_->SetLastError(base::File::GetLastFileError());
+     return SQLITE_IOERR_FSTAT;
+@@ -389,6 +418,10 @@ int SandboxedVfsFile::Lock(int mode) {
+   }
+ 
+   base::File::Error error = file_.Lock(file_lock_mode);
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "[Chromium:AROS:SandboxedVfs] lock path='" << file_path_.value()
++          << "' mode=" << mode << " error=" << error;
++#endif
+   if (error != base::File::FILE_OK) {
+     vfs_->SetLastError(base::File::GetLastFileError());
+     return SQLITE_IOERR_LOCK;
+diff --git a/sql/sandboxed_vfs_file.h b/sql/sandboxed_vfs_file.h
+index 5f9ce841bb..10384c46c1 100644
+--- a/sql/sandboxed_vfs_file.h
++++ b/sql/sandboxed_vfs_file.h
+@@ -9,6 +9,7 @@
+ #include "base/files/file_path.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
++#include "build/build_config.h"
+ #include "third_party/sqlite/sqlite3.h"
+ 
+ namespace sql {
+@@ -61,6 +62,9 @@ class SandboxedVfsFile {
+   // sqlite3_file implementation.
+   int Close();
+   int Read(void* buffer, int size, sqlite3_int64 offset);
++#if BUILDFLAG(IS_AROS)
++  int ReadImpl(void* buffer, int size, sqlite3_int64 offset);
++#endif
+   int Write(const void* buffer, int size, sqlite3_int64 offset);
+   int Truncate(sqlite3_int64 size);
+   int Sync(int flags);

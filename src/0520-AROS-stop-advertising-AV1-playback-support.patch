@@ -1,0 +1,34 @@
+From c96be9980166d153ef28048b56e94498acdc3c8f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 7 Aug 2026 20:48:45 -0500
+Subject: [PATCH 520/638] AROS: stop advertising AV1 playback support
+
+---
+ media/base/supported_types.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index 58801ea7a9..4b6389cc0c 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -286,6 +286,12 @@ bool IsVp9ProfileSupported(const VideoType& type) {
+ }
+ 
+ bool IsAV1Supported(const VideoType& type) {
++  // AROS can build dav1d, but software AV1 currently starves the hosted
++  // YouTube path. Do not advertise it to sites until native/GPU decode or
++  // enough software headroom is available.
++#if BUILDFLAG(IS_AROS)
++  return false;
++#else
+   // If the AV1 decoder is enabled, or if we're on Q or later, yes.
+ #if BUILDFLAG(ENABLE_AV1_DECODER)
+   return IsColorSpaceSupported(type.color_space);
+@@ -296,6 +302,7 @@ bool IsAV1Supported(const VideoType& type) {
+ #else
+   return false;
+ #endif
++#endif  // BUILDFLAG(IS_AROS)
+ }
+ 
+ bool IsMPEG4Supported() {

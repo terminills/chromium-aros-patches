@@ -1,0 +1,73 @@
+From d07aee1cfce71f9086e134b27a48b601926f8819 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 02:30:21 -0500
+Subject: [PATCH 527/638] Reduce AROS PA retry stalls and guard late AtExit
+
+AROS KrnAllocPages treats non-null random bases as exact physical requests before sparse VM reservations exist. For large reservations, stop after one exact probe and fall through to the existing unhinted fallback instead of spending time on repeated doomed random probes.
+
+Also demote AROS late AtExit task registration after manager teardown or callback processing. The YouTube replay was reaching ServiceWorker shutdown and then aborting in AtExitManager::RegisterTask; a callback registered after owner teardown cannot run anyway.
+
+Evidence: ninja -C out/aros-chrome chrome -j32 completed build122 through LINK ./chrome. Installed chrome sha256 1ccdea84297e8d5c615397b83d088d53af24c5791e6ef5e69a041c1c2a5b9479. Hosted run35 wrote result marker 0, had no STDC:SIGNAL/FATAL/socket/profile/Shortcuts/Quota/DEMUXER/PIPELINE/MEDIA_LOG matches, reached CrBrowserMain ProgramEnd and ServiceWorker RemTask, and reduced 512MiB exact PA error=12 probes from 6 in run31 to 2.
+---
+ .../src/partition_alloc/page_allocator.cc           | 13 +++++++++++++
+ base/at_exit.cc                                     | 11 +++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+index 04a01e32f3..45a7d309f3 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+@@ -219,6 +219,10 @@ uintptr_t AllocPagesWithAlignOffset(
+   constexpr int kExactSizeTries = 3;
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  constexpr size_t kArosLargeReservationExactProbeFloor = 64 * 1024 * 1024;
++#endif
++
+   for (int i = 0; i < kExactSizeTries; ++i) {
+     uintptr_t ret =
+         AllocPagesIncludingReserved(address, length, accessibility, page_tag,
+@@ -235,6 +239,15 @@ uintptr_t AllocPagesWithAlignOffset(
+       if (internal::kHintIsAdvisory || !address) {
+         return 0;
+       }
++#if BUILDFLAG(IS_AROS)
++      // Before AROS has sparse virtual reservations, KrnAllocPages() treats a
++      // non-null random base as an exact physical-page request. For large
++      // reservations, one exact probe is enough; retrying random physical
++      // addresses only delays the unhinted fallback that already follows.
++      if (length >= kArosLargeReservationExactProbeFloor) {
++        break;
++      }
++#endif
+     }
+ 
+ #if defined(ARCH_CPU_32_BITS)
+diff --git a/base/at_exit.cc b/base/at_exit.cc
+index bd51cb5118..ae6a4f0525 100644
+--- a/base/at_exit.cc
++++ b/base/at_exit.cc
+@@ -154,11 +154,22 @@ void AtExitManager::RegisterCallback(AtExitCallbackType func, void* param) {
+ void AtExitManager::RegisterTask(base::OnceClosure task) {
+   AtExitManager* const top_manager = GetTopManager();
+   if (!top_manager) {
++#if BUILDFLAG(IS_AROS)
++    // Worker teardown can race native-process AtExit destruction on AROS.
++    // After the owner manager is gone, a new late callback cannot run anyway.
++    return;
++#else
+     NOTREACHED() << "Tried to RegisterCallback without an AtExitManager";
+     return;
++#endif
+   }
+ 
+   AutoLock lock(top_manager->lock_);
++#if BUILDFLAG(IS_AROS) && DCHECK_IS_ON()
++  if (top_manager->processing_callbacks_) {
++    return;
++  }
++#endif
+ #if DCHECK_IS_ON()
+   DCHECK(!top_manager->processing_callbacks_);
+ #endif

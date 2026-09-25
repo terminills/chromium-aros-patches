@@ -1,0 +1,39 @@
+From 836b9cffc08a89e967e507dd755b7be1f3170af5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:54:39 -0500
+Subject: [PATCH 345/638] extensions: retain networking-private factory with
+ stubs
+
+Stub platforms still need the common factory's ownership and destructor definitions because Chrome installs a UI delegate factory unconditionally. Keep backend operations stubbed while compiling the common factory lifecycle.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained only UIDelegateFactory::~UIDelegateFactory from this target
+
+AI_LIMITATIONS: factory compile and native CEF link remain pending; no AROS network-management backend is added
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ extensions/browser/api/networking_private/BUILD.gn | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/extensions/browser/api/networking_private/BUILD.gn b/extensions/browser/api/networking_private/BUILD.gn
+index 9ae8caa565..c2aa60dff1 100644
+--- a/extensions/browser/api/networking_private/BUILD.gn
++++ b/extensions/browser/api/networking_private/BUILD.gn
+@@ -83,6 +83,10 @@ source_set("networking_private") {
+     ]
+   } else {
+     not_needed([ "default_sources" ])
+-    sources = [ "networking_private_stubs.cc" ]
++    sources = [
++      "networking_private_delegate_factory.cc",
++      "networking_private_delegate_factory.h",
++      "networking_private_stubs.cc",
++    ]
+   }
+ }

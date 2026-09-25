@@ -1,0 +1,115 @@
+From 1486a5dec9dfff40345b58c6a52aa369efdd9933 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 01:46:23 -0500
+Subject: [PATCH 557/638] base: run IO pump threads above Exec priority 0 on
+ AROS
+
+Exec only preempts the running task for a strictly higher priority task,
+so a priority-0 IO pump that is signalled while the renderer, compositor
+or worker pool is busy waits for the remainder of an 80 ms quantum and
+then its round-robin turn.  QUIC, which does its ACK and loss recovery in
+user space on that pump, measured 55 ms median / 745 ms p99 ack delay and
+inflated the smoothed RTT to 28 s, while TCP (protocol work inside the
+priority-5 AROSTCP task) was unaffected.
+
+Map MessagePumpType::IO threads of type kDefault or above to Exec
+priority >= 1 in SetCurrentThreadTypeForPlatform, and pass the creator's
+pump hint from ThreadFunc on AROS so the priority is right from the
+start (the pump is not bound yet when the hint is derived).  IO pumps
+sleep in WaitSelect between short bursts, so they do not starve the
+priority-0 system tasks the way continuously ready compositor tasks did.
+---
+ base/threading/platform_thread_aros.cc  | 33 +++++++++++++++++++++++--
+ base/threading/platform_thread_posix.cc | 15 +++++++----
+ 2 files changed, 41 insertions(+), 7 deletions(-)
+
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 77d8c9946a..347d1b22fe 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -8,7 +8,11 @@
+ 
+ #include <optional>
+ 
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
+ #include "base/aros/socket_library.h"
++#include "base/message_loop/message_pump_type.h"
+ #include "base/threading/platform_thread_internal_posix.h"
+ 
+ namespace base {
+@@ -40,12 +44,37 @@ const ThreadTypeToNiceValuePair kThreadTypeToNiceValueMap[7] = {
+     {ThreadType::kRealtimeAudio, -10},
+ };
+ 
++// Exec only preempts the running task for a task of strictly higher
++// priority. A priority-0 task that is signalled while another priority-0 task
++// is busy waits for the remainder of that task's quantum (SysBase->Quantum,
++// 4 VBlank ticks = 80 ms on hosted) and then for its turn behind every other
++// ready task at the same priority. With the renderer, compositor and worker
++// pool all runnable, an IO pump saw 55 ms median / 750 ms p99 between a
++// datagram arriving and its ACK leaving (QUIC ack_delay_time), which QUIC
++// reads as a 28 s RTT while TCP, whose protocol work runs inside the
++// priority-5 AROSTCP task, is unaffected. IO pumps sleep in WaitSelect() and
++// do short bursts of work, so running them one step above the pool makes a
++// readable socket or a posted task preempt CPU-bound work without starving
++// the system tasks; they stay below the DOS handlers and AROSTCP (5).
++constexpr int kIoPumpMinimumPriority = 1;
++
+ bool CanSetThreadTypeToRealtimeAudio() {
+   return true;
+ }
+ 
+-bool SetCurrentThreadTypeForPlatform(ThreadType, MessagePumpType) {
+-  return false;
++bool SetCurrentThreadTypeForPlatform(ThreadType thread_type,
++                                     MessagePumpType pump_type_hint) {
++  struct Task* task = FindTask(nullptr);
++  if (!task)
++    return false;
++  int priority = -ThreadTypeToNiceValue(thread_type);
++  if (pump_type_hint == MessagePumpType::IO &&
++      thread_type >= ThreadType::kDefault &&
++      priority < kIoPumpMinimumPriority) {
++    priority = kIoPumpMinimumPriority;
++  }
++  SetTaskPri(task, static_cast<BYTE>(priority));
++  return true;
+ }
+ 
+ std::optional<ThreadPriorityForTest>
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index ff8f0a7dcc..0a8ce586f8 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -98,7 +98,14 @@ void* ThreadFunc(void* params) {
+     // Threads on linux/android may inherit their priority from the thread
+     // where they were created. This explicitly sets the priority of all new
+     // threads.
++#if BUILDFLAG(IS_AROS)
++    // The pump is not bound yet, so pass the hint from the creator: Exec
++    // task priorities depend on it (see SetCurrentThreadTypeForPlatform).
++    internal::SetCurrentThreadType(thread_params->thread_type,
++                                   thread_params->message_pump_type);
++#else
+     PlatformThread::SetCurrentThreadType(thread_params->thread_type);
++#endif
+ #endif  //  !BUILDFLAG(IS_NACL)
+   }
+ 
+@@ -392,11 +399,9 @@ namespace internal {
+ void SetCurrentThreadTypeImpl(ThreadType thread_type,
+                               MessagePumpType pump_type_hint) {
+ #if BUILDFLAG(IS_AROS)
+-  struct Task* task = FindTask(nullptr);
+-  if (task) {
+-    const int nice_setting = internal::ThreadTypeToNiceValue(thread_type);
+-    SetTaskPri(task, static_cast<BYTE>(-nice_setting));
+-  }
++  // Exec priorities are set entirely by the platform hook; there is no
++  // setpriority(2) fallback on AROS.
++  internal::SetCurrentThreadTypeForPlatform(thread_type, pump_type_hint);
+ #elif BUILDFLAG(IS_NACL)
+   NOTIMPLEMENTED();
+ #else

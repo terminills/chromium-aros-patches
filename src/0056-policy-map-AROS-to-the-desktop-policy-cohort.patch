@@ -1,0 +1,51 @@
+From 908cf7760798718ce2235cddfd1cec6bbaed5fef Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:39:22 -0500
+Subject: [PATCH 056/638] policy: map AROS to the desktop policy cohort
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: The generated AROS policy constants and protobufs now contain the portable desktop policy set.
+
+ROOT_CAUSE: generate_policy_source.gni passed target_os=aros to a generator whose policy taxonomy has no AROS cohort, producing zero keys and zero-length access arrays.
+
+FIX_REASON: Policy metadata needs a supported product cohort; Linux is Chromium 124's portable desktop cohort and this mapping does not alter AROS runtime OS identity.
+
+SCOPE: components/policy/tools/generate_policy_source.gni only.
+
+VALIDATION: GN regenerated with --target-platform=linux; 518 policy constants were emitted; all six previously failing policy common objects compiled.
+
+RISK: AROS inherits Linux desktop policy applicability metadata until an explicit AROS policy taxonomy exists; platform-specific providers remain independently gated.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/policy/tools/generate_policy_source.gni | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/components/policy/tools/generate_policy_source.gni b/components/policy/tools/generate_policy_source.gni
+index 0ee9a803c0..d2dfb8f782 100644
+--- a/components/policy/tools/generate_policy_source.gni
++++ b/components/policy/tools/generate_policy_source.gni
+@@ -46,6 +46,13 @@ template("generate_policy_source") {
+     policy_templates_generated_json_path =
+         "$policy_templates_base_dir/policy_templates.json"
+ 
++    # Policy templates do not define a separate AROS product cohort. Use the
++    # portable desktop policy set without changing AROS's runtime OS identity.
++    policy_target_platform = target_os
++    if (target_os == "aros") {
++      policy_target_platform = "linux"
++    }
++
+     script = "//components/policy/tools/generate_policy_source.py"
+ 
+     deps = [ "//components/policy:generate_policy_templates" ]
+@@ -59,7 +66,7 @@ template("generate_policy_source") {
+       "--chrome-version-major=" + chrome_version_major,
+       "--policy-templates-file=" +
+           rebase_path(policy_templates_generated_json_path, root_build_dir),
+-      "--target-platform=" + target_os,
++      "--target-platform=" + policy_target_platform,
+     ]
+     if (!chunking) {
+       args += [ "--no-chunking" ]

@@ -1,0 +1,92 @@
+From 1bda39e5e0c136f0bd4d7f8301eed700170a5517 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 03:57:21 -0500
+Subject: [PATCH 42/43] AROS: hand the Intuition window back as
+ CefWindowInfo::window
+
+On X11 CEF creates the host window itself and returns it through
+CefBrowserHost::GetWindowHandle() so the client can drive it through the
+window system.  On AROS the host window is an Aura/Ozone widget and the
+handle stayed 0, so an embedder (ElectronShell) could not resize, retitle
+or activate the window it asked for -- Electron's BrowserWindow geometry
+had nowhere to go.
+
+The native Linux delegate now resolves the Intuition window from the
+host's AcceleratedWidget (ui/ozone/platform/aros/aros_native_window.h)
+after Show(), and SizeTo() resizes the widget instead of being a no-op.
+---
+ BUILD.gn                                      |  4 ++++
+ .../browser_platform_delegate_native_linux.cc | 24 +++++++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 9155ec29..5dec031d 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1171,6 +1171,10 @@ source_set("libcef_static") {
+       "libcef/common/util_linux.cc",
+       "libcef/common/util_linux.h",
+     ]
++
++    # CefWindowInfo::window is the Intuition window on AROS; the Ozone
++    # platform resolves it from the Aura host's AcceleratedWidget.
++    deps += [ "//ui/ozone/platform/aros" ]
+   }
+ 
+   if (is_mac) {
+diff --git a/libcef/browser/native/browser_platform_delegate_native_linux.cc b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+index 1643219d..6da88e95 100644
+--- a/libcef/browser/native/browser_platform_delegate_native_linux.cc
++++ b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+@@ -9,6 +9,7 @@
+ #include "libcef/browser/native/window_delegate_view.h"
+ #include "libcef/browser/thread_util.h"
+ 
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/public/browser/render_view_host.h"
+@@ -27,6 +28,12 @@
+ #include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "ui/aura/window.h"
++#include "ui/aura/window_tree_host.h"
++#include "ui/ozone/platform/aros/aros_native_window.h"
++#endif
++
+ CefBrowserPlatformDelegateNativeLinux::CefBrowserPlatformDelegateNativeLinux(
+     const CefWindowInfo& window_info,
+     SkColor background_color)
+@@ -105,6 +112,18 @@ bool CefBrowserPlatformDelegateNativeLinux::CreateHostWindow() {
+ 
+   window_widget_ = delegate_view->GetWidget();
+   window_widget_->Show();
++
++  // Hand the Intuition window back the way the X11 path hands back its
++  // ::Window: CefBrowserHost::GetWindowHandle() is how a client that does not
++  // own the host window drives it through the window system.
++  aura::WindowTreeHost* const host = window_widget_->GetNativeWindow()->GetHost();
++  struct Window* const native_window =
++      host ? ui::GetArosNativeWindow(host->GetAcceleratedWidget()) : nullptr;
++  window_info_.window = reinterpret_cast<cef_window_handle_t>(native_window);
++  if (!native_window) {
++    LOG(WARNING) << "[CEF:AROS] host window created without an Intuition "
++                    "window handle";
++  }
+ #endif  // BUILDFLAG(IS_AROS)
+ 
+   // As an additional requirement on Linux, we must set the colors for the
+@@ -216,6 +235,11 @@ void CefBrowserPlatformDelegateNativeLinux::SizeTo(int width, int height) {
+         gfx::Rect(window_x11_->bounds().origin(), gfx::Size(width, height)));
+   }
+ #endif  // BUILDFLAG(IS_OZONE_X11)
++#if BUILDFLAG(IS_AROS)
++  if (window_widget_) {
++    window_widget_->SetSize(gfx::Size(width, height));
++  }
++#endif  // BUILDFLAG(IS_AROS)
+ }
+ 
+ void CefBrowserPlatformDelegateNativeLinux::ViewText(const std::string& text) {

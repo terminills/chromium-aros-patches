@@ -1,0 +1,37 @@
+From bf7d754fe32ffd2042506eefc60da031fc3b5033 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 23:25:48 -0500
+Subject: [PATCH 128/638] [AROS] Capture the headless harness exception
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted run 0128 proved the screenshot switch, output path, harness document, and parsed command dictionary are all valid, but Runtime.evaluate returns exceptionDetails without result.value. The command handler discards those details and reports success, producing no PNG and a misleading exit code 0.
+FIX_REASON: Serialize the single DevTools Runtime.evaluate reply into the existing AROS command diagnostic so debug.resource captures the JavaScript exception message and stack before shutdown.
+SCOPE: components/headless/command_handler/headless_command_handler.cc
+VALIDATION: AROS command_handler/headless_command_handler.o cross-compiled; artifact 30 records exception=1 value=0 and the later independent hosted teardown trap.
+RISK: One AROS-only INFO line may be several kilobytes when DevTools includes a full stack; it is temporary diagnostic evidence and does not change result handling.
+AI_DECISION_CHAIN: run 0128 valid screenshot command -> Runtime.evaluate exception hidden -> capture exact DevTools payload
+---
+ .../headless/command_handler/headless_command_handler.cc     | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/components/headless/command_handler/headless_command_handler.cc b/components/headless/command_handler/headless_command_handler.cc
+index a3e40c34df..4fd7e97672 100644
+--- a/components/headless/command_handler/headless_command_handler.cc
++++ b/components/headless/command_handler/headless_command_handler.cc
+@@ -421,11 +421,14 @@ void HeadlessCommandHandler::OnTargetCrashed(const base::Value::Dict&) {
+ 
+ void HeadlessCommandHandler::OnCommandsResult(base::Value::Dict result) {
+ #if BUILDFLAG(IS_AROS)
++  std::string result_json;
++  base::JSONWriter::Write(result, &result_json);
+   LOG(INFO) << "[Chromium:headless-command] Runtime.evaluate completed error="
+             << (result.Find("error") != nullptr) << " exception="
+             << (result.FindByDottedPath("result.exceptionDetails") != nullptr)
+             << " value="
+-            << (result.FindByDottedPath("result.result.value") != nullptr);
++            << (result.FindByDottedPath("result.result.value") != nullptr)
++            << " payload=" << result_json;
+ #endif
+   if (result.FindBoolByDottedPath("result.result.value.pageLoadTimedOut")
+           .value_or(false)) {

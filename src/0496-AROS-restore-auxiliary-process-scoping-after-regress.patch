@@ -1,0 +1,276 @@
+From f610dcdcf37be3bd744a6a53a837b45b898dfde8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 22:15:39 -0500
+Subject: [PATCH 496/638] AROS: restore auxiliary process scoping after
+ regression proof
+
+The three-way rollback proved Fast.com paints and remains alive beyond the compositor watchdog. Restore the production process-scoped TimeTicks, discardable allocator, and work-ID state before splitting the group into individual A/B tests.
+
+
+
+---
+ base/memory/discardable_memory_allocator.cc | 50 +++++++++++++++--
+ base/message_loop/work_id_provider.cc       | 45 +++++++++++++++
+ base/time/time.cc                           | 62 ++++++++++++++++++++-
+ 3 files changed, 152 insertions(+), 5 deletions(-)
+
+diff --git a/base/memory/discardable_memory_allocator.cc b/base/memory/discardable_memory_allocator.cc
+index 9105ad03f7..1669bc1141 100644
+--- a/base/memory/discardable_memory_allocator.cc
++++ b/base/memory/discardable_memory_allocator.cc
+@@ -4,29 +4,71 @@
+ 
+ #include "base/memory/discardable_memory_allocator.h"
+ 
++#include <map>
+ #include <utility>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
++#include "base/no_destructor.h"
+ #include "base/process/memory.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct DiscardableMemoryAllocatorRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, DiscardableMemoryAllocator*> instances;
++};
++
++DiscardableMemoryAllocator*& GetAllocatorForCurrentProcess() {
++  const base::CommandLine* const process_identity =
++      base::CommandLine::InitializedForCurrentProcess()
++          ? base::CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local DiscardableMemoryAllocator** cached_instance = nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return *cached_instance;
++
++  static base::NoDestructor<DiscardableMemoryAllocatorRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  cached_instance = &registry->instances[process_identity];
++  return *cached_instance;
++}
++#else
+ DiscardableMemoryAllocator* g_discardable_allocator = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+ // static
+ void DiscardableMemoryAllocator::SetInstance(
+     DiscardableMemoryAllocator* allocator) {
+-  DCHECK(!allocator || !g_discardable_allocator);
+-  g_discardable_allocator = allocator;
++#if BUILDFLAG(IS_AROS)
++  DiscardableMemoryAllocator*& current_allocator =
++      GetAllocatorForCurrentProcess();
++#else
++  DiscardableMemoryAllocator*& current_allocator = g_discardable_allocator;
++#endif
++  DCHECK(!allocator || !current_allocator);
++  current_allocator = allocator;
+ }
+ 
+ // static
+ DiscardableMemoryAllocator* DiscardableMemoryAllocator::GetInstance() {
+-  DCHECK(g_discardable_allocator);
+-  return g_discardable_allocator;
++#if BUILDFLAG(IS_AROS)
++  DiscardableMemoryAllocator* const current_allocator =
++      GetAllocatorForCurrentProcess();
++#else
++  DiscardableMemoryAllocator* const current_allocator =
++      g_discardable_allocator;
++#endif
++  DCHECK(current_allocator);
++  return current_allocator;
+ }
+ 
+ std::unique_ptr<base::DiscardableMemory>
+diff --git a/base/message_loop/work_id_provider.cc b/base/message_loop/work_id_provider.cc
+index 5298b84997..6540af9e7d 100644
+--- a/base/message_loop/work_id_provider.cc
++++ b/base/message_loop/work_id_provider.cc
+@@ -4,17 +4,62 @@
+ 
+ #include "base/message_loop/work_id_provider.h"
+ 
++#include <map>
+ #include <memory>
+ 
++#include "base/command_line.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
+ #include "base/threading/thread_local.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ 
++namespace {
++
++#if BUILDFLAG(IS_AROS)
++struct WorkIdProviderTLSRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*,
++           base::ThreadLocalOwnedPointer<WorkIdProvider>*>
++      instances;
++};
++
++base::ThreadLocalOwnedPointer<WorkIdProvider>*
++GetWorkIdProviderTLSForCurrentProcess() {
++  const base::CommandLine* const process_identity =
++      base::CommandLine::InitializedForCurrentProcess()
++          ? base::CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const base::CommandLine* cached_identity = nullptr;
++  thread_local base::ThreadLocalOwnedPointer<WorkIdProvider>* cached_instance =
++      nullptr;
++  if (cached_instance && cached_identity == process_identity)
++    return cached_instance;
++
++  static base::NoDestructor<WorkIdProviderTLSRegistry> registry;
++  base::AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  base::ThreadLocalOwnedPointer<WorkIdProvider>*& instance =
++      registry->instances[process_identity];
++  if (!instance)
++    instance = new base::ThreadLocalOwnedPointer<WorkIdProvider>();
++  cached_instance = instance;
++  return cached_instance;
++}
++#endif
++
++}  // namespace
++
+ // static
+ WorkIdProvider* WorkIdProvider::GetForCurrentThread() {
++#if BUILDFLAG(IS_AROS)
++  ThreadLocalOwnedPointer<WorkIdProvider>* instance =
++      GetWorkIdProviderTLSForCurrentProcess();
++#else
+   static NoDestructor<ThreadLocalOwnedPointer<WorkIdProvider>> instance;
++#endif
+   if (!instance->Get())
+     instance->Set(WrapUnique(new WorkIdProvider));
+   return instance->Get();
+diff --git a/base/time/time.cc b/base/time/time.cc
+index 3224381beb..1511c87621 100644
+--- a/base/time/time.cc
++++ b/base/time/time.cc
+@@ -4,9 +4,14 @@
+ 
+ #include "base/time/time.h"
+ 
++#include "build/build_config.h"
++
+ #include <atomic>
+ #include <cmath>
+ #include <limits>
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#endif
+ #include <optional>
+ #include <ostream>
+ #include <tuple>
+@@ -14,17 +19,46 @@
+ 
+ #include "base/check.h"
+ #include "base/format_macros.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/no_destructor.h"
++#include "base/process/process_handle.h"
++#include "base/synchronization/lock.h"
++#endif
+ #include "base/strings/stringprintf.h"
+ #include "base/third_party/nspr/prtime.h"
+ #include "base/time/time_override.h"
+-#include "build/build_config.h"
+ 
+ namespace base {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// AROS native processes have independent scheduler and IPC identities while
++// sharing one address space. Keep Chromium's normally process-global Unix
++// epoch state keyed by the native process id so one child cannot observe the
++// browser's already-consumed sentinel or cached epoch.
++struct TimeTicksProcessState {
++  TimeTicks shared_time_ticks_at_unix_epoch;
++  std::optional<TimeTicks> unix_epoch;
++};
++
++struct TimeTicksProcessRegistry {
++  Lock lock;
++  std::map<ProcessId, TimeTicksProcessState> states;
++};
++
++TimeTicksProcessRegistry& GetTimeTicksProcessRegistry() {
++  static NoDestructor<TimeTicksProcessRegistry> registry;
++  return *registry;
++}
++
++#else
++
+ TimeTicks g_shared_time_ticks_at_unix_epoch;
+ 
++#endif
++
+ }  // namespace
+ 
+ namespace internal {
+@@ -214,12 +248,37 @@ TimeTicks TimeTicks::Now() {
+ // TimeTicks::UnixEpoch is accessed. It is intended to make the offset between
+ // unix time and monotonic time consistent across processes.
+ void TimeTicks::SetSharedUnixEpoch(TimeTicks ticks_at_epoch) {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetTimeTicksProcessRegistry();
++  AutoLock lock(registry.lock);
++  TimeTicksProcessState& state = registry.states[GetCurrentProcId()];
++  DCHECK(state.shared_time_ticks_at_unix_epoch.is_null());
++  DCHECK(!state.unix_epoch.has_value());
++  state.shared_time_ticks_at_unix_epoch = ticks_at_epoch;
++#else
+   DCHECK(g_shared_time_ticks_at_unix_epoch.is_null());
+   g_shared_time_ticks_at_unix_epoch = ticks_at_epoch;
++#endif
+ }
+ 
+ // static
+ TimeTicks TimeTicks::UnixEpoch() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetTimeTicksProcessRegistry();
++  AutoLock lock(registry.lock);
++  TimeTicksProcessState& state = registry.states[GetCurrentProcId()];
++  if (!state.unix_epoch.has_value()) {
++    state.unix_epoch =
++        state.shared_time_ticks_at_unix_epoch.is_null()
++            ? subtle::TimeTicksNowIgnoringOverride() -
++                  (subtle::TimeNowIgnoringOverride() - Time::UnixEpoch())
++            : state.shared_time_ticks_at_unix_epoch;
++    // Prevent future usage of `shared_time_ticks_at_unix_epoch` in this
++    // native process without affecting concurrently running AROS processes.
++    state.shared_time_ticks_at_unix_epoch = TimeTicks::Max();
++  }
++  return *state.unix_epoch;
++#else
+   struct StaticUnixEpoch {
+     StaticUnixEpoch()
+         : epoch(
+@@ -236,6 +295,7 @@ TimeTicks TimeTicks::UnixEpoch() {
+ 
+   static StaticUnixEpoch static_epoch;
+   return static_epoch.epoch;
++#endif
+ }
+ 
+ TimeTicks TimeTicks::SnappedToNextTick(TimeTicks tick_phase,

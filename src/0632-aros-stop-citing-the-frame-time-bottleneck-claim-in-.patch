@@ -1,0 +1,33 @@
+From 1fe808991e49798e90b703293ddafdb886faa0bd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 21:20:01 -0500
+Subject: [PATCH 632/638] aros: stop citing the frame-time bottleneck claim in
+ launch_aros.cc
+
+The comment on child-process placement still said the renderer main thread
+"is what the frame-time measurements show to be the bottleneck". Those
+measurements were dominated by the serial-port traces (67b78a322e); which
+thread bounds frame time is unmeasured. Say so, pointing at the same note
+in base_switches.cc, so the comment cannot be read as evidence.
+
+---
+ base/process/launch_aros.cc | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index 475975e079..82a1d44b0a 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -233,8 +233,10 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+   // Place the child on a core of its own. A child process inherits its
+   // launcher's CPU exactly as a thread inherits its creator's, so without this
+   // every renderer's main thread lands on CPU 0 next to the browser's - which
+-  // is precisely what the multi-process model exists to avoid, and the main
+-  // thread is what the frame-time measurements show to be the bottleneck.
++  // is precisely what the multi-process model exists to avoid. (Which thread
++  // is the frame-time bottleneck is UNMEASURED: every number before
++  // 2026-09-20 measured the serial port, see base_switches.cc
++  // kArosNativeThreadPool.)
+   //
+   // nullptr unless --aros-pin-workers is on, and NP_Affinity with a NULL value
+   // is ignored by CreateNewProc (rom/dos/createnewproc.c only diverts to

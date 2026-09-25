@@ -1,0 +1,352 @@
+From 152b466a176c5b0d373bbd7256ad1ce735beb34c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 08:24:05 -0500
+Subject: [PATCH 540/638] AROS: quiet normal Chromium platform diagnostics
+
+---
+ .../browser/chrome_resource_bundle_helper.cc  | 13 +++---
+ ...ome_browser_cloud_management_controller.cc |  6 +++
+ .../providers/cast/cast_media_source.cc       |  9 +++++
+ components/metrics/persistent_histograms.cc   | 40 +++++++++----------
+ net/cert/ev_root_ca_metadata.cc               |  8 ++++
+ net/proxy_resolution/proxy_config_service.cc  |  4 ++
+ .../battery/battery_status_manager_default.cc | 11 ++++-
+ ui/gl/gl_context.cc                           | 11 +++--
+ .../desktop_window_tree_host_platform.cc      |  2 +
+ 9 files changed, 70 insertions(+), 34 deletions(-)
+
+diff --git a/chrome/browser/chrome_resource_bundle_helper.cc b/chrome/browser/chrome_resource_bundle_helper.cc
+index 1670d527a3..e52bf9998e 100644
+--- a/chrome/browser/chrome_resource_bundle_helper.cc
++++ b/chrome/browser/chrome_resource_bundle_helper.cc
+@@ -112,13 +112,12 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
+   const bool have_locales =
+       base::PathService::Get(ui::DIR_LOCALES, &locales_path);
+   const base::FilePath en_us_path = locales_path.AppendASCII("en-US.pak");
+-  LOG(WARNING) << "[Chromium:AROS:Locale] preferred='" << preferred_locale
+-               << "' module=" << have_module << " '" << module_path.value()
+-               << "' assets=" << have_assets << " '" << assets_path.value()
+-               << "' locales=" << have_locales << " '"
+-               << locales_path.value() << "' en-US-exists="
+-               << base::PathExists(en_us_path) << " '"
+-               << en_us_path.value() << "'";
++  VLOG(1) << "[Chromium:AROS:Locale] preferred='" << preferred_locale
++          << "' module=" << have_module << " '" << module_path.value()
++          << "' assets=" << have_assets << " '" << assets_path.value()
++          << "' locales=" << have_locales << " '" << locales_path.value()
++          << "' en-US-exists=" << base::PathExists(en_us_path) << " '"
++          << en_us_path.value() << "'";
+ #endif
+   // On a POSIX OS other than ChromeOS, the parameter that is passed to the
+   // method InitSharedInstance is ignored.
+diff --git a/components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc b/components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc
+index 3c88222d7f..25feb3ae3f 100644
+--- a/components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc
++++ b/components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc
+@@ -158,11 +158,17 @@ void ChromeBrowserCloudManagementController::Init(
+     PrefService* local_state,
+     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+   if (!IsEnabled()) {
++#if BUILDFLAG(IS_AROS)
++    VLOG_POLICY(1, CBCM_ENROLLMENT)
++        << "Cloud management controller initialization skipped; CBCM is not "
++           "enabled.";
++#else
+     LOG_POLICY(ERROR, CBCM_ENROLLMENT)
+         << "Cloud management controller initialization aborted as CBCM is not "
+            "enabled. Please use the `--enable-chrome-browser-cloud-management` "
+            "command line flag to enable it if you are not using the official "
+            "Google Chrome build.";
++#endif
+     return;
+   }
+   LOG_POLICY(INFO, CBCM_ENROLLMENT)
+diff --git a/components/media_router/common/providers/cast/cast_media_source.cc b/components/media_router/common/providers/cast/cast_media_source.cc
+index bac711389e..28d4e36b97 100644
+--- a/components/media_router/common/providers/cast/cast_media_source.cc
++++ b/components/media_router/common/providers/cast/cast_media_source.cc
+@@ -15,6 +15,7 @@
+ #include "base/strings/string_piece.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "build/build_config.h"
+ #include "components/media_router/common/media_source.h"
+ #include "components/media_router/common/providers/cast/channel/cast_device_capability.h"
+ #include "components/media_router/common/providers/cast/channel/cast_message_util.h"
+@@ -168,7 +169,11 @@ CastDeviceCapabilitySet CastDeviceCapabilitiesFromString(
+     if (capability) {
+       result.Put(*capability);
+     } else {
++#if BUILDFLAG(IS_AROS)
++      VLOG(1) << "Unknown capability name: " << capability_str;
++#else
+       DLOG(ERROR) << "Unkown capability name: " << capability_str;
++#endif
+     }
+   }
+   return result;
+@@ -183,7 +188,11 @@ std::vector<ReceiverAppType> SupportedAppTypesFromString(
+     if (type) {
+       result.push_back(*type);
+     } else {
++#if BUILDFLAG(IS_AROS)
++      VLOG(1) << "Unknown supported app type: " << type_str;
++#else
+       DLOG(ERROR) << "Unkown supported app type: " << type_str;
++#endif
+     }
+   }
+   return result;
+diff --git a/components/metrics/persistent_histograms.cc b/components/metrics/persistent_histograms.cc
+index 20584ff393..842dcef99e 100644
+--- a/components/metrics/persistent_histograms.cc
++++ b/components/metrics/persistent_histograms.cc
+@@ -106,7 +106,7 @@ base::FilePath GetSpareFilePath(const base::FilePath& metrics_dir) {
+ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+                               const base::FilePath& upload_dir) {
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file setup enter";
++  VLOG(1) << "[Chromium:AROS:Histograms] mapped-file setup enter";
+ #endif
+   // The spare file in the user data dir ("BrowserMetrics-spare.pma") would
+   // have been created in the previous session. We will move it to |upload_dir|
+@@ -122,8 +122,8 @@ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+   InitResult result;
+   const bool upload_dir_exists = base::PathExists(upload_dir);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory exists="
+-               << upload_dir_exists;
++  VLOG(1) << "[Chromium:AROS:Histograms] upload directory exists="
++          << upload_dir_exists;
+ #endif
+   if (!upload_dir_exists) {
+     // Handle failure to create the directory.
+@@ -131,8 +131,8 @@ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+   } else {
+     const bool active_file_exists = base::PathExists(active_file);
+ #if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Histograms] active file exists="
+-                 << active_file_exists;
++    VLOG(1) << "[Chromium:AROS:Histograms] active file exists="
++            << active_file_exists;
+ #endif
+     if (active_file_exists) {
+       // "active" filename is supposed to be unique so this shouldn't happen.
+@@ -146,26 +146,26 @@ InitResult InitWithMappedFile(const base::FilePath& metrics_dir,
+       const bool exclusive_write = true;
+       // Move any spare file into the active position.
+ #if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Histograms] spare replacement begin";
++      VLOG(1) << "[Chromium:AROS:Histograms] spare replacement begin";
+ #endif
+       base::ReplaceFile(spare_file, active_file, nullptr);
+ #if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Histograms] spare replacement complete";
++      VLOG(1) << "[Chromium:AROS:Histograms] spare replacement complete";
+ #endif
+       // Create global allocator using the |active_file|.
+       if (kSpareFileRequired && !base::PathExists(active_file)) {
+         result = kNoSpareFile;
+       } else {
+ #if BUILDFLAG(IS_AROS)
+-        LOG(WARNING) << "[Chromium:AROS:Histograms] CreateWithFile begin";
++        VLOG(1) << "[Chromium:AROS:Histograms] CreateWithFile begin";
+ #endif
+         const bool allocator_created =
+             base::GlobalHistogramAllocator::CreateWithFile(
+                 active_file, kAllocSize, kAllocId, kBrowserMetricsName,
+                 exclusive_write);
+ #if BUILDFLAG(IS_AROS)
+-        LOG(WARNING) << "[Chromium:AROS:Histograms] CreateWithFile complete="
+-                     << allocator_created;
++        VLOG(1) << "[Chromium:AROS:Histograms] CreateWithFile complete="
++                << allocator_created;
+ #endif
+         result = allocator_created ? kMappedFileSuccess : kMappedFileFailed;
+       }
+@@ -191,12 +191,12 @@ void InstantiatePersistentHistogramsImpl(const base::FilePath& metrics_dir,
+   base::FilePath upload_dir = metrics_dir.AppendASCII(kBrowserMetricsName);
+   // TODO(crbug.com/1183166): Only create the dir in kMappedFile mode.
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory create begin";
++  VLOG(1) << "[Chromium:AROS:Histograms] upload directory create begin";
+ #endif
+   const bool upload_dir_created = base::CreateDirectory(upload_dir);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] upload directory create complete="
+-               << upload_dir_created;
++  VLOG(1) << "[Chromium:AROS:Histograms] upload directory create complete="
++          << upload_dir_created;
+ #endif
+ 
+   InitResult result;
+@@ -205,12 +205,12 @@ void InstantiatePersistentHistogramsImpl(const base::FilePath& metrics_dir,
+   switch (mode) {
+     case kMappedFile:
+ #if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file dispatch begin";
++      VLOG(1) << "[Chromium:AROS:Histograms] mapped-file dispatch begin";
+ #endif
+       result = InitWithMappedFile(metrics_dir, upload_dir);
+ #if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Histograms] mapped-file dispatch complete result="
+-                   << static_cast<int>(result);
++      VLOG(1) << "[Chromium:AROS:Histograms] mapped-file dispatch complete result="
++              << static_cast<int>(result);
+ #endif
+       break;
+     case kLocalMemory:
+@@ -245,19 +245,19 @@ void InstantiatePersistentHistogramsImpl(const base::FilePath& metrics_dir,
+ 
+   // Store a copy of the system profile in this allocator.
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] register system profile begin";
++  VLOG(1) << "[Chromium:AROS:Histograms] register system profile begin";
+ #endif
+   metrics::GlobalPersistentSystemProfile::GetInstance()
+       ->RegisterPersistentAllocator(allocator->memory_allocator());
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] register system profile complete";
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] tracking histograms begin";
++  VLOG(1) << "[Chromium:AROS:Histograms] register system profile complete";
++  VLOG(1) << "[Chromium:AROS:Histograms] tracking histograms begin";
+ #endif
+ 
+   // Create tracking histograms for the allocator and record storage file.
+   allocator->CreateTrackingHistograms(kBrowserMetricsName);
+ #if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Histograms] tracking histograms complete";
++  VLOG(1) << "[Chromium:AROS:Histograms] tracking histograms complete";
+ #endif
+ }
+ 
+diff --git a/net/cert/ev_root_ca_metadata.cc b/net/cert/ev_root_ca_metadata.cc
+index 30a627f0af..8192ef63ba 100644
+--- a/net/cert/ev_root_ca_metadata.cc
++++ b/net/cert/ev_root_ca_metadata.cc
+@@ -116,24 +116,32 @@ bool EVRootCAMetadata::RemoveEVCA(const SHA256HashValue& fingerprint) {
+ //
+ 
+ bool EVRootCAMetadata::IsEVPolicyOID(bssl::der::Input policy_oid) const {
++#if !BUILDFLAG(IS_AROS)
+   LOG(WARNING) << "Not implemented";
++#endif
+   return false;
+ }
+ 
+ bool EVRootCAMetadata::HasEVPolicyOID(const SHA256HashValue& fingerprint,
+                                       bssl::der::Input policy_oid) const {
++#if !BUILDFLAG(IS_AROS)
+   LOG(WARNING) << "Not implemented";
++#endif
+   return false;
+ }
+ 
+ bool EVRootCAMetadata::AddEVCA(const SHA256HashValue& fingerprint,
+                                const char* policy) {
++#if !BUILDFLAG(IS_AROS)
+   LOG(WARNING) << "Not implemented";
++#endif
+   return true;
+ }
+ 
+ bool EVRootCAMetadata::RemoveEVCA(const SHA256HashValue& fingerprint) {
++#if !BUILDFLAG(IS_AROS)
+   LOG(WARNING) << "Not implemented";
++#endif
+   return true;
+ }
+ 
+diff --git a/net/proxy_resolution/proxy_config_service.cc b/net/proxy_resolution/proxy_config_service.cc
+index 810f40830b..ccf0533e7f 100644
+--- a/net/proxy_resolution/proxy_config_service.cc
++++ b/net/proxy_resolution/proxy_config_service.cc
+@@ -134,9 +134,13 @@ ProxyConfigService::CreateSystemProxyConfigService(
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // TODO(crbug.com/889195): Implement a system proxy service for Fuchsia.
+   return std::make_unique<ProxyConfigServiceDirect>();
++#else
++#if BUILDFLAG(IS_AROS)
++  VLOG(1) << "Using direct proxy settings; no AROS system proxy fetcher exists.";
+ #else
+   LOG(WARNING) << "Failed to choose a system proxy settings fetcher "
+                   "for this platform.";
++#endif
+   return std::make_unique<ProxyConfigServiceDirect>();
+ #endif
+ }
+diff --git a/services/device/battery/battery_status_manager_default.cc b/services/device/battery/battery_status_manager_default.cc
+index 32c9a11301..f366d3472a 100644
+--- a/services/device/battery/battery_status_manager_default.cc
++++ b/services/device/battery/battery_status_manager_default.cc
+@@ -7,6 +7,7 @@
+ #include <memory>
+ 
+ #include "base/notreached.h"
++#include "build/build_config.h"
+ 
+ namespace device {
+ 
+@@ -26,11 +27,19 @@ class BatteryStatusManagerDefault : public BatteryStatusManager {
+  private:
+   // BatteryStatusManager:
+   bool StartListeningBatteryChange() override {
++#if BUILDFLAG(IS_AROS)
++    return false;
++#else
+     NOTIMPLEMENTED();
+     return false;
++#endif
+   }
+ 
+-  void StopListeningBatteryChange() override { NOTIMPLEMENTED(); }
++  void StopListeningBatteryChange() override {
++#if !BUILDFLAG(IS_AROS)
++    NOTIMPLEMENTED();
++#endif
++  }
+ };
+ 
+ }  // namespace
+diff --git a/ui/gl/gl_context.cc b/ui/gl/gl_context.cc
+index d5bd08cc71..cb9364463e 100644
+--- a/ui/gl/gl_context.cc
++++ b/ui/gl/gl_context.cc
+@@ -444,18 +444,17 @@ void GLContext::InitializeDynamicBindings() {
+     // Chromium GPU probe faults after a GL procedure lookup; these markers
+     // distinguish a bridge return from generated binding-table completion.
+ #if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings begin context="
+-                 << this << " driver=" << driver_gl_.get();
++    VLOG(1) << "[Chromium:AROS:GL] dynamic bindings begin context=" << this
++            << " driver=" << driver_gl_.get();
+ #endif
+     driver_gl_->InitializeDynamicBindings(GetVersionInfo(), GetExtensions());
+ #if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings returned context="
+-                 << this << " driver=" << driver_gl_.get();
++    VLOG(1) << "[Chromium:AROS:GL] dynamic bindings returned context=" << this
++            << " driver=" << driver_gl_.get();
+ #endif
+     dynamic_bindings_initialized_ = true;
+ #if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:GL] dynamic bindings complete context="
+-                 << this;
++    VLOG(1) << "[Chromium:AROS:GL] dynamic bindings complete context=" << this;
+ #endif
+   }
+ }
+diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
+index f49896ef09..6072db84d9 100644
+--- a/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
++++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
+@@ -796,7 +796,9 @@ void DesktopWindowTreeHostPlatform::SetWindowIcons(
+ }
+ 
+ void DesktopWindowTreeHostPlatform::InitModalType(ui::ModalType modal_type) {
++#if !BUILDFLAG(IS_AROS)
+   NOTIMPLEMENTED_LOG_ONCE();
++#endif
+ }
+ 
+ void DesktopWindowTreeHostPlatform::FlashFrame(bool flash_frame) {

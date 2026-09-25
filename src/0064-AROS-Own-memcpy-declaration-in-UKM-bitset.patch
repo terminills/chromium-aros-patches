@@ -1,0 +1,30 @@
+From 0c408a1ddf8b2cc44cac22816fcf7587ffb32126 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:15:36 -0500
+Subject: [PATCH 064/638] [AROS] Own memcpy declaration in UKM bitset
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: UKM recorder bitset now compiles under the strict AROS C++ header environment.
+ROOT_CAUSE: components/ukm/bitset.cc called memcpy without directly including the standard header that declares it; transitive host headers masked the dependency.
+FIX_REASON: Include <cstring> at the call site so declaration ownership is explicit and platform-neutral.
+SCOPE: components/ukm/bitset.cc only.
+VALIDATION: ninja -C out/aros-headless -j32 obj/components/ukm/ukm_recorder/bitset.o
+RISK: Minimal; no runtime behavior changes.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/ukm/bitset.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/components/ukm/bitset.cc b/components/ukm/bitset.cc
+index 0c4faff95e..da83c35aa5 100644
+--- a/components/ukm/bitset.cc
++++ b/components/ukm/bitset.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "components/ukm/bitset.h"
+ 
++#include <cstring>
++
+ #include "base/check_op.h"
+ 
+ namespace ukm {

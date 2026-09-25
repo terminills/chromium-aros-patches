@@ -1,0 +1,53 @@
+From ae04a262fd56152c87cded3f48be044b2af307bd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:09:01 -0500
+Subject: [PATCH 628/638] aros: --aros-multi-process opts out of the
+ single-process default
+
+ApplyArosProcessModelDefaults() only ever ADDED --single-process, so
+there was no way to ask for real renderer child processes even though
+child_process_launcher_helper_aros.cc and launch_aros.cc implement one
+on CreateNewProc(). Single-process means every tab shares one renderer
+main thread, and that thread is the frame-time bottleneck; per-tab
+parallelism is zero until this is on. Sandbox and GPU-process defaults
+are unchanged so one axis moves at a time. Off by default: untested.
+
+
+---
+ content/app/content_main.cc | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index ddb66958df..3acb945f73 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -145,8 +145,28 @@ void ApplyArosProcessModelDefaults(base::CommandLine* command_line) {
+   if (command_line->HasSwitch(switches::kProcessType))
+     return;
+ 
+-  if (!command_line->HasSwitch(switches::kSingleProcess))
++  // --aros-multi-process opts out of the single-process default above.
++  //
++  // The comment above is now partly historical: "AROS has no multi-process
++  // child launcher" was true when it was written, but
++  // content/browser/child_process_launcher_helper_aros.cc and
++  // base/process/launch_aros.cc since implement one on CreateNewProc(). The
++  // default was never revisited, and because this function only ever ADDS the
++  // switch there was no way to ask for the multi-process model at all.
++  //
++  // This matters more than any thread-pool tuning. Single-process means every
++  // tab shares one renderer main thread, and the main thread is what the
++  // frame-time measurements show to be the bottleneck - so per-tab parallelism
++  // is currently exactly zero, and no scheduling policy inside the one process
++  // can change that.
++  //
++  // Left OFF by default: multi-process on AROS is untested, and the sandbox and
++  // GPU-process defaults below stay as they are, so this changes one axis at a
++  // time.
++  if (!command_line->HasSwitch(::switches::kArosMultiProcess) &&
++      !command_line->HasSwitch(switches::kSingleProcess)) {
+     command_line->AppendSwitch(switches::kSingleProcess);
++  }
+   if (!command_line->HasSwitch(sandbox::policy::switches::kNoSandbox))
+     command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
+   // A caller that picked a GL implementation wants the GPU path.

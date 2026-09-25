@@ -1,0 +1,227 @@
+From c9ea11a5bff330f313337d71e0c36d0240f70ae9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:53:56 -0500
+Subject: [PATCH 008/638] third_party/libevent: add an explicit AROS backend
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium's bundled libevent selected generic POSIX configuration and signal/socket assumptions that do not match the AROS headers or bsdsocket lifecycle.
+
+FIX_REASON: Add a pinned AROS libevent configuration and isolate the small socket and signal differences instead of pretending AROS is Linux or disabling event handling globally.
+
+SCOPE: third_party/libevent build selection, AROS config headers, evutil socket handling, and signal setup.
+
+VALIDATION: the headless_shell graph compiled the bundled libevent targets and progressed through Mojo and into the Skia graph.
+
+RISK: low; changes are selected only for target_os=aros and retain libevent's existing event model.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/libevent/BUILD.gn            |  7 +++
+ third_party/libevent/aros/config.h       | 61 ++++++++++++++++++++++++
+ third_party/libevent/aros/event-config.h | 43 +++++++++++++++++
+ third_party/libevent/event-config.h      |  2 +
+ third_party/libevent/evutil.c            |  9 +++-
+ third_party/libevent/signal.c            |  8 ++++
+ 6 files changed, 129 insertions(+), 1 deletion(-)
+ create mode 100644 third_party/libevent/aros/config.h
+ create mode 100644 third_party/libevent/aros/event-config.h
+
+diff --git a/third_party/libevent/BUILD.gn b/third_party/libevent/BUILD.gn
+index 97ed48b38a..1e2f232861 100644
+--- a/third_party/libevent/BUILD.gn
++++ b/third_party/libevent/BUILD.gn
+@@ -51,6 +51,13 @@ static_library("libevent") {
+       "epoll.c",
+     ]
+     include_dirs += [ "android" ]
++  } else if (is_aros) {
++    sources += [
++      "aros/config.h",
++      "aros/event-config.h",
++    ]
++    sources -= [ "poll.c" ]
++    include_dirs += [ "aros" ]
+   }
+ 
+   if (!is_debug) {
+diff --git a/third_party/libevent/aros/config.h b/third_party/libevent/aros/config.h
+new file mode 100644
+index 0000000000..35ddda5bcf
+--- /dev/null
++++ b/third_party/libevent/aros/config.h
+@@ -0,0 +1,61 @@
++/* AROS configuration for Chromium's bundled libevent 1.4. */
++#ifndef THIRD_PARTY_LIBEVENT_AROS_CONFIG_H_
++#define THIRD_PARTY_LIBEVENT_AROS_CONFIG_H_
++
++#define HAVE_CLOCK_GETTIME 1
++#define HAVE_FCNTL 1
++#define HAVE_FCNTL_H 1
++#define HAVE_FD_MASK 1
++#define HAVE_GETEGID 1
++#define HAVE_GETEUID 1
++#define HAVE_GETTIMEOFDAY 1
++#define HAVE_INTTYPES_H 1
++#define HAVE_MEMORY_H 1
++#define HAVE_SELECT 1
++#define HAVE_SETFD 1
++#define HAVE_SIGACTION 1
++#define HAVE_SIGNAL 1
++#define HAVE_SIGNAL_H 1
++#define HAVE_STDARG_H 1
++#define HAVE_STDINT_H 1
++#define HAVE_STDLIB_H 1
++#define HAVE_STRINGS_H 1
++#define HAVE_STRING_H 1
++#define HAVE_STRLCPY 1
++#define HAVE_STRSEP 1
++#define HAVE_STRTOK_R 1
++#define HAVE_STRTOLL 1
++#define HAVE_STRUCT_IN6_ADDR 1
++#define HAVE_SYS_IOCTL_H 1
++#define HAVE_SYS_PARAM_H 1
++#define HAVE_SYS_QUEUE_H 1
++#define HAVE_SYS_SELECT_H 1
++#define HAVE_SYS_SOCKET_H 1
++#define HAVE_SYS_STAT_H 1
++#define HAVE_SYS_TIME_H 1
++#define HAVE_SYS_TYPES_H 1
++#define HAVE_TAILQFOREACH 1
++#define HAVE_TIMERADD 1
++#define HAVE_TIMERCLEAR 1
++#define HAVE_TIMERCMP 1
++#define HAVE_TIMERISSET 1
++#define HAVE_UINT16_T 1
++#define HAVE_UINT32_T 1
++#define HAVE_UINT64_T 1
++#define HAVE_UINT8_T 1
++#define HAVE_UNISTD_H 1
++#define HAVE_VASPRINTF 1
++
++#define PACKAGE "libevent"
++#define PACKAGE_VERSION "1.4.15"
++#define SIZEOF_INT 4
++#define SIZEOF_LONG 8
++#define SIZEOF_LONG_LONG 8
++#define SIZEOF_SHORT 2
++#define STDC_HEADERS 1
++#define TIME_WITH_SYS_TIME 1
++#define VERSION "1.4.15"
++
++/* AROS currently exposes select(), but not poll(), epoll(), or kqueue(). */
++
++#endif  /* THIRD_PARTY_LIBEVENT_AROS_CONFIG_H_ */
+diff --git a/third_party/libevent/aros/event-config.h b/third_party/libevent/aros/event-config.h
+new file mode 100644
+index 0000000000..df78e60bd3
+--- /dev/null
++++ b/third_party/libevent/aros/event-config.h
+@@ -0,0 +1,43 @@
++/* Public AROS configuration for Chromium's bundled libevent 1.4. */
++#ifndef THIRD_PARTY_LIBEVENT_AROS_EVENT_CONFIG_H_
++#define THIRD_PARTY_LIBEVENT_AROS_EVENT_CONFIG_H_
++
++#define _EVENT_HAVE_FCNTL_H 1
++#define _EVENT_HAVE_FD_MASK 1
++#define _EVENT_HAVE_GETEGID 1
++#define _EVENT_HAVE_GETEUID 1
++#define _EVENT_HAVE_GETTIMEOFDAY 1
++#define _EVENT_HAVE_INTTYPES_H 1
++#define _EVENT_HAVE_SELECT 1
++#define _EVENT_HAVE_SIGACTION 1
++#define _EVENT_HAVE_SIGNAL_H 1
++#define _EVENT_HAVE_STDINT_H 1
++#define _EVENT_HAVE_STDLIB_H 1
++#define _EVENT_HAVE_STRING_H 1
++#define _EVENT_HAVE_SYS_QUEUE_H 1
++#define _EVENT_HAVE_SYS_SELECT_H 1
++#define _EVENT_HAVE_SYS_SOCKET_H 1
++#define _EVENT_HAVE_SYS_TIME_H 1
++#define _EVENT_HAVE_SYS_TYPES_H 1
++#define _EVENT_HAVE_TIMERADD 1
++#define _EVENT_HAVE_TIMERCLEAR 1
++#define _EVENT_HAVE_TIMERCMP 1
++#define _EVENT_HAVE_TIMERISSET 1
++#define _EVENT_HAVE_UINT16_T 1
++#define _EVENT_HAVE_UINT32_T 1
++#define _EVENT_HAVE_UINT64_T 1
++#define _EVENT_HAVE_UINT8_T 1
++#define _EVENT_HAVE_UNISTD_H 1
++
++#define _EVENT_NUMERIC_VERSION 0x01040f00
++#define _EVENT_PACKAGE "libevent"
++#define _EVENT_PACKAGE_VERSION "1.4.15"
++#define _EVENT_SIZEOF_INT 4
++#define _EVENT_SIZEOF_LONG 8
++#define _EVENT_SIZEOF_LONG_LONG 8
++#define _EVENT_SIZEOF_SHORT 2
++#define _EVENT_STDC_HEADERS 1
++#define _EVENT_TIME_WITH_SYS_TIME 1
++#define _EVENT_VERSION "1.4.15"
++
++#endif  /* THIRD_PARTY_LIBEVENT_AROS_EVENT_CONFIG_H_ */
+diff --git a/third_party/libevent/event-config.h b/third_party/libevent/event-config.h
+index 22c4b2e6fb..1f77919ca6 100644
+--- a/third_party/libevent/event-config.h
++++ b/third_party/libevent/event-config.h
+@@ -17,6 +17,8 @@
+ #include "third_party/libevent/solaris/event-config.h"
+ #elif defined(_AIX)
+ #include "third_party/libevent/aix/event-config.h"
++#elif defined(__AROS__)
++#include "third_party/libevent/aros/event-config.h"
+ #else
+ #error generate event-config.h for your platform
+ #endif
+diff --git a/third_party/libevent/evutil.c b/third_party/libevent/evutil.c
+index cc6d0f46a9..191175fa06 100644
+--- a/third_party/libevent/evutil.c
++++ b/third_party/libevent/evutil.c
+@@ -64,7 +64,14 @@
+ int
+ evutil_socketpair(int family, int type, int protocol, int fd[2])
+ {
+-#ifndef WIN32
++#if defined(__AROS__)
++	(void)family;
++	(void)type;
++	(void)protocol;
++	(void)fd;
++	errno = ENOSYS;
++	return -1;
++#elif !defined(WIN32)
+ 	return socketpair(family, type, protocol, fd);
+ #else
+ 	/* This code is originally from Tor.  Used with permission. */
+diff --git a/third_party/libevent/signal.c b/third_party/libevent/signal.c
+index b8d51ab519..8352480096 100644
+--- a/third_party/libevent/signal.c
++++ b/third_party/libevent/signal.c
+@@ -85,7 +85,11 @@ evsignal_cb(int fd, short what, void *arg)
+ 	ssize_t n;
+ #endif
+ 
++#ifdef __AROS__
++	n = read(fd, signals, sizeof(signals));
++#else
+ 	n = recv(fd, signals, sizeof(signals), 0);
++#endif
+ 	if (n == -1) {
+ 		int err = EVUTIL_SOCKET_ERROR();
+ 		if (! error_is_eagain(err))
+@@ -316,7 +320,11 @@ evsignal_handler(int sig)
+ #endif
+ 
+ 	/* Wake up our notification mechanism */
++#ifdef __AROS__
++	write(evsignal_base->sig.ev_signal_pair[0], "a", 1);
++#else
+ 	send(evsignal_base->sig.ev_signal_pair[0], "a", 1, 0);
++#endif
+ 	errno = save_errno;
+ }
+ 

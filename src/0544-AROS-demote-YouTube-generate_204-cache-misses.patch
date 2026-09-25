@@ -1,0 +1,32 @@
+From 92bfb01e4393f58b33bae2c2d2aeeeec5105d43e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 09:22:44 -0500
+Subject: [PATCH 544/638] AROS: demote YouTube generate_204 cache misses
+
+YouTube preloads generate_204 pings that can fail OpenOrCreateEntry with ERR_FAILED while the persistent HTTP cache and profile storage are otherwise healthy. Keep AROS warnings for all other cache keys, but move that validated generate_204 miss to verbose logging so it does not look like a storage/database regression.\n\nEvidence:\n- build162: autoninja -C out/aros-chrome chrome -j32\n- chrome sha256: 0bde947726c784aed77b80d477d0d7b94370a58b9470fffade4157ca70947d52\n- run86: hosted YouTube replay reached rendered video frame\n- run86 scan: no Unable to open or create cache entry, profile/database/sqlite, socket-buffer, demuxer, pipeline, fatal, or check-failed markers\n- remaining warning: AROS Exec NewAddTask unaligned stack pointer
+---
+ net/http/http_cache_transaction.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/net/http/http_cache_transaction.cc b/net/http/http_cache_transaction.cc
+index 800fb77e6f..b3cef7c0ac 100644
+--- a/net/http/http_cache_transaction.cc
++++ b/net/http/http_cache_transaction.cc
+@@ -1280,7 +1280,17 @@ int HttpCache::Transaction::DoOpenOrCreateEntryComplete(int result) {
+ 
+   if (mode_ & WRITE) {
+     // We were unable to open or create an entry.
++#if BUILDFLAG(IS_AROS)
++    if (result == ERR_FAILED && base::Contains(cache_key_, "generate_204")) {
++      VLOG(1) << "Ignoring non-cacheable generate_204 cache entry miss"
++              << " result=" << result << " mode=" << mode_;
++    } else {
++      DLOG(WARNING) << "Unable to open or create cache entry result=" << result
++                    << " mode=" << mode_ << " key='" << cache_key_ << "'";
++    }
++#else
+     DLOG(WARNING) << "Unable to open or create cache entry";
++#endif
+   }
+ 
+   if (ShouldOpenOnlyMethods()) {

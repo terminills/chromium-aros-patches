@@ -1,0 +1,41 @@
+From 4dfc6fa2378e279325639c6f0e1e7dbc98a67320 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 8 Sep 2026 00:25:27 -0500
+Subject: [PATCH 596/638] media/renderers: drop the AROS null-sink override in
+ AudioRendererImpl
+
+Since 202762fbac AudioRendererImpl unconditionally replaced the sink with
+NullAudioSink on AROS, so the renderer never requested an output stream
+from the audio service and AudioManagerAros/AhiOutputStream (9e35bd9f24)
+was never reached.  Restore the upstream behaviour: use the real sink when
+the device status is OK and fall back to NullAudioSink otherwise, which
+still covers systems where ahi.device cannot open.
+---
+ media/renderers/audio_renderer_impl.cc | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/media/renderers/audio_renderer_impl.cc b/media/renderers/audio_renderer_impl.cc
+index c690f60433..d3b51e47cc 100644
+--- a/media/renderers/audio_renderer_impl.cc
++++ b/media/renderers/audio_renderer_impl.cc
+@@ -420,12 +420,6 @@ void AudioRendererImpl::OnDeviceInfoReceived(
+   UMA_HISTOGRAM_ENUMERATION("Media.AudioRendererImpl.SinkStatus",
+                             output_device_info.device_status(),
+                             OUTPUT_DEVICE_STATUS_MAX + 1);
+-#if BUILDFLAG(IS_AROS)
+-  MEDIA_LOG(INFO, media_log_)
+-      << "AROS using null audio sink until native output is wired";
+-  sink_ = new NullAudioSink(task_runner_);
+-  output_device_info = sink_->GetOutputDeviceInfo();
+-#else
+   if (output_device_info.device_status() != OUTPUT_DEVICE_STATUS_OK) {
+     MEDIA_LOG(ERROR, media_log_)
+         << "Output device error, falling back to null sink. device_status="
+@@ -436,7 +430,6 @@ void AudioRendererImpl::OnDeviceInfoReceived(
+     // If playback is muted, we use a fake sink for output until it unmutes.
+     null_sink_ = new NullAudioSink(task_runner_);
+   }
+-#endif
+ 
+   current_decoder_config_ = stream->audio_decoder_config();
+   DCHECK(current_decoder_config_.IsValidConfig());

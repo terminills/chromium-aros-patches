@@ -1,0 +1,240 @@
+From 06dd3708a91bb5579a3ab754c08baca405f3c235 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 23:21:02 -0500
+Subject: [PATCH 385/638] [AROS] Bridge Viz canvas presents across Processes
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: build-validated, runtime-pending
+
+ROOT_CAUSE: With --single-process removed, Viz owns a separately relocated ArosWindowManager whose process-local widget map cannot resolve the browser Process's native Intuition window. Raster frames reached PresentCanvas but every presentation returned false.
+
+FIX_REASON: Publish a browser-owned Exec MsgPort and synchronously forward plain canvas metadata from Viz. AROS's shared address space lets the browser paint the same pixel buffer without a copy; ReplyMsg keeps the buffer alive until presentation finishes.
+
+SCOPE: AROS Ozone window manager only. No loader, relocation, GOT, PIC, GPU, or non-AROS behavior changes.
+
+VALIDATION: ninja -C out/aros-v8-library -j32 chrome passed 6/6; resulting chrome remains AROS ELF64 ET_REL with a zero-size .got section.
+
+RISK: The first bridge uses one public presentation-port name, so concurrent independent Chromium browser instances require a later per-instance rendezvous token.
+
+AI_DECISION_CHAIN: runtime 25 multiprocess present-failure evidence
+---
+ ui/ozone/platform/aros/aros_window_manager.cc | 154 +++++++++++++++---
+ ui/ozone/platform/aros/aros_window_manager.h  |   4 +
+ 2 files changed, 135 insertions(+), 23 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index fab22c04c1..57b1ea9cde 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -18,9 +18,31 @@
+ 
+ namespace ui {
+ 
++namespace {
++
++constexpr char kPresentationPortName[] = "Chromium.Ozone.AROS.Presentation";
++
++struct ArosPresentMessage {
++  Message message = {};
++  gfx::AcceleratedWidget widget = gfx::kNullAcceleratedWidget;
++  const void* pixels = nullptr;
++  size_t row_bytes = 0;
++  int width = 0;
++  int height = 0;
++  int damage_x = 0;
++  int damage_y = 0;
++  int damage_width = 0;
++  int damage_height = 0;
++  bool result = false;
++};
++
++}  // namespace
++
+ ArosWindowManager::ArosWindowManager() {
+   event_port_ = CreateMsgPort();
+   CHECK(event_port_);
++  presentation_reply_port_ = CreateMsgPort();
++  CHECK(presentation_reply_port_);
+   LOG(INFO) << "[Chromium:Ozone:AROS] shared IDCMP port=" << event_port_
+             << " signal=" << static_cast<int>(event_port_->mp_SigBit);
+ }
+@@ -31,6 +53,20 @@ ArosWindowManager::~ArosWindowManager() {
+     DCHECK(native_windows_.empty());
+     DCHECK(windows_.empty());
+   }
++  if (owns_presentation_port_) {
++    Forbid();
++    RemPort(presentation_port_);
++    Permit();
++    while (auto* message = reinterpret_cast<ArosPresentMessage*>(
++               GetMsg(presentation_port_))) {
++      message->result = false;
++      ReplyMsg(&message->message);
++    }
++    DeleteMsgPort(presentation_port_);
++  }
++  if (presentation_reply_port_) {
++    DeleteMsgPort(presentation_reply_port_);
++  }
+   if (event_port_) {
+     DeleteMsgPort(event_port_);
+   }
+@@ -38,6 +74,27 @@ ArosWindowManager::~ArosWindowManager() {
+ 
+ gfx::AcceleratedWidget ArosWindowManager::AddWindow(ArosWindow* window) {
+   base::AutoLock lock(lock_);
++  if (!presentation_port_) {
++    struct MsgPort* candidate = CreateMsgPort();
++    CHECK(candidate);
++    candidate->mp_Node.ln_Name = const_cast<char*>(kPresentationPortName);
++
++    Forbid();
++    if (!FindPort(kPresentationPortName)) {
++      AddPort(candidate);
++      presentation_port_ = candidate;
++      owns_presentation_port_ = true;
++    }
++    Permit();
++
++    if (!owns_presentation_port_) {
++      DeleteMsgPort(candidate);
++    } else {
++      LOG(INFO) << "[Chromium:Ozone:AROS] browser presentation port="
++                << presentation_port_ << " name=" << kPresentationPortName;
++    }
++  }
++
+   const gfx::AcceleratedWidget widget = next_widget_++;
+   CHECK_NE(widget, gfx::kNullAcceleratedWidget);
+   CHECK(windows_.emplace(widget, window).second);
+@@ -99,31 +156,48 @@ struct Window* ArosWindowManager::GetNativeWindow(
+ }
+ 
+ void ArosWindowManager::ProcessNativeEvents() {
+-  if (!event_port_) {
+-    return;
+-  }
++  if (event_port_) {
++    while (auto* message =
++               reinterpret_cast<IntuiMessage*>(GetMsg(event_port_))) {
++      struct Window* const native_window = message->IDCMPWindow;
++      const uint32_t message_class = message->Class;
++      const uint16_t code = message->Code;
++      const uint16_t qualifier = message->Qualifier;
++      const int16_t mouse_x = message->MouseX;
++      const int16_t mouse_y = message->MouseY;
++
++      ArosWindow* target = nullptr;
++      {
++        base::AutoLock lock(lock_);
++        const auto it = native_windows_.find(native_window);
++        if (it != native_windows_.end()) {
++          target = it->second;
++        }
++      }
+ 
+-  while (auto* message = reinterpret_cast<IntuiMessage*>(GetMsg(event_port_))) {
+-    struct Window* const native_window = message->IDCMPWindow;
+-    const uint32_t message_class = message->Class;
+-    const uint16_t code = message->Code;
+-    const uint16_t qualifier = message->Qualifier;
+-    const int16_t mouse_x = message->MouseX;
+-    const int16_t mouse_y = message->MouseY;
+-
+-    ArosWindow* target = nullptr;
+-    {
+-      base::AutoLock lock(lock_);
+-      const auto it = native_windows_.find(native_window);
+-      if (it != native_windows_.end()) {
+-        target = it->second;
++      ReplyMsg(reinterpret_cast<Message*>(message));
++      if (target) {
++        target->HandleNativeEvent(message_class, code, qualifier, mouse_x,
++                                  mouse_y);
+       }
+     }
++  }
+ 
+-    ReplyMsg(reinterpret_cast<Message*>(message));
+-    if (target) {
+-      target->HandleNativeEvent(message_class, code, qualifier, mouse_x,
+-                                mouse_y);
++  if (presentation_port_) {
++    while (auto* request = reinterpret_cast<ArosPresentMessage*>(
++               GetMsg(presentation_port_))) {
++      {
++        base::AutoLock lock(lock_);
++        const auto it = windows_.find(request->widget);
++        request->result =
++            it != windows_.end() &&
++            it->second->PresentPixels(
++                request->pixels, request->row_bytes,
++                gfx::Size(request->width, request->height),
++                gfx::Rect(request->damage_x, request->damage_y,
++                          request->damage_width, request->damage_height));
++      }
++      ReplyMsg(&request->message);
+     }
+   }
+ }
+@@ -135,8 +209,42 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+                                       const gfx::Rect& damage) {
+   base::AutoLock lock(lock_);
+   const auto it = windows_.find(widget);
+-  return it != windows_.end() &&
+-         it->second->PresentPixels(pixels, row_bytes, pixel_size, damage);
++  if (it != windows_.end()) {
++    return it->second->PresentPixels(pixels, row_bytes, pixel_size, damage);
++  }
++
++  ArosPresentMessage request;
++  request.message.mn_ReplyPort = presentation_reply_port_;
++  request.message.mn_Length = sizeof(request);
++  request.widget = widget;
++  request.pixels = pixels;
++  request.row_bytes = row_bytes;
++  request.width = pixel_size.width();
++  request.height = pixel_size.height();
++  request.damage_x = damage.x();
++  request.damage_y = damage.y();
++  request.damage_width = damage.width();
++  request.damage_height = damage.height();
++
++  Forbid();
++  struct MsgPort* const presentation_port = FindPort(kPresentationPortName);
++  if (presentation_port) {
++    PutMsg(presentation_port, &request.message);
++  }
++  Permit();
++  if (!presentation_port) {
++    return false;
++  }
++
++  WaitPort(presentation_reply_port_);
++  CHECK_EQ(GetMsg(presentation_reply_port_), &request.message);
++  if (!logged_forwarded_present_) {
++    logged_forwarded_present_ = true;
++    LOG(INFO) << "[Chromium:Ozone:AROS] first cross-Process canvas present "
++                 "widget="
++              << widget << " result=" << request.result;
++  }
++  return request.result;
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index ce82cd9fd0..89d36a725e 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -63,6 +63,10 @@ class ArosWindowManager {
+   std::map<struct Window*, raw_ptr<ArosWindow>> native_windows_
+       GUARDED_BY(lock_);
+   RAW_PTR_EXCLUSION struct MsgPort* event_port_ = nullptr;
++  RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
++  RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
++  bool owns_presentation_port_ = false;
++  bool logged_forwarded_present_ GUARDED_BY(lock_) = false;
+ };
+ 
+ }  // namespace ui

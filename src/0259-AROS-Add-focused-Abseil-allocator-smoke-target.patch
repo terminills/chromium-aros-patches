@@ -1,0 +1,36 @@
+From 0ffb6593ba10b29add2117d3e895dc609fc58dfb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 22:46:12 -0500
+Subject: [PATCH 259/638] [AROS] Add focused Abseil allocator smoke target
+
+ROOT_CAUSE: Chromium hosted Compositor aborts in Abseil LowLevelAlloc after KrnAllocPages fails. The fallback needs a focused AROS-only validation target while full GN regeneration remains blocked by unrelated media and ANGLE graph errors.
+
+FIX_REASON: Add a test-only AROS target without adding a production Chromium dependency.
+
+VALIDATION: git diff --check passed. A direct cross-compiled hosted allocator arena lifecycle probe passed. Full GN regeneration remains blocked by unrelated unresolved graph targets.
+---
+ third_party/abseil-cpp/absl/base/BUILD.gn | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/third_party/abseil-cpp/absl/base/BUILD.gn b/third_party/abseil-cpp/absl/base/BUILD.gn
+index 5da9dde2d7..64384689db 100644
+--- a/third_party/abseil-cpp/absl/base/BUILD.gn
++++ b/third_party/abseil-cpp/absl/base/BUILD.gn
+@@ -327,3 +327,17 @@ absl_test("nullability_test") {
+     ":nullability",
+   ]
+ }
++
++# This upstream allocator test does not depend on gtest and runs allocation
++# coverage before main(). Keep it AROS-only so the fallback page provenance
++# path can be validated without adding a production Chromium dependency.
++if (is_aros) {
++  executable("low_level_alloc_aros_test") {
++    testonly = true
++    sources = [ "internal/low_level_alloc_test.cc" ]
++    deps = [
++      ":malloc_internal",
++      "//third_party/abseil-cpp/absl/container:node_hash_map",
++    ]
++  }
++}

@@ -1,0 +1,55 @@
+From 9eab91ac09c1e19f0caec25954eb09ccb4e5ad7c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:18:50 -0500
+Subject: [PATCH 014/638] ui: define provisional AROS physical key identity
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: The DOM keycode table selects a platform-native scan-code column at compile time, but AROS had no branch and the headless build stopped at an unsupported-platform preprocessor error. AROS also has no Chromium Ozone keyboard backend whose private scan-code ABI could be selected honestly.
+
+FIX_REASON: Use USB HID usage values as the provisional AROS native key identity. This preserves deterministic DOM/USB round trips without claiming Linux XKB or evdev semantics, and leaves a clear replacement point for the native Ozone input backend.
+
+SCOPE: ui/events/keycodes/dom keycode mapping and contract documentation.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ui/events/dom_keycode_converter/keycode_converter.o
+
+RISK: low for headless bring-up; interactive AROS input must translate Intuition/raw key events into this provisional USB identity or replace the mapping when its native ABI is designed.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/events/keycodes/dom/keycode_converter.cc | 6 ++++++
+ ui/events/keycodes/dom/keycode_converter.h  | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/ui/events/keycodes/dom/keycode_converter.cc b/ui/events/keycodes/dom/keycode_converter.cc
+index e628c37a57..f99a6778ce 100644
+--- a/ui/events/keycodes/dom/keycode_converter.cc
++++ b/ui/events/keycodes/dom/keycode_converter.cc
+@@ -33,6 +33,12 @@ namespace {
+ #elif BUILDFLAG(IS_ANDROID)
+ #define DOM_CODE(usb, evdev, xkb, win, mac, code, id) \
+   { usb, evdev, code }
++#elif BUILDFLAG(IS_AROS)
++// The initial AROS headless port has no native Ozone keyboard backend. Keep
++// physical key identity in USB HID usage space until that backend defines an
++// AROS-specific scan-code translation.
++#define DOM_CODE(usb, evdev, xkb, win, mac, code, id) \
++  { usb, usb, code }
+ #elif BUILDFLAG(IS_FUCHSIA)
+ #define DOM_CODE(usb, evdev, xkb, win, mac, code, id) \
+   { usb, usb, code }
+diff --git a/ui/events/keycodes/dom/keycode_converter.h b/ui/events/keycodes/dom/keycode_converter.h
+index 04309c55c1..a0775a9c86 100644
+--- a/ui/events/keycodes/dom/keycode_converter.h
++++ b/ui/events/keycodes/dom/keycode_converter.h
+@@ -37,6 +37,7 @@ typedef struct {
+   //  On Linux: XKB scancode
+   //  On Windows: Windows OEM scancode
+   //  On Mac: Mac keycode
++  //  On AROS (headless bring-up): USB HID usage
+   //  On Fuchsia: 16-bit Code from the USB Keyboard Usage Page.
+   int native_keycode;
+ 

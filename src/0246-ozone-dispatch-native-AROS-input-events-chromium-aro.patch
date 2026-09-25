@@ -1,0 +1,521 @@
+From 39770cf4f4aeb08aea74ff10089a9f06cf6f4812 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 14:55:44 -0500
+Subject: [PATCH 246/638] ozone: dispatch native AROS input events [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: implemented
+
+ROOT_CAUSE: The AROS Ozone window subscribed only to lifecycle IDCMP classes and dispatched no Chromium input events. After adding native dispatch, mouse release events cleared persistent button state before construction and omitted the changed button from event.flags(), so release-triggered controls such as modal buttons never activated.
+
+FIX_REASON: Translate AROS pointer motion, buttons, wheel raw keys, keyboard raw keys, modifiers, and repeats into Chromium ui::Events, and retain the changed button in release-event flags while clearing persistent pointer state.
+
+SCOPE: ui/ozone/platform/aros/aros_window.cc and ui/ozone/platform/aros/aros_window.h only. Native Intuition framing remains unchanged; borderless Chromium-owned non-client UI is deferred.
+
+VALIDATION: Bundled clang-format --dry-run --Werror and git diff --check pass; focused and in-tree AROS object builds pass; full Chrome link and ET_REL consolidation pass; hosted physical replay changes the local page to RESULT: accepted. Runtime SHA-256 f7d9e97d1e06482a7472b374bea164b06748a3a3bf42f410de665789861b74cf. Native runtime confirmation remains delegated.
+
+RISK: Medium. This is the initial native AROS input backend; key mapping currently follows the standard US raw-key layout. Mouse release flags now follow Chromium event semantics.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap,
+---
+ ui/ozone/platform/aros/aros_window.cc | 421 +++++++++++++++++++++++++-
+ ui/ozone/platform/aros/aros_window.h  |  10 +
+ 2 files changed, 427 insertions(+), 4 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 7671d903f6..14f2cc3432 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -11,9 +11,17 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "ui/base/cursor/platform_cursor.h"
+ #include "ui/display/types/display_constants.h"
++#include "ui/events/base_event_utils.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/events/keycodes/dom/dom_code.h"
++#include "ui/events/keycodes/dom/dom_key.h"
++#include "ui/events/keycodes/keyboard_code_conversion.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
+ #include <cybergraphx/cybergraphics.h>
++#include <devices/inputevent.h>
++#include <devices/rawkeycodes.h>
+ #include <intuition/intuition.h>
+ #include <proto/cybergraphics.h>
+ #include <proto/exec.h>
+@@ -26,14 +34,282 @@ namespace {
+ 
+ constexpr int kDefaultWindowWidth = 1024;
+ constexpr int kDefaultWindowHeight = 720;
+-constexpr ULONG kWindowEventMask = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE |
+-                                   IDCMP_CHANGEWINDOW | IDCMP_REFRESHWINDOW |
+-                                   IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW;
++constexpr ULONG kWindowEventMask =
++    IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_CHANGEWINDOW |
++    IDCMP_REFRESHWINDOW | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW |
++    IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_RAWKEY;
+ 
+ int PositiveOrDefault(int value, int fallback) {
+   return value > 0 ? value : fallback;
+ }
+ 
++int ModifierFlagsFromQualifier(uint16_t qualifier) {
++  int flags = EF_NONE;
++  if (qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) {
++    flags |= EF_SHIFT_DOWN;
++  }
++  if (qualifier & IEQUALIFIER_CONTROL) {
++    flags |= EF_CONTROL_DOWN;
++  }
++  if (qualifier & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) {
++    flags |= EF_ALT_DOWN;
++  }
++  if (qualifier & (IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND)) {
++    flags |= EF_COMMAND_DOWN;
++  }
++  if (qualifier & IEQUALIFIER_CAPSLOCK) {
++    flags |= EF_CAPS_LOCK_ON;
++  }
++  return flags;
++}
++
++int MouseFlagsFromQualifier(uint16_t qualifier) {
++  int flags = EF_NONE;
++  if (qualifier & IEQUALIFIER_LEFTBUTTON) {
++    flags |= EF_LEFT_MOUSE_BUTTON;
++  }
++  if (qualifier & IEQUALIFIER_MIDBUTTON) {
++    flags |= EF_MIDDLE_MOUSE_BUTTON;
++  }
++  if (qualifier & IEQUALIFIER_RBUTTON) {
++    flags |= EF_RIGHT_MOUSE_BUTTON;
++  }
++  return flags;
++}
++
++int MouseButtonFlagFromCode(uint16_t code) {
++  switch (code & ~IECODE_UP_PREFIX) {
++    case IECODE_LBUTTON:
++      return EF_LEFT_MOUSE_BUTTON;
++    case IECODE_MBUTTON:
++      return EF_MIDDLE_MOUSE_BUTTON;
++    case IECODE_RBUTTON:
++      return EF_RIGHT_MOUSE_BUTTON;
++    default:
++      return EF_NONE;
++  }
++}
++
++DomCode DomCodeFromRawKey(uint16_t code) {
++  switch (code) {
++    case RAWKEY_ESCAPE:
++      return DomCode::ESCAPE;
++    case RAWKEY_F1:
++      return DomCode::F1;
++    case RAWKEY_F2:
++      return DomCode::F2;
++    case RAWKEY_F3:
++      return DomCode::F3;
++    case RAWKEY_F4:
++      return DomCode::F4;
++    case RAWKEY_F5:
++      return DomCode::F5;
++    case RAWKEY_F6:
++      return DomCode::F6;
++    case RAWKEY_F7:
++      return DomCode::F7;
++    case RAWKEY_F8:
++      return DomCode::F8;
++    case RAWKEY_F9:
++      return DomCode::F9;
++    case RAWKEY_F10:
++      return DomCode::F10;
++    case RAWKEY_F11:
++      return DomCode::F11;
++    case RAWKEY_F12:
++      return DomCode::F12;
++    case RAWKEY_PAUSE:
++      return DomCode::PAUSE;
++    case RAWKEY_TILDE:
++      return DomCode::BACKQUOTE;
++    case RAWKEY_1:
++      return DomCode::DIGIT1;
++    case RAWKEY_2:
++      return DomCode::DIGIT2;
++    case RAWKEY_3:
++      return DomCode::DIGIT3;
++    case RAWKEY_4:
++      return DomCode::DIGIT4;
++    case RAWKEY_5:
++      return DomCode::DIGIT5;
++    case RAWKEY_6:
++      return DomCode::DIGIT6;
++    case RAWKEY_7:
++      return DomCode::DIGIT7;
++    case RAWKEY_8:
++      return DomCode::DIGIT8;
++    case RAWKEY_9:
++      return DomCode::DIGIT9;
++    case RAWKEY_0:
++      return DomCode::DIGIT0;
++    case RAWKEY_MINUS:
++      return DomCode::MINUS;
++    case RAWKEY_EQUAL:
++      return DomCode::EQUAL;
++    case RAWKEY_BACKSLASH:
++    case RAWKEY_2B:
++      return DomCode::BACKSLASH;
++    case RAWKEY_BACKSPACE:
++      return DomCode::BACKSPACE;
++    case RAWKEY_TAB:
++      return DomCode::TAB;
++    case RAWKEY_Q:
++      return DomCode::US_Q;
++    case RAWKEY_W:
++      return DomCode::US_W;
++    case RAWKEY_E:
++      return DomCode::US_E;
++    case RAWKEY_R:
++      return DomCode::US_R;
++    case RAWKEY_T:
++      return DomCode::US_T;
++    case RAWKEY_Y:
++      return DomCode::US_Y;
++    case RAWKEY_U:
++      return DomCode::US_U;
++    case RAWKEY_I:
++      return DomCode::US_I;
++    case RAWKEY_O:
++      return DomCode::US_O;
++    case RAWKEY_P:
++      return DomCode::US_P;
++    case RAWKEY_LBRACKET:
++      return DomCode::BRACKET_LEFT;
++    case RAWKEY_RBRACKET:
++      return DomCode::BRACKET_RIGHT;
++    case RAWKEY_RETURN:
++      return DomCode::ENTER;
++    case RAWKEY_CAPSLOCK:
++      return DomCode::CAPS_LOCK;
++    case RAWKEY_A:
++      return DomCode::US_A;
++    case RAWKEY_S:
++      return DomCode::US_S;
++    case RAWKEY_D:
++      return DomCode::US_D;
++    case RAWKEY_F:
++      return DomCode::US_F;
++    case RAWKEY_G:
++      return DomCode::US_G;
++    case RAWKEY_H:
++      return DomCode::US_H;
++    case RAWKEY_J:
++      return DomCode::US_J;
++    case RAWKEY_K:
++      return DomCode::US_K;
++    case RAWKEY_L:
++      return DomCode::US_L;
++    case RAWKEY_SEMICOLON:
++      return DomCode::SEMICOLON;
++    case RAWKEY_QUOTE:
++      return DomCode::QUOTE;
++    case RAWKEY_LSHIFT:
++      return DomCode::SHIFT_LEFT;
++    case RAWKEY_LESSGREATER:
++      return DomCode::INTL_BACKSLASH;
++    case RAWKEY_Z:
++      return DomCode::US_Z;
++    case RAWKEY_X:
++      return DomCode::US_X;
++    case RAWKEY_C:
++      return DomCode::US_C;
++    case RAWKEY_V:
++      return DomCode::US_V;
++    case RAWKEY_B:
++      return DomCode::US_B;
++    case RAWKEY_N:
++      return DomCode::US_N;
++    case RAWKEY_M:
++      return DomCode::US_M;
++    case RAWKEY_COMMA:
++      return DomCode::COMMA;
++    case RAWKEY_PERIOD:
++      return DomCode::PERIOD;
++    case RAWKEY_SLASH:
++      return DomCode::SLASH;
++    case RAWKEY_RSHIFT:
++      return DomCode::SHIFT_RIGHT;
++    case RAWKEY_CONTROL:
++      return DomCode::CONTROL_LEFT;
++    case RAWKEY_LAMIGA:
++      return DomCode::META_LEFT;
++    case RAWKEY_LALT:
++      return DomCode::ALT_LEFT;
++    case RAWKEY_SPACE:
++      return DomCode::SPACE;
++    case RAWKEY_RALT:
++      return DomCode::ALT_RIGHT;
++    case RAWKEY_RAMIGA:
++      return DomCode::META_RIGHT;
++    case RAWKEY_INSERT:
++      return DomCode::INSERT;
++    case RAWKEY_DELETE:
++      return DomCode::DEL;
++    case RAWKEY_HOME:
++      return DomCode::HOME;
++    case RAWKEY_END:
++      return DomCode::END;
++    case RAWKEY_PAGEUP:
++      return DomCode::PAGE_UP;
++    case RAWKEY_PAGEDOWN:
++      return DomCode::PAGE_DOWN;
++    case RAWKEY_HELP:
++      return DomCode::HELP;
++    case RAWKEY_UP:
++      return DomCode::ARROW_UP;
++    case RAWKEY_LEFT:
++      return DomCode::ARROW_LEFT;
++    case RAWKEY_DOWN:
++      return DomCode::ARROW_DOWN;
++    case RAWKEY_RIGHT:
++      return DomCode::ARROW_RIGHT;
++    case RAWKEY_KP_7:
++      return DomCode::NUMPAD7;
++    case RAWKEY_KP_8:
++      return DomCode::NUMPAD8;
++    case RAWKEY_KP_9:
++      return DomCode::NUMPAD9;
++    case RAWKEY_KP_4:
++      return DomCode::NUMPAD4;
++    case RAWKEY_KP_5:
++      return DomCode::NUMPAD5;
++    case RAWKEY_KP_6:
++      return DomCode::NUMPAD6;
++    case RAWKEY_KP_1:
++      return DomCode::NUMPAD1;
++    case RAWKEY_KP_2:
++      return DomCode::NUMPAD2;
++    case RAWKEY_KP_3:
++      return DomCode::NUMPAD3;
++    case RAWKEY_KP_0:
++      return DomCode::NUMPAD0;
++    case RAWKEY_KP_DECIMAL:
++      return DomCode::NUMPAD_DECIMAL;
++    case RAWKEY_KP_PLUS:
++      return DomCode::NUMPAD_ADD;
++    case RAWKEY_KP_MINUS:
++      return DomCode::NUMPAD_SUBTRACT;
++    case RAWKEY_KP_ENTER:
++      return DomCode::NUMPAD_ENTER;
++    case RAWKEY_KP_DIVIDE:
++      return DomCode::NUMPAD_DIVIDE;
++    case RAWKEY_KP_MULTIPLY:
++      return DomCode::NUMPAD_MULTIPLY;
++    case RAWKEY_SCRLOCK:
++      return DomCode::SCROLL_LOCK;
++    case RAWKEY_PRTSCREEN:
++      return DomCode::PRINT_SCREEN;
++    case RAWKEY_NUMLOCK:
++      return DomCode::NUM_LOCK;
++    default:
++      return DomCode::NONE;
++  }
++}
++
++bool IsMouseWheelRawKey(uint16_t code) {
++  return code >= RAWKEY_NM_WHEEL_UP && code <= RAWKEY_NM_WHEEL_RIGHT;
++}
++
+ }  // namespace
+ 
+ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+@@ -50,7 +326,7 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+       WA_InnerHeight, bounds_.height(), WA_CloseGadget, TRUE, WA_DepthGadget,
+       TRUE, WA_DragBar, TRUE, WA_SizeGadget, TRUE, WA_SizeBBottom, TRUE,
+       WA_Activate, FALSE, WA_Hidden, TRUE, WA_AutoAdjust, TRUE, WA_SmartRefresh,
+-      TRUE, TAG_DONE);
++      TRUE, WA_ReportMouse, TRUE, WA_RMBTrap, TRUE, TAG_DONE);
+ 
+   if (!window_) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS] OpenWindowTags failed widget="
+@@ -288,12 +564,149 @@ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+         active_ = false;
+         delegate_->OnActivationChanged(false);
+       }
++      mouse_button_flags_ = EF_NONE;
++      break;
++    case IDCMP_MOUSEMOVE:
++      DispatchMouseMove(qualifier, mouse_x, mouse_y);
++      break;
++    case IDCMP_MOUSEBUTTONS:
++      DispatchMouseButton(code, qualifier, mouse_x, mouse_y);
++      break;
++    case IDCMP_RAWKEY:
++      DispatchRawKey(code, qualifier, mouse_x, mouse_y);
+       break;
+     default:
+       break;
+   }
+ }
+ 
++void ArosWindow::DispatchMouseMove(uint16_t qualifier,
++                                   int16_t mouse_x,
++                                   int16_t mouse_y) {
++  if (!window_) {
++    return;
++  }
++
++  const gfx::Point location(mouse_x - window_->BorderLeft,
++                            mouse_y - window_->BorderTop);
++  const gfx::Rect client_bounds(bounds_.size());
++  if (!capture_ && !client_bounds.Contains(location)) {
++    return;
++  }
++
++  mouse_button_flags_ = MouseFlagsFromQualifier(qualifier);
++  const gfx::Point root_location(window_->LeftEdge + mouse_x,
++                                 window_->TopEdge + mouse_y);
++  MouseEvent event(ET_MOUSE_MOVED, location, root_location, EventTimeForNow(),
++                   ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_,
++                   EF_NONE);
++  delegate_->DispatchEvent(&event);
++}
++
++void ArosWindow::DispatchMouseButton(uint16_t code,
++                                     uint16_t qualifier,
++                                     int16_t mouse_x,
++                                     int16_t mouse_y) {
++  if (!window_) {
++    return;
++  }
++
++  const int changed_button = MouseButtonFlagFromCode(code);
++  if (changed_button == EF_NONE) {
++    return;
++  }
++
++  const bool released = (code & IECODE_UP_PREFIX) != 0;
++  if (released) {
++    mouse_button_flags_ &= ~changed_button;
++  } else {
++    mouse_button_flags_ |= changed_button;
++  }
++
++  const gfx::Point location(mouse_x - window_->BorderLeft,
++                            mouse_y - window_->BorderTop);
++  const gfx::Rect client_bounds(bounds_.size());
++  if (!capture_ && !client_bounds.Contains(location)) {
++    return;
++  }
++
++  const gfx::Point root_location(window_->LeftEdge + mouse_x,
++                                 window_->TopEdge + mouse_y);
++  // Release events still identify the changed button after persistent state
++  // has been cleared.
++  MouseEvent event(released ? ET_MOUSE_RELEASED : ET_MOUSE_PRESSED, location,
++                   root_location, EventTimeForNow(),
++                   ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_ |
++                       changed_button,
++                   changed_button);
++  event.InitializeNative();
++  delegate_->DispatchEvent(&event);
++}
++
++void ArosWindow::DispatchRawKey(uint16_t code,
++                                uint16_t qualifier,
++                                int16_t mouse_x,
++                                int16_t mouse_y) {
++  const bool released = (code & IECODE_UP_PREFIX) != 0;
++  const uint16_t raw_code = code & ~IECODE_UP_PREFIX;
++
++  if (IsMouseWheelRawKey(raw_code)) {
++    if (released || !window_) {
++      return;
++    }
++    const gfx::Point location(mouse_x - window_->BorderLeft,
++                              mouse_y - window_->BorderTop);
++    const gfx::Rect client_bounds(bounds_.size());
++    if (!capture_ && !client_bounds.Contains(location)) {
++      return;
++    }
++    const gfx::Point root_location(window_->LeftEdge + mouse_x,
++                                   window_->TopEdge + mouse_y);
++    gfx::Vector2d offset;
++    switch (raw_code) {
++      case RAWKEY_NM_WHEEL_UP:
++        offset.set_y(MouseWheelEvent::kWheelDelta);
++        break;
++      case RAWKEY_NM_WHEEL_DOWN:
++        offset.set_y(-MouseWheelEvent::kWheelDelta);
++        break;
++      case RAWKEY_NM_WHEEL_LEFT:
++        offset.set_x(MouseWheelEvent::kWheelDelta);
++        break;
++      case RAWKEY_NM_WHEEL_RIGHT:
++        offset.set_x(-MouseWheelEvent::kWheelDelta);
++        break;
++    }
++    MouseWheelEvent event(
++        offset, location, root_location, EventTimeForNow(),
++        ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_, EF_NONE);
++    delegate_->DispatchEvent(&event);
++    return;
++  }
++
++  const DomCode dom_code = DomCodeFromRawKey(raw_code);
++  if (dom_code == DomCode::NONE) {
++    VLOG(1) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
++    return;
++  }
++
++  int flags = ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_;
++  if (qualifier & IEQUALIFIER_REPEAT) {
++    flags |= EF_IS_REPEAT;
++  }
++  DomKey dom_key = DomKey::UNIDENTIFIED;
++  KeyboardCode key_code = DomCodeToUsLayoutKeyboardCode(dom_code);
++  KeyboardCode layout_key_code = key_code;
++  if (DomCodeToUsLayoutDomKey(dom_code, flags, &dom_key, &layout_key_code)) {
++    key_code = layout_key_code;
++  }
++
++  KeyEvent event(released ? ET_KEY_RELEASED : ET_KEY_PRESSED, key_code,
++                 dom_code, flags, dom_key, EventTimeForNow());
++  event.InitializeNative();
++  delegate_->DispatchEvent(&event);
++}
++
+ bool ArosWindow::PresentPixels(const void* pixels,
+                                size_t row_bytes,
+                                const gfx::Size& pixel_size,
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 3cae4db56a..39668713d8 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -84,6 +84,15 @@ class ArosWindow : public PlatformWindow {
+   void UpdateBoundsFromNative(bool notify_delegate);
+   void UpdateWindowState(PlatformWindowState state);
+   void DisableNativeEvents();
++  void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
++  void DispatchMouseButton(uint16_t code,
++                           uint16_t qualifier,
++                           int16_t mouse_x,
++                           int16_t mouse_y);
++  void DispatchRawKey(uint16_t code,
++                      uint16_t qualifier,
++                      int16_t mouse_x,
++                      int16_t mouse_y);
+   gfx::Rect PrimaryScreenBounds() const;
+ 
+   raw_ptr<PlatformWindowDelegate> delegate_ = nullptr;
+@@ -99,6 +108,7 @@ class ArosWindow : public PlatformWindow {
+   bool capture_ = false;
+   bool shutting_down_ = false;
+   bool native_events_enabled_ = false;
++  int mouse_button_flags_ = 0;
+ };
+ 
+ }  // namespace ui

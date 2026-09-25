@@ -1,0 +1,30 @@
+From 91b740f71acadb168eaaad535ed93fc0b3eeda17 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 05:13:35 -0500
+Subject: [PATCH 535/638] Default AROS to software compositing
+
+---
+ chrome/app/chrome_main_delegate.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 63d145359c..84c2a5aeb1 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1337,6 +1337,16 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+   // The DevTools remote debugging pipe file descriptors need to be checked
+   // before any other files are opened, see https://crbug.com/1423048.
+   const bool is_browser = !command_line.HasSwitch(switches::kProcessType);
++#if BUILDFLAG(IS_AROS)
++  if (is_browser &&
++      !command_line.HasSwitch("aros-enable-gpu-compositing") &&
++      !command_line.HasSwitch(switches::kDisableGpuCompositing)) {
++    base::CommandLine::ForCurrentProcess()->AppendSwitch(
++        switches::kDisableGpuCompositing);
++    LOG(INFO) << "[Chromium:AROS] defaulting to software compositing; pass "
++                 "--aros-enable-gpu-compositing to test GPU compositing";
++  }
++#endif
+ #if BUILDFLAG(IS_WIN)
+   const bool pipes_are_specified_explicitly =
+       command_line.HasSwitch(::switches::kRemoteDebuggingIoPipes);

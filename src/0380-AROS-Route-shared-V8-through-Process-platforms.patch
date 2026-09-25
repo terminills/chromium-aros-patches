@@ -1,0 +1,33 @@
+From 287cfb526d7c4f0babc2039d3b228e2b2a3b2cba Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:52:13 -0500
+Subject: [PATCH 380/638] [AROS] Route shared V8 through Process platforms
+
+Advance V8 to 9d79b0e. Resident engine startup remains global, while platform selection becomes caller-context aware through the AROS adapter supplied by v8.library.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: per-process-v8-platform-routing-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-12 second renderer reached gin V8Initializer then failed repeated InitializePlatform at startup state 4
+
+AI_VALIDATION: V8 source diff check passes; target build and hosted replay pending
+
+AI_LIMITATIONS: platform adapter source and lifecycle remain in the paired AROS commit
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-12-cppgc-owned-allocator.log; runtime-12-cppgc-owned-allocator.png
+
+AI_DECISION_CHAIN:; Chromium 8aa41e9e56; V8 9d79b0e
+
+Job:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 8f086208e4..9d79b0e5ef 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 8f086208e47a16a0da0cface834f85533fdf3dfa
++Subproject commit 9d79b0e5ef157648ad6334b75e81e2ddce5a9b22

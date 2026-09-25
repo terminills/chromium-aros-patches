@@ -1,0 +1,31 @@
+From 88c1c2469334b515e1423c200b843ca8e70589be Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 19:08:43 -0500
+Subject: [PATCH 250/638] gpu: retain validating decoder fallback on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-5-gpu-fallback
+AI_STATUS: implemented
+ROOT_CAUSE: AROS could enter a non-passthrough GLES2 command-buffer path while the validating decoder factory was compiled out, causing LOG(FATAL).
+FIX_REASON: Keep Chromium's validating decoder compiled so unavailable passthrough degrades to the supported command path instead of aborting before AROS selects a Gallium renderer.
+SCOPE: Build-time AROS decoder availability only; renderer selection and Ozone EGL/Gallium exposure remain separate.
+VALIDATION: generated ENABLE_VALIDATING_COMMAND_DECODER=1; rebuilt gles2 decoder object excludes the unsupported fatal; 273-step incremental full chrome link; ninja no-work verification.
+RISK: Low; this retains Chromium's existing decoder implementation and preserves runtime passthrough selection.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;;
+---
+ ui/gl/features.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ui/gl/features.gni b/ui/gl/features.gni
+index 06806b8ceb..00ede2313d 100644
+--- a/ui/gl/features.gni
++++ b/ui/gl/features.gni
+@@ -27,7 +27,7 @@ declare_args() {
+   # Independent of use_dawn, which controls whether Dawn is used in Chromium.
+   build_dawn_tests = is_mac || is_win || is_linux || is_chromeos || is_android
+ 
+-  enable_validating_command_decoder = is_android
++  enable_validating_command_decoder = is_android || is_aros
+ }
+ 
+ declare_args() {

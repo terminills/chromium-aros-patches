@@ -1,0 +1,31 @@
+From 1d3cc6f4e1ccb7f7ff15a009cafaa1f8abb2d146 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 20:40:38 -0500
+Subject: [PATCH 336/638] v8: keep Core consumers on shared engine seam
+
+Advance Chromium's pinned V8 source to the internal-header correction that prevents Blink Core inspector generation from engulfing v8_libbase. The focused Core archive retains the two generated v8.library import objects and no V8 support implementation members.
+
+AI_PHASE: chromium-blink-core-library
+
+AI_STATUS: v8-support-layer-leak-removed
+
+AI_FAILURE_PRESERVED: first complete Core archive contained 39 v8_libbase objects through internal header target dependencies
+
+AI_VALIDATION: focused archive rebuilt in one action; member count 16120 to 16081; v8_libbase=0; v8_libplatform=0; both GN paths absent; V8 import bridge=2
+
+AI_EVIDENCE: out/aros-blink-core/test-artifacts/-blink-core-library-20260725/04-focused-core-archive-audit.log; 05-focused-core-v8-support-paths.log; 08-internal-v8-header-seam-audit.log
+
+AI_LIMITATIONS: 244 Blink Platform constituent objects, 1195 duplicate callable bridge definitions, and data-object crossings still block a safe native blink_core.library link
+
+AI_DECISION_CHAIN:; f7925185c1; V8 d1f9493
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index cf6aab6d1a..d1f9493f69 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit cf6aab6d1a035d57333c400a2e44e0586e54b57d
++Subproject commit d1f9493f698fbda3b65f5701dcd40e49b4871d81

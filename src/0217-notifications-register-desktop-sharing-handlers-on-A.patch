@@ -1,0 +1,43 @@
+From c6bb0e52a26a7051402c342e0c0971f188faaf83 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:15:47 -0500
+Subject: [PATCH 217/638] notifications: register desktop sharing handlers on
+ AROS [chromium] [aros]
+
+Statement:
+AROS builds Chromium's in-process message center plus the portable Sharing and Send Tab notification handlers, but NotificationDisplayServiceImpl omitted AROS from their include and registration boundary. The generic sharing registration consequently referenced an undeclared handler.
+
+Decision:
+Include the desktop handler declarations on AROS and register Send Tab alongside the already-generic sharing handler. This uses Chromium's message center and does not claim native OS notification integration.
+
+Evidence:
+notification_display_service_impl.o compiles in out/aros-chrome.
+
+Chain:
+Completes the Send Tab desktop path begun by c16c3a5ea1 and message center support from 45232d66a9 for.
+---
+ .../notifications/notification_display_service_impl.cc        | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/notifications/notification_display_service_impl.cc b/chrome/browser/notifications/notification_display_service_impl.cc
+index f5d155d5ca..21ce712d63 100644
+--- a/chrome/browser/notifications/notification_display_service_impl.cc
++++ b/chrome/browser/notifications/notification_display_service_impl.cc
+@@ -32,7 +32,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/send_tab_to_self/desktop_notification_handler.h"
+ #include "chrome/browser/sharing/sharing_notification_handler.h"
+ #endif
+@@ -81,7 +81,7 @@ NotificationDisplayServiceImpl::NotificationDisplayServiceImpl(Profile* profile)
+                            std::make_unique<PersistentNotificationHandler>());
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+     AddNotificationHandler(
+         NotificationHandler::Type::SEND_TAB_TO_SELF,
+         std::make_unique<send_tab_to_self::DesktopNotificationHandler>(

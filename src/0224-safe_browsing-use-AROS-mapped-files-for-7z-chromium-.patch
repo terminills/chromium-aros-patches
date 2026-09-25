@@ -1,0 +1,38 @@
+From 6024aa8d6ab04784b4252020e09ae7e58cf333c9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:53:08 -0500
+Subject: [PATCH 224/638] safe_browsing: use AROS mapped files for 7z
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: SevenZipAnalyzer uses Chromium MemoryMappedFile, but its generic POSIX include branch unconditionally imported sys/mman.h. AROS has an in-tree copy-backed MemoryMappedFile implementation and no sys/mman header, so the upstream Chrome graph stopped before compiling the otherwise portable analyzer.
+
+FIX_REASON: Exclude only AROS from the direct sys/mman include. Keep SevenZip analysis enabled and continue routing mapping through the existing AROS MemoryMappedFile backend instead of deleting browser functionality.
+
+SCOPE: chrome/utility/safe_browsing/seven_zip_analyzer.cc only.
+
+VALIDATION: out/aros-chrome obj/chrome/utility/safe_browsing/safe_browsing/seven_zip_analyzer.o compiles; git diff --cached --check passes.
+
+RISK: low; the preprocessor change is AROS-only and all runtime mapping remains owned by base::MemoryMappedFile.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ chrome/utility/safe_browsing/seven_zip_analyzer.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/utility/safe_browsing/seven_zip_analyzer.cc b/chrome/utility/safe_browsing/seven_zip_analyzer.cc
+index 9a3f442235..2e4c691c17 100644
+--- a/chrome/utility/safe_browsing/seven_zip_analyzer.cc
++++ b/chrome/utility/safe_browsing/seven_zip_analyzer.cc
+@@ -17,7 +17,7 @@
+ #include <windows.h>
+ // Must be after <windows.h>
+ #include <winbase.h>
+-#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#elif (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)) || BUILDFLAG(IS_FUCHSIA)
+ #include <sys/mman.h>
+ #endif
+ 

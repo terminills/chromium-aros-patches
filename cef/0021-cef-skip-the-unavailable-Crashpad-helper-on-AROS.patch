@@ -1,0 +1,52 @@
+From 2f1daf733239ed3f68dddf97c57cb263c3b7f6c7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 23:36:17 -0500
+Subject: [PATCH 21/43] cef: skip the unavailable Crashpad helper on AROS
+
+Do not include or compare the Crashpad handler switch on AROS. The platform has no embedded Crashpad process; secondary Chromium processes continue through ContentMain.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-native-link-gap-fixed-under-validation
+
+AI_VALIDATION: mixed-provenance diagnostic native link contained exactly one unresolved crash_reporter::switches::kCrashpadHandler
+
+AI_ASSUMPTION: AROS crash reporting remains native and does not launch a Crashpad helper process
+
+AI_LIMITATIONS: coherent archive rebuild and native relink remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-native-link-pass2-20260725/03-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ libcef/browser/main_runner.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/libcef/browser/main_runner.cc b/libcef/browser/main_runner.cc
+index 4523eef6..cc671590 100644
+--- a/libcef/browser/main_runner.cc
++++ b/libcef/browser/main_runner.cc
+@@ -22,7 +22,9 @@
+ #include "base/synchronization/waitable_event.h"
+ #include "base/threading/thread.h"
+ #include "chrome/common/chrome_result_codes.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crash_switches.h"
++#endif
+ #include "content/app/content_main_runner_impl.h"
+ #include "content/browser/scheduler/browser_task_executor.h"
+ #include "content/public/app/content_main.h"
+@@ -371,11 +373,13 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
+ 
+   int result;
+ 
++#if !BUILDFLAG(IS_AROS)
+   if (process_type == crash_reporter::switches::kCrashpadHandler) {
+     result = RunAsCrashpadHandler(command_line);
+     main_delegate->AfterExecuteProcess();
+     return result;
+   }
++#endif
+ 
+   // Execute the secondary process.
+   content::ContentMainParams main_params(

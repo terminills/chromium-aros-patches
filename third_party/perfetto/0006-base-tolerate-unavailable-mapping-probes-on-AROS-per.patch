@@ -1,0 +1,41 @@
+From 288d79a0e9b6bacc523004dfea3278c0e01f96f4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:03:36 -0500
+Subject: [PATCH 6/7] base: tolerate unavailable mapping probes on AROS
+ [perfetto] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: Perfetto test support unconditionally includes sys/mman.h and calls mincore on non-Windows targets, but AROS exposes neither interface.
+FIX_REASON: Treat mapping-state introspection as unavailable on AROS, matching Perfetto\047s existing fail-open test utility behavior for NaCl while leaving runtime allocation behavior unchanged.
+VALIDATION: ninja -C ../../out/aros-windowed -j1 obj/third_party/perfetto/src/base/test_support/vm_test_utils.o
+RISK: IsMapped cannot detect holes on AROS until MMU-backed query support exists.
+---
+ src/base/test/vm_test_utils.cc | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/base/test/vm_test_utils.cc b/src/base/test/vm_test_utils.cc
+index 8a240b0..cad3f68 100644
+--- a/src/base/test/vm_test_utils.cc
++++ b/src/base/test/vm_test_utils.cc
+@@ -29,7 +29,7 @@
+ 
+ #include <Windows.h>
+ #include <Psapi.h>
+-#else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+@@ -91,8 +91,9 @@ bool IsMapped(void* start, size_t size) {
+   // Fuchsia doesn't yet support paging (b/119503290).
+   ignore_result(page_size);
+   return true;
+-#elif PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
+-  // mincore isn't available on NaCL.
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  // mincore isn't available on NaCl or AROS.
+   ignore_result(page_size);
+   return true;
+ #else

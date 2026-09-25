@@ -1,0 +1,48 @@
+From 8e2c32531117480db2b7c8704d949389f37c5728 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 15:52:28 -0500
+Subject: [PATCH 377/638] [AROS] Use BoringSSL C backend for large addresses
+
+AI_PHASE: chromium-process-model
+AI_STATUS: utility-boringssl-rel32-range-failure-fixed
+ROOT_CAUSE: BoringSSL's generated x86_64 assembly used small-model RIP-relative accesses to writable OPENSSL_ia32cap_P. A later utility child placed Chrome text and data more than 2 GiB apart, so LoadSeg rejected relocation 21549.
+FIX_REASON: Keep the boringssl_asm target structurally present but empty on AROS and compile BoringSSL itself with OPENSSL_NO_ASM. The C backend inherits AROS -mcmodel=large and requires no runtime GOT.
+SCOPE: third_party/boringssl/BUILD.gn
+VALIDATION: ninja -C out/aros-chrome -j32 chrome passed. Full Chrome remains a compact ET_REL with 35 section-table entries; OPENSSL_ia32cap_P relocations are absent and V8 import slots remain R_X86_64_64.
+RISK: This is the correctness baseline rather than the final optimized crypto backend. Runtime must prove the later utility child and renderer page paint; DOM-storage EBADF remains separate.
+AI_DECISION_CHAIN: later utility OPENSSL_ia32cap_P PC32 failure -> identify generated BoringSSL assembly -> reject GOT/dynamic-loader workaround -> disable assembly privately -> preserve broad public-config rebuild as failure evidence -> clean full link.
+Evidence:-chromium-browser-renderer-20260728/runtime-06.log,-chromium-browser-renderer-20260728/build-21-boringssl-public-noasm.log,-chromium-browser-renderer-20260728/build-22-boringssl-private-noasm.log
+Job:
+---
+ third_party/boringssl/BUILD.gn | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/third_party/boringssl/BUILD.gn b/third_party/boringssl/BUILD.gn
+index feaef4bfd7..d8e2f7cf82 100644
+--- a/third_party/boringssl/BUILD.gn
++++ b/third_party/boringssl/BUILD.gn
+@@ -119,6 +119,14 @@ if (is_msan) {
+ 
+     public_configs = [ ":no_asm_config" ]
+   }
++} else if (is_aros) {
++  # AROS x86_64 LoadSeg may place executable and writable hunks more than
++  # 2 GiB apart. BoringSSL's generated assembly uses small-model RIP-relative
++  # accesses to OPENSSL_ia32cap_P, so use the large-model-safe C backend until
++  # those assembly entry points have an AROS relocation model.
++  source_set("boringssl_asm") {
++    visibility = [ ":*" ]  # Only targets in this file can depend on this.
++  }
+ } else if (is_win && (current_cpu == "x86" || current_cpu == "x64")) {
+   # Windows' x86 and x86_64 assembly is built with NASM.
+   import("//third_party/nasm/nasm_assemble.gni")
+@@ -151,6 +159,9 @@ component("boringssl") {
+ 
+   public_configs = [ ":external_config" ]
+   configs += [ ":component_config" ]
++  if (is_aros) {
++    configs += [ ":no_asm_config" ]
++  }
+ 
+   configs -= [ "//build/config/compiler:chromium_code" ]
+   configs += [ "//build/config/compiler:no_chromium_code" ]

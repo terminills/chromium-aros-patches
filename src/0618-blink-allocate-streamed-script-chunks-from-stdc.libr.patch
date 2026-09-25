@@ -1,0 +1,102 @@
+From 90ce5a753b53b8c4cd64fa0ccf30c3d86b511afd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 05:21:14 -0500
+Subject: [PATCH 618/638] blink: allocate streamed script chunks from
+ stdc.library on AROS
+
+SourceStream::GetMoreData() and InlineSourceStream::GetMoreData() hand
+ownership of the chunk buffers to V8, which frees them with delete[] in
+Utf8ExternalStreamingStream's chunk vector. On AROS Blink (cef-blink.library,
+PartitionAlloc-Everywhere) and V8 (v8.library, stdc.library malloc) are
+separate shared libraries with separate heaps, so a new[]'d chunk freed by
+v8.library landed in stdc's free() and corrupted the TLSF free list
+([Kernel:TLSF] free-list corruption at FREE outside TLSF area, Trap 4 in
+BackgroundCompileTask::Run) the first time a webview streamed a script.
+
+Allocate those chunks with ArosLibcMalloc() so V8's delete[] reaches the heap
+that owns them. The not-handed-over path (initial_data_.reset()) stays
+correct because the AROS allocator shim forwards non-PartitionAlloc pointers
+to stdc.library's free(). 0-byte chunks still get a valid pointer, as the V8
+scanner requires.
+---
+ .../bindings/core/v8/script_streamer.cc       | 32 ++++++++++++++++---
+ 1 file changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/third_party/blink/renderer/bindings/core/v8/script_streamer.cc b/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
+index 169bc48d27..98e4bde94b 100644
+--- a/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
++++ b/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
+@@ -21,6 +21,7 @@
+ #include "base/threading/scoped_blocking_call.h"
+ #include "base/threading/thread_restrictions.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/system/wait.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
+ #include "third_party/abseil-cpp/absl/types/variant.h"
+@@ -62,9 +63,30 @@
+ #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+ #include "third_party/blink/renderer/platform/wtf/text/text_encoding_registry.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/shim/allocator_shim_aros_libc.h"
++#endif
++
+ namespace blink {
+ namespace {
+ 
++// Allocates a source chunk whose ownership GetMoreData() passes to V8, which
++// releases it with delete[]. On AROS Blink and V8 are separate shared
++// libraries with separate heaps (Blink frees through PartitionAlloc, V8
++// through stdc.library), so the chunk must come from the heap V8's delete[]
++// reaches: stdc.library's. Blink can still free such a chunk itself (the
++// not-handed-over path below): its allocator shim forwards pointers it does not
++// own to stdc.library. Everywhere else it is a plain new[].
++uint8_t* AllocateSourceChunk(size_t size) {
++#if BUILDFLAG(IS_AROS)
++  // The V8 scanner requires a valid pointer even for a 0-byte chunk.
++  return static_cast<uint8_t*>(
++      allocator_shim::internal::ArosLibcMalloc(size ? size : 1));
++#else
++  return new uint8_t[size];
++#endif
++}
++
+ v8::ScriptType ScriptTypeForStreamingTask(ScriptResource* script_resource) {
+   switch (script_resource->GetInitialRequestScriptType()) {
+     case mojom::blink::ScriptType::kModule:
+@@ -144,8 +166,8 @@ class SourceStream : public v8::ScriptCompiler::ExternalSourceStream {
+           CHECK_GT(num_bytes, 0u);
+ 
+           if (src) {
+-            auto copy_for_script_stream =
+-                std::make_unique<uint8_t[]>(num_bytes);
++            std::unique_ptr<uint8_t[]> copy_for_script_stream(
++                AllocateSourceChunk(num_bytes));
+             memcpy(copy_for_script_stream.get(), buffer, num_bytes);
+             *src = copy_for_script_stream.release();
+           }
+@@ -268,7 +290,7 @@ class SourceStream : public v8::ScriptCompiler::ExternalSourceStream {
+     const size_t length = resource_buffer->size();
+ 
+     if (length > 0) {
+-      initial_data_.reset(new uint8_t[length]);
++      initial_data_.reset(AllocateSourceChunk(length));
+ 
+       bool success = resource_buffer->GetBytes(
+           reinterpret_cast<void*>(initial_data_.get()), length);
+@@ -1001,12 +1023,12 @@ class InlineSourceStream final
+     if (!text_) {
+       // The V8 scanner requires a valid pointer when using TWO_BYTE sources,
+       // even if the length is 0.
+-      *src = new uint8_t[0];
++      *src = AllocateSourceChunk(0);
+       return 0;
+     }
+ 
+     size_t size = text_.CharactersSizeInBytes();
+-    auto data_copy = std::make_unique<uint8_t[]>(size);
++    std::unique_ptr<uint8_t[]> data_copy(AllocateSourceChunk(size));
+     memcpy(data_copy.get(), text_.Bytes(), size);
+     text_ = String();
+ 

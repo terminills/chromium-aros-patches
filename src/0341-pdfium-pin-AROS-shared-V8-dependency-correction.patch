@@ -1,0 +1,29 @@
+From 1daaaf5e1a439e7a6f287acd0bd6149a689da02d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:35:05 -0500
+Subject: [PATCH 341/638] pdfium: pin AROS shared-V8 dependency correction
+
+Advance the nested PDFium revision to keep v8_libplatform and v8_libbase in the resident v8.library when building CEF on AROS.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: nested-revision-pinned-under-validation
+
+AI_VALIDATION: exact gitlink advances e15b92e to b316eb6; rejected CEF archive audit identified 49 embedded V8 support objects
+
+AI_LIMITATIONS: regenerated dependency graph and archive member audit remain pending
+
+AI_EVIDENCE: out/aros-cef-bootstrap/test-artifacts/-coherent-cef-archive-20260725
+
+AI_DECISION_CHAIN:; b316eb6
+---
+ third_party/pdfium | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/pdfium b/third_party/pdfium
+index e15b92e443..b316eb6463 160000
+--- a/third_party/pdfium
++++ b/third_party/pdfium
+@@ -1 +1 @@
+-Subproject commit e15b92e443568dac2dde59fe3af1ff6afb4e5662
++Subproject commit b316eb64639d9ea4bb2e7a214c8fede9f40475b6

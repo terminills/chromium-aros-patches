@@ -1,0 +1,125 @@
+From e633eb4d12520f2b6780934b0c9b613b395c3bd9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 12:39:02 -0500
+Subject: [PATCH 573/638] aros: single-profile browser shape
+
+The in-process browser has one BrowserContext; the system profile the
+ProfilePicker runs in, a second profile, the guest profile and an
+Incognito window are all second contexts and trip the
+InSameStoragePartition CHECK in RenderProcessHostImpl (profile menu
+"Add"/"Manage profiles" -> ProfilePickerView::Init).
+
+Hide those entry points on AROS: profile creation and guest mode
+report disabled, the profile menu skips its management section, the
+app-menu profile submenu drops "Manage Chrome profiles", Incognito
+defaults to disabled, and ProfilePicker::Show becomes a logged no-op
+as a backstop for the remaining callers. Signing in stays available
+through the DICE tab.
+---
+ chrome/browser/prefs/incognito_mode_prefs.cc            | 6 ++++++
+ chrome/browser/profiles/profiles_state.cc               | 9 +++++++++
+ chrome/browser/ui/toolbar/app_menu_model.cc             | 3 +++
+ chrome/browser/ui/views/profiles/profile_menu_view.cc   | 6 ++++++
+ chrome/browser/ui/views/profiles/profile_picker_view.cc | 9 +++++++++
+ 5 files changed, 33 insertions(+)
+
+diff --git a/chrome/browser/prefs/incognito_mode_prefs.cc b/chrome/browser/prefs/incognito_mode_prefs.cc
+index d84951d2cf..9f162df175 100644
+--- a/chrome/browser/prefs/incognito_mode_prefs.cc
++++ b/chrome/browser/prefs/incognito_mode_prefs.cc
+@@ -34,7 +34,13 @@ using policy::IncognitoModeAvailability;
+ 
+ // static
+ const IncognitoModeAvailability IncognitoModePrefs::kDefaultAvailability =
++#if BUILDFLAG(IS_AROS)
++    // An Incognito window is a second BrowserContext, which the in-process
++    // browser cannot host (see profiles::IsProfileCreationAllowed()).
++    policy::IncognitoModeAvailability::kDisabled;
++#else
+     policy::IncognitoModeAvailability::kEnabled;
++#endif
+ 
+ // static
+ bool IncognitoModePrefs::IntToAvailability(
+diff --git a/chrome/browser/profiles/profiles_state.cc b/chrome/browser/profiles/profiles_state.cc
+index c524b39ec6..62f9dec7e4 100644
+--- a/chrome/browser/profiles/profiles_state.cc
++++ b/chrome/browser/profiles/profiles_state.cc
+@@ -218,6 +218,11 @@ bool IsProfileCreationAllowed() {
+   if (!AreSecondaryProfilesAllowed())
+     return false;
+ #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
++#if BUILDFLAG(IS_AROS)
++  // The browser runs in-process with one BrowserContext; a second profile
++  // (or the system profile the picker lives in) cannot get a renderer.
++  return false;
++#endif
+ 
+   const PrefService* const pref_service = g_browser_process->local_state();
+   DCHECK(pref_service);
+@@ -229,6 +234,10 @@ bool IsGuestModeEnabled() {
+   if (!AreSecondaryProfilesAllowed())
+     return false;
+ #endif  // BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_AROS)
++  // See IsProfileCreationAllowed(): the guest profile is a second context.
++  return false;
++#endif
+ 
+   const PrefService* const pref_service = g_browser_process->local_state();
+   DCHECK(pref_service);
+diff --git a/chrome/browser/ui/toolbar/app_menu_model.cc b/chrome/browser/ui/toolbar/app_menu_model.cc
+index 715078e9d0..5655b06f1c 100644
+--- a/chrome/browser/ui/toolbar/app_menu_model.cc
++++ b/chrome/browser/ui/toolbar/app_menu_model.cc
+@@ -465,10 +465,13 @@ ProfileSubMenuModel::ProfileSubMenuModel(
+           ui::ImageModel::FromVectorIcon(kAccountAddChromeRefreshIcon,
+                                          ui::kColorMenuIcon, kDefaultIconSize));
+     }
++#if !BUILDFLAG(IS_AROS)
++    // One profile only on AROS; the picker has no context to run in.
+     AddItemWithStringIdAndIcon(
+         IDC_MANAGE_CHROME_PROFILES, IDS_MANAGE_CHROME_PROFILES,
+         ui::ImageModel::FromVectorIcon(kAccountManageChromeRefreshIcon,
+                                        ui::kColorMenuIcon, kDefaultIconSize));
++#endif
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/views/profiles/profile_menu_view.cc b/chrome/browser/ui/views/profiles/profile_menu_view.cc
+index 9d3cc6410a..2f7bd35a23 100644
+--- a/chrome/browser/ui/views/profiles/profile_menu_view.cc
++++ b/chrome/browser/ui/views/profiles/profile_menu_view.cc
+@@ -882,6 +882,12 @@ void ProfileMenuView::BuildAvailableProfiles() {
+ }
+ 
+ void ProfileMenuView::BuildProfileManagementFeatureButtons() {
++#if BUILDFLAG(IS_AROS)
++  // One profile only (see profiles::IsProfileCreationAllowed()): there is
++  // nothing to add, switch to or manage, and the "managed" hint that stands
++  // in for the manage button elsewhere would be wrong here.
++  return;
++#endif
+   bool profiles_selectable = true;
+ #if BUILDFLAG(IS_CHROMEOS_LACROS)
+   profiles_selectable = profiles::AreSecondaryProfilesAllowed();
+diff --git a/chrome/browser/ui/views/profiles/profile_picker_view.cc b/chrome/browser/ui/views/profiles/profile_picker_view.cc
+index efb97059fc..b636dc1dd4 100644
+--- a/chrome/browser/ui/views/profiles/profile_picker_view.cc
++++ b/chrome/browser/ui/views/profiles/profile_picker_view.cc
+@@ -158,6 +158,15 @@ void ClearLockedProfilesFirstBrowserKeepAlive() {
+ 
+ // static
+ void ProfilePicker::Show(Params&& params) {
++#if BUILDFLAG(IS_AROS)
++  // The picker is a WebUI in the system profile, a second BrowserContext the
++  // in-process browser cannot host (RenderProcessHostImpl CHECKs that every
++  // renderer shares the one StoragePartition). The entry points that reach
++  // here are hidden on AROS; this catches the rest.
++  LOG(WARNING) << "ProfilePicker::Show ignored on AROS (entry point "
++               << static_cast<int>(params.entry_point()) << ")";
++  return;
++#endif
+   // Re-open with new params if necessary.
+   if (g_profile_picker_view && g_profile_picker_view->MaybeReopen(params)) {
+     return;

@@ -1,0 +1,60 @@
+From 763f95ccc9291d06084d77589977686db3fb2ca5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 01:46:35 -0500
+Subject: [PATCH 136/638] [AROS] Reduce exposed DevTools bridge logging
+
+---
+ .../devtools/protocol/target_handler.cc       | 19 -------------------
+ 1 file changed, 19 deletions(-)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index a334bdc3f1..c6d6d1b4f4 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -249,10 +249,6 @@ class BrowserToPageConnector {
+     base::JSONWriter::Write(message, &json_message);
+     page_host_->DispatchProtocolMessage(
+         page_host_client_.get(), base::as_bytes(base::make_span(json_message)));
+-#if BUILDFLAG(IS_AROS)
+-    LOG(INFO) << "[Chromium:cdp-bridge] page command method=" << method
+-              << " id=" << page_message_id_ - 1;
+-#endif
+   }
+ 
+ #if BUILDFLAG(IS_AROS)
+@@ -310,9 +306,6 @@ class BrowserToPageConnector {
+       // Make sure this is a binding call.
+       const std::string* method = dict.FindString("method");
+       if (!method || *method != "Runtime.bindingCalled") {
+-#if BUILDFLAG(IS_AROS)
+-        LOG(INFO) << "[Chromium:cdp-bridge] page response=" << message_sp;
+-#endif
+         return;
+       }
+ 
+@@ -330,9 +323,6 @@ class BrowserToPageConnector {
+       if (!payload) {
+         return;
+       }
+-#if BUILDFLAG(IS_AROS)
+-      LOG(INFO) << "[Chromium:cdp-bridge] page binding payload=" << *payload;
+-#endif
+       browser_host_->DispatchProtocolMessage(
+           browser_host_client_.get(),
+           base::as_bytes(base::make_span(*payload)));
+@@ -340,15 +330,6 @@ class BrowserToPageConnector {
+     }
+     DCHECK(agent_host == browser_host_.get());
+ 
+-#if BUILDFLAG(IS_AROS)
+-    if (message_sp.size() > 1024) {
+-      LOG(INFO) << "[Chromium:cdp-bridge] browser response bytes="
+-                << message_sp.size();
+-    } else {
+-      LOG(INFO) << "[Chromium:cdp-bridge] browser response=" << message_sp;
+-    }
+-#endif
+-
+     std::string encoded = base::Base64Encode(message_sp);
+     std::string eval_code =
+         "try { window." + binding_name_ + ".onmessage(atob(\"";

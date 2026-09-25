@@ -1,0 +1,44 @@
+From fad331d7cbb5114dd82e25c756095b3788f20e9d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:28:28 -0500
+Subject: [PATCH 017/638] ipc: admit fixed-width LP64 traits on AROS [chromium]
+ [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: The x86-64 AROS ABI defines int64_t as long and uint64_t as unsigned long, but Chromium only enabled the corresponding ParamTraits on other LP64 platforms. Fixed-width IPC values therefore instantiated the deliberately missing generic long specialization.
+
+FIX_REASON: Enable long/unsigned-long ParamTraits only when AROS is built with ARCH_CPU_64_BITS. This represents the fixed-width typedefs without weakening the 32/64-bit wire-compatibility guard for future 32-bit AROS builds.
+
+SCOPE: IPC primitive ParamTraits platform selection.
+
+VALIDATION: toolchain macros report 8-byte long/pointers and int64_t=long; ninja -C out/aros-headless -j4 obj/ipc/ipc/ipc_mojo_param_traits.o
+
+RISK: low; the condition is architecture-gated and uses Chromium's existing 64-bit Pickle encoding.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ipc/ipc_message_utils.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/ipc/ipc_message_utils.h b/ipc/ipc_message_utils.h
+index 0c908fd7f9..39b9e33d0d 100644
+--- a/ipc/ipc_message_utils.h
++++ b/ipc/ipc_message_utils.h
+@@ -210,11 +210,13 @@ struct ParamTraits<unsigned int> {
+ //      very few IPCs that cross this boundary.
+ //   2) We also need to keep it for Linux for two reasons: int64_t is typedef'd
+ //      to long, and gfx::PluginWindow is long and is used in one GPU IPC.
+-//   3) Android 64 bit and Fuchsia also have int64_t typedef'd to long.
++//   3) Android 64 bit, AROS 64 bit, and Fuchsia also have int64_t typedef'd to
++//      long.
+ // Since we want to support Android 32<>64 bit IPC, as long as we don't have
+ // these traits for 32 bit ARM then that'll catch any errors.
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+     BUILDFLAG(IS_FUCHSIA) ||                                              \
++    (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_64_BITS)) ||                  \
+     (BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_64_BITS))
+ template <>
+ struct ParamTraits<long> {

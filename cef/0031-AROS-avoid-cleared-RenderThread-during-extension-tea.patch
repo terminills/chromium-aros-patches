@@ -1,0 +1,43 @@
+From b1147a0c17f5c50785cf7ed16622b4ece56c258d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 26 Jul 2026 04:22:42 -0500
+Subject: [PATCH 31/43] AROS: avoid cleared RenderThread during extension
+ teardown
+
+AI_PHASE: cef-osr-browser
+
+AI_STATUS: archive-clean-runtime-pending
+
+ROOT_CAUSE: WillDestroyCurrentMessageLoop runs after the RenderThread global has been cleared, so Shutdown dereferenced a null RenderThread while trying to remove an observer whose owner list was already destroyed.
+
+FIX_REASON: Release the extension dispatcher and request policy on their renderer sequence without consulting the cleared RenderThread singleton.
+
+VALIDATION: hosted replay painted and closed, removed the prior Mojo wrong-sequence fatal, and isolated the new null dereference at CefExtensionsRendererClient::Shutdown+0x23; corrected obj/cef/libcef.a rebuild passed.
+
+AI_LIMITATIONS: corrected native cef.library relink and hosted shutdown replay remain pending.
+
+AI_DECISION_CHAIN:; aa68073e renderer-sequence teardown; 07-runtime null RenderThread failure
+
+Evidence:-cef-final-runtime-20260726/extension-renderer-teardown-pass/07-runtime.log
+
+Job:
+---
+ libcef/renderer/extensions/extensions_renderer_client.cc | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/libcef/renderer/extensions/extensions_renderer_client.cc b/libcef/renderer/extensions/extensions_renderer_client.cc
+index e6afe4bd..38062f29 100644
+--- a/libcef/renderer/extensions/extensions_renderer_client.cc
++++ b/libcef/renderer/extensions/extensions_renderer_client.cc
+@@ -52,9 +52,8 @@ CefExtensionsRendererClient::CefExtensionsRendererClient(
+ CefExtensionsRendererClient::~CefExtensionsRendererClient() = default;
+ 
+ void CefExtensionsRendererClient::Shutdown() {
+-  if (extension_dispatcher_) {
+-    content::RenderThread::Get()->RemoveObserver(extension_dispatcher_.get());
+-  }
++  // RenderThread::Get() is already cleared when this message-loop teardown
++  // callback runs. Its observer list has therefore also been destroyed.
+   resource_request_policy_.reset();
+   extension_dispatcher_.reset();
+ }

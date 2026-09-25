@@ -1,0 +1,63 @@
+From caadbc45998133dd96f592b3188a874ba619b461 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:38:25 -0500
+Subject: [PATCH 093/638] [AROS] Report renderer sandbox capability honestly
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Renderer lifecycle hooks are defined and AROS reports sandboxing unavailable.
+ROOT_CAUSE: RendererMainPlatformDelegate had no AROS implementation, and borrowing another platform's success result would falsely claim renderer isolation.
+FIX_REASON: Provide no-op lifecycle hooks and return false from EnableSandbox until direct child launch and OPAL/MMU renderer-domain enforcement exist.
+SCOPE: Content renderer platform source selection and delegate.
+VALIDATION: Filtered GN generation succeeded; delegate object and librenderer.a build; nm confirms all five platform methods.
+RISK: Renderer code remains unsandboxed during bring-up; callers now receive the correct capability result.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ content/renderer/BUILD.gn                     |  4 ++++
+ .../renderer_main_platform_delegate_aros.cc   | 22 +++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+ create mode 100644 content/renderer/renderer_main_platform_delegate_aros.cc
+
+diff --git a/content/renderer/BUILD.gn b/content/renderer/BUILD.gn
+index d80cdfcc88..33cc781573 100644
+--- a/content/renderer/BUILD.gn
++++ b/content/renderer/BUILD.gn
+@@ -204,6 +204,10 @@ target(link_target_type, "renderer") {
+     sources += [ "renderer_main_platform_delegate_linux.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "renderer_main_platform_delegate_aros.cc" ]
++  }
++
+   if (is_mac) {
+     sources += [
+       "renderer_main_platform_delegate_mac.mm",
+diff --git a/content/renderer/renderer_main_platform_delegate_aros.cc b/content/renderer/renderer_main_platform_delegate_aros.cc
+new file mode 100644
+index 0000000000..5b2ebd80da
+--- /dev/null
++++ b/content/renderer/renderer_main_platform_delegate_aros.cc
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/renderer/renderer_main_platform_delegate.h"
++
++namespace content {
++
++RendererMainPlatformDelegate::RendererMainPlatformDelegate(
++    const MainFunctionParams&) {}
++
++RendererMainPlatformDelegate::~RendererMainPlatformDelegate() = default;
++
++void RendererMainPlatformDelegate::PlatformInitialize() {}
++
++void RendererMainPlatformDelegate::PlatformUninitialize() {}
++
++bool RendererMainPlatformDelegate::EnableSandbox() {
++  return false;
++}
++
++}  // namespace content

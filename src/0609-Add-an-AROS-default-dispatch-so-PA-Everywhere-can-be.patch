@@ -1,0 +1,263 @@
+From 176b70ec602c1bde33e7d24a2d99c95fa76e776d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 12 Sep 2026 17:46:35 -0500
+Subject: [PATCH 609/638] Add an AROS default dispatch so PA-Everywhere can be
+ turned off
+
+A Chromium-derived program on AROS can be split across several AROS shared
+libraries, and the allocator shim is only linked into whichever of them pulls
+in //base. In the CEF/Electron stack that is cef-blink.library alone;
+v8.library and node.library get libstdc++'s stock operator new/delete, which
+call stdc.library's malloc()/free(). With PartitionAlloc-Everywhere on, that
+is two heaps in one process, and an object allocated on one side and deleted
+on the other is freed to the wrong allocator:
+
+    Utf8ExternalStreamingStream::~Utf8ExternalStreamingStream (v8.library)
+      operator delete[] -> operator delete -> free           (v8.library)
+        Exec_119_FreePooled -> tlsf_freemem -> tlsf_freevec
+          [Kernel:TLSF] free-list corruption at FREE outside TLSF area
+
+The freed block sits inside PartitionAlloc's regular pool, which the run's own
+trim-exec event places at [0x7fcbc0000000, 0x7fcc00000000). Blink's background
+script streamer allocates the chunk vector, V8 destroys it, so any page with a
+script large enough to stream reproduces it. The standalone browser is immune
+because it builds with v8_use_aros_library=false: one link unit, one allocator.
+
+The library split cannot copy that - CEF and node must share a single V8 - so
+the fix is the other direction: hand out the one allocator every library in the
+process can reach, stdc.library's. use_partition_alloc_as_malloc=false did not
+link before this, because the default-dispatch branches covered android, apple,
+linux and win but not aros.
+
+PartitionAlloc is still built and still backs the partitions Blink drives
+explicitly (WTF, Oilpan, ArrayBuffers); those never cross a library boundary.
+Single-binary targets should keep PA-E on.
+---
+ .../src/partition_alloc/BUILD.gn              |   4 +
+ .../shim/allocator_shim_aros_libc.cc          |  21 +++
+ .../shim/allocator_shim_aros_libc.h           |  11 ++
+ ...ator_shim_default_dispatch_to_aros_libc.cc | 143 ++++++++++++++++++
+ 4 files changed, 179 insertions(+)
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_aros_libc.cc
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+index 5c2f298305..8c455d3dda 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
++++ b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+@@ -900,6 +900,10 @@ if (is_clang_or_gcc) {
+     }
+ 
+     if (!use_partition_alloc_as_malloc) {
++      if (is_aros) {
++        shim_sources +=
++            [ "shim/allocator_shim_default_dispatch_to_aros_libc.cc" ]
++      }
+       if (is_android) {
+         shim_sources += [
+           "shim/allocator_shim_default_dispatch_to_linker_wrapped_symbols.cc",
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+index 7a4573355c..f84c9d9033 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+@@ -33,4 +33,25 @@ void* ArosLibcRealloc(void* ptr, size_t size) {
+   return StdCVector<void* (*)(void*, size_t)>(LVOrealloc)(ptr, size);
+ }
+ 
++void* ArosLibcMalloc(size_t size) {
++  return StdCVector<void* (*)(size_t)>(LVOmalloc)(size);
++}
++
++void* ArosLibcCalloc(size_t n, size_t size) {
++  return StdCVector<void* (*)(size_t, size_t)>(LVOcalloc)(n, size);
++}
++
++void* ArosLibcAlignedAlloc(size_t alignment, size_t size) {
++  // C11 aligned_alloc() takes a size that is a multiple of the alignment,
++  // while the memalign() this stands in for does not. Round up rather than
++  // fail, which is what every libc that implements one in terms of the other
++  // does.
++  const size_t rounded = (size + alignment - 1) & ~(alignment - 1);
++  if (rounded < size) {
++    return nullptr;  // Overflowed.
++  }
++  return StdCVector<void* (*)(size_t, size_t)>(LVOaligned_alloc)(alignment,
++                                                                 rounded);
++}
++
+ }  // namespace allocator_shim::internal
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
+index 45bac36fcc..dc29940806 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.h
+@@ -15,11 +15,22 @@
+ // that way reach the shim's free()/realloc() and must be routed back to the
+ // library. These entry points call stdc.library through its jump table, so
+ // they are unaffected by the symbol override.
++//
++// They are also the whole malloc family that
++// allocator_shim_default_dispatch_to_aros_libc.cc dispatches to when
++// PartitionAlloc-Everywhere is off, which is how a program split across several
++// AROS shared libraries keeps ONE heap: stdc.library is the only allocator every
++// library in the process can reach. See that file for why that matters.
+ namespace allocator_shim::internal {
+ 
+ PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) void ArosLibcFree(void* ptr);
+ PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
+ void* ArosLibcRealloc(void* ptr, size_t size);
++PA_COMPONENT_EXPORT(ALLOCATOR_SHIM) void* ArosLibcMalloc(size_t size);
++PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
++void* ArosLibcCalloc(size_t n, size_t size);
++PA_COMPONENT_EXPORT(ALLOCATOR_SHIM)
++void* ArosLibcAlignedAlloc(size_t alignment, size_t size);
+ 
+ }  // namespace allocator_shim::internal
+ 
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_aros_libc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_aros_libc.cc
+new file mode 100644
+index 0000000000..5c7f462f88
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_aros_libc.cc
+@@ -0,0 +1,143 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <limits>
++
++#include "partition_alloc/oom.h"
++#include "partition_alloc/partition_alloc_base/compiler_specific.h"
++#include "partition_alloc/partition_alloc_base/numerics/checked_math.h"
++#include "partition_alloc/shim/allocator_shim.h"
++#include "partition_alloc/shim/allocator_shim_aros_libc.h"
++
++// Default dispatch for the allocator shim when PartitionAlloc-Everywhere is
++// off: every allocation goes to stdc.library.
++//
++// WHY THIS EXISTS -- it is not a performance preference.
++//
++// A Chromium-derived program on AROS can be split across several AROS shared
++// libraries: v8.library, node.library and cef-blink.library are separate link
++// units, each with its own copy of libstdc++. The allocator shim, and therefore
++// PartitionAlloc-Everywhere, is only linked into whichever of them pulls in
++// //base -- in practice cef-blink.library alone. The others get libstdc++'s
++// stock operator new/delete, which call stdc.library's malloc()/free().
++//
++// So with PA-E on, one process has two heaps that do not know about each other,
++// and an object allocated on one side and deleted on the other is freed to the
++// wrong allocator. That is not hypothetical: Blink's script streamer allocates
++// a chunk vector in cef-blink.library and V8 destroys it in v8.library, which
++// walked a PartitionAlloc pointer into exec's FreePooled() and tripped
++// tlsf_fail_corruption ("FREE outside TLSF area") on any page big enough to
++// stream a script.
++//
++//     _ZN2v88internal27Utf8ExternalStreamingStreamD0Ev   (v8.library)
++//       operator delete[] -> operator delete -> free     (v8.library, libstdc++)
++//         Exec_119_FreePooled -> tlsf_freemem -> tlsf_freevec
++//           [Kernel:TLSF] free-list corruption at FREE outside TLSF area
++//
++// The standalone browser never hits this because it builds with
++// v8_use_aros_library=false, i.e. one link unit and one allocator. The library
++// split cannot simply follow it: CEF and node must share a single V8, so
++// v8.library has to stay external.
++//
++// That leaves exactly one allocator every library in the process can reach --
++// stdc.library's -- so that is the one the shim hands out. PartitionAlloc is
++// still built and still backs the partitions Blink drives explicitly (WTF,
++// Oilpan, ArrayBuffers); those never cross a library boundary, because the
++// code that allocates from them is the code that frees them.
++//
++// Set use_partition_alloc_as_malloc=false for any output directory that builds
++// AROS shared libraries. For a single-binary target, leave PA-E on.
++
++namespace {
++
++using allocator_shim::AllocatorDispatch;
++using allocator_shim::internal::ArosLibcAlignedAlloc;
++using allocator_shim::internal::ArosLibcCalloc;
++using allocator_shim::internal::ArosLibcFree;
++using allocator_shim::internal::ArosLibcMalloc;
++using allocator_shim::internal::ArosLibcRealloc;
++
++// Matches the other shims, which cap below INT_MAX rather than at it.
++constexpr size_t kMaxAllowedSize = std::numeric_limits<int>::max() - (1 << 12);
++
++void* ArosMalloc(const AllocatorDispatch*, size_t size, void* context) {
++  if (PA_UNLIKELY(size >= kMaxAllowedSize)) {
++    partition_alloc::TerminateBecauseOutOfMemory(size);
++  }
++  return ArosLibcMalloc(size);
++}
++
++void* ArosUncheckedMalloc(const AllocatorDispatch*, size_t size, void* context) {
++  if (PA_UNLIKELY(size >= kMaxAllowedSize)) {
++    return nullptr;
++  }
++  return ArosLibcMalloc(size);
++}
++
++void* ArosCalloc(const AllocatorDispatch*,
++                 size_t n,
++                 size_t size,
++                 void* context) {
++  const auto total = partition_alloc::internal::base::CheckMul(n, size);
++  if (PA_UNLIKELY(!total.IsValid() || total.ValueOrDie() >= kMaxAllowedSize)) {
++    partition_alloc::TerminateBecauseOutOfMemory(size * n);
++  }
++  return ArosLibcCalloc(n, size);
++}
++
++void* ArosRealloc(const AllocatorDispatch*,
++                  void* address,
++                  size_t size,
++                  void* context) {
++  if (PA_UNLIKELY(size >= kMaxAllowedSize)) {
++    partition_alloc::TerminateBecauseOutOfMemory(size);
++  }
++  return ArosLibcRealloc(address, size);
++}
++
++void* ArosMemalign(const AllocatorDispatch*,
++                   size_t alignment,
++                   size_t size,
++                   void* context) {
++  if (PA_UNLIKELY(size >= kMaxAllowedSize)) {
++    partition_alloc::TerminateBecauseOutOfMemory(size);
++  }
++  return ArosLibcAlignedAlloc(alignment, size);
++}
++
++void ArosFree(const AllocatorDispatch*, void* address, void* context) {
++  ArosLibcFree(address);
++}
++
++size_t ArosGetSizeEstimate(const AllocatorDispatch*,
++                           void* address,
++                           void* context) {
++  // stdc.library has no malloc_usable_size(); it keeps the block size in its
++  // own header and does not publish it. Zero is the documented "don't know"
++  // answer here -- it only reaches allocator memory dumps, never a free() or a
++  // copy, both of which take the size from the library itself.
++  return 0;
++}
++
++}  // namespace
++
++const AllocatorDispatch AllocatorDispatch::default_dispatch = {
++    &ArosMalloc,          /* alloc_function */
++    &ArosUncheckedMalloc, /* alloc_unchecked_function */
++    &ArosCalloc,          /* alloc_zero_initialized_function */
++    &ArosMemalign,        /* alloc_aligned_function */
++    &ArosRealloc,         /* realloc_function */
++    &ArosFree,            /* free_function */
++    &ArosGetSizeEstimate, /* get_size_estimate_function */
++    nullptr,              /* good_size_function */
++    nullptr,              /* claimed_address */
++    nullptr,              /* batch_malloc_function */
++    nullptr,              /* batch_free_function */
++    nullptr,              /* free_definite_size_function */
++    nullptr,              /* try_free_default_function */
++    nullptr,              /* aligned_malloc_function */
++    nullptr,              /* aligned_realloc_function */
++    nullptr,              /* aligned_free_function */
++    nullptr,              /* next */
++};

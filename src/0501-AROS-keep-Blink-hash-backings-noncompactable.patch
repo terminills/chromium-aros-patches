@@ -1,0 +1,81 @@
+From 9ac55405df34a5e7b4d383333a7cdb72720cadfc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 4 Aug 2026 10:14:24 -0500
+Subject: [PATCH 501/638] AROS: keep Blink hash backings noncompactable
+
+AROS currently uses system libstdc++, whose small-string objects retain self-pointers into inline storage. cppgc's raw hash-backing compaction can move those objects without running their move constructors, leaving stale pointers into the old backing and causing invalid frees during sweeping.\n\nPlace AROS hash backings in the default noncompactable space and omit movable-slot registration while preserving strong and weak container tracing.\n\nACD-Agent: codex\nACD-Job:\nACD-Scope: Chromium AROS Blink hash backing compaction
+---
+ .../heap/collection_support/heap_hash_table_backing.h    | 6 ++++++
+ .../blink/renderer/platform/heap/heap_allocator_impl.h   | 9 +++++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h b/third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h
+index ddb9a54dc3..a72c3aee54 100644
+--- a/third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h
++++ b/third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h
+@@ -8,6 +8,7 @@
+ #include <type_traits>
+ 
+ #include "base/check_op.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/heap/custom_spaces.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+ #include "third_party/blink/renderer/platform/heap/thread_state_storage.h"
+@@ -259,10 +260,15 @@ struct IsTraceable<internal::ConcurrentBucket<T>> : IsTraceable<T> {};
+ 
+ namespace cppgc {
+ 
++// AROS currently builds Blink against system libstdc++. Its small-string
++// objects contain self-pointers into their inline storage, so raw compaction of
++// a hash backing can leave those pointers addressing the backing's old slot.
++#if !BUILDFLAG(IS_AROS)
+ template <typename Table>
+ struct SpaceTrait<blink::HeapHashTableBacking<Table>> {
+   using Space = blink::CompactableHeapHashTableBackingSpace;
+ };
++#endif
+ 
+ // Custom allocation accounts for inlined storage of the actual elements of the
+ // backing table.
+diff --git a/third_party/blink/renderer/platform/heap/heap_allocator_impl.h b/third_party/blink/renderer/platform/heap/heap_allocator_impl.h
+index b80294b86f..eb1fde1e18 100644
+--- a/third_party/blink/renderer/platform/heap/heap_allocator_impl.h
++++ b/third_party/blink/renderer/platform/heap/heap_allocator_impl.h
+@@ -6,6 +6,7 @@
+ #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_HEAP_ALLOCATOR_IMPL_H_
+ 
+ #include "base/bits.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector_backing.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+@@ -247,10 +248,14 @@ class PLATFORM_EXPORT HeapAllocator {
+   static void TraceHashTableBackingStrongly(Visitor* visitor,
+                                             const T* backing,
+                                             const T* const* backing_slot) {
++    // See HeapHashTableBacking's AROS SpaceTrait guard. A noncompactable
++    // backing must not register a movable slot with cppgc.
++#if !BUILDFLAG(IS_AROS)
+     visitor->RegisterMovableReference(
+         const_cast<const HeapHashTableBacking<HashTable>**>(
+             reinterpret_cast<const HeapHashTableBacking<HashTable>* const*>(
+                 backing_slot)));
++#endif
+     visitor->TraceStrongContainer(
+         reinterpret_cast<const HeapHashTableBacking<HashTable>*>(backing));
+   }
+@@ -261,10 +266,14 @@ class PLATFORM_EXPORT HeapAllocator {
+                                           const T* const* backing_slot,
+                                           WeakCallback callback,
+                                           const void* parameter) {
++    // See HeapHashTableBacking's AROS SpaceTrait guard. A noncompactable
++    // backing must not register a movable slot with cppgc.
++#if !BUILDFLAG(IS_AROS)
+     visitor->RegisterMovableReference(
+         const_cast<const HeapHashTableBacking<HashTable>**>(
+             reinterpret_cast<const HeapHashTableBacking<HashTable>* const*>(
+                 backing_slot)));
++#endif
+     visitor->TraceWeakContainer(
+         reinterpret_cast<const HeapHashTableBacking<HashTable>*>(backing),
+         callback, parameter);

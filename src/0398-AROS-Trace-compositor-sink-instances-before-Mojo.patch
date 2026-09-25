@@ -1,0 +1,221 @@
+From 6e18d7e974e3f29fb28eab7ade3c34a699395325 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 05:13:04 -0500
+Subject: [PATCH 398/638] [AROS] Trace compositor sink instances before Mojo
+
+Runtime 40 proves the browser root embeds one child Surface while Viz receives no child frame. Replace the process-global frame counter with bounded per-instance telemetry and record sink construction, pipe type, binding/connection state, LocalSurfaceId assignment, begin-frame demand/delivery, no-frame acknowledgements, submissions, and disconnects.
+
+The AROS-only probe distinguishes a child sink that is never created or scheduled from one that submits into a bound Mojo remote but fails before Viz dispatch.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+AI_OBSERVED: Root SurfaceContent reference reaches Viz, but zero non-root CompositorFrameSinkSupport submissions arrive.
+
+AI_FIX_REASON: Move observability to each AsyncLayerTreeFrameSink instance before the Mojo submission boundary.
+
+AI_SCOPE: cc/mojo_embedder/async_layer_tree_frame_sink.cc and .h only.
+
+AI_VALIDATION: git diff --check; build and hosted runtime pending by design.
+
+AI_DECISION_CHAIN: runtime40 root/child discriminator -> per-instance renderer sink lifecycle -> transport receiver boundary.
+---
+ .../async_layer_tree_frame_sink.cc            | 98 ++++++++++++++++++-
+ .../async_layer_tree_frame_sink.h             |  7 ++
+ 2 files changed, 100 insertions(+), 5 deletions(-)
+
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.cc b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+index 391467d9a9..de44de5a12 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.cc
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+@@ -97,6 +97,18 @@ AsyncLayerTreeFrameSink::AsyncLayerTreeFrameSink(
+       use_begin_frame_presentation_feedback_(
+           params->use_begin_frame_presentation_feedback) {
+   DETACH_FROM_THREAD(thread_checker_);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[AROS async-sink-create] instance=" << this
++             << " thread=" << base::PlatformThread::CurrentId()
++             << " regular_pipe="
++             << pipes_.compositor_frame_sink_remote.is_valid()
++             << " associated_pipe="
++             << pipes_.compositor_frame_sink_associated_remote.is_valid()
++             << " client_pipe=" << pipes_.client_receiver.is_valid()
++             << " direct_client=" << use_direct_client_receiver_
++             << " auto_begin=" << auto_needs_begin_frame_
++             << " begin_acks=" << wants_begin_frame_acks_;
++#endif
+ }
+ 
+ AsyncLayerTreeFrameSink::~AsyncLayerTreeFrameSink() {}
+@@ -108,6 +120,12 @@ bool AsyncLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
+     return false;
+ 
+   DCHECK(pipes_.HasUnbound());
++#if BUILDFLAG(IS_AROS)
++  const bool aros_had_regular_pipe =
++      pipes_.compositor_frame_sink_remote.is_valid();
++  const bool aros_had_associated_pipe =
++      pipes_.compositor_frame_sink_associated_remote.is_valid();
++#endif
+   if (pipes_.compositor_frame_sink_remote.is_valid()) {
+     compositor_frame_sink_.Bind(std::move(pipes_.compositor_frame_sink_remote));
+     compositor_frame_sink_.set_disconnect_with_reason_handler(
+@@ -153,6 +171,21 @@ bool AsyncLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
+   compositor_frame_sink_ptr_->InitializeCompositorFrameSinkType(
+       viz::mojom::CompositorFrameSinkType::kLayerTree);
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[AROS async-sink-bind] instance=" << this
++             << " thread=" << base::PlatformThread::CurrentId()
++             << " regular=" << aros_had_regular_pipe
++             << " associated=" << aros_had_associated_pipe
++             << " regular_bound=" << compositor_frame_sink_.is_bound()
++             << " regular_connected=" << compositor_frame_sink_.is_connected()
++             << " associated_bound="
++             << compositor_frame_sink_associated_.is_bound()
++             << " associated_connected="
++             << compositor_frame_sink_associated_.is_connected()
++             << " direct_receiver="
++             << absl::holds_alternative<DirectClientReceiver>(client_receiver_);
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+   std::vector<int32_t> thread_ids;
+   thread_ids.push_back(base::PlatformThread::CurrentId());
+@@ -186,6 +219,11 @@ void AsyncLayerTreeFrameSink::SetLocalSurfaceId(
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+   DCHECK(local_surface_id.is_valid());
+   local_surface_id_ = local_surface_id;
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[AROS async-sink-surface] instance=" << this
++             << " thread=" << base::PlatformThread::CurrentId()
++             << " surface=" << local_surface_id_.ToString();
++#endif
+ }
+ 
+ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+@@ -197,22 +235,30 @@ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+   DCHECK(frame.metadata.begin_frame_ack.frame_id.IsSequenceValid());
+ 
+ #if BUILDFLAG(IS_AROS)
+-  static size_t aros_submitted_frame_count = 0;
+-  if (aros_submitted_frame_count < 16) {
++  if (aros_submit_count_ < 16) {
+     size_t quad_count = 0;
+     size_t software_resource_count = 0;
+     for (const auto& pass : frame.render_pass_list)
+       quad_count += pass->quad_list.size();
+     for (const auto& resource : frame.resource_list)
+       software_resource_count += resource.is_software ? 1u : 0u;
+-    ++aros_submitted_frame_count;
+-    LOG(ERROR) << "[AROS renderer-frame] seq=" << aros_submitted_frame_count
++    ++aros_submit_count_;
++    LOG(ERROR) << "[AROS renderer-frame] instance=" << this
++               << " seq=" << aros_submit_count_
++               << " thread=" << base::PlatformThread::CurrentId()
+                << " surface=" << local_surface_id_.ToString()
+                << " size=" << frame.size_in_pixels().ToString()
+                << " passes=" << frame.render_pass_list.size()
+                << " quads=" << quad_count
+                << " resources=" << frame.resource_list.size()
+-               << " software_resources=" << software_resource_count;
++               << " software_resources=" << software_resource_count
++               << " regular_bound=" << compositor_frame_sink_.is_bound()
++               << " regular_connected="
++               << compositor_frame_sink_.is_connected()
++               << " associated_bound="
++               << compositor_frame_sink_associated_.is_bound()
++               << " associated_connected="
++               << compositor_frame_sink_associated_.is_connected();
+   }
+ #endif
+ 
+@@ -301,6 +347,17 @@ void AsyncLayerTreeFrameSink::DidNotProduceFrame(const viz::BeginFrameAck& ack,
+   DCHECK(compositor_frame_sink_ptr_);
+   DCHECK(!ack.has_damage);
+   DCHECK(ack.frame_id.IsSequenceValid());
++#if BUILDFLAG(IS_AROS)
++  if (aros_no_frame_count_ < 16) {
++    ++aros_no_frame_count_;
++    LOG(ERROR) << "[AROS async-sink-no-frame] instance=" << this
++               << " seq=" << aros_no_frame_count_
++               << " thread=" << base::PlatformThread::CurrentId()
++               << " source=" << ack.frame_id.source_id
++               << " sequence=" << ack.frame_id.sequence_number
++               << " reason=" << static_cast<int>(reason);
++  }
++#endif
+   TRACE_EVENT(
+       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
+       perfetto::Flow::Global(ack.trace_id), [&](perfetto::EventContext ctx) {
+@@ -352,6 +409,20 @@ void AsyncLayerTreeFrameSink::OnBeginFrame(
+     const viz::FrameTimingDetailsMap& timing_details,
+     bool frame_ack,
+     std::vector<viz::ReturnedResource> resources) {
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_frame_count_ < 16) {
++    ++aros_begin_frame_count_;
++    LOG(ERROR) << "[AROS async-sink-begin] instance=" << this
++               << " seq=" << aros_begin_frame_count_
++               << " thread=" << base::PlatformThread::CurrentId()
++               << " source=" << args.frame_id.source_id
++               << " sequence=" << args.frame_id.sequence_number
++               << " paused=" << begin_frames_paused_
++               << " needs=" << needs_begin_frames_
++               << " frame_ack=" << frame_ack
++               << " returned_resources=" << resources.size();
++  }
++#endif
+   viz::BeginFrameArgs adjusted_args = args;
+   adjusted_args.client_arrival_time = base::TimeTicks::Now();
+   if (features::IsOnBeginFrameAcksEnabled()) {
+@@ -428,6 +499,17 @@ void AsyncLayerTreeFrameSink::OnSurfaceEvicted(
+ 
+ void AsyncLayerTreeFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
+   DCHECK(compositor_frame_sink_ptr_);
++#if BUILDFLAG(IS_AROS)
++  if (aros_needs_begin_frame_count_ < 16) {
++    ++aros_needs_begin_frame_count_;
++    LOG(ERROR) << "[AROS async-sink-needs-begin] instance=" << this
++               << " seq=" << aros_needs_begin_frame_count_
++               << " thread=" << base::PlatformThread::CurrentId()
++               << " old=" << needs_begin_frames_
++               << " new=" << needs_begin_frames
++               << " auto=" << auto_needs_begin_frame_;
++  }
++#endif
+ 
+   // If `auto_needs_begin_frame_` is set to true, rely on unsolicited frames
+   // instead of SetNeedsBeginFrame(true) to indicate that the client needs
+@@ -444,6 +526,12 @@ void AsyncLayerTreeFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
+ void AsyncLayerTreeFrameSink::OnMojoConnectionError(
+     uint32_t custom_reason,
+     const std::string& description) {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[AROS async-sink-disconnect] instance=" << this
++             << " thread=" << base::PlatformThread::CurrentId()
++             << " reason=" << custom_reason
++             << " description=" << description;
++#endif
+   // TODO(rivr): Use DLOG(FATAL) once crbug.com/1043899 is resolved.
+   if (custom_reason)
+     DLOG(ERROR) << description;
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.h b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+index 9d0b26a62d..4e8d12b1be 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.h
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+@@ -212,6 +212,13 @@ class CC_MOJO_EMBEDDER_EXPORT AsyncLayerTreeFrameSink
+ 
+   bool use_begin_frame_presentation_feedback_ = false;
+ 
++#if BUILDFLAG(IS_AROS)
++  size_t aros_submit_count_ = 0;
++  size_t aros_begin_frame_count_ = 0;
++  size_t aros_no_frame_count_ = 0;
++  size_t aros_needs_begin_frame_count_ = 0;
++#endif
++
+   base::WeakPtrFactory<AsyncLayerTreeFrameSink> weak_factory_{this};
+ };
+ 

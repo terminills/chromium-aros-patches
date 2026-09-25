@@ -1,0 +1,89 @@
+From a62c85216dd38631c0040d5872ecc2e873ecdb51 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:51:46 -0500
+Subject: [PATCH 040/638] blink: read AROS task stack bounds from Exec
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Blink GC stack estimation had no AROS implementation and rejected both stack size and upper-bound queries.
+
+FIX_REASON: Read tc_SPLower/tc_SPUpper from the current Exec task, validate the range, and use the exact upper bound for downward-growing stacks.
+
+SCOPE: third_party/blink/renderer/platform/wtf/stack_util.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/third_party/blink/renderer/platform/wtf/wtf/stack_util.o
+
+RISK: low; every running AROS task owns these bounds and invalid task metadata fails immediately.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../blink/renderer/platform/wtf/stack_util.cc | 34 ++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/platform/wtf/stack_util.cc b/third_party/blink/renderer/platform/wtf/stack_util.cc
+index 8432101f2b..d874fdd810 100644
+--- a/third_party/blink/renderer/platform/wtf/stack_util.cc
++++ b/third_party/blink/renderer/platform/wtf/stack_util.cc
+@@ -9,6 +9,11 @@
+ #include "base/notreached.h"
+ #include "third_party/blink/renderer/platform/wtf/threading.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <intrin.h>
+ #include <stddef.h>
+@@ -20,12 +25,36 @@ extern "C" void* __libc_stack_end;  // NOLINT
+ 
+ namespace WTF {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++struct ArosStackBounds {
++  uintptr_t lower;
++  uintptr_t upper;
++};
++
++ArosStackBounds GetArosStackBounds() {
++  struct Task* task = FindTask(nullptr);
++  CHECK(task);
++  uintptr_t lower = reinterpret_cast<uintptr_t>(task->tc_SPLower);
++  uintptr_t upper = reinterpret_cast<uintptr_t>(task->tc_SPUpper);
++  CHECK_LT(lower, upper);
++  return {lower, upper};
++}
++
++}  // namespace
++#endif
++
+ size_t GetUnderestimatedStackSize() {
+ // FIXME: ASAN bot uses a fake stack as a thread stack frame,
+ // and its size is different from the value which APIs tells us.
+ #if defined(ADDRESS_SANITIZER)
+   return 0;
+ 
++#elif BUILDFLAG(IS_AROS)
++  ArosStackBounds bounds = GetArosStackBounds();
++  return bounds.upper - bounds.lower;
++
+ // FIXME: On Mac OSX and Linux, this method cannot estimate stack size
+ // correctly for the main thread.
+ 
+@@ -97,7 +126,10 @@ size_t GetUnderestimatedStackSize() {
+ }
+ 
+ void* GetStackStart() {
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++#if BUILDFLAG(IS_AROS)
++  return reinterpret_cast<void*>(GetArosStackBounds().upper);
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
++    BUILDFLAG(IS_ANDROID) || \
+     BUILDFLAG(IS_FREEBSD) || BUILDFLAG(IS_FUCHSIA)
+   pthread_attr_t attr;
+   int error;

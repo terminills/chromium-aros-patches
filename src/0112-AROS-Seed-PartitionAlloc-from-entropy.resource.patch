@@ -1,0 +1,41 @@
+From 8647f1976da854f121b0d929137cca666ea0234e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 13:05:05 -0500
+Subject: [PATCH 112/638] [AROS] Seed PartitionAlloc from entropy.resource
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: PartitionAlloc's private POSIX RandBytes path fell through to /dev/urandom, which AROS does not provide, and trapped while initializing PartitionAddressSpace for the first headless renderer command.
+FIX_REASON: Use AROS getentropy() in bounded 256-byte chunks so PartitionAlloc obtains strong entropy through entropy.resource while honoring the AROS API limit.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
+VALIDATION: PartitionAlloc rand_util_posix.o cross-compiled for AROS; hosted run 0112 captured the prior /dev/urandom CHECK from RandBytes before this change.
+RISK: Allocation initialization remains fail-closed when entropy.resource cannot satisfy a request, matching PartitionAlloc's security contract.
+AI_DECISION_CHAIN: first command renderer -> PartitionAddressSpace initialization -> private RandBytes /dev/urandom assumption -> native AROS entropy.resource bridge
+Continues: 2d3ba2dc7a
+---
+ .../partition_alloc_base/rand_util_posix.cc          | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
+index 6bb4805298..b09c07c5ea 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
+@@ -105,6 +105,18 @@ void RandBytes(void* output, size_t output_length) {
+   if (getentropy(output, output_length) == 0) {
+     return;
+   }
++#elif BUILDFLAG(IS_AROS)
++  size_t offset = 0;
++  while (offset < output_length) {
++    size_t chunk = output_length - offset;
++    if (chunk > 256) {
++      chunk = 256;
++    }
++    PA_BASE_CHECK(
++        getentropy(static_cast<char*>(output) + offset, chunk) == 0);
++    offset += chunk;
++  }
++  return;
+ #endif
+   // If getrandom(2) above returned with an error and the /dev/urandom fallback
+   // took place on Linux/ChromeOS bots, they would fail with a CHECK in

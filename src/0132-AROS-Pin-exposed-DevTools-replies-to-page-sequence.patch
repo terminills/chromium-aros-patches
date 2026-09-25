@@ -1,0 +1,53 @@
+From 2587fa58cd79fbab0d7cfadff412be0052b782cc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 00:53:02 -0500
+Subject: [PATCH 132/638] [AROS] Pin exposed DevTools replies to page sequence
+
+---
+ content/browser/devtools/protocol/target_handler.cc | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index 05766d94b5..d84912f3bf 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -187,7 +187,10 @@ class BrowserToPageConnector {
+ 
+   BrowserToPageConnector(const std::string& binding_name,
+                          DevToolsAgentHost* page_host)
+-      : binding_name_(binding_name), page_host_(page_host) {
++      : binding_name_(binding_name),
++        page_delivery_task_runner_(
++            base::SequencedTaskRunner::GetCurrentDefault()),
++        page_host_(page_host) {
+ #if BUILDFLAG(IS_AROS)
+     LOG(INFO) << "[Chromium:cdp-bridge] create binding=" << binding_name_;
+ #endif
+@@ -319,7 +322,7 @@ class BrowserToPageConnector {
+     // browser response while the page's previous Runtime.evaluate is still on
+     // the stack. Defer delivery so that evaluation can return before the next
+     // command enters the renderer agent.
+-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++    page_delivery_task_runner_->PostTask(
+         FROM_HERE,
+         base::BindOnce(&BrowserToPageConnector::SendProtocolMessageToPage,
+                        weak_ptr_factory_.GetWeakPtr(), "Runtime.evaluate",
+@@ -331,6 +334,10 @@ class BrowserToPageConnector {
+   }
+ 
+   void AgentHostClosed(DevToolsAgentHost* agent_host) {
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:cdp-bridge] agent host closed role="
++              << (agent_host == browser_host_.get() ? "browser" : "page");
++#endif
+     if (agent_host == browser_host_.get()) {
+       page_host_->DetachClient(page_host_client_.get());
+     } else {
+@@ -341,6 +348,7 @@ class BrowserToPageConnector {
+   }
+ 
+   std::string binding_name_;
++  scoped_refptr<base::SequencedTaskRunner> page_delivery_task_runner_;
+   scoped_refptr<DevToolsAgentHost> browser_host_;
+   scoped_refptr<DevToolsAgentHost> page_host_;
+   std::unique_ptr<BrowserConnectorHostClient> browser_host_client_;

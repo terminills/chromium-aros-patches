@@ -1,0 +1,148 @@
+From d8531801ae650d6d8cea06d38c72a46d86767c2b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 01:13:31 -0500
+Subject: [PATCH 390/638] [AROS] Trace SharedImage pixel continuity
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+OBSERVED: Runtime 31 delivered matching renderer/Viz frames containing 26 software resources, but no legacy shared-bitmap allocation occurred and the child surface remained white.
+
+FIX_REASON: Fingerprint bounded pixel prefixes when renderer GMB writes finish and when Viz begins reading SharedMemoryImageBacking pixmaps. This locates byte divergence without changing allocation, synchronization, or rendering semantics.
+
+SCOPE: AROS-only diagnostics in shared-memory GMB and SharedMemoryImageBacking; no loader, relocation, IPC, or graphics policy changes.
+
+VALIDATION: Both translation units compile in out/aros-v8-library; git diff --check passes; full link and runtime 32 follow.
+
+AI_DECISION_CHAIN: runtime 31
+---
+ .../shared_memory_image_backing.cc            | 31 ++++++++++++++++-
+ .../gpu_memory_buffer_impl_shared_memory.cc   | 34 +++++++++++++++++++
+ 2 files changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc b/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
+index acdf8f9ab8..1e192be196 100644
+--- a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
++++ b/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "gpu/command_buffer/service/shared_image/shared_memory_image_backing.h"
+ 
++#include <algorithm>
++
+ #include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/notreached.h"
+@@ -31,6 +33,18 @@
+ namespace gpu {
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++uint32_t ArosByteFingerprint(const void* memory, size_t size) {
++  const auto* bytes = static_cast<const uint8_t*>(memory);
++  uint32_t fingerprint = 2166136261u;
++  for (size_t index = 0; index < std::min<size_t>(size, 256u); ++index) {
++    fingerprint ^= bytes[index];
++    fingerprint *= 16777619u;
++  }
++  return fingerprint;
++}
++#endif
++
+ class MemoryImageRepresentationImpl : public MemoryImageRepresentation {
+  public:
+   MemoryImageRepresentationImpl(SharedImageManager* manager,
+@@ -41,7 +55,22 @@ class MemoryImageRepresentationImpl : public MemoryImageRepresentation {
+  protected:
+   SkPixmap BeginReadAccess() override {
+     DCHECK(format().is_single_plane());
+-    return shared_image_shared_memory()->pixmaps()[0];
++    SkPixmap pixmap = shared_image_shared_memory()->pixmaps()[0];
++#if BUILDFLAG(IS_AROS)
++    static size_t aros_read_access_count = 0;
++    if (aros_read_access_count < 64) {
++      ++aros_read_access_count;
++      LOG(ERROR) << "[AROS viz-shared-image] seq=" << aros_read_access_count
++                 << " mailbox=" << mailbox().ToDebugString()
++                 << " size=" << size().ToString()
++                 << " row_bytes=" << pixmap.rowBytes()
++                 << " pixels=" << pixmap.addr()
++                 << " fingerprint="
++                 << ArosByteFingerprint(pixmap.addr(),
++                                        pixmap.computeByteSize());
++    }
++#endif
++    return pixmap;
+   }
+ 
+  private:
+diff --git a/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc b/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
+index 7b844ccbc5..283aa3c11a 100644
+--- a/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
++++ b/gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "gpu/ipc/common/gpu_memory_buffer_impl_shared_memory.h"
+ 
++#include <algorithm>
+ #include <stdint.h>
+ 
+ #include <utility>
+@@ -11,16 +12,34 @@
+ #include "base/format_macros.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/numerics/safe_math.h"
+ #include "base/process/memory.h"
+ #include "base/trace_event/memory_allocator_dump_guid.h"
+ #include "base/trace_event/process_memory_dump.h"
++#include "build/build_config.h"
+ #include "ui/gfx/buffer_format_util.h"
+ #include "ui/gl/gl_bindings.h"
+ 
+ namespace gpu {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++uint32_t ArosByteFingerprint(const void* memory, size_t size) {
++  const auto* bytes = static_cast<const uint8_t*>(memory);
++  uint32_t fingerprint = 2166136261u;
++  for (size_t index = 0; index < std::min<size_t>(size, 256u); ++index) {
++    fingerprint ^= bytes[index];
++    fingerprint *= 16777619u;
++  }
++  return fingerprint;
++}
++
++}  // namespace
++#endif
++
+ GpuMemoryBufferImplSharedMemory::GpuMemoryBufferImplSharedMemory(
+     gfx::GpuMemoryBufferId id,
+     const gfx::Size& size,
+@@ -259,6 +278,21 @@ void GpuMemoryBufferImplSharedMemory::Unmap() {
+   base::AutoLock auto_lock(map_lock_);
+   DCHECK_GT(map_count_, 0u);
+   --map_count_;
++#if BUILDFLAG(IS_AROS)
++  static size_t aros_unmapped_buffer_count = 0;
++  if (map_count_ == 0 && aros_unmapped_buffer_count < 64) {
++    const size_t buffer_size =
++        gfx::BufferSizeForBufferFormat(size_, format_);
++    const void* pixels =
++        static_cast<const uint8_t*>(shared_memory_mapping_.memory()) + offset_;
++    ++aros_unmapped_buffer_count;
++    LOG(ERROR) << "[AROS renderer-gmb] seq=" << aros_unmapped_buffer_count
++               << " id=" << id_.id << " size=" << size_.ToString()
++               << " stride=" << stride_ << " pixels=" << pixels
++               << " fingerprint="
++               << ArosByteFingerprint(pixels, buffer_size);
++  }
++#endif
+ }
+ 
+ int GpuMemoryBufferImplSharedMemory::stride(size_t plane) const {

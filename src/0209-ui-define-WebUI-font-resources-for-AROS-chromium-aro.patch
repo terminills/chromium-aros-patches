@@ -1,0 +1,34 @@
+From 9c8fecfec2585d3b131fcaf3665d6148ff205270 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:36:35 -0500
+Subject: [PATCH 209/638] ui: define WebUI font resources for AROS [chromium]
+ [aros]
+
+Statement:
+Once GRIT treated AROS as a distinct target, the portable WebUI font family and size resources were absent even though ui/base consumes them on every desktop target.
+
+Decision:
+Use the existing Arial/sans-serif fallback resource group for AROS. This preserves Chromium's system-font preference path and supplies only the backup values.
+
+Evidence:
+The app_locale_settings GRIT action regenerates successfully and obj/ui/base/base/web_ui_util.o compiles for the AROS toolchain.
+
+Chain:
+Follows 2b08d739c3 and unblocks the upstream Chrome resource graph in.
+---
+ ui/strings/app_locale_settings.grd | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ui/strings/app_locale_settings.grd b/ui/strings/app_locale_settings.grd
+index 27a6a07f76..9bfc081275 100644
+--- a/ui/strings/app_locale_settings.grd
++++ b/ui/strings/app_locale_settings.grd
+@@ -218,7 +218,7 @@
+           75%
+         </message>
+       </if>
+-      <if expr="is_linux or is_android or is_bsd or is_fuchsia">
++      <if expr="is_linux or is_android or is_aros or is_bsd or is_fuchsia">
+         <!-- The font used in Web UI (e.g. History). Note that these are only
+              backups. We try to use the system font if possible. -->
+         <message name="IDS_WEB_FONT_FAMILY" use_name_for_id="true">

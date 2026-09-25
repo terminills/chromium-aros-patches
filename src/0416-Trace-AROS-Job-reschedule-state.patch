@@ -1,0 +1,145 @@
+From 775e9de416a4dd7927b41d34d0111e1fdbcbe91a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 13:45:25 -0500
+Subject: [PATCH 416/638] [AROS] Trace AROS Job reschedule state
+
+
+
+---
+ base/task/post_job.cc                    | 34 ++++++++++++++++++++++--
+ base/task/thread_pool/job_task_source.cc | 30 +++++++++++++++++++--
+ 2 files changed, 60 insertions(+), 4 deletions(-)
+
+diff --git a/base/task/post_job.cc b/base/task/post_job.cc
+index 69fa3190c8..b7947e7884 100644
+--- a/base/task/post_job.cc
++++ b/base/task/post_job.cc
+@@ -4,16 +4,24 @@
+ 
+ #include "base/task/post_job.h"
+ 
++#include <atomic>
++
++#include "base/logging.h"
+ #include "base/task/scoped_set_task_priority_for_current_thread.h"
+ #include "base/task/thread_pool/job_task_source.h"
+ #include "base/task/thread_pool/pooled_task_runner_delegate.h"
+ #include "base/task/thread_pool/thread_pool_impl.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++std::atomic<int> g_aros_job_notify_log_count{0};
++#endif
++
+ scoped_refptr<internal::JobTaskSource> CreateJobTaskSource(
+     const Location& from_here,
+     const TaskTraits& traits,
+@@ -108,11 +116,33 @@ void JobHandle::UpdatePriority(TaskPriority new_priority) {
+ }
+ 
+ void JobHandle::NotifyConcurrencyIncrease() {
+-  if (!internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+-          task_source_->delegate())) {
++  const bool delegate_matches =
++      internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
++          task_source_->delegate());
++#if BUILDFLAG(IS_AROS)
++  const bool log_aros_notify =
++      g_aros_job_notify_log_count.fetch_add(1, std::memory_order_relaxed) < 64;
++  if (log_aros_notify) {
++    LOG(ERROR) << "[AROS_JOB] notify handle=" << this
++               << " source=" << task_source_.get()
++               << " delegate_matches=" << delegate_matches
++               << " workers=" << task_source_->GetWorkerCount()
++               << " max=" << task_source_->GetMaxConcurrency()
++               << " remaining=" << task_source_->GetRemainingConcurrency();
++  }
++#endif
++  if (!delegate_matches) {
+     return;
+   }
+   task_source_->NotifyConcurrencyIncrease();
++#if BUILDFLAG(IS_AROS)
++  if (log_aros_notify) {
++    LOG(ERROR) << "[AROS_JOB] notify-return source=" << task_source_.get()
++               << " workers=" << task_source_->GetWorkerCount()
++               << " max=" << task_source_->GetMaxConcurrency()
++               << " remaining=" << task_source_->GetRemainingConcurrency();
++  }
++#endif
+ }
+ 
+ void JobHandle::Join() {
+diff --git a/base/task/thread_pool/job_task_source.cc b/base/task/thread_pool/job_task_source.cc
+index aeaf7e444e..194cfe4055 100644
+--- a/base/task/thread_pool/job_task_source.cc
++++ b/base/task/thread_pool/job_task_source.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "base/task/thread_pool/job_task_source.h"
+ 
++#include <atomic>
+ #include <bit>
+ #include <type_traits>
+ #include <utility>
+@@ -21,12 +22,17 @@
+ #include "base/time/time.h"
+ #include "base/time/time_override.h"
+ #include "base/trace_event/base_tracing.h"
++#include "build/build_config.h"
+ 
+ namespace base {
+ namespace internal {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++std::atomic<int> g_aros_job_source_notify_log_count{0};
++#endif
++
+ // Capped to allow assigning task_ids from a bitfield.
+ constexpr size_t kMaxWorkersPerJob = 32;
+ static_assert(
+@@ -279,7 +285,19 @@ size_t JobTaskSource::GetWorkerCount() const {
+ void JobTaskSource::NotifyConcurrencyIncrease() {
+   // Avoid unnecessary locks when NotifyConcurrencyIncrease() is spuriously
+   // called.
+-  if (GetRemainingConcurrency() == 0) {
++  const size_t remaining_concurrency = GetRemainingConcurrency();
++#if BUILDFLAG(IS_AROS)
++  const bool log_aros_notify =
++      g_aros_job_source_notify_log_count.fetch_add(
++          1, std::memory_order_relaxed) < 64;
++  if (log_aros_notify) {
++    LOG(ERROR) << "[AROS_JOB_SOURCE] notify source=" << this
++               << " workers=" << GetWorkerCount()
++               << " max=" << GetMaxConcurrency()
++               << " remaining=" << remaining_concurrency;
++  }
++#endif
++  if (remaining_concurrency == 0) {
+     return;
+   }
+ 
+@@ -298,7 +316,15 @@ void JobTaskSource::NotifyConcurrencyIncrease() {
+   // previously were too many worker. For simplicity, the task source is always
+   // enqueued and will get discarded if already saturated when it is popped from
+   // the priority queue.
+-  delegate_->EnqueueJobTaskSource(this);
++  const bool enqueued = delegate_->EnqueueJobTaskSource(this);
++#if BUILDFLAG(IS_AROS)
++  if (log_aros_notify) {
++    LOG(ERROR) << "[AROS_JOB_SOURCE] enqueue source=" << this
++               << " accepted=" << enqueued
++               << " workers=" << GetWorkerCount()
++               << " remaining=" << GetRemainingConcurrency();
++  }
++#endif
+ }
+ 
+ size_t JobTaskSource::GetMaxConcurrency() const {

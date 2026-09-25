@@ -1,0 +1,70 @@
+From 0d431e7e1d7ef832f28d4c10b131deaef57f1005 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 20:46:13 -0500
+Subject: [PATCH 338/638] blink: add ABI-safe embedded Platform Core mode
+
+Let the focused AROS Core extraction select exactly one Platform policy: the diagnostic external-resident seam or an ABI-safe archive that keeps Platform and WTF inside Core. The latter preserves the identity of the 646 directly referenced data objects.
+
+AI_PHASE: chromium-blink-core-library
+
+AI_STATUS: coarser-resident-boundary-checkpoint
+
+AI_FAILURE_PRESERVED: the separate Core-to-Platform experiment exposed B=212, D=235, and R=199 data symbols plus 612 generic-closure callable collisions
+
+AI_VALIDATION: source diff check passes; focused embedded graph generation and archive replay intentionally follow this checkpoint
+
+AI_EVIDENCE: out/aros-blink-core/test-artifacts/-blink-core-library-20260725/11-platform-constituent-suppression-audit.log
+
+AI_LIMITATIONS: embedded archive and native blink_core.library have not yet been built or timed
+
+AI_DECISION_CHAIN:; af534b63c8; evidence verdict separate resident seam unsafe
+---
+ BUILD.gn                                          | 3 ++-
+ build/config/aros/blink_library/blink_library.gni | 5 +++++
+ third_party/blink/renderer/core/BUILD.gn          | 5 ++---
+ 3 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 57b123c994..53e8486645 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -104,7 +104,8 @@ group("gn_all") {
+     deps += root_extra_deps
+   } else if (is_aros && aros_blink_core_library_only) {
+     assert(use_blink)
+-    assert(aros_blink_platform_use_library)
++    assert(aros_blink_platform_use_library !=
++           aros_blink_core_embed_platform)
+     assert(!aros_blink_platform_library_only)
+     assert(!aros_cef_library_only)
+     assert(!aros_v8_library_only)
+diff --git a/build/config/aros/blink_library/blink_library.gni b/build/config/aros/blink_library/blink_library.gni
+index d3aaeba066..d7ddcfb7d1 100644
+--- a/build/config/aros/blink_library/blink_library.gni
++++ b/build/config/aros/blink_library/blink_library.gni
+@@ -17,4 +17,9 @@ declare_args() {
+ 
+   # Generate a complete Blink Core archive from the focused AROS graph.
+   aros_blink_core_library_only = false
++
++  # Keep Platform inside the resident Core archive. Blink Core directly refers
++  # to hundreds of Platform/WTF data objects, so this is the ABI-safe mode for
++  # native extraction until those ownership boundaries are refactored.
++  aros_blink_core_embed_platform = false
+ }
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+index 532ad361e0..4bd01afce4 100644
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -412,9 +412,8 @@ component("core") {
+ }
+ 
+ if (is_aros && aros_blink_core_library_only) {
+-  # Capture the current Core closure after replacing the top-level Platform
+-  # component. The first build is an observability checkpoint: its remaining
+-  # Platform members and unresolved data objects define the next safe seam.
++  # Capture the current Core closure. AROS can either measure the external
++  # Platform seam or keep Platform embedded for an ABI-safe native library.
+   static_library("aros_blink_core_archive") {
+     complete_static_lib = true
+     visibility += [ "//:gn_all" ]

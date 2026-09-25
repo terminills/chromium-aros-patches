@@ -1,0 +1,72 @@
+From ae2964f64cf51e833ec4e8ca745cd125afaa302f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 21:21:21 -0500
+Subject: [PATCH 593/638] cdm/renderer: use the generic key-system updater on
+ AROS
+
+The AROS stand-in only advertised ExternalClearKey and never consulted
+the browser's CDM registry, so a registered Widevine CDM was invisible
+to renderers.
+---
+ components/cdm/renderer/BUILD.gn              |  7 +---
+ .../key_system_support_update_aros.cc         | 33 -------------------
+ 2 files changed, 1 insertion(+), 39 deletions(-)
+ delete mode 100644 components/cdm/renderer/key_system_support_update_aros.cc
+
+diff --git a/components/cdm/renderer/BUILD.gn b/components/cdm/renderer/BUILD.gn
+index 38ab86b472..10ebce2eee 100644
+--- a/components/cdm/renderer/BUILD.gn
++++ b/components/cdm/renderer/BUILD.gn
+@@ -17,12 +17,7 @@ static_library("renderer") {
+     "//third_party/widevine/cdm:buildflags",
+   ]
+ 
+-  if (is_aros) {
+-    sources += [
+-      "key_system_support_update_aros.cc",
+-      "key_system_support_update.h",
+-    ]
+-  } else if (enable_library_cdms || is_win || is_android) {
++  if (enable_library_cdms || is_win || is_android) {
+     sources += [
+       "key_system_support_update.cc",
+       "key_system_support_update.h",
+diff --git a/components/cdm/renderer/key_system_support_update_aros.cc b/components/cdm/renderer/key_system_support_update_aros.cc
+deleted file mode 100644
+index bb21637e74..0000000000
+--- a/components/cdm/renderer/key_system_support_update_aros.cc
++++ /dev/null
+@@ -1,33 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "components/cdm/renderer/key_system_support_update.h"
+-
+-#include <memory>
+-#include <utility>
+-
+-#include "base/feature_list.h"
+-#include "base/logging.h"
+-#include "components/cdm/renderer/external_clear_key_key_system_info.h"
+-#include "media/base/media_switches.h"
+-
+-namespace cdm {
+-
+-std::unique_ptr<media::KeySystemSupportObserver> GetSupportedKeySystemsUpdates(
+-    bool can_persist_data,
+-    media::GetSupportedKeySystemsCB cb) {
+-  (void)can_persist_data;
+-
+-  media::KeySystemInfos key_systems;
+-  if (base::FeatureList::IsEnabled(media::kExternalClearKeyForTesting)) {
+-    LOG(ERROR) << "[Chromium:AROS:CDM] advertising ExternalClearKey testing "
+-                  "key system";
+-    key_systems.push_back(std::make_unique<ExternalClearKeyKeySystemInfo>());
+-  }
+-
+-  cb.Run(std::move(key_systems));
+-  return nullptr;
+-}
+-
+-}  // namespace cdm

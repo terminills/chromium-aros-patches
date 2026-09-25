@@ -1,0 +1,45 @@
+From b555748af23e8fd2cee54c4d59e8fb85ad474f62 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 02:13:27 -0500
+Subject: [PATCH 558/638] aros: keep VERBOSE log lines off the Exec debug
+ channel
+
+The system debug log on AROS is written a character at a time (serial on
+native, the bootstrap's unbuffered stderr on hosted); at --v=1 the QUIC
+stack logs every packet and the network thread spent ~2.4 ms per line in
+KPutStr, about 300 s of an 8 minute YouTube run.  INFO and above still go
+to the channel; VERBOSE lines are left to stderr and --log-file.  Open
+debug.library once instead of per line (which also logged two RamLib
+lines per message on a debug kernel).
+---
+ base/logging.cc | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/base/logging.cc b/base/logging.cc
+index 2a22e95fbe..6fe5d9c608 100644
+--- a/base/logging.cc
++++ b/base/logging.cc
+@@ -841,10 +841,19 @@ void LogMessage::Flush() {
+                        str_newline.c_str());
+     }
+ #elif BUILDFLAG(IS_AROS)
+-    struct Library* DebugBase = OpenLibrary("debug.library", 0);
+-    if (DebugBase) {
+-      ArosKPutStr(str_newline.c_str());
+-      CloseLibrary(DebugBase);
++    // The system debug log is Exec's debug channel: the serial port on
++    // native, the bootstrap's unbuffered stderr on hosted. Either way it is
++    // written one character at a time, so a line costs milliseconds and the
++    // thread that logs it stalls for that long. A --v=1 stream (QUIC logs
++    // every packet) turned the network thread into a logger that occasionally
++    // handled packets. Keep INFO and above on the channel, where they line up
++    // with the kernel's own output around a crash, and leave VERBOSE lines to
++    // stderr and --log-file. debug.library stays open for the process.
++    if (severity_ >= LOGGING_INFO) {
++      static struct Library* const debug_base =
++          OpenLibrary("debug.library", 0);
++      if (debug_base)
++        ArosKPutStr(str_newline.c_str());
+     }
+ #elif BUILDFLAG(IS_ANDROID)
+     android_LogPriority priority =

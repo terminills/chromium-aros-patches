@@ -1,0 +1,154 @@
+From 908955bc761b847c897443b4bac97b3a78ac6737 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 23:43:18 -0500
+Subject: [PATCH 498/638] AROS: key TimeTicks epoch by logical process
+
+AROS pthread workers are Exec tasks with distinct getpid values, so task-keyed TimeTicks state gives one Chromium process inconsistent Unix epochs and regresses compositor scheduling. Use the inherited CommandLine registry identity instead, cache the resolved state per worker, and initialize the epoch once across that logical process.
+
+
+
+---
+ base/time/time.cc | 90 ++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/base/time/time.cc b/base/time/time.cc
+index 3224381beb..bb1be19f0b 100644
+--- a/base/time/time.cc
++++ b/base/time/time.cc
+@@ -4,27 +4,93 @@
+ 
+ #include "base/time/time.h"
+ 
++#include "build/build_config.h"
++
+ #include <atomic>
+ #include <cmath>
+ #include <limits>
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#include <memory>
++#include <mutex>
++#endif
+ #include <optional>
+ #include <ostream>
+ #include <tuple>
+ #include <utility>
+ 
+ #include "base/check.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/command_line.h"
++#endif
+ #include "base/format_macros.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/no_destructor.h"
++#endif
+ #include "base/strings/stringprintf.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/synchronization/lock.h"
++#endif
+ #include "base/third_party/nspr/prtime.h"
+ #include "base/time/time_override.h"
+-#include "build/build_config.h"
+ 
+ namespace base {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// AROS native processes share an address space, so Chromium's ordinary static
++// Unix-epoch state must be partitioned by logical process. Exec task IDs are
++// unsuitable here: pthread workers are separate tasks and would each receive a
++// subtly different epoch. CommandLine is registered once per native Chromium
++// process and inherited by its worker-task ancestry, making its address the
++// stable process identity already used by other shared Chromium registries.
++struct TimeTicksProcessState {
++  TimeTicks shared_time_ticks_at_unix_epoch;
++  TimeTicks unix_epoch;
++  std::once_flag initialize_unix_epoch_once;
++};
++
++struct TimeTicksProcessRegistry {
++  Lock lock;
++  std::map<const CommandLine*, std::unique_ptr<TimeTicksProcessState>> states;
++};
++
++TimeTicksProcessState& GetTimeTicksProcessState() {
++  // A worker task never changes logical Chromium process during its lifetime.
++  // Avoid both the CommandLine ancestry walk and the registry lock after its
++  // first process-scoped lookup. Calls made before CommandLine initialization
++  // deliberately remain uncached so the task can adopt its eventual identity.
++  thread_local TimeTicksProcessState* cached_state = nullptr;
++  if (cached_state) {
++    return *cached_state;
++  }
++
++  const CommandLine* const process_identity =
++      CommandLine::InitializedForCurrentProcess()
++          ? CommandLine::ForCurrentProcess()
++          : nullptr;
++
++  static NoDestructor<TimeTicksProcessRegistry> registry;
++  AutoLock lock(registry->lock);
++  std::unique_ptr<TimeTicksProcessState>& state =
++      registry->states[process_identity];
++  if (!state) {
++    state = std::make_unique<TimeTicksProcessState>();
++  }
++  if (process_identity) {
++    cached_state = state.get();
++  }
++  return *state;
++}
++
++#else
++
+ TimeTicks g_shared_time_ticks_at_unix_epoch;
+ 
++#endif
++
+ }  // namespace
+ 
+ namespace internal {
+@@ -214,12 +280,33 @@ TimeTicks TimeTicks::Now() {
+ // TimeTicks::UnixEpoch is accessed. It is intended to make the offset between
+ // unix time and monotonic time consistent across processes.
+ void TimeTicks::SetSharedUnixEpoch(TimeTicks ticks_at_epoch) {
++#if BUILDFLAG(IS_AROS)
++  TimeTicksProcessState& state = GetTimeTicksProcessState();
++  DCHECK(state.shared_time_ticks_at_unix_epoch.is_null());
++  DCHECK(state.unix_epoch.is_null());
++  state.shared_time_ticks_at_unix_epoch = ticks_at_epoch;
++#else
+   DCHECK(g_shared_time_ticks_at_unix_epoch.is_null());
+   g_shared_time_ticks_at_unix_epoch = ticks_at_epoch;
++#endif
+ }
+ 
+ // static
+ TimeTicks TimeTicks::UnixEpoch() {
++#if BUILDFLAG(IS_AROS)
++  TimeTicksProcessState& state = GetTimeTicksProcessState();
++  std::call_once(state.initialize_unix_epoch_once, [&state]() {
++    state.unix_epoch =
++        state.shared_time_ticks_at_unix_epoch.is_null()
++            ? subtle::TimeTicksNowIgnoringOverride() -
++                  (subtle::TimeNowIgnoringOverride() - Time::UnixEpoch())
++            : state.shared_time_ticks_at_unix_epoch;
++    // Prevent future usage of `shared_time_ticks_at_unix_epoch` in this
++    // logical process without affecting concurrently running AROS processes.
++    state.shared_time_ticks_at_unix_epoch = TimeTicks::Max();
++  });
++  return state.unix_epoch;
++#else
+   struct StaticUnixEpoch {
+     StaticUnixEpoch()
+         : epoch(
+@@ -236,6 +323,7 @@ TimeTicks TimeTicks::UnixEpoch() {
+ 
+   static StaticUnixEpoch static_epoch;
+   return static_epoch.epoch;
++#endif
+ }
+ 
+ TimeTicks TimeTicks::SnappedToNextTick(TimeTicks tick_phase,

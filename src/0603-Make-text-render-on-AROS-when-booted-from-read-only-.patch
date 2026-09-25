@@ -1,0 +1,163 @@
+From a06984d5a7c0c3526a701a4dd4fd7238007fe419 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 9 Sep 2026 20:26:07 -0500
+Subject: [PATCH 603/638] Make text render on AROS when booted from read-only
+ media
+
+Three defects, all of which had to go before the browser showed any text on
+a Live CD. Page content that fetched its own webfonts (Google, YouTube,
+Netflix) looked perfect throughout, which is what made this confusing: only
+text needing a LOCAL font was affected - the whole browser UI, and any page
+using a normal font stack.
+
+1. Skia never reports an empty font directory. SkFontMgr_custom_directory
+   inserts one nameless family holding an SkTypeface_Empty when a scan finds
+   nothing, so countFamilies() is 1 even on failure, and the UI was drawn
+   with a typeface that has no glyphs. Ask whether any real glyphs exist
+   instead of counting families.
+
+2. FONTS:TrueType does not resolve on read-only media. Booting from CD turns
+   FONTS: into a multi-assign (RAM:Fonts first, SYS:Fonts added), and
+   AmigaDOS only searches the first entry when a path descends into a
+   subdirectory - RAM:Fonts holds the few bitmap families the startup
+   sequence copies. Fall back to SYS:Fonts/TrueType, which always exists
+   because the CD is SYS: when it boots.
+
+3. Nothing named a font AROS actually ships. The UI fallback family was
+   "sans" and Blink's generics were Times New Roman / Arial / Courier New;
+   none exist here, so both fell through to Skia's own fallback - the first
+   family loaded from the directory, which alphabetically is the display face
+   Architex. Everything that did render came out in it. Name the shipped
+   faces: Open Sans for UI and sans-serif, Spectral for serif, Elronet
+   Monospace for fixed.
+
+Verified from a clean Live CD boot at 8 GB: omnibox, tab titles, menus and
+chrome://settings all render in Open Sans.
+---
+ skia/ext/font_utils.cc                        | 54 ++++++++++++++++++-
+ .../common/web_preferences/web_preferences.cc | 14 +++++
+ ui/gfx/platform_font_skia.cc                  |  6 +++
+ 3 files changed, 72 insertions(+), 2 deletions(-)
+
+diff --git a/skia/ext/font_utils.cc b/skia/ext/font_utils.cc
+index e7ecf6db36..5dee297f6a 100644
+--- a/skia/ext/font_utils.cc
++++ b/skia/ext/font_utils.cc
+@@ -58,16 +58,66 @@ SkFontMgr* g_fontmgr_override = nullptr;
+ 
+ namespace skia {
+ 
++#if BUILDFLAG(IS_AROS)
++// Skia's directory loader never reports an empty result: when a directory
++// yields no fonts it inserts one nameless family holding a single
++// SkTypeface_Empty (SkFontMgr_custom_directory.cpp). countFamilies() is
++// therefore 1 even when nothing was found, and the browser happily draws its
++// whole UI with a typeface that has no glyphs - menus, omnibox and tab titles
++// come out blank while pages that fetch their own webfonts look perfect.
++// So ask whether any real glyphs exist, not how many families there are.
++static bool FontMgrHasGlyphs(const sk_sp<SkFontMgr>& mgr) {
++  if (!mgr) {
++    return false;
++  }
++  for (int i = 0; i < mgr->countFamilies(); ++i) {
++    sk_sp<SkFontStyleSet> set(mgr->createStyleSet(i));
++    if (!set) {
++      continue;
++    }
++    for (int j = 0; j < set->count(); ++j) {
++      sk_sp<SkTypeface> typeface(set->createTypeface(j));
++      if (typeface && typeface->countGlyphs() > 0) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++#endif  // BUILDFLAG(IS_AROS)
++
+ static sk_sp<SkFontMgr> fontmgr_factory() {
+   if (g_fontmgr_override) {
+     return sk_ref_sp(g_fontmgr_override);
+   }
+ #if BUILDFLAG(IS_AROS)
++  // FONTS: is the right place to look first - it is what a user re-points to
++  // add their own fonts - but it cannot be relied on. Booting from read-only
++  // media turns it into a multi-assign (RAM:Fonts, then SYS:Fonts added), and
++  // a multi-assign is searched for files: a path that descends into a
++  // SUBDIRECTORY only looks in the first entry. RAM:Fonts holds the handful of
++  // bitmap families the startup sequence copies, so "FONTS:TrueType" simply
++  // does not resolve on a Live CD and every family disappears - the browser UI
++  // draws no text at all, while pages that fetch their own webfonts look fine.
++  //
++  // SYS:Fonts always exists, on both media: the CD is SYS: when it boots.
+   constexpr char kSystemFontDirectory[] = "FONTS:TrueType";
++  constexpr char kBootFontDirectory[] = "SYS:Fonts/TrueType";
+   sk_sp<SkFontMgr> manager =
+       SkFontMgr_New_Custom_Directory(kSystemFontDirectory);
+-  bug("[AROS:SkiaFont] directory=%s families=%d\n", kSystemFontDirectory,
+-      manager ? manager->countFamilies() : 0);
++  if (!FontMgrHasGlyphs(manager)) {
++    sk_sp<SkFontMgr> boot =
++        SkFontMgr_New_Custom_Directory(kBootFontDirectory);
++    bug("[AROS:SkiaFont] %s had no usable fonts, using %s (families=%d)\n",
++        kSystemFontDirectory, kBootFontDirectory,
++        boot ? boot->countFamilies() : 0);
++    if (FontMgrHasGlyphs(boot)) {
++      manager = std::move(boot);
++    }
++  } else {
++    bug("[AROS:SkiaFont] directory=%s families=%d\n", kSystemFontDirectory,
++        manager->countFamilies());
++  }
+   return manager;
+ #elif BUILDFLAG(IS_ANDROID)
+   return SkFontMgr_New_Android(nullptr);
+diff --git a/third_party/blink/common/web_preferences/web_preferences.cc b/third_party/blink/common/web_preferences/web_preferences.cc
+index dd2c16ad21..91f2eab32b 100644
+--- a/third_party/blink/common/web_preferences/web_preferences.cc
++++ b/third_party/blink/common/web_preferences/web_preferences.cc
+@@ -35,6 +35,19 @@ const char kCommonScript[] = "Zyyy";
+ 
+ WebPreferences::WebPreferences()
+     : touch_drag_drop_enabled(IsTouchDragDropEnabled()) {
++#if BUILDFLAG(IS_AROS)
++  // AROS ships none of the usual defaults (no Arial, Times New Roman, Courier
++  // New or DejaVu), and Skia's fallback when a family is missing is simply the
++  // first one loaded from the font directory - which here is a display face,
++  // Architex. Every page and every piece of browser UI was being set in it.
++  // Name faces the system actually has instead.
++  standard_font_family_map[web_pref::kCommonScript] = u"Open Sans";
++  fixed_font_family_map[web_pref::kCommonScript] = u"Elronet Monospace";
++  serif_font_family_map[web_pref::kCommonScript] = u"Spectral";
++  sans_serif_font_family_map[web_pref::kCommonScript] = u"Open Sans";
++  cursive_font_family_map[web_pref::kCommonScript] = u"Artilla Script";
++  fantasy_font_family_map[web_pref::kCommonScript] = u"Architex";
++#else
+   standard_font_family_map[web_pref::kCommonScript] = u"Times New Roman";
+ #if BUILDFLAG(IS_MAC)
+   fixed_font_family_map[web_pref::kCommonScript] = u"Menlo";
+@@ -45,6 +58,7 @@ WebPreferences::WebPreferences()
+   sans_serif_font_family_map[web_pref::kCommonScript] = u"Arial";
+   cursive_font_family_map[web_pref::kCommonScript] = u"Script";
+   fantasy_font_family_map[web_pref::kCommonScript] = u"Impact";
++#endif  // BUILDFLAG(IS_AROS)
+   // Latin Modern Math is an open source font available in LaTeX distributions,
+   // and consequently other installable system packages. It provides the default
+   // "Computer Modern" style that math people are used to and contains an
+diff --git a/ui/gfx/platform_font_skia.cc b/ui/gfx/platform_font_skia.cc
+index 30cc8df075..3fa7d9c131 100644
+--- a/ui/gfx/platform_font_skia.cc
++++ b/ui/gfx/platform_font_skia.cc
+@@ -42,6 +42,12 @@ namespace {
+ // IsFallbackFontAllowed function in skia/ext/SkFontHost_fontconfig_direct.cpp.
+ #if BUILDFLAG(IS_ANDROID)
+ const char kFallbackFontFamilyName[] = "serif";
++#elif BUILDFLAG(IS_AROS)
++// "sans" matches nothing in AROS's font set, so Skia handed back its own
++// fallback - the first family loaded from the directory, a display face
++// called Architex - and the entire browser UI was drawn in it. Name a face
++// the system actually ships.
++const char kFallbackFontFamilyName[] = "Open Sans";
+ #else
+ const char kFallbackFontFamilyName[] = "sans";
+ #endif

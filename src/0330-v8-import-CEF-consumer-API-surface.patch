@@ -1,0 +1,48 @@
+From 6a6eabe55b753254ead1879d62773827b607d148 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 18:19:26 -0500
+Subject: [PATCH 330/638] v8: import CEF consumer API surface
+
+Add the exact V8 C++ ABI symbols left unresolved after the native cef.library vector bridge succeeded. Every entry exists in Chromium's pinned V8 monolith and continues to resolve lazily through v8.library; no engine objects are added to CEF.
+
+AI_PHASE: v8-library-convergence
+
+AI_STATUS: cef-v8-import-surface-checkpoint
+
+AI_ASSUMPTION: the CEF-specific V8 calls use the same pinned C++ ABI and resolver contract already proven by Chromium
+
+AI_VALIDATION: manifest has no duplicates; all 14 new mangled symbols are defined by out/aros-v8-library/obj/v8/libv8_monolith.a
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-library-20260724/02-native-cef-library-vector-bridge-link.log
+
+AI_LIMITATIONS: generated trampolines and the remaining non-V8 CEF component imports require the next build pass
+
+AI_DECISION_CHAIN:; Chromium ec8ef7281d; AROS f2e058ef51
+---
+ .../aros/v8_library/v8_function_imports.txt      | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/build/config/aros/v8_library/v8_function_imports.txt b/build/config/aros/v8_library/v8_function_imports.txt
+index dd99292354..3e4d2df0c4 100644
+--- a/build/config/aros/v8_library/v8_function_imports.txt
++++ b/build/config/aros/v8_library/v8_function_imports.txt
+@@ -694,3 +694,19 @@ _ZNK2v88TryCatch7MessageEv
+ _ZNK2v88TryCatch9ExceptionEv
+ _ZNK2v88TryCatch9HasCaughtEv
+ _ZNK5cppgc14LivenessBroker21IsHeapObjectAliveImplEPKv
++
++# Additional CEF consumer surface isolated by the native cef.library link.
++_ZN2v811ArrayBuffer6DetachEv
++_ZN2v815MicrotasksScopeC1EPNS_7IsolateENS0_4TypeE
++_ZN2v86Object32SetAlignedPointerInInternalFieldEiPv
++_ZN2v86Object6DeleteENS_5LocalINS_7ContextEEEj
++_ZN2v87Isolate18AddMessageListenerEPFvNS_5LocalINS_7MessageEEENS1_INS_5ValueEEEES5_
++_ZN2v87Isolate3NewERKNS0_12CreateParamsE
++_ZNK2v810StackFrame13IsConstructorEv
++_ZNK2v810StackFrame24GetScriptNameOrSourceURLEv
++_ZNK2v810StackFrame6IsEvalEv
++_ZNK2v85Value11FullIsFalseEv
++_ZNK2v87Message12GetEndColumnENS_5LocalINS_7ContextEEE
++_ZNK2v87Message14GetEndPositionEv
++_ZNK2v87Message14GetStartColumnEv
++_ZNK2v87Message16GetStartPositionEv

@@ -1,0 +1,46 @@
+From 083403702acb9612ff10967d62b159b947f1e05e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 12:43:18 -0500
+Subject: [PATCH 412/638] [AROS] Restore last-known-good AROS priorities
+
+Restore the exact AROS thread-priority mapping used by working multiprocess Build 65. This is a controlled regression test: worker-group topology and pool floors have already been independently rejected.
+
+
+
+---
+ base/threading/platform_thread_aros.cc | 18 ++++++------------
+ 1 file changed, 6 insertions(+), 12 deletions(-)
+
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 283b0c3d5e..8f40ebd8ad 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -20,22 +20,16 @@ const ThreadPriorityToNiceValuePairForTest
+         {ThreadPriorityForTest::kDisplay, -8},
+         {ThreadPriorityForTest::kCompositing, -1},
+         {ThreadPriorityForTest::kNormal, 0},
+-        {ThreadPriorityForTest::kResourceEfficient, 0},
+-        {ThreadPriorityForTest::kUtility, 0},
+-        {ThreadPriorityForTest::kBackground, 0},
++        {ThreadPriorityForTest::kResourceEfficient, 1},
++        {ThreadPriorityForTest::kUtility, 2},
++        {ThreadPriorityForTest::kBackground, 10},
+ };
+ 
+ const ThreadTypeToNiceValuePair kThreadTypeToNiceValueMap[7] = {
+-    // Exec round-robins runnable peers at one priority, but does not
+-    // guarantee service to a lower-priority task while higher-priority work
+-    // remains ready. Keep ordinary Chromium pool roles at priority 0 and let
+-    // Chromium's task queues classify their work.
+-    {ThreadType::kBackground, 0},
+-    {ThreadType::kUtility, 0},
+-    {ThreadType::kResourceEfficient, 0},
++    {ThreadType::kBackground, 10},
++    {ThreadType::kUtility, 2},
++    {ThreadType::kResourceEfficient, 1},
+     {ThreadType::kDefault, 0},
+-    // Latency-critical roles are normally blocked between short bursts and
+-    // may retain explicit Exec priority.
+     {ThreadType::kCompositing, -1},
+     {ThreadType::kDisplayCritical, -8},
+     {ThreadType::kRealtimeAudio, -10},

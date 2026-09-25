@@ -1,0 +1,206 @@
+From 8edb5bbaa071480b9256a60aa140b3dae669691e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:10:26 -0500
+Subject: [PATCH 303/638] cef: apply Chrome profile integration hooks
+
+Apply CEF's upstream chrome_browser_profiles patch as a discrete prerequisite. This exposes CEF off-the-record profile creation and the ProfileManager extension points consumed by libcef.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-chrome-profile-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: libcef_static reported missing OTRProfileID::CreateUniqueForCEF and ProfileManager overrides
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/12-libcef-static-after-browser-plugin-owner.log
+
+AI_DECISION_CHAIN:; 52dac911; 26642fbe8d
+---
+ .../browser/profiles/off_the_record_profile_impl.cc |  4 +++-
+ chrome/browser/profiles/profile.cc                  | 13 +++++++++++++
+ chrome/browser/profiles/profile.h                   |  7 ++++++-
+ chrome/browser/profiles/profile_impl.cc             |  4 +++-
+ chrome/browser/profiles/profile_manager.cc          |  2 +-
+ chrome/browser/profiles/profile_manager.h           |  4 ++--
+ chrome/browser/profiles/renderer_updater.cc         |  2 ++
+ chrome/browser/profiles/renderer_updater_factory.cc |  3 +++
+ 8 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/profiles/off_the_record_profile_impl.cc b/chrome/browser/profiles/off_the_record_profile_impl.cc
+index 2e67f8c97f..a336797997 100644
+--- a/chrome/browser/profiles/off_the_record_profile_impl.cc
++++ b/chrome/browser/profiles/off_the_record_profile_impl.cc
+@@ -666,7 +666,9 @@ std::unique_ptr<Profile> Profile::CreateOffTheRecordProfile(
+ #endif
+   if (!profile)
+     profile = std::make_unique<OffTheRecordProfileImpl>(parent, otr_profile_id);
+-  profile->Init();
++  // With CEF we want to delay initialization.
++  if (!otr_profile_id.IsUniqueForCEF())
++    profile->Init();
+   return std::move(profile);
+ }
+ 
+diff --git a/chrome/browser/profiles/profile.cc b/chrome/browser/profiles/profile.cc
+index 2ec2a791c4..8573cac411 100644
+--- a/chrome/browser/profiles/profile.cc
++++ b/chrome/browser/profiles/profile.cc
+@@ -91,6 +91,7 @@ base::LazyInstance<std::set<content::BrowserContext*>>::Leaky
+ 
+ namespace {
+ 
++const char kCEFOTRProfileIDPrefix[] = "CEF::BrowserContext";
+ const char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
+ const char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
+ const char kTestOTRProfileIDPrefix[] = "Test::OTR";
+@@ -111,6 +112,8 @@ bool Profile::OTRProfileID::AllowsBrowserWindows() const {
+   // DevTools::BrowserContext, MediaRouter::Presentation, and
+   // CaptivePortal::Signin are exceptions to this ban.
+   if (*this == PrimaryID() ||
++      base::StartsWith(profile_id_, kCEFOTRProfileIDPrefix,
++                       base::CompareCase::SENSITIVE) ||
+       base::StartsWith(profile_id_, kDevToolsOTRProfileIDPrefix,
+                        base::CompareCase::SENSITIVE) ||
+       base::StartsWith(profile_id_, kMediaRouterOTRProfileIDPrefix,
+@@ -148,6 +151,16 @@ Profile::OTRProfileID Profile::OTRProfileID::CreateUnique(
+       base::Uuid::GenerateRandomV4().AsLowercaseString().c_str()));
+ }
+ 
++// static
++Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForCEF() {
++  return CreateUnique(kCEFOTRProfileIDPrefix);
++}
++
++bool Profile::OTRProfileID::IsUniqueForCEF() const {
++  return base::StartsWith(profile_id_, kCEFOTRProfileIDPrefix,
++                          base::CompareCase::SENSITIVE);
++}
++
+ // static
+ Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForDevTools() {
+   return CreateUnique(kDevToolsOTRProfileIDPrefix);
+diff --git a/chrome/browser/profiles/profile.h b/chrome/browser/profiles/profile.h
+index 3d5b457eec..c7d37503a0 100644
+--- a/chrome/browser/profiles/profile.h
++++ b/chrome/browser/profiles/profile.h
+@@ -94,6 +94,10 @@ class Profile : public content::BrowserContext {
+     // be applicable to run. Please see crbug.com/1098697#c3 for more details.
+     static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
+ 
++    // Creates a unique OTR profile id to be used for CEF browser contexts.
++    static OTRProfileID CreateUniqueForCEF();
++    bool IsUniqueForCEF() const;
++
+     // Creates a unique OTR profile id to be used for DevTools browser contexts.
+     static OTRProfileID CreateUniqueForDevTools();
+ 
+@@ -511,6 +515,8 @@ class Profile : public content::BrowserContext {
+     return instant_service_;
+   }
+ 
++  void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
++
+  protected:
+   // Creates an OffTheRecordProfile which points to this Profile.
+   static std::unique_ptr<Profile> CreateOffTheRecordProfile(
+@@ -522,7 +528,6 @@ class Profile : public content::BrowserContext {
+   static PrefStore* CreateExtensionPrefStore(Profile*,
+                                              bool incognito_pref_store);
+ 
+-  void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
+   void NotifyProfileInitializationComplete();
+ 
+   // Returns whether the user has signed in this profile to an account.
+diff --git a/chrome/browser/profiles/profile_impl.cc b/chrome/browser/profiles/profile_impl.cc
+index 98bfbc0f96..de7919947e 100644
+--- a/chrome/browser/profiles/profile_impl.cc
++++ b/chrome/browser/profiles/profile_impl.cc
+@@ -1043,7 +1043,9 @@ Profile* ProfileImpl::GetOffTheRecordProfile(const OTRProfileID& otr_profile_id,
+ 
+   otr_profiles_[otr_profile_id] = std::move(otr_profile);
+ 
+-  NotifyOffTheRecordProfileCreated(raw_otr_profile);
++  // With CEF we want to delay initialization.
++  if (!otr_profile_id.IsUniqueForCEF())
++    NotifyOffTheRecordProfileCreated(raw_otr_profile);
+ 
+   return raw_otr_profile;
+ }
+diff --git a/chrome/browser/profiles/profile_manager.cc b/chrome/browser/profiles/profile_manager.cc
+index 3db592470f..75bfc32b65 100644
+--- a/chrome/browser/profiles/profile_manager.cc
++++ b/chrome/browser/profiles/profile_manager.cc
+@@ -437,7 +437,7 @@ ProfileManager::ProfileManager(const base::FilePath& user_data_dir)
+   profile_manager_android_ = std::make_unique<ProfileManagerAndroid>(this);
+ #endif
+ 
+-  if (ProfileShortcutManager::IsFeatureEnabled() && !user_data_dir_.empty())
++  if (!user_data_dir_.empty() && ProfileShortcutManager::IsFeatureEnabled())
+     profile_shortcut_manager_ = ProfileShortcutManager::Create(this);
+ 
+   zombie_metrics_timer_.Start(FROM_HERE, base::Minutes(30), this,
+diff --git a/chrome/browser/profiles/profile_manager.h b/chrome/browser/profiles/profile_manager.h
+index 3d5fd0d5ca..965ab69b3f 100644
+--- a/chrome/browser/profiles/profile_manager.h
++++ b/chrome/browser/profiles/profile_manager.h
+@@ -134,7 +134,7 @@ class ProfileManager : public Profile::Delegate {
+   // acceptable. Returns nullptr if loading the new profile fails.
+   // TODO(bauerb): Migrate calls from other code to `GetProfileByPath()`, then
+   // make this method private.
+-  Profile* GetProfile(const base::FilePath& profile_dir);
++  virtual Profile* GetProfile(const base::FilePath& profile_dir);
+ 
+   // Returns regular or off-the-record profile given its profile key.
+   static Profile* GetProfileFromProfileKey(ProfileKey* profile_key);
+@@ -175,7 +175,7 @@ class ProfileManager : public Profile::Delegate {
+ 
+   // Returns true if the profile pointer is known to point to an existing
+   // profile.
+-  bool IsValidProfile(const void* profile);
++  virtual bool IsValidProfile(const void* profile);
+ 
+   // Returns the directory where the first created profile is stored,
+   // relative to the user data directory currently in use.
+diff --git a/chrome/browser/profiles/renderer_updater.cc b/chrome/browser/profiles/renderer_updater.cc
+index 0d1d2e3661..a97322b1d9 100644
+--- a/chrome/browser/profiles/renderer_updater.cc
++++ b/chrome/browser/profiles/renderer_updater.cc
+@@ -9,6 +9,7 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "build/chromeos_buildflags.h"
++#include "cef/libcef/features/runtime.h"
+ #include "chrome/browser/content_settings/content_settings_manager_delegate.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -45,6 +46,7 @@ RendererUpdater::RendererUpdater(Profile* profile)
+ #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+       ,
+       bound_session_cookie_refresh_service_(
++          cef::IsAlloyRuntimeEnabled() ? nullptr :
+           BoundSessionCookieRefreshServiceFactory::GetForProfile(profile))
+ #endif
+ {
+diff --git a/chrome/browser/profiles/renderer_updater_factory.cc b/chrome/browser/profiles/renderer_updater_factory.cc
+index ed5b366aa4..58ebe795e4 100644
+--- a/chrome/browser/profiles/renderer_updater_factory.cc
++++ b/chrome/browser/profiles/renderer_updater_factory.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/profiles/renderer_updater_factory.h"
+ 
++#include "cef/libcef/features/runtime.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/profiles/renderer_updater.h"
+@@ -25,7 +26,9 @@ RendererUpdaterFactory::RendererUpdaterFactory()
+   DependsOn(IdentityManagerFactory::GetInstance());
+   DependsOn(HostContentSettingsMapFactory::GetInstance());
+ #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
++  if (!cef::IsAlloyRuntimeEnabled()) {
+   DependsOn(BoundSessionCookieRefreshServiceFactory::GetInstance());
++  }
+ #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+ }
+ 

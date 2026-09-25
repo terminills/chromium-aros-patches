@@ -1,0 +1,92 @@
+From 473375da990b1ac07709234df5df696f5753a4a8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:57:55 -0500
+Subject: [PATCH 206/638] read_anything: gate optional ScreenAI integration
+ [chromium] [aros]
+
+Statement:
+Read Anything is a portable browser feature, but its optional Screen2x path must not require ScreenAI service bindings when that service is disabled.
+
+Decision:
+Compile the ScreenAI router includes, startup request, and completion callback only under ENABLE_SCREEN_AI_SERVICE while retaining the rest of Read Anything unchanged.
+
+Evidence:
+The prior AROS object failed on an intentionally ungenerated screen_ai_factory.mojom.h. read_anything_untrusted_page_handler.o now compiles with enable_screen_ai_service=false.
+
+Chain:
+
+ACD-chromium-native-port-roadmap
+---
+ .../read_anything/read_anything_untrusted_page_handler.cc   | 6 ++++++
+ .../read_anything/read_anything_untrusted_page_handler.h    | 3 +++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc b/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc
+index 6c17f28ff3..e5bccb33d8 100644
+--- a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc
++++ b/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc
+@@ -15,8 +15,10 @@
+ #include "base/values.h"
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/profiles/profile.h"
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+ #include "chrome/browser/screen_ai/screen_ai_service_router.h"
+ #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
++#endif
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_controller.h"
+@@ -206,6 +208,7 @@ ReadAnythingUntrustedPageHandler::ReadAnythingUntrustedPageHandler(
+         highlightGranularity);
+   }
+ 
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+   if (features::IsReadAnythingWithScreen2xEnabled()) {
+     screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(
+         browser_->profile())
+@@ -215,6 +218,7 @@ ReadAnythingUntrustedPageHandler::ReadAnythingUntrustedPageHandler(
+                 &ReadAnythingUntrustedPageHandler::OnScreenAIServiceInitialized,
+                 weak_factory_.GetWeakPtr()));
+   }
++#endif
+ 
+   OnActiveWebContentsChanged();
+ }
+@@ -457,6 +461,7 @@ void ReadAnythingUntrustedPageHandler::OnSidePanelControllerDestroyed() {
+ // screen_ai::ScreenAIInstallState::Observer:
+ ///////////////////////////////////////////////////////////////////////////////
+ 
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+ void ReadAnythingUntrustedPageHandler::OnScreenAIServiceInitialized(
+     bool successful) {
+   DCHECK(features::IsReadAnythingWithScreen2xEnabled());
+@@ -464,6 +469,7 @@ void ReadAnythingUntrustedPageHandler::OnScreenAIServiceInitialized(
+     page_->ScreenAIServiceReady();
+   }
+ }
++#endif
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ // TabStripModelObserver:
+diff --git a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h b/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h
+index b4aa0b0892..60b4d9fdd3 100644
+--- a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h
++++ b/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h
+@@ -23,6 +23,7 @@
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "mojo/public/cpp/bindings/remote.h"
++#include "services/screen_ai/buildflags/buildflags.h"
+ #include "ui/accessibility/ax_action_data.h"
+ 
+ namespace content {
+@@ -211,7 +212,9 @@ class ReadAnythingUntrustedPageHandler
+                           ui::AXActionHandlerObserver>
+       ax_action_handler_observer_{this};
+ 
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+   void OnScreenAIServiceInitialized(bool successful);
++#endif
+ 
+   base::WeakPtrFactory<ReadAnythingUntrustedPageHandler> weak_factory_{this};
+ };

@@ -1,0 +1,394 @@
+From 755591361bee045e490057ffeb8a858a792169dd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:22:02 -0500
+Subject: [PATCH 3/4] common: add the native AROS system utility backend
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: ANGLE common now supplies explicit AROS path, environment, timer, thread, native-library, and fail-closed memory/debug contracts.
+
+ROOT_CAUSE: ANGLE_PLATFORM_POSIX selected portable compiler primitives, but libGLESv2.gni only added system utility implementations for Linux-family, Apple, Windows, Fuchsia, and Android targets. AROS therefore linked no implementation at all.
+
+FIX_REASON: Add an AROS-owned backend instead of compiling Linux dlopen, procfs, and signal assumptions. Use debug.library for unsupported-operation diagnostics and return failure for contracts AROS does not yet implement.
+
+SCOPE: third_party/angle BUILD.gn, src/libGLESv2.gni, and src/common/system_utils_aros.cpp
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/third_party/angle/angle_common/system_utils_aros.o passed; a focused libGLESv2.so link eliminated all ANGLE platform-helper undefined symbols and now stops only at the independent AROS startup.o/main shared-link issue.
+
+RISK: Dynamic symbol lookup and MMU page protection remain deliberately unsupported; static ANGLE Phase 3 does not require them, and later native GPU/dynamic-library phases must replace these fail-closed paths.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ BUILD.gn                         |   4 +
+ src/common/system_utils_aros.cpp | 331 +++++++++++++++++++++++++++++++
+ src/libGLESv2.gni                |   4 +
+ 3 files changed, 339 insertions(+)
+ create mode 100644 src/common/system_utils_aros.cpp
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 834b707..b98f76e 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -510,6 +510,10 @@ template("angle_common_lib") {
+       libs = [ "dl" ]
+     }
+ 
++    if (is_aros) {
++      libs = [ "debug" ]
++    }
++
+     if (is_android && (angle_enable_gl || angle_enable_vulkan)) {
+       # In API level 26 ANativeWindow APIs were moved from libandroid.so
+       # into a separate library, libnativewindow.so
+diff --git a/src/common/system_utils_aros.cpp b/src/common/system_utils_aros.cpp
+new file mode 100644
+index 0000000..a7706b8
+--- /dev/null
++++ b/src/common/system_utils_aros.cpp
+@@ -0,0 +1,331 @@
++//
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++
++// system_utils_aros.cpp: Native AROS implementations of system utilities.
++
++#include "common/system_utils.h"
++
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <array>
++#include <string>
++
++#include <exec/libraries.h>
++#include <proto/debug.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++
++extern "C" void ArosKPutStr(const char *) asm("KPutStr");
++
++namespace
++{
++using ArosLibrary = struct Library;
++
++void ArosLogUnsupported(const char *operation)
++{
++    ArosLibrary *debugBase = OpenLibrary("debug.library", 0);
++    if (!debugBase)
++    {
++        return;
++    }
++
++    ArosKPutStr("[ANGLE:AROS] unsupported operation: ");
++    ArosKPutStr(operation);
++    ArosKPutStr("\n");
++    CloseLibrary(debugBase);
++}
++
++std::string JoinDirectoryAndLeaf(const std::string &directory, const char *leaf)
++{
++    if (directory.empty() || directory.back() == '/' || directory.back() == ':')
++    {
++        return directory + leaf;
++    }
++    return directory + "/" + leaf;
++}
++}  // namespace
++
++namespace angle
++{
++
++std::string GetExecutablePath()
++{
++    std::array<char, 1024> path = {};
++    return GetProgramName(path.data(), path.size()) ? std::string(path.data()) : std::string();
++}
++
++std::string GetExecutableDirectory()
++{
++    return StripFilenameFromPath(GetExecutablePath());
++}
++
++std::string GetModuleDirectory()
++{
++    return GetExecutableDirectory();
++}
++
++const char *GetSharedLibraryExtension()
++{
++    return "library";
++}
++
++const char *GetExecutableExtension()
++{
++    return "";
++}
++
++char GetPathSeparator()
++{
++    return '/';
++}
++
++Optional<std::string> GetCWD()
++{
++    std::array<char, 4096> path = {};
++    return getcwd(path.data(), path.size()) ? Optional<std::string>(path.data())
++                                            : Optional<std::string>::Invalid();
++}
++
++bool SetCWD(const char *dirName)
++{
++    return chdir(dirName) == 0;
++}
++
++bool SetEnvironmentVar(const char *variableName, const char *value)
++{
++    return setenv(variableName, value, 1) == 0;
++}
++
++bool UnsetEnvironmentVar(const char *variableName)
++{
++    return unsetenv(variableName) == 0;
++}
++
++std::string GetEnvironmentVar(const char *variableName)
++{
++    const char *value = getenv(variableName);
++    return value ? std::string(value) : std::string();
++}
++
++const char *GetPathSeparatorForEnvironmentVar()
++{
++    return ":";
++}
++
++bool IsDirectory(const char *filename)
++{
++    struct stat status = {};
++    return stat(filename, &status) == 0 && S_ISDIR(status.st_mode);
++}
++
++bool CreateDirectories(const std::string &path)
++{
++    std::string normalized(path);
++    MakeForwardSlashThePathSeparator(normalized);
++
++    size_t separator = 0;
++    while ((separator = normalized.find('/', separator)) != std::string::npos)
++    {
++        const std::string parent = normalized.substr(0, separator++);
++        if (!parent.empty() && !IsDirectory(parent.c_str()) &&
++            mkdir(parent.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) != 0)
++        {
++            return false;
++        }
++    }
++
++    return normalized.empty() || IsDirectory(normalized.c_str()) ||
++           mkdir(normalized.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == 0;
++}
++
++void MakeForwardSlashThePathSeparator(std::string &path)
++{
++    for (char &character : path)
++    {
++        if (character == '\\')
++        {
++            character = '/';
++        }
++    }
++}
++
++std::string GetRootDirectory()
++{
++    return "/";
++}
++
++Optional<std::string> GetTempDirectory()
++{
++    const char *directory = getenv("TMPDIR");
++    return std::string(directory ? directory : "T:");
++}
++
++Optional<std::string> CreateTemporaryFileInDirectory(const std::string &directory)
++{
++    return CreateTemporaryFileInDirectoryWithExtension(directory, std::string());
++}
++
++Optional<std::string> CreateTemporaryFileInDirectoryWithExtension(const std::string &directory,
++                                                                  const std::string &extension)
++{
++    std::string filename = JoinDirectoryAndLeaf(directory, ".angle.XXXXXX");
++    int descriptor       = mkstemp(filename.data());
++    if (descriptor < 0)
++    {
++        return Optional<std::string>::Invalid();
++    }
++    close(descriptor);
++
++    if (!extension.empty())
++    {
++        const std::string renamed = filename + extension;
++        if (rename(filename.c_str(), renamed.c_str()) != 0)
++        {
++            remove(filename.c_str());
++            return Optional<std::string>::Invalid();
++        }
++        filename = renamed;
++    }
++
++    return filename;
++}
++
++double GetCurrentSystemTime()
++{
++    struct timespec now = {};
++    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
++    {
++        return 0.0;
++    }
++    return static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
++}
++
++double GetCurrentProcessCpuTime()
++{
++    struct timespec now = {};
++    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) != 0)
++    {
++        return 0.0;
++    }
++    return static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
++}
++
++bool RunApp(const std::vector<const char *> &,
++            std::string *,
++            std::string *,
++            int *)
++{
++    ArosLogUnsupported("RunApp");
++    return false;
++}
++
++void *OpenSystemLibraryWithExtensionAndGetError(const char *libraryName,
++                                                SearchType searchType,
++                                                std::string *errorOut)
++{
++    if (searchType == SearchType::AlreadyLoaded)
++    {
++        if (errorOut)
++        {
++            *errorOut = "AROS cannot safely acquire an already-loaded library by name";
++        }
++        return nullptr;
++    }
++
++    ArosLibrary *library = OpenLibrary(libraryName, 0);
++    if (!library && errorOut)
++    {
++        *errorOut = std::string("OpenLibrary failed: ") + libraryName;
++    }
++    return library;
++}
++
++void *GetLibrarySymbol(void *, const char *)
++{
++    ArosLogUnsupported("GetLibrarySymbol");
++    return nullptr;
++}
++
++std::string GetLibraryPath(void *libraryHandle)
++{
++    ArosLibrary *library = static_cast<ArosLibrary *>(libraryHandle);
++    return library && library->lib_Node.ln_Name ? library->lib_Node.ln_Name : "";
++}
++
++void CloseSystemLibrary(void *libraryHandle)
++{
++    if (libraryHandle)
++    {
++        CloseLibrary(static_cast<ArosLibrary *>(libraryHandle));
++    }
++}
++
++bool IsDebuggerAttached()
++{
++    return false;
++}
++
++void BreakDebugger()
++{
++    ArosLogUnsupported("BreakDebugger");
++    abort();
++}
++
++uint64_t GetProcessMemoryUsageKB()
++{
++    return 0;
++}
++
++bool ProtectMemory(uintptr_t, size_t)
++{
++    ArosLogUnsupported("ProtectMemory");
++    return false;
++}
++
++bool UnprotectMemory(uintptr_t, size_t)
++{
++    ArosLogUnsupported("UnprotectMemory");
++    return false;
++}
++
++size_t GetPageSize()
++{
++    return 4096;
++}
++
++namespace
++{
++class ArosPageFaultHandler final : public PageFaultHandler
++{
++  public:
++    explicit ArosPageFaultHandler(PageFaultCallback callback) : PageFaultHandler(callback) {}
++
++    bool enable() override
++    {
++        ArosLogUnsupported("PageFaultHandler::enable");
++        return false;
++    }
++
++    bool disable() override { return true; }
++};
++}  // namespace
++
++PageFaultHandler *CreatePageFaultHandler(PageFaultCallback callback)
++{
++    return new ArosPageFaultHandler(callback);
++}
++
++void SetCurrentThreadName(const char *name)
++{
++    pthread_setname_np(pthread_self(), name);
++}
++
++}  // namespace angle
+diff --git a/src/libGLESv2.gni b/src/libGLESv2.gni
+index 10565a1..2d05144 100644
+--- a/src/libGLESv2.gni
++++ b/src/libGLESv2.gni
+@@ -115,6 +115,10 @@ if (is_linux || is_chromeos || is_android || is_fuchsia) {
+   ]
+ }
+ 
++if (is_aros) {
++  libangle_common_sources += [ "src/common/system_utils_aros.cpp" ]
++}
++
+ if (is_apple) {
+   libangle_common_sources += [
+     "src/common/apple/SoftLinking.h",

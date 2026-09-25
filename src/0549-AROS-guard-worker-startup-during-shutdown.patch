@@ -1,0 +1,491 @@
+From 9fb0c27126327601e4bbf26a37c6e8837e1bef49 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 11:38:17 -0500
+Subject: [PATCH 549/638] AROS: guard worker startup during shutdown
+
+Add an AROS process-wide child shutdown flag so off-thread service worker startup checks do not dereference ChildProcess::current() during teardown. Suppress late dedicated/service worker startup once renderer shutdown has begun.
+
+Make AROS service-worker ping timeouts observe-only and single-shot. YouTube playback can keep the renderer visibly alive while the service worker Mojo ping does not reach the worker context thread, so do not stop the worker from the watchdog; retain AROS ping/stage telemetry for the hosted replay.
+
+Evidence: build173 chrome sha256 fa90761fc45261927e5b205be2a36815284dc288534b06330bc6887364ea0009 copied into hosted with matching hash. run106 reached YouTube, started sw.js, sent one ping, logged one timeout observe-only, did not emit 'Service Worker is not responding', and did not repeat the timeout in the sampled window.
+---
+ .../service_worker_ping_controller.cc         | 22 +++++++++++++++
+ .../service_worker/service_worker_version.cc  |  5 ++++
+ content/child/child_process.cc                | 19 +++++++++++++
+ content/child/child_process.h                 |  4 +++
+ .../renderer/renderer_blink_platform_impl.cc  |  9 ++++++
+ .../renderer/renderer_blink_platform_impl.h   |  1 +
+ .../embedded_worker_instance_client_impl.cc   | 11 ++++++++
+ .../service_worker_context_client.cc          | 28 +++++++++++++++++++
+ third_party/blink/public/platform/platform.h  |  1 +
+ .../workers/threaded_messaging_proxy_base.cc  | 12 ++++++++
+ .../exported/web_embedded_worker_impl.cc      | 25 +++++++++++++++++
+ .../service_worker_global_scope.cc            |  5 ++++
+ 12 files changed, 142 insertions(+)
+
+diff --git a/content/browser/service_worker/service_worker_ping_controller.cc b/content/browser/service_worker/service_worker_ping_controller.cc
+index b47ee123f7..436351c62a 100644
+--- a/content/browser/service_worker/service_worker_ping_controller.cc
++++ b/content/browser/service_worker/service_worker_ping_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/browser/service_worker/service_worker_ping_controller.h"
+ 
++#include "base/logging.h"
++#include "build/build_config.h"
+ #include "content/browser/service_worker/service_worker_version.h"
+ 
+ namespace content {
+@@ -20,15 +22,24 @@ ServiceWorkerPingController::ServiceWorkerPingController(
+ ServiceWorkerPingController::~ServiceWorkerPingController() = default;
+ 
+ void ServiceWorkerPingController::Activate() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] activate";
++#endif
+   ping_state_ = PingState::kPinging;
+ }
+ 
+ void ServiceWorkerPingController::Deactivate() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] deactivate";
++#endif
+   ClearLastPingTime();
+   ping_state_ = PingState::kNotPinging;
+ }
+ 
+ void ServiceWorkerPingController::OnPongReceived() {
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] pong";
++#endif
+   ClearLastPingTime();
+ }
+ 
+@@ -41,7 +52,15 @@ bool ServiceWorkerPingController::IsTimedOut() const {
+ }
+ 
+ void ServiceWorkerPingController::CheckPingStatus() {
++#if BUILDFLAG(IS_AROS)
++  if (ping_state_ == PingState::kPingTimedOut)
++    return;
++#endif
++
+   if (version_->GetTickDuration(last_ping_time_) > kPingTimeout) {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] timeout";
++#endif
+     ping_state_ = PingState::kPingTimedOut;
+     version_->OnPingTimeout();
+     return;
+@@ -52,6 +71,9 @@ void ServiceWorkerPingController::CheckPingStatus() {
+     return;
+ 
+   version_->PingWorker();
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] ping";
++#endif
+   version_->RestartTick(&last_ping_time_);
+ }
+ 
+diff --git a/content/browser/service_worker/service_worker_version.cc b/content/browser/service_worker/service_worker_version.cc
+index 9205ed014a..bad57c5f6c 100644
+--- a/content/browser/service_worker/service_worker_version.cc
++++ b/content/browser/service_worker/service_worker_version.cc
+@@ -29,6 +29,7 @@
+ #include "base/time/default_tick_clock.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/uuid.h"
++#include "build/build_config.h"
+ #include "components/services/storage/public/mojom/service_worker_database.mojom-forward.h"
+ #include "content/browser/bad_message.h"
+ #include "content/browser/child_process_security_policy_impl.h"
+@@ -2576,6 +2577,10 @@ void ServiceWorkerVersion::PingWorker() {
+ void ServiceWorkerVersion::OnPingTimeout() {
+   DCHECK(running_status() == blink::EmbeddedWorkerStatus::kStarting ||
+          running_status() == blink::EmbeddedWorkerStatus::kRunning);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] timeout observe-only";
++  return;
++#endif
+   MaybeReportConsoleMessageToInternals(
+       blink::mojom::ConsoleMessageLevel::kVerbose, kNotRespondingErrorMesage);
+   embedded_worker_->StopIfNotAttachedToDevTools();
+diff --git a/content/child/child_process.cc b/content/child/child_process.cc
+index 2e15099721..539e12f4b2 100644
+--- a/content/child/child_process.cc
++++ b/content/child/child_process.cc
+@@ -6,6 +6,8 @@
+ 
+ #include <string.h>
+ 
++#include <atomic>
++
+ #include "base/clang_profiling_buildflags.h"
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+@@ -42,6 +44,10 @@ namespace {
+ 
+ ABSL_CONST_INIT thread_local ChildProcess* child_process = nullptr;
+ 
++#if BUILDFLAG(IS_AROS)
++std::atomic_bool g_process_shutdown_started{false};
++#endif
++
+ class ChildIOThread : public base::Thread {
+  public:
+   ChildIOThread() : base::Thread("Chrome_ChildIOThread") {}
+@@ -67,6 +73,10 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
+                                thread_pool_init_params)
+     : resetter_(&child_process, this, nullptr),
+       io_thread_(std::make_unique<ChildIOThread>()) {
++#if BUILDFLAG(IS_AROS)
++  g_process_shutdown_started.store(false, std::memory_order_release);
++#endif
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+@@ -149,6 +159,7 @@ ChildProcess::~ChildProcess() {
+ 
+ #if BUILDFLAG(IS_AROS)
+   VLOG(1) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor begin";
++  g_process_shutdown_started.store(true, std::memory_order_release);
+ #endif
+ 
+   // Signal this event before destroying the child process.  That way all
+@@ -250,6 +261,14 @@ ChildProcess* ChildProcess::current() {
+   return child_process;
+ }
+ 
++bool ChildProcess::IsProcessShutdownStarted() {
++#if BUILDFLAG(IS_AROS)
++  return g_process_shutdown_started.load(std::memory_order_acquire);
++#else
++  return false;
++#endif
++}
++
+ base::WaitableEvent* ChildProcess::GetShutDownEvent() {
+   return &shutdown_event_;
+ }
+diff --git a/content/child/child_process.h b/content/child/child_process.h
+index f1fedbdff1..eeadf8ca8a 100644
+--- a/content/child/child_process.h
++++ b/content/child/child_process.h
+@@ -97,6 +97,10 @@ class CONTENT_EXPORT ChildProcess {
+   // on the main thread.
+   static ChildProcess* current();
+ 
++  // Thread-safe shutdown observation for code paths that may run off the
++  // ChildProcess owner thread.
++  static bool IsProcessShutdownStarted();
++
+  private:
+   const base::AutoReset<ChildProcess*> resetter_;
+ 
+diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
+index f8bd867f76..c0a68af3a0 100644
+--- a/content/renderer/renderer_blink_platform_impl.cc
++++ b/content/renderer/renderer_blink_platform_impl.cc
+@@ -846,6 +846,15 @@ RendererBlinkPlatformImpl::CreateDedicatedWorkerHostFactoryClient(
+                                                             interface_broker);
+ }
+ 
++bool RendererBlinkPlatformImpl::IsWorkerThreadStartupAllowed() {
++#if BUILDFLAG(IS_AROS)
++  RenderThreadImpl* thread = RenderThreadImpl::current();
++  return !thread || !thread->GetShutdownEvent()->IsSignaled();
++#else
++  return true;
++#endif
++}
++
+ void RendererBlinkPlatformImpl::DidStartWorkerThread() {
+   WorkerThreadRegistry::Instance()->DidStartCurrentWorkerThread();
+ }
+diff --git a/content/renderer/renderer_blink_platform_impl.h b/content/renderer/renderer_blink_platform_impl.h
+index 98f9b71b7c..988dc01dc9 100644
+--- a/content/renderer/renderer_blink_platform_impl.h
++++ b/content/renderer/renderer_blink_platform_impl.h
+@@ -184,6 +184,7 @@ class CONTENT_EXPORT RendererBlinkPlatformImpl : public BlinkPlatformImpl {
+   CreateDedicatedWorkerHostFactoryClient(
+       blink::WebDedicatedWorker*,
+       const blink::BrowserInterfaceBrokerProxy&) override;
++  bool IsWorkerThreadStartupAllowed() override;
+   void DidStartWorkerThread() override;
+   void WillStopWorkerThread() override;
+   void WorkerContextCreated(const v8::Local<v8::Context>& worker) override;
+diff --git a/content/renderer/service_worker/embedded_worker_instance_client_impl.cc b/content/renderer/service_worker/embedded_worker_instance_client_impl.cc
+index c4fb4fdbe9..c9f082fbe3 100644
+--- a/content/renderer/service_worker/embedded_worker_instance_client_impl.cc
++++ b/content/renderer/service_worker/embedded_worker_instance_client_impl.cc
+@@ -7,10 +7,13 @@
+ #include <memory>
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/trace_event/trace_event.h"
++#include "build/build_config.h"
++#include "content/child/child_process.h"
+ #include "content/child/child_thread_impl.h"
+ #include "content/child/scoped_child_process_reference.h"
+ #include "content/public/common/content_client.h"
+@@ -62,6 +65,14 @@ void EmbeddedWorkerInstanceClientImpl::StartWorker(
+   auto start_timing = blink::mojom::EmbeddedWorkerStartTiming::New();
+   start_timing->start_worker_received_time = base::TimeTicks::Now();
+ 
++#if BUILDFLAG(IS_AROS)
++  if (ChildProcess::IsProcessShutdownStarted()) {
++    LOG(ERROR) << "[Chromium:AROS:WorkerShutdown] dropping service worker "
++                  "startup after child shutdown began";
++    return;
++  }
++#endif
++
+   std::unique_ptr<blink::WebEmbeddedWorkerStartData> start_data =
+       BuildStartData(*params);
+   if (params->main_script_load_params) {
+diff --git a/content/renderer/service_worker/service_worker_context_client.cc b/content/renderer/service_worker/service_worker_context_client.cc
+index 1a0ee0160e..251d0a1422 100644
+--- a/content/renderer/service_worker/service_worker_context_client.cc
++++ b/content/renderer/service_worker/service_worker_context_client.cc
+@@ -14,6 +14,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/ranges/algorithm.h"
+@@ -24,6 +25,7 @@
+ #include "base/threading/thread_checker.h"
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
++#include "build/build_config.h"
+ #include "content/public/common/content_features.h"
+ #include "content/public/common/referrer.h"
+ #include "content/public/renderer/content_renderer_client.h"
+@@ -202,6 +204,10 @@ void ServiceWorkerContextClient::StartWorkerContextOnInitiatorThread(
+     mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker>
+         browser_interface_broker) {
+   DCHECK(initiator_thread_task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] start-context version="
++             << service_worker_version_id_ << " script=" << script_url_;
++#endif
+   worker_ = std::move(worker);
+   worker_->StartWorkerContext(
+       std::move(start_data), std::move(installed_scripts_manager_params),
+@@ -263,6 +269,10 @@ void ServiceWorkerContextClient::FailedToFetchModuleScript() {
+ 
+ void ServiceWorkerContextClient::WorkerScriptLoadedOnWorkerThread() {
+   DCHECK(worker_task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] script-loaded version="
++             << service_worker_version_id_ << " script=" << script_url_;
++#endif
+   instance_host_->OnScriptLoaded();
+   base::UmaHistogramTimes(
+       base::StrCat(
+@@ -282,6 +292,10 @@ void ServiceWorkerContextClient::WorkerContextStarted(
+   DCHECK(worker_task_runner->RunsTasksInCurrentSequence());
+   DCHECK(!worker_task_runner_);
+   worker_task_runner_ = std::move(worker_task_runner);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] context-started version="
++             << service_worker_version_id_ << " script=" << script_url_;
++#endif
+   DCHECK(!proxy_);
+   proxy_ = proxy;
+ 
+@@ -306,6 +320,10 @@ void ServiceWorkerContextClient::WorkerContextStarted(
+ void ServiceWorkerContextClient::WillEvaluateScript(
+     v8::Local<v8::Context> v8_context) {
+   DCHECK(worker_task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] will-evaluate version="
++             << service_worker_version_id_ << " script=" << script_url_;
++#endif
+   start_timing_->script_evaluation_start_time = base::TimeTicks::Now();
+ 
+   // Temporary CHECK for https://crbug.com/881100
+@@ -328,6 +346,11 @@ void ServiceWorkerContextClient::WillEvaluateScript(
+ 
+ void ServiceWorkerContextClient::DidEvaluateScript(bool success) {
+   DCHECK(worker_task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] did-evaluate version="
++             << service_worker_version_id_ << " success=" << success
++             << " script=" << script_url_;
++#endif
+   start_timing_->script_evaluation_end_time = base::TimeTicks::Now();
+ 
+   // Temporary CHECK for https://crbug.com/881100
+@@ -507,6 +530,11 @@ void ServiceWorkerContextClient::OnNavigationPreloadComplete(
+ void ServiceWorkerContextClient::SendWorkerStarted(
+     blink::mojom::ServiceWorkerStartStatus status) {
+   DCHECK(worker_task_runner_->RunsTasksInCurrentSequence());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] send-started version="
++             << service_worker_version_id_ << " status="
++             << static_cast<int>(status) << " script=" << script_url_;
++#endif
+   // |context_| is valid because this task was posted to |worker_task_runner_|.
+   DCHECK(context_);
+ 
+diff --git a/third_party/blink/public/platform/platform.h b/third_party/blink/public/platform/platform.h
+index dd4d7af0a5..569530ded3 100644
+--- a/third_party/blink/public/platform/platform.h
++++ b/third_party/blink/public/platform/platform.h
+@@ -633,6 +633,7 @@ class BLINK_PLATFORM_EXPORT Platform {
+   virtual std::unique_ptr<WebDedicatedWorkerHostFactoryClient>
+   CreateDedicatedWorkerHostFactoryClient(WebDedicatedWorker*,
+                                          const BrowserInterfaceBrokerProxy&);
++  virtual bool IsWorkerThreadStartupAllowed() { return true; }
+   virtual void DidStartWorkerThread() {}
+   virtual void WillStopWorkerThread() {}
+   virtual void WorkerContextCreated(const v8::Local<v8::Context>& worker) {}
+diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
+index e23bb31031..29736a541c 100644
+--- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
++++ b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
+@@ -5,9 +5,12 @@
+ #include "third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h"
+ 
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/synchronization/waitable_event.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/task_type.h"
++#include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/platform/web_worker_fetch_context.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/inspector/console_message.h"
+@@ -67,6 +70,15 @@ void ThreadedMessagingProxyBase::InitializeWorkerThread(
+     std::unique_ptr<WorkerDevToolsParams> client_provided_devtools_params) {
+   DCHECK(IsParentContextThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  if (!Platform::Current()->IsWorkerThreadStartupAllowed()) {
++    LOG(ERROR) << "[Chromium:AROS:WorkerShutdown] suppressing worker startup "
++                  "after renderer shutdown began";
++    asked_to_terminate_ = true;
++    return;
++  }
++#endif
++
+   KURL script_url = global_scope_creation_params->script_url;
+ 
+   if (global_scope_creation_params->web_worker_fetch_context) {
+diff --git a/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc b/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
+index f0908b7af6..b610db8494 100644
+--- a/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
++++ b/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
+@@ -32,7 +32,9 @@
+ 
+ #include <memory>
+ #include <utility>
++#include "base/logging.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "services/network/public/cpp/shared_url_loader_factory.h"
+ #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
+@@ -118,6 +120,10 @@ void WebEmbeddedWorkerImpl::StartWorkerContext(
+     InterfaceRegistry* interface_registry,
+     scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner) {
+   DCHECK(!asked_to_terminate_);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] web-start-context script="
++             << worker_start_data->script_url;
++#endif
+ 
+   std::unique_ptr<ServiceWorkerInstalledScriptsManager>
+       installed_scripts_manager;
+@@ -156,6 +162,11 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+     InterfaceRegistry* interface_registry,
+     scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner) {
+   DCHECK(!asked_to_terminate_);
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] web-start-thread script="
++             << worker_start_data->script_url << " type="
++             << static_cast<int>(worker_start_data->script_type);
++#endif
+ 
+   // For now we don't use global scope name for service workers.
+   const String global_scope_name = g_empty_string;
+@@ -242,6 +253,9 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+   worker_thread_->Start(std::move(global_scope_creation_params),
+                         WorkerBackingThreadStartupData::CreateDefault(),
+                         std::move(devtools_params));
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] web-thread-start-called";
++#endif
+ 
+   std::unique_ptr<CrossThreadFetchClientSettingsObjectData>
+       fetch_client_setting_object_data = CreateFetchClientSettingsObjectData(
+@@ -257,6 +271,10 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+     // > url, job's client, "serviceworker", and the to-be-created environment
+     // > settings object for this service worker.
+     case mojom::blink::ScriptType::kClassic:
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:ServiceWorker] fetch-classic script="
++                 << worker_start_data->script_url;
++#endif
+       worker_thread_->FetchAndRunClassicScript(
+           worker_start_data->script_url,
+           std::move(worker_start_data->main_script_load_params),
+@@ -270,6 +288,10 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+     // > script url, job’s client, "serviceworker", "omit", and the
+     // > to-be-created environment settings object for this service worker.
+     case mojom::blink::ScriptType::kModule:
++#if BUILDFLAG(IS_AROS)
++      LOG(ERROR) << "[Chromium:AROS:ServiceWorker] fetch-module script="
++                 << worker_start_data->script_url;
++#endif
+       worker_thread_->FetchAndRunModuleScript(
+           worker_start_data->script_url,
+           std::move(worker_start_data->main_script_load_params),
+@@ -284,6 +306,9 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+   worker_context_client_->WorkerReadyForInspectionOnInitiatorThread(
+       std::move(devtools_agent_remote),
+       std::move(devtools_agent_host_receiver));
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorker] ready-for-inspection";
++#endif
+ }
+ 
+ std::unique_ptr<CrossThreadFetchClientSettingsObjectData>
+diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
+index 4fb81baab8..1a90d51c2c 100644
+--- a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
++++ b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
+@@ -36,12 +36,14 @@
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/feature_list.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/ranges/algorithm.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "services/network/public/cpp/cross_origin_embedder_policy.h"
+ #include "services/network/public/mojom/cookie_manager.mojom-blink.h"
+@@ -2568,6 +2570,9 @@ void ServiceWorkerGlobalScope::StartContentDeleteEvent(String id,
+ 
+ void ServiceWorkerGlobalScope::Ping(PingCallback callback) {
+   DCHECK(IsContextThread());
++#if BUILDFLAG(IS_AROS)
++  LOG(ERROR) << "[Chromium:AROS:ServiceWorkerPing] worker-received";
++#endif
+   std::move(callback).Run();
+ }
+ 

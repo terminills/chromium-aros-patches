@@ -1,0 +1,375 @@
+From 83dcf9ca9fdd502af588244f69960f617928dbd3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:49:18 -0500
+Subject: [PATCH 005/638] mojo: bridge AROS shared-region platform handles
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Mojo serializes shared buffers as POSIX file-descriptor pairs, but AROS's current Chromium base backend represents a duplicated same-address-space region by refcounted native identity rather than an fd.
+
+FIX_REASON: Add a typed AROS shared-memory platform handle and teach legacy Mojo and ipcz shared-buffer paths to retain, clone, serialize, and release that identity without truncating it into a 32-bit file descriptor.
+
+SCOPE: Mojo C/C++ platform-handle ABI, shared-buffer dispatch, core wrapping, ipcz shared buffers, and platform-handle utilities.
+
+VALIDATION: all focused Mojo shared-buffer and platform-handle objects compile in the AROS headless graph.
+
+RISK: medium; valid for single-address-space bring-up, while protected cross-domain transfer awaits OPAL/MMU mapping records and a native channel transport.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ mojo/core/core.cc                           |  3 +-
+ mojo/core/core_ipcz.cc                      |  8 +++-
+ mojo/core/ipcz_driver/shared_buffer.cc      |  6 ++-
+ mojo/core/platform_handle_utils.cc          |  6 +++
+ mojo/core/shared_buffer_dispatcher.cc       |  3 +-
+ mojo/public/c/system/platform_handle.h      |  6 +++
+ mojo/public/cpp/platform/platform_handle.cc | 52 +++++++++++++++++++++
+ mojo/public/cpp/platform/platform_handle.h  | 35 ++++++++++++++
+ mojo/public/cpp/system/platform_handle.cc   | 12 +++++
+ 9 files changed, 125 insertions(+), 6 deletions(-)
+
+diff --git a/mojo/core/core.cc b/mojo/core/core.cc
+index a7b0be7961..90bb8fd57e 100644
+--- a/mojo/core/core.cc
++++ b/mojo/core/core.cc
+@@ -683,7 +683,8 @@ MojoResult Core::CreateDataPipe(const MojoCreateDataPipeOptions* options,
+   // consumer of this pipe, and it would be impossible to support such access
+   // control on Android anyway.
+   auto writable_region_handle = ring_buffer_region.PassPlatformHandle();
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+   // This isn't strictly necessary, but it does make the handle configuration
+   // consistent with regular UnsafeSharedMemoryRegions.
+   writable_region_handle.readonly_fd.reset();
+diff --git a/mojo/core/core_ipcz.cc b/mojo/core/core_ipcz.cc
+index 1a7f6159a2..546df843e7 100644
+--- a/mojo/core/core_ipcz.cc
++++ b/mojo/core/core_ipcz.cc
+@@ -686,7 +686,8 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
+ 
+   uint32_t capacity = *num_platform_handles;
+   uint32_t required_handles = 1;
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && \
++    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_AROS)
+   if (buffer->region().GetMode() ==
+       base::subtle::PlatformSharedMemoryRegion::Mode::kWritable) {
+     required_handles = 2;
+@@ -700,7 +701,10 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
+   PlatformHandle handles[2];
+   base::subtle::ScopedPlatformSharedMemoryHandle region_handle =
+       buffer->region().PassPlatformHandle();
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_AROS)
++  handles[0] = PlatformHandle(std::move(region_handle));
++#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && \
++    !BUILDFLAG(IS_ANDROID)
+   handles[0] = PlatformHandle(std::move(region_handle.fd));
+   handles[1] = PlatformHandle(std::move(region_handle.readonly_fd));
+ #else
+diff --git a/mojo/core/ipcz_driver/shared_buffer.cc b/mojo/core/ipcz_driver/shared_buffer.cc
+index 879fafd665..63ce939df5 100644
+--- a/mojo/core/ipcz_driver/shared_buffer.cc
++++ b/mojo/core/ipcz_driver/shared_buffer.cc
+@@ -62,6 +62,8 @@ CreateRegionHandleFromPlatformHandles(
+   return zx::vmo(handles[0].TakeHandle());
+ #elif BUILDFLAG(IS_APPLE)
+   return handles[0].TakeMachSendRight();
++#elif BUILDFLAG(IS_AROS)
++  return handles[0].TakeArosSharedMemory();
+ #elif BUILDFLAG(IS_ANDROID)
+   return handles[0].TakeFD();
+ #else
+@@ -172,7 +174,7 @@ bool SharedBuffer::GetSerializedDimensions(Transport& transmitter,
+                                            size_t& num_handles) {
+   num_bytes = sizeof(BufferHeader);
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_FUCHSIA) || \
+-    BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+   num_handles = 1;
+ #else
+   if (region_.GetMode() ==
+@@ -214,7 +216,7 @@ bool SharedBuffer::Serialize(Transport& transmitter,
+ 
+   auto handle = region_.PassPlatformHandle();
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_FUCHSIA) || \
+-    BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+   DCHECK_EQ(handles.size(), 1u);
+   handles[0] = PlatformHandle(std::move(handle));
+ #else
+diff --git a/mojo/core/platform_handle_utils.cc b/mojo/core/platform_handle_utils.cc
+index e95b2cb09b..3b2fb70339 100644
+--- a/mojo/core/platform_handle_utils.cc
++++ b/mojo/core/platform_handle_utils.cc
+@@ -36,6 +36,9 @@ void ExtractPlatformHandlesFromSharedMemoryRegionHandle(
+   // This is a Mach port. Same code as above and below, but separated for
+   // clarity.
+   *extracted_handle = PlatformHandle(std::move(handle));
++#elif BUILDFLAG(IS_AROS)
++  *extracted_handle = PlatformHandle(std::move(handle));
++  *extracted_readonly_handle = PlatformHandle();
+ #elif BUILDFLAG(IS_ANDROID)
+   // This is a file descriptor. Same code as above, but separated for clarity.
+   *extracted_handle = PlatformHandle(std::move(handle));
+@@ -58,6 +61,9 @@ CreateSharedMemoryRegionHandleFromPlatformHandles(
+ #elif BUILDFLAG(IS_APPLE)
+   DCHECK(!readonly_handle.is_valid());
+   return handle.TakeMachSendRight();
++#elif BUILDFLAG(IS_AROS)
++  DCHECK(!readonly_handle.is_valid());
++  return handle.TakeArosSharedMemory();
+ #elif BUILDFLAG(IS_ANDROID)
+   DCHECK(!readonly_handle.is_valid());
+   return handle.TakeFD();
+diff --git a/mojo/core/shared_buffer_dispatcher.cc b/mojo/core/shared_buffer_dispatcher.cc
+index ab30a68b08..1c630e11b4 100644
+--- a/mojo/core/shared_buffer_dispatcher.cc
++++ b/mojo/core/shared_buffer_dispatcher.cc
+@@ -265,7 +265,8 @@ MojoResult SharedBufferDispatcher::DuplicateBufferHandle(
+     } else if (region_.GetMode() ==
+                base::subtle::PlatformSharedMemoryRegion::Mode::kWritable) {
+       auto handle = region_.PassPlatformHandle();
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_APPLE)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && \
++    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_AROS)
+       // On POSIX systems excluding Android, Fuchsia, iOS, and macOS, we
+       // explicitly wipe out the secondary (read-only) FD from the platform
+       // handle to repurpose it for exclusive unsafe usage.
+diff --git a/mojo/public/c/system/platform_handle.h b/mojo/public/c/system/platform_handle.h
+index c91b462658..b686ec870d 100644
+--- a/mojo/public/c/system/platform_handle.h
++++ b/mojo/public/c/system/platform_handle.h
+@@ -50,6 +50,12 @@ typedef uint32_t MojoPlatformHandleType;
+ // opaquely of type |mach_port_t|). Only usable on macOS hosts.
+ #define MOJO_PLATFORM_HANDLE_TYPE_MACH_RECEIVE_RIGHT ((MojoPlatformHandleType)5)
+ 
++// The value represents an AROS same-address-space shared-memory region. The
++// low bit carries the read-only state; the remaining bits identify the
++// reference-counted region object. Only usable on AROS hosts.
++#define MOJO_PLATFORM_HANDLE_TYPE_AROS_SHARED_MEMORY \
++  ((MojoPlatformHandleType)6)
++
+ // |MojoPlatformHandle|: A handle to a native platform object.
+ //
+ //     |uint32_t struct_size|: The size of this structure. Used for versioning
+diff --git a/mojo/public/cpp/platform/platform_handle.cc b/mojo/public/cpp/platform/platform_handle.cc
+index 02f751714a..46245636b1 100644
+--- a/mojo/public/cpp/platform/platform_handle.cc
++++ b/mojo/public/cpp/platform/platform_handle.cc
+@@ -9,6 +9,10 @@
+ #include "base/logging.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/memory/platform_shared_memory_aros.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+ 
+@@ -123,6 +127,13 @@ PlatformHandle::PlatformHandle(base::ScopedFD fd)
+ }
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++PlatformHandle::PlatformHandle(
++    base::subtle::ScopedArosSharedMemoryHandle shared_memory)
++    : type_(Type::kArosSharedMemory),
++      aros_shared_memory_(std::move(shared_memory)) {}
++#endif
++
+ PlatformHandle::~PlatformHandle() = default;
+ 
+ PlatformHandle& PlatformHandle::operator=(PlatformHandle&& other) {
+@@ -142,6 +153,10 @@ PlatformHandle& PlatformHandle::operator=(PlatformHandle&& other) {
+   fd_ = std::move(other.fd_);
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  aros_shared_memory_ = std::move(other.aros_shared_memory_);
++#endif
++
+   return *this;
+ }
+ 
+@@ -181,6 +196,17 @@ void PlatformHandle::ToMojoPlatformHandle(PlatformHandle handle,
+     }
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++    if (handle.is_aros_shared_memory()) {
++      auto shared_memory = handle.TakeArosSharedMemory().release();
++      const uintptr_t region = reinterpret_cast<uintptr_t>(shared_memory.region);
++      CHECK_EQ(region & uintptr_t{1}, uintptr_t{0});
++      out_handle->type = MOJO_PLATFORM_HANDLE_TYPE_AROS_SHARED_MEMORY;
++      out_handle->value = region | (shared_memory.read_only ? 1u : 0u);
++      break;
++    }
++#endif
++
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+     DCHECK(handle.is_fd());
+     out_handle->type = MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR;
+@@ -218,6 +244,16 @@ PlatformHandle PlatformHandle::FromMojoPlatformHandle(
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_AROS_SHARED_MEMORY) {
++    const uintptr_t value = static_cast<uintptr_t>(handle->value);
++    base::subtle::ArosSharedMemoryHandle shared_memory = {
++        reinterpret_cast<void*>(value & ~uintptr_t{1}), (value & 1u) != 0};
++    return PlatformHandle(
++        base::subtle::ScopedArosSharedMemoryHandle(shared_memory));
++  }
++#endif
++
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   if (handle->type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
+     return PlatformHandle();
+@@ -240,6 +276,10 @@ void PlatformHandle::reset() {
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   fd_.reset();
+ #endif
++
++#if BUILDFLAG(IS_AROS)
++  aros_shared_memory_.reset();
++#endif
+ }
+ 
+ void PlatformHandle::release() {
+@@ -257,6 +297,10 @@ void PlatformHandle::release() {
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   std::ignore = fd_.release();
+ #endif
++
++#if BUILDFLAG(IS_AROS)
++  std::ignore = aros_shared_memory_.release();
++#endif
+ }
+ 
+ PlatformHandle PlatformHandle::Clone() const {
+@@ -271,6 +315,14 @@ PlatformHandle PlatformHandle::Clone() const {
+     return PlatformHandle(CloneMachPort(mach_send_));
+   CHECK(!is_valid_mach_receive()) << "Cannot clone Mach receive rights";
+   return PlatformHandle(CloneFD(fd_));
++#elif BUILDFLAG(IS_AROS)
++  if (is_valid_aros_shared_memory()) {
++    auto shared_memory = aros_shared_memory_.get();
++    base::subtle::RetainArosSharedMemoryHandle(shared_memory);
++    return PlatformHandle(
++        base::subtle::ScopedArosSharedMemoryHandle(shared_memory));
++  }
++  return PlatformHandle(CloneFD(fd_));
+ #elif BUILDFLAG(IS_POSIX)
+   return PlatformHandle(CloneFD(fd_));
+ #endif
+diff --git a/mojo/public/cpp/platform/platform_handle.h b/mojo/public/cpp/platform/platform_handle.h
+index 7a6547d0ef..6c892e4602 100644
+--- a/mojo/public/cpp/platform/platform_handle.h
++++ b/mojo/public/cpp/platform/platform_handle.h
+@@ -11,6 +11,10 @@
+ #include "build/build_config.h"
+ #include "mojo/public/c/system/platform_handle.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/memory/platform_shared_memory_handle.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include "base/win/scoped_handle.h"
+ #elif BUILDFLAG(IS_FUCHSIA)
+@@ -43,6 +47,9 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+  public:
+   enum class Type {
+     kNone,
++#if BUILDFLAG(IS_AROS)
++    kArosSharedMemory,
++#endif
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+     kHandle,
+ #elif BUILDFLAG(IS_APPLE)
+@@ -70,6 +77,11 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+   explicit PlatformHandle(base::ScopedFD fd);
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  explicit PlatformHandle(
++      base::subtle::ScopedArosSharedMemoryHandle shared_memory);
++#endif
++
+   PlatformHandle(const PlatformHandle&) = delete;
+   PlatformHandle& operator=(const PlatformHandle&) = delete;
+ 
+@@ -165,6 +177,25 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+   [[nodiscard]] mach_port_t ReleaseMachReceiveRight() {
+     return TakeMachReceiveRight().release();
+   }
++#elif BUILDFLAG(IS_AROS)
++  bool is_valid() const {
++    return is_valid_fd() || is_valid_aros_shared_memory();
++  }
++  bool is_valid_aros_shared_memory() const {
++    return aros_shared_memory_.is_valid();
++  }
++  bool is_aros_shared_memory() const {
++    return type_ == Type::kArosSharedMemory;
++  }
++  const base::subtle::ScopedArosSharedMemoryHandle& GetArosSharedMemory()
++      const {
++    return aros_shared_memory_;
++  }
++  base::subtle::ScopedArosSharedMemoryHandle TakeArosSharedMemory() {
++    if (type_ == Type::kArosSharedMemory)
++      type_ = Type::kNone;
++    return std::move(aros_shared_memory_);
++  }
+ #elif BUILDFLAG(IS_POSIX)
+   bool is_valid() const { return is_valid_fd(); }
+ #else
+@@ -230,6 +261,10 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   base::ScopedFD fd_;
+ #endif
++
++#if BUILDFLAG(IS_AROS)
++  base::subtle::ScopedArosSharedMemoryHandle aros_shared_memory_;
++#endif
+ };
+ 
+ }  // namespace mojo
+diff --git a/mojo/public/cpp/system/platform_handle.cc b/mojo/public/cpp/system/platform_handle.cc
+index 09e209dd70..5d16ee6edd 100644
+--- a/mojo/public/cpp/system/platform_handle.cc
++++ b/mojo/public/cpp/system/platform_handle.cc
+@@ -69,6 +69,9 @@ ScopedSharedBufferHandle WrapPlatformSharedMemoryRegion(
+ #elif BUILDFLAG(IS_APPLE)
+   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT;
+   platform_handles[0].value = static_cast<uint64_t>(handle.release());
++#elif BUILDFLAG(IS_AROS)
++  PlatformHandle::ToMojoPlatformHandle(PlatformHandle(std::move(handle)),
++                                       &platform_handles[0]);
+ #elif BUILDFLAG(IS_ANDROID)
+   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR;
+   platform_handles[0].value = static_cast<uint64_t>(handle.release());
+@@ -134,6 +137,15 @@ base::subtle::PlatformSharedMemoryRegion UnwrapPlatformSharedMemoryRegion(
+   if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT)
+     return base::subtle::PlatformSharedMemoryRegion();
+   region_handle.reset(static_cast<mach_port_t>(platform_handles[0].value));
++#elif BUILDFLAG(IS_AROS)
++  if (num_platform_handles != 1 ||
++      platform_handles[0].type !=
++          MOJO_PLATFORM_HANDLE_TYPE_AROS_SHARED_MEMORY) {
++    return base::subtle::PlatformSharedMemoryRegion();
++  }
++  region_handle =
++      PlatformHandle::FromMojoPlatformHandle(&platform_handles[0])
++          .TakeArosSharedMemory();
+ #elif BUILDFLAG(IS_ANDROID)
+   if (num_platform_handles != 1)
+     return base::subtle::PlatformSharedMemoryRegion();

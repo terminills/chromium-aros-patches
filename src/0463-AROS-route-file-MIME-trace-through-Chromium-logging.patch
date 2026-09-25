@@ -1,0 +1,48 @@
+From 231516ccee01b2541a413c24d19e694865ffaf79 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 09:08:02 -0500
+Subject: [PATCH 463/638] AROS: route file MIME trace through Chromium logging
+
+
+
+---
+ content/browser/loader/file_url_loader_factory.cc | 12 +++++-------
+ 1 file changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/content/browser/loader/file_url_loader_factory.cc b/content/browser/loader/file_url_loader_factory.cc
+index 0372d70a91..1ec296460a 100644
+--- a/content/browser/loader/file_url_loader_factory.cc
++++ b/content/browser/loader/file_url_loader_factory.cc
+@@ -4,7 +4,6 @@
+ 
+ #include "content/browser/loader/file_url_loader_factory.h"
+ 
+-#include <cstdio>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -17,6 +16,7 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/i18n/time_formatting.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/string_piece.h"
+@@ -690,12 +690,10 @@ class FileURLLoader : public network::mojom::URLLoader {
+     const bool found_mime_type =
+         net::GetMimeTypeFromFile(full_path, &head->mime_type);
+ #if BUILDFLAG(IS_AROS)
+-    fprintf(stderr,
+-            "[Chromium:AROS:FileURL] response path='%s' extension='%s' "
+-            "mime_found=%d mime='%s'\n",
+-            full_path.AsUTF8Unsafe().c_str(),
+-            full_path.Extension().c_str(), found_mime_type,
+-            head->mime_type.c_str());
++    LOG(ERROR) << "[Chromium:AROS:FileURL] response path='"
++               << full_path.AsUTF8Unsafe() << "' extension='"
++               << full_path.Extension() << "' mime_found=" << found_mime_type
++               << " mime='" << head->mime_type << "'";
+ #endif
+     if (!found_mime_type) {
+       std::string new_type;

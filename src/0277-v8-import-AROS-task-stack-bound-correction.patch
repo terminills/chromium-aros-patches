@@ -1,0 +1,29 @@
+From bafd26a596c650c0ae887651c4061114bdd9e820 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 23:46:11 -0500
+Subject: [PATCH 277/638] v8: import AROS task stack-bound correction
+
+Update the pinned V8 checkout so shared v8.library queries stack bounds from the current AROS Exec task instead of host emulated TLS.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: runtime-stack-tls-correction-imported
+
+AI_ASSUMPTION: nested V8 commit 921060e is the canonical implementation boundary
+
+AI_VALIDATION: Chromium shared-v8 runtime failure was captured at V8 Stack::GetStackStart on a preload-scanner task
+
+AI_LIMITATIONS: rebuild and runtime revalidation remain pending
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index afd67a4266..921060e60f 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit afd67a426649dc669a527fc3bc47ec5f1491987f
++Subproject commit 921060e60fc47b92d896cbf289cce0fcac32654f

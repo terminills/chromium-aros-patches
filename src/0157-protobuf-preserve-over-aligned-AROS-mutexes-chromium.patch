@@ -1,0 +1,105 @@
+From b439f7435d6cd7f99ef87b9641a1bd99eedbde0c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:12:35 -0500
+Subject: [PATCH 157/638] protobuf: preserve over-aligned AROS mutexes
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: The SMP AROS pthread mutex embeds a 128-byte-aligned Exec spinlock, but Protobuf flat descriptor storage supports member alignments only through 16 bytes.
+FIX_REASON: Keep WrappedMutex constant-initializable, then construct the native std::mutex once on first use in explicitly aligned indirect storage; descriptor objects remain pointer-aligned without changing lock behavior.
+VALIDATION: protobuf_full descriptor.o and struct.pb.o compile in out/aros-windowed.
+RISK: Each used Protobuf WrappedMutex has one small backing allocation on AROS; MMU-backed allocator work can later optimize that storage.
+---
+ .../src/google/protobuf/stubs/mutex.h         | 61 +++++++++++++++++--
+ 1 file changed, 57 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/protobuf/src/google/protobuf/stubs/mutex.h b/third_party/protobuf/src/google/protobuf/stubs/mutex.h
+index c4599913be..2e5929d2d3 100644
+--- a/third_party/protobuf/src/google/protobuf/stubs/mutex.h
++++ b/third_party/protobuf/src/google/protobuf/stubs/mutex.h
+@@ -30,7 +30,10 @@
+ #ifndef GOOGLE_PROTOBUF_STUBS_MUTEX_H_
+ #define GOOGLE_PROTOBUF_STUBS_MUTEX_H_
+ 
++#include <atomic>
++#include <memory>
+ #include <mutex>
++#include <new>
+ 
+ #ifdef GOOGLE_PROTOBUF_SUPPORT_WINDOWS_XP
+ 
+@@ -118,19 +121,69 @@ class CallOnceInitializedMutex {
+ // mutexes.
+ class GOOGLE_PROTOBUF_CAPABILITY("mutex") PROTOBUF_EXPORT WrappedMutex {
+  public:
+-#if defined(__QNX__)
++#if defined(__AROS__)
++  constexpr WrappedMutex() = default;
++  ~WrappedMutex() { delete mutex_.load(std::memory_order_relaxed); }
++#elif defined(__QNX__)
+   constexpr WrappedMutex() = default;
+ #else
+   constexpr WrappedMutex() {}
+ #endif
+-  void Lock() GOOGLE_PROTOBUF_ACQUIRE() { mu_.lock(); }
+-  void Unlock() GOOGLE_PROTOBUF_RELEASE() { mu_.unlock(); }
++  void Lock() GOOGLE_PROTOBUF_ACQUIRE() {
++#if defined(__AROS__)
++    GetMutex().lock();
++#else
++    mu_.lock();
++#endif
++  }
++  void Unlock() GOOGLE_PROTOBUF_RELEASE() {
++#if defined(__AROS__)
++    GetMutex().unlock();
++#else
++    mu_.unlock();
++#endif
++  }
+   // Crash if this Mutex is not held exclusively by this thread.
+   // May fail to crash when it should; will never crash when it should not.
+   void AssertHeld() const {}
+ 
+  private:
+-#if defined(GOOGLE_PROTOBUF_SUPPORT_WINDOWS_XP)
++#if defined(__AROS__)
++  struct IndirectMutex {
++    static constexpr size_t kStorageSize =
++        sizeof(std::mutex) + alignof(std::mutex) - 1;
++
++    IndirectMutex() : storage(new unsigned char[kStorageSize]) {
++      void* candidate = storage.get();
++      size_t space = kStorageSize;
++      void* aligned =
++          std::align(alignof(std::mutex), sizeof(std::mutex), candidate, space);
++      mutex = ::new (aligned) std::mutex();
++    }
++
++    ~IndirectMutex() { mutex->~mutex(); }
++
++    std::unique_ptr<unsigned char[]> storage;
++    std::mutex* mutex = nullptr;
++  };
++
++  std::mutex& GetMutex() {
++    IndirectMutex* current = mutex_.load(std::memory_order_acquire);
++    if (!current) {
++      IndirectMutex* created = new IndirectMutex;
++      if (mutex_.compare_exchange_strong(current, created,
++                                         std::memory_order_release,
++                                         std::memory_order_acquire)) {
++        current = created;
++      } else {
++        delete created;
++      }
++    }
++    return *current->mutex;
++  }
++
++  std::atomic<IndirectMutex*> mutex_{nullptr};
++#elif defined(GOOGLE_PROTOBUF_SUPPORT_WINDOWS_XP)
+   CallOnceInitializedMutex<CriticalSectionLock> mu_{};
+ #elif defined(_WIN32)
+   CallOnceInitializedMutex<std::mutex> mu_{};

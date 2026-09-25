@@ -1,0 +1,99 @@
+From 5608e6140c4c66d2d6918e017a40eb6f2cc6da6e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 00:58:51 -0500
+Subject: [PATCH 133/638] [AROS] Serialize exposed DevTools page delivery
+
+---
+ .../devtools/protocol/target_handler.cc       | 50 +++++++++++++++++--
+ 1 file changed, 45 insertions(+), 5 deletions(-)
+
+diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
+index d84912f3bf..01cc4a29f1 100644
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/devtools/protocol/target_handler.h"
+ 
++#include <deque>
+ #include <memory>
+ 
+ #include "base/base64.h"
+@@ -246,14 +247,52 @@ class BrowserToPageConnector {
+     base::Value message(std::move(message_dict));
+     std::string json_message;
+     base::JSONWriter::Write(message, &json_message);
++#if BUILDFLAG(IS_AROS)
++    DCHECK(!page_dispatch_in_progress_);
++    page_dispatch_in_progress_ = true;
++#endif
+     page_host_->DispatchProtocolMessage(
+         page_host_client_.get(), base::as_bytes(base::make_span(json_message)));
+ #if BUILDFLAG(IS_AROS)
++    page_dispatch_in_progress_ = false;
+     LOG(INFO) << "[Chromium:cdp-bridge] page command method=" << method
+               << " id=" << page_message_id_ - 1;
++    MaybeSchedulePageEvaluation();
+ #endif
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  void QueuePageEvaluation(base::Value params) {
++    pending_page_evaluations_.push_back(std::move(params));
++    MaybeSchedulePageEvaluation();
++  }
++
++  void MaybeSchedulePageEvaluation() {
++    if (page_dispatch_in_progress_ || page_delivery_task_posted_ ||
++        pending_page_evaluations_.empty()) {
++      return;
++    }
++
++    page_delivery_task_posted_ = true;
++    page_delivery_task_runner_->PostTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserToPageConnector::DeliverNextPageEvaluation,
++                       weak_ptr_factory_.GetWeakPtr()));
++  }
++
++  void DeliverNextPageEvaluation() {
++    page_delivery_task_posted_ = false;
++    if (page_dispatch_in_progress_ || pending_page_evaluations_.empty()) {
++      MaybeSchedulePageEvaluation();
++      return;
++    }
++
++    base::Value params = std::move(pending_page_evaluations_.front());
++    pending_page_evaluations_.pop_front();
++    SendProtocolMessageToPage("Runtime.evaluate", std::move(params));
++  }
++#endif
++
+   void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
+                                base::span<const uint8_t> message) {
+     base::StringPiece message_sp(reinterpret_cast<const char*>(message.data()),
+@@ -322,11 +361,7 @@ class BrowserToPageConnector {
+     // browser response while the page's previous Runtime.evaluate is still on
+     // the stack. Defer delivery so that evaluation can return before the next
+     // command enters the renderer agent.
+-    page_delivery_task_runner_->PostTask(
+-        FROM_HERE,
+-        base::BindOnce(&BrowserToPageConnector::SendProtocolMessageToPage,
+-                       weak_ptr_factory_.GetWeakPtr(), "Runtime.evaluate",
+-                       base::Value(std::move(params))));
++    QueuePageEvaluation(base::Value(std::move(params)));
+ #else
+     SendProtocolMessageToPage("Runtime.evaluate",
+                               base::Value(std::move(params)));
+@@ -354,6 +389,11 @@ class BrowserToPageConnector {
+   std::unique_ptr<BrowserConnectorHostClient> browser_host_client_;
+   std::unique_ptr<BrowserConnectorHostClient> page_host_client_;
+   int page_message_id_ = 0;
++#if BUILDFLAG(IS_AROS)
++  std::deque<base::Value> pending_page_evaluations_;
++  bool page_dispatch_in_progress_ = false;
++  bool page_delivery_task_posted_ = false;
++#endif
+   base::WeakPtrFactory<BrowserToPageConnector> weak_ptr_factory_{this};
+ };
+ 

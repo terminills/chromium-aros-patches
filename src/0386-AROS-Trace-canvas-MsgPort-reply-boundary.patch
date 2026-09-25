@@ -1,0 +1,91 @@
+From 8e8c8e7e32dcc09c846875663d7681b0e4248537 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 23:32:38 -0500
+Subject: [PATCH 386/638] [AROS] Trace canvas MsgPort reply boundary
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+OBSERVED: Runtime 26 visibly painted the browser surface but web contents remained at Loading. Browser logs reached native backing-store allocation while Viz never reached its post-WaitPort marker.
+
+FIX_REASON: Add first-request-only markers at browser receipt, PresentPixels completion, ReplyMsg completion, and Viz's pre-WaitPort edge. Transport semantics remain unchanged until the exact stall is observed.
+
+SCOPE: AROS Ozone window manager only; no relocation, loader, graphics, or generic Chromium changes.
+
+VALIDATION: clang-format and cached diff check pass; runtime validation follows under.
+
+AI_DECISION_CHAIN: runtime 26 partial-paint verdict
+---
+ ui/ozone/platform/aros/aros_window_manager.cc | 26 +++++++++++++++++++
+ ui/ozone/platform/aros/aros_window_manager.h  |  2 ++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 57b1ea9cde..2ed586cfa0 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -186,8 +186,18 @@ void ArosWindowManager::ProcessNativeEvents() {
+   if (presentation_port_) {
+     while (auto* request = reinterpret_cast<ArosPresentMessage*>(
+                GetMsg(presentation_port_))) {
++      bool first_request = false;
++      const gfx::AcceleratedWidget widget = request->widget;
+       {
+         base::AutoLock lock(lock_);
++        first_request = !logged_received_present_;
++        if (first_request) {
++          logged_received_present_ = true;
++          LOG(INFO) << "[Chromium:Ozone:AROS] received first cross-Process "
++                       "canvas present widget="
++                    << request->widget << " pixels=" << request->pixels
++                    << " size=" << request->width << "x" << request->height;
++        }
+         const auto it = windows_.find(request->widget);
+         request->result =
+             it != windows_.end() &&
+@@ -196,8 +206,18 @@ void ArosWindowManager::ProcessNativeEvents() {
+                 gfx::Size(request->width, request->height),
+                 gfx::Rect(request->damage_x, request->damage_y,
+                           request->damage_width, request->damage_height));
++        if (first_request) {
++          LOG(INFO) << "[Chromium:Ozone:AROS] completed first cross-Process "
++                       "canvas paint widget="
++                    << request->widget << " result=" << request->result;
++        }
+       }
+       ReplyMsg(&request->message);
++      if (first_request) {
++        LOG(INFO) << "[Chromium:Ozone:AROS] replied to first cross-Process "
++                     "canvas present widget="
++                  << widget;
++      }
+     }
+   }
+ }
+@@ -236,6 +256,12 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+     return false;
+   }
+ 
++  if (!logged_waiting_present_reply_) {
++    logged_waiting_present_reply_ = true;
++    LOG(INFO) << "[Chromium:Ozone:AROS] waiting for first cross-Process "
++                 "canvas reply widget="
++              << widget;
++  }
+   WaitPort(presentation_reply_port_);
+   CHECK_EQ(GetMsg(presentation_reply_port_), &request.message);
+   if (!logged_forwarded_present_) {
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 89d36a725e..c6d41b5bac 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -66,6 +66,8 @@ class ArosWindowManager {
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
+   bool owns_presentation_port_ = false;
++  bool logged_received_present_ GUARDED_BY(lock_) = false;
++  bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;
+ };
+ 

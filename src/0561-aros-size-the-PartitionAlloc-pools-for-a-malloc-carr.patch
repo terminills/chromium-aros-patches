@@ -1,0 +1,66 @@
+From bbb9bd2e2de7fa6f57ed237532103df4f50179c3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 05:05:09 -0500
+Subject: [PATCH 561/638] aros: size the PartitionAlloc pools for a
+ malloc-carrying regular pool
+
+Give the regular pool the 2 GiB maximum since it also carries malloc() once
+the allocator shim is in use, and size the BRP and configurable pools to what
+they need on AROS (BRP is unsupported and only has to exist; the V8 sandbox
+reserves its pool up front) so the reservations fit the hosted RAM.
+---
+ .../src/partition_alloc/partition_address_space.h  | 14 ++++++++++++--
+ .../partition_alloc/partition_alloc_constants.h    |  6 ++++--
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
+index 39644800b7..e699231866 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
+@@ -269,17 +269,27 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) PartitionAddressSpace {
+   // region. One use case for this Pool is V8 Sandbox, which requires that
+   // ArrayBuffers be located inside of it.
+   static constexpr size_t kRegularPoolSize = kPoolMaxSize;
++#if BUILDFLAG(IS_AROS)
++  // Pools are physically backed on AROS (see kPoolMaxSize). BackupRefPtr is
++  // not supported there, so the BRP pool only needs to exist.
++  static constexpr size_t kBRPPoolSize = kGiB / 2;
++#else
+   static constexpr size_t kBRPPoolSize = kPoolMaxSize;
++#endif
+   static_assert(std::has_single_bit(kRegularPoolSize));
+   static_assert(std::has_single_bit(kBRPPoolSize));
+ #if BUILDFLAG(ENABLE_THREAD_ISOLATION)
+   static constexpr size_t kThreadIsolatedPoolSize = kGiB / 4;
+   static_assert(std::has_single_bit(kThreadIsolatedPoolSize));
+ #endif
+-  static constexpr size_t kConfigurablePoolMaxSize = kPoolMaxSize;
+ #if BUILDFLAG(IS_AROS)
+-  static constexpr size_t kConfigurablePoolMinSize = kPoolMaxSize;
++  // The configurable pool hosts the V8 sandbox, which reserves the pool up
++  // front; keep that reservation bounded like the other physically backed
++  // pools.
++  static constexpr size_t kConfigurablePoolMaxSize = kGiB / 2;
++  static constexpr size_t kConfigurablePoolMinSize = kGiB / 2;
+ #else
++  static constexpr size_t kConfigurablePoolMaxSize = kPoolMaxSize;
+   static constexpr size_t kConfigurablePoolMinSize = 1 * kGiB;
+ #endif
+   static_assert(kConfigurablePoolMinSize <= kConfigurablePoolMaxSize);
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+index 4669e605e9..ffa2fa7393 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+@@ -315,8 +315,10 @@ constexpr size_t kNumPools = kMaxPoolHandle - 1;
+ #if BUILDFLAG(IS_AROS)
+ // KrnAllocPages() currently provides physically backed pages rather than a
+ // sparse virtual reservation. Keep the pre-MMU pools bounded until AROS can
+-// reserve and commit address space independently.
+-constexpr size_t kPoolMaxSize = kGiB / 2;
++// reserve and commit address space independently. The regular pool also
++// carries malloc() when the allocator shim is in use, so it gets the maximum;
++// the smaller pools size themselves in partition_address_space.h.
++constexpr size_t kPoolMaxSize = 2 * kGiB;
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || \
+     BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+ constexpr size_t kPoolMaxSize = 8 * kGiB;

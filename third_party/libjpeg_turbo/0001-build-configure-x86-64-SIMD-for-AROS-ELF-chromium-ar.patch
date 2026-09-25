@@ -1,0 +1,58 @@
+From fe5a387cbefbe46a152c3bb3deceecfd850ec2d9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 14:11:40 -0500
+Subject: [PATCH] build: configure x86-64 SIMD for AROS ELF [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: libjpeg-turbo's NASM target did not classify AROS as ELF, and the SIMD helper compiled without the feature-test level needed to declare the already-implemented setenv API.
+
+FIX_REASON: Select the ELF assembler object format and expose POSIX.1-2008 declarations for AROS-specific SIMD/config targets rather than disabling x86-64 acceleration.
+
+SCOPE: third_party/libjpeg_turbo/BUILD.gn AROS defines only.
+
+VALIDATION: the focused jsimd object and downstream Skia JPEG codec objects compile in the headless graph.
+
+RISK: low; generated code keeps the same x86-64 ABI and uses AROS's implemented environment API.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ BUILD.gn | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index b39d278..ed11cc0 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -136,7 +136,8 @@ if (current_cpu == "x86" || current_cpu == "x64") {
+       }
+     } else if (is_mac || is_ios) {
+       defines += [ "MACHO" ]
+-    } else if (is_linux || is_android || is_fuchsia || is_chromeos) {
++    } else if (is_linux || is_android || is_fuchsia || is_chromeos ||
++               is_aros) {
+       defines += [ "ELF" ]
+     }
+   }
+@@ -146,6 +147,9 @@ static_library("simd") {
+   include_dirs = [ "." ]
+   deps = [ ":libjpeg_headers" ]
+   defines = [ "MANGLE_JPEG_NAMES" ]
++  if (is_aros) {
++    defines += [ "_POSIX_C_SOURCE=200809L" ]
++  }
+ 
+   if (current_cpu == "x86") {
+     deps += [ ":simd_asm" ]
+@@ -199,6 +203,9 @@ static_library("simd") {
+ config("libjpeg_config") {
+   include_dirs = [ "." ]
+   defines = [ "MANGLE_JPEG_NAMES" ]
++  if (is_aros) {
++    defines += [ "_POSIX_C_SOURCE=200809L" ]
++  }
+ }
+ 
+ static_library("libjpeg") {

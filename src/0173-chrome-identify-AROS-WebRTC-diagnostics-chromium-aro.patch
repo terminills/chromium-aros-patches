@@ -1,0 +1,32 @@
+From e8a0e24791275a2b35febe8a2a893753c83a8a82 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:20:20 -0500
+Subject: [PATCH 173/638] chrome: identify AROS WebRTC diagnostics [chromium]
+ [aros]
+
+Statement: WebRTC log metadata requires a platform product string and fails compilation for unclassified desktop targets.
+
+Decision: Label native AROS browser logs as Chrome_AROS while preserving all existing upload behavior.
+
+Evidence: The real Chrome browser graph reached the uploader's unsupported-platform branch.
+
+Validation: webrtc_log_uploader.o compiles in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ chrome/browser/media/webrtc/webrtc_log_uploader.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/chrome/browser/media/webrtc/webrtc_log_uploader.cc b/chrome/browser/media/webrtc/webrtc_log_uploader.cc
+index aaf7ed7fa8..6bc698d534 100644
+--- a/chrome/browser/media/webrtc/webrtc_log_uploader.cc
++++ b/chrome/browser/media/webrtc/webrtc_log_uploader.cc
+@@ -112,6 +112,8 @@ std::string GetLogUploadProduct() {
+   const char product[] = "Chrome_ChromeOS";
+ #elif BUILDFLAG(IS_FUCHSIA)
+   const char product[] = "Chrome_Fuchsia";
++#elif BUILDFLAG(IS_AROS)
++  const char product[] = "Chrome_AROS";
+ #else
+ #error Platform not supported.
+ #endif

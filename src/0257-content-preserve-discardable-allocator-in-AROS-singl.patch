@@ -1,0 +1,69 @@
+From 13de93f94e6437aa4042d2fea30256c44f4d0e47 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 18 Jul 2026 15:27:00 -0500
+Subject: [PATCH 257/638] content: preserve discardable allocator in AROS
+ single-process [chromium] [aros]
+
+AI_PHASE: chromium GPU bridge single-process bring-up
+
+AI_STATUS: hosted allocator handoff fixed; native pending
+
+ROOT_CAUSE: Chromium deliberately skips BrowserMainLoop discardable allocator publication under --single-process for Android WebView. AROS uses that mode as a temporary child-process transport bridge, so Skia first reached a null global allocator on Chrome_IOThread. Publishing the browser manager alone then exposed the paired issue: RenderThreadImpl installed a second client allocator and tripped Chromium's single-owner DCHECK.
+
+FIX_REASON: Publish the already-created browser-owned DiscardableSharedMemoryManager only for AROS single-process mode, then keep RenderThreadImpl from replacing that process-global allocator in the same mode. This implements both halves of Chromium's existing crbug.com/503724 TODO without weakening the allocator invariant.
+
+SCOPE: AROS plus --single-process only. All other platforms and normal multi-process AROS behavior retain the existing registration path.
+
+VALIDATION: ninja -C out/aros-chrome chrome rebuilt both touched objects and linked chrome. Private 16 GiB hosted replay candidate 5ebc9c66d42bebf9bac04db3957ec201503a85f77481a4c51a35b8040657d2d6 reached New Tab paint construction with no discardable_memory_allocator.cc fatal. debug.resource TaskTrace captured Chrome_IOThread waiting in MessagePumpAROS::WaitForIdleEvents rather than aborting.
+
+CLASSIFICATION: hosted reproduced and fixed; native pending. The resulting guest client area remains visually black, which is a separate hosted presentation issue and is not claimed fixed here.
+
+EVIDENCE: chromium-aros/test-artifacts/hosted-20260718-gl-binding-boundary/25-discardable-memory-single-process-replay-hosted.log; 26-discardable-memory-single-process-replay-hosted.png; 27-discardable-memory-single-process-tasktrace-hosted.txt
+
+RISK: low. The change preserves Chromium's single allocator owner contract and activates only during the AROS bridge mode.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/browser/browser_main_loop.cc   |  7 ++++++-
+ content/renderer/render_thread_impl.cc | 10 ++++++++--
+ 2 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
+index 40087ce5a3..6b0f9f0d8f 100644
+--- a/content/browser/browser_main_loop.cc
++++ b/content/browser/browser_main_loop.cc
+@@ -717,7 +717,12 @@ void BrowserMainLoop::PostCreateMainMessageLoop() {
+ 
+   // TODO(boliu): kSingleProcess check is a temporary workaround for
+   // in-process Android WebView. crbug.com/503724 tracks proper fix.
+-  if (!parsed_command_line_->HasSwitch(switches::kSingleProcess)) {
++  //
++  // AROS currently uses single-process mode as its temporary child-process
++  // transport bridge. Its browser-owned discardable-memory manager is still
++  // created, and Skia uses it from Chrome_IOThread, so publish that manager.
++  if (BUILDFLAG(IS_AROS) ||
++      !parsed_command_line_->HasSwitch(switches::kSingleProcess)) {
+     base::DiscardableMemoryAllocator::SetInstance(
+         discardable_memory::DiscardableSharedMemoryManager::Get());
+   }
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index b43b4aeaef..6eb0630dd9 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -608,8 +608,14 @@ void RenderThreadImpl::Init() {
+   // TODO(boliu): In single process, browser main loop should set up the
+   // discardable memory manager, and should skip this if kSingleProcess.
+   // See crbug.com/503724.
+-  base::DiscardableMemoryAllocator::SetInstance(
+-      discardable_memory_allocator_.get());
++  // AROS uses the browser-owned manager while its child-process transport is
++  // bridged through single-process mode. Do not replace that global instance
++  // from the in-process renderer thread.
++  if (!BUILDFLAG(IS_AROS) ||
++      !command_line.HasSwitch(switches::kSingleProcess)) {
++    base::DiscardableMemoryAllocator::SetInstance(
++        discardable_memory_allocator_.get());
++  }
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   // The SandboxedProcessThreadTypeHandler isn't created in

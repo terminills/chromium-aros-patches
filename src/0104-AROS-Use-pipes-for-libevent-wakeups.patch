@@ -1,0 +1,41 @@
+From def84d9cb574e1bdbed83eeea638ff82dce32610 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 23:05:42 -0500
+Subject: [PATCH 104/638] [AROS] Use pipes for libevent wakeups
+
+AI_PHASE: Chromium hosted runtime bring-up
+
+AI_STATUS: implemented
+
+ROOT_CAUSE: The AROS evutil_socketpair branch returned ENOSYS even though signal.c already treats the wakeup pair as read/write file descriptors. Every worker MessagePumpLibevent therefore failed in evsignal_init before entering its loop.
+
+FIX_REASON: A POSIX pipe supplies exactly the unidirectional wakeup behavior used by the AROS signal handler and avoids involving task-owned bsdsocket.library state.
+
+SCOPE: third_party/libevent/evutil.c
+
+VALIDATION: ninja obj/third_party/libevent/libevent/evutil.o
+
+RISK: Low. The change is AROS-only and preserves the existing libevent fd pair contract.
+
+AI_DECISION_CHAIN: ACD-chromium-aros-port-roadmap
+
+Continues: 8df7662723 [AROS] Use Exec tasks for thread identity
+---
+ third_party/libevent/evutil.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/third_party/libevent/evutil.c b/third_party/libevent/evutil.c
+index 191175fa06..8d73ee26d7 100644
+--- a/third_party/libevent/evutil.c
++++ b/third_party/libevent/evutil.c
+@@ -68,9 +68,7 @@ evutil_socketpair(int family, int type, int protocol, int fd[2])
+ 	(void)family;
+ 	(void)type;
+ 	(void)protocol;
+-	(void)fd;
+-	errno = ENOSYS;
+-	return -1;
++	return pipe(fd);
+ #elif !defined(WIN32)
+ 	return socketpair(family, type, protocol, fd);
+ #else

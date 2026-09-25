@@ -1,0 +1,66 @@
+From 55f001110e337981c943b84b6bbc40080ec4d454 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:38:21 -0500
+Subject: [PATCH 195/638] safe_browsing: stream AROS uploads from copied
+ mappings [chromium] [aros]
+
+Statement:
+Cloud content scanning selected its POSIX mmap-only file wrapper on AROS, preventing the full Chrome graph from compiling despite AROS already providing a copy-backed MemoryMappedFile implementation.
+
+Decision:
+Use base::MemoryMappedFile for AROS while retaining the specialized mmap retry wrapper on other POSIX systems. Keep multipart and resumable Safe Browsing data-pipe uploads functional.
+
+Evidence:
+connector_data_pipe_getter.o builds successfully in out/aros-chrome without sys/mman.h.
+
+Chain:
+ first native upstream Chromium browser window.
+---
+ .../cloud_content_scanning/connector_data_pipe_getter.cc    | 6 +++---
+ .../cloud_content_scanning/connector_data_pipe_getter.h     | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.cc b/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.cc
+index 3be0179c46..8943384b25 100644
+--- a/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.cc
++++ b/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.cc
+@@ -14,7 +14,7 @@
+ #include "mojo/public/c/system/data_pipe.h"
+ #include "net/base/net_errors.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include <sys/mman.h>
+ 
+ #include "base/threading/scoped_blocking_call.h"
+@@ -30,7 +30,7 @@ constexpr int64_t kMaxSize = 32 * 1024;
+ 
+ }  // namespace
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ bool ConnectorDataPipeGetter::InternalMemoryMappedFile::Initialize(
+     base::File file) {
+   if (IsValid())
+@@ -92,7 +92,7 @@ void ConnectorDataPipeGetter::InternalMemoryMappedFile::CloseHandles() {
+   file_.Close();
+ }
+ 
+-#endif  // BUILDFLAG(IS_POSIX)
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ 
+ // static
+ std::unique_ptr<ConnectorDataPipeGetter>
+diff --git a/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.h b/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.h
+index 974aac91a7..d5e05b045d 100644
+--- a/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.h
++++ b/chrome/browser/safe_browsing/cloud_content_scanning/connector_data_pipe_getter.h
+@@ -35,7 +35,7 @@ namespace safe_browsing {
+ // 2. Resumable request with a body that contains solely file or page data.
+ class ConnectorDataPipeGetter : public network::mojom::DataPipeGetter {
+  public:
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // Mimics base::MemoryMappedFile for READ_ONLY access.
+   // The only difference between this class and base::MemoryMappedFile is that
+   // if the mmap call fails using MAP_SHARED it will retry it with MAP_PRIVATE.

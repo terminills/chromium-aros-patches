@@ -1,0 +1,29 @@
+From 0c2b7ecc76f69b6b5c8c872369e85ed9ed629540 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:41:06 -0500
+Subject: [PATCH 286/638] deps: checkpoint Dawn native AROS baseline
+
+Advance the Dawn gitlink to b1906015, which carries the committed native AROS platform baseline used by the current Chromium build.
+
+AI_PHASE: chromium-aros-display
+
+AI_STATUS: gitlink-checkpoint
+
+AI_ASSUMPTION: Dawn b1906015 is the intended complete nested AROS baseline
+
+AI_VALIDATION: nested repository is clean; focused blink_platform build completed 15781/15781 with this revision
+
+AI_LIMITATIONS: this does not prove a hardware-backed Dawn runtime
+
+AI_DECISION_CHAIN:
+---
+ third_party/dawn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/dawn b/third_party/dawn
+index c00db02cbb..b19060158a 160000
+--- a/third_party/dawn
++++ b/third_party/dawn
+@@ -1 +1 @@
+-Subproject commit c00db02cbbfedcc03ce23a2f237468d1405a5cda
++Subproject commit b19060158a383f03605a147c19c028469a18ebf6

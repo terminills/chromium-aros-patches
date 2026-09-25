@@ -1,0 +1,39 @@
+From 17bbe57ab57728466c7c9a2ecb01e20724de5047 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 15:17:15 -0500
+Subject: [PATCH 576/638] profile menu: no profile-management section on AROS
+
+---
+ .../browser/ui/views/profiles/profile_menu_view.cc   | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/ui/views/profiles/profile_menu_view.cc b/chrome/browser/ui/views/profiles/profile_menu_view.cc
+index 2f7bd35a23..65c71d3dd2 100644
+--- a/chrome/browser/ui/views/profiles/profile_menu_view.cc
++++ b/chrome/browser/ui/views/profiles/profile_menu_view.cc
+@@ -158,8 +158,10 @@ void ProfileMenuView::BuildMenu() {
+     BuildFeatureButtons();
+   }
+ 
+-//  ChromeOS doesn't support multi-profile.
+-#if !BUILDFLAG(IS_CHROMEOS_ASH)
++//  ChromeOS doesn't support multi-profile; AROS has the one profile of
++//  its in-process browser (profiles::IsProfileCreationAllowed()), so there
++//  is no list to head, nothing to switch to and nothing to add or manage.
++#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_AROS)
+   if (!(profile->IsGuestSession())) {
+     SetProfileManagementHeading(l10n_util::GetStringUTF16(
+         switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+@@ -882,12 +884,6 @@ void ProfileMenuView::BuildAvailableProfiles() {
+ }
+ 
+ void ProfileMenuView::BuildProfileManagementFeatureButtons() {
+-#if BUILDFLAG(IS_AROS)
+-  // One profile only (see profiles::IsProfileCreationAllowed()): there is
+-  // nothing to add, switch to or manage, and the "managed" hint that stands
+-  // in for the manage button elsewhere would be wrong here.
+-  return;
+-#endif
+   bool profiles_selectable = true;
+ #if BUILDFLAG(IS_CHROMEOS_LACROS)
+   profiles_selectable = profiles::AreSecondaryProfilesAllowed();

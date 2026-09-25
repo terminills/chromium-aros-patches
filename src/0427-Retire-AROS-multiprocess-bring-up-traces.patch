@@ -1,0 +1,1684 @@
+From ea0875ca554fa709d53bb88a16efaf65b74ac41a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:02:00 -0500
+Subject: [PATCH 427/638] [AROS] Retire AROS multiprocess bring-up traces
+
+Remove committed child-launch, compositor, raster, scheduler, input, and job telemetry from the active binary after it served its bring-up purpose. The diagnostic checkpoints and failed assumptions remain preserved in history. Genuine launch and presentation failures remain logged.
+
+---
+ base/task/common/task_annotator.cc            |  19 ---
+ base/task/post_job.cc                         |  34 +----
+ base/task/thread_pool/job_task_source.cc      |  30 +---
+ .../async_layer_tree_frame_sink.cc            | 116 --------------
+ .../async_layer_tree_frame_sink.h             |   8 -
+ cc/raster/categorized_worker_pool.cc          |  40 -----
+ cc/raster/zero_copy_raster_buffer_provider.cc |  34 -----
+ cc/scheduler/scheduler.cc                     |  40 -----
+ cc/scheduler/scheduler.h                      |   5 -
+ cc/scheduler/scheduler_state_machine.cc       |  55 -------
+ cc/scheduler/scheduler_state_machine.h        |   4 -
+ cc/tiles/tile_manager.cc                      |  75 ---------
+ cc/trees/layer_tree_host.cc                   |  28 ----
+ cc/trees/layer_tree_host.h                    |   6 -
+ cc/trees/layer_tree_host_impl.cc              | 144 +-----------------
+ cc/trees/layer_tree_host_impl.h               |   5 -
+ cc/trees/proxy_impl.cc                        |  13 --
+ cc/trees/proxy_impl.h                         |   1 -
+ cc/trees/proxy_main.cc                        |  19 ---
+ cc/trees/proxy_main.h                         |   1 -
+ .../browser/child_process_launcher_helper.cc  |  28 ----
+ .../child_process_launcher_helper_aros.cc     |   5 -
+ .../renderer_host/render_widget_host_impl.cc  |  47 ------
+ .../widget/input/main_thread_event_queue.cc   |  55 +------
+ .../renderer/platform/widget/widget_base.cc   |  32 ----
+ ui/ozone/platform/aros/aros_window.cc         |  12 +-
+ 26 files changed, 8 insertions(+), 848 deletions(-)
+
+diff --git a/base/task/common/task_annotator.cc b/base/task/common/task_annotator.cc
+index d003594b5f..28e046d6c4 100644
+--- a/base/task/common/task_annotator.cc
++++ b/base/task/common/task_annotator.cc
+@@ -22,7 +22,6 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/base_tracing.h"
+ #include "base/tracing_buildflags.h"
+-#include "build/build_config.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ 
+ #if BUILDFLAG(ENABLE_BASE_TRACING)
+@@ -154,10 +153,6 @@ void TaskAnnotator::WillQueueTask(perfetto::StaticString trace_event_name,
+ }
+ 
+ void TaskAnnotator::RunTaskImpl(PendingTask& pending_task) {
+-#if BUILDFLAG(IS_AROS)
+-  const TimeTicks aros_task_start = TimeTicks::Now();
+-#endif
+-
+   TRACE_HEAP_PROFILER_API_SCOPED_TASK_EXECUTION(
+       pending_task.posted_from.file_name());
+ 
+@@ -208,20 +203,6 @@ void TaskAnnotator::RunTaskImpl(PendingTask& pending_task) {
+     std::move(pending_task.task).Run();
+   }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  const TimeDelta aros_task_duration = TimeTicks::Now() - aros_task_start;
+-  static thread_local uint32_t aros_slow_task_reports = 0;
+-  if (aros_task_duration >= Milliseconds(250) &&
+-      aros_slow_task_reports < 32) {
+-    LOG(ERROR) << "[AROS_TASK] slow-run duration_us="
+-               << aros_task_duration.InMicroseconds()
+-               << " sequence=" << pending_task.sequence_num
+-               << " delayed=" << !pending_task.delayed_run_time.is_null()
+-               << " posted_from=" << pending_task.posted_from.ToString();
+-    ++aros_slow_task_reports;
+-  }
+-#endif
+-
+   // Stomp the markers. Otherwise they can stick around on the unused parts of
+   // stack and cause |task_backtrace| to be associated with an unrelated stack
+   // sample on this thread later in the event of a crash. Alias once again after
+diff --git a/base/task/post_job.cc b/base/task/post_job.cc
+index b7947e7884..69fa3190c8 100644
+--- a/base/task/post_job.cc
++++ b/base/task/post_job.cc
+@@ -4,24 +4,16 @@
+ 
+ #include "base/task/post_job.h"
+ 
+-#include <atomic>
+-
+-#include "base/logging.h"
+ #include "base/task/scoped_set_task_priority_for_current_thread.h"
+ #include "base/task/thread_pool/job_task_source.h"
+ #include "base/task/thread_pool/pooled_task_runner_delegate.h"
+ #include "base/task/thread_pool/thread_pool_impl.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
+-#include "build/build_config.h"
+ 
+ namespace base {
+ 
+ namespace {
+ 
+-#if BUILDFLAG(IS_AROS)
+-std::atomic<int> g_aros_job_notify_log_count{0};
+-#endif
+-
+ scoped_refptr<internal::JobTaskSource> CreateJobTaskSource(
+     const Location& from_here,
+     const TaskTraits& traits,
+@@ -116,33 +108,11 @@ void JobHandle::UpdatePriority(TaskPriority new_priority) {
+ }
+ 
+ void JobHandle::NotifyConcurrencyIncrease() {
+-  const bool delegate_matches =
+-      internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+-          task_source_->delegate());
+-#if BUILDFLAG(IS_AROS)
+-  const bool log_aros_notify =
+-      g_aros_job_notify_log_count.fetch_add(1, std::memory_order_relaxed) < 64;
+-  if (log_aros_notify) {
+-    LOG(ERROR) << "[AROS_JOB] notify handle=" << this
+-               << " source=" << task_source_.get()
+-               << " delegate_matches=" << delegate_matches
+-               << " workers=" << task_source_->GetWorkerCount()
+-               << " max=" << task_source_->GetMaxConcurrency()
+-               << " remaining=" << task_source_->GetRemainingConcurrency();
+-  }
+-#endif
+-  if (!delegate_matches) {
++  if (!internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
++          task_source_->delegate())) {
+     return;
+   }
+   task_source_->NotifyConcurrencyIncrease();
+-#if BUILDFLAG(IS_AROS)
+-  if (log_aros_notify) {
+-    LOG(ERROR) << "[AROS_JOB] notify-return source=" << task_source_.get()
+-               << " workers=" << task_source_->GetWorkerCount()
+-               << " max=" << task_source_->GetMaxConcurrency()
+-               << " remaining=" << task_source_->GetRemainingConcurrency();
+-  }
+-#endif
+ }
+ 
+ void JobHandle::Join() {
+diff --git a/base/task/thread_pool/job_task_source.cc b/base/task/thread_pool/job_task_source.cc
+index 194cfe4055..aeaf7e444e 100644
+--- a/base/task/thread_pool/job_task_source.cc
++++ b/base/task/thread_pool/job_task_source.cc
+@@ -4,7 +4,6 @@
+ 
+ #include "base/task/thread_pool/job_task_source.h"
+ 
+-#include <atomic>
+ #include <bit>
+ #include <type_traits>
+ #include <utility>
+@@ -22,17 +21,12 @@
+ #include "base/time/time.h"
+ #include "base/time/time_override.h"
+ #include "base/trace_event/base_tracing.h"
+-#include "build/build_config.h"
+ 
+ namespace base {
+ namespace internal {
+ 
+ namespace {
+ 
+-#if BUILDFLAG(IS_AROS)
+-std::atomic<int> g_aros_job_source_notify_log_count{0};
+-#endif
+-
+ // Capped to allow assigning task_ids from a bitfield.
+ constexpr size_t kMaxWorkersPerJob = 32;
+ static_assert(
+@@ -285,19 +279,7 @@ size_t JobTaskSource::GetWorkerCount() const {
+ void JobTaskSource::NotifyConcurrencyIncrease() {
+   // Avoid unnecessary locks when NotifyConcurrencyIncrease() is spuriously
+   // called.
+-  const size_t remaining_concurrency = GetRemainingConcurrency();
+-#if BUILDFLAG(IS_AROS)
+-  const bool log_aros_notify =
+-      g_aros_job_source_notify_log_count.fetch_add(
+-          1, std::memory_order_relaxed) < 64;
+-  if (log_aros_notify) {
+-    LOG(ERROR) << "[AROS_JOB_SOURCE] notify source=" << this
+-               << " workers=" << GetWorkerCount()
+-               << " max=" << GetMaxConcurrency()
+-               << " remaining=" << remaining_concurrency;
+-  }
+-#endif
+-  if (remaining_concurrency == 0) {
++  if (GetRemainingConcurrency() == 0) {
+     return;
+   }
+ 
+@@ -316,15 +298,7 @@ void JobTaskSource::NotifyConcurrencyIncrease() {
+   // previously were too many worker. For simplicity, the task source is always
+   // enqueued and will get discarded if already saturated when it is popped from
+   // the priority queue.
+-  const bool enqueued = delegate_->EnqueueJobTaskSource(this);
+-#if BUILDFLAG(IS_AROS)
+-  if (log_aros_notify) {
+-    LOG(ERROR) << "[AROS_JOB_SOURCE] enqueue source=" << this
+-               << " accepted=" << enqueued
+-               << " workers=" << GetWorkerCount()
+-               << " remaining=" << GetRemainingConcurrency();
+-  }
+-#endif
++  delegate_->EnqueueJobTaskSource(this);
+ }
+ 
+ size_t JobTaskSource::GetMaxConcurrency() const {
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.cc b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+index 49478c1950..f8c11450f4 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.cc
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.cc
+@@ -97,18 +97,6 @@ AsyncLayerTreeFrameSink::AsyncLayerTreeFrameSink(
+       use_begin_frame_presentation_feedback_(
+           params->use_begin_frame_presentation_feedback) {
+   DETACH_FROM_THREAD(thread_checker_);
+-#if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS async-sink-create] instance=" << this
+-             << " thread=" << base::PlatformThread::CurrentId()
+-             << " regular_pipe="
+-             << pipes_.compositor_frame_sink_remote.is_valid()
+-             << " associated_pipe="
+-             << pipes_.compositor_frame_sink_associated_remote.is_valid()
+-             << " client_pipe=" << pipes_.client_receiver.is_valid()
+-             << " direct_client=" << use_direct_client_receiver_
+-             << " auto_begin=" << auto_needs_begin_frame_
+-             << " begin_acks=" << wants_begin_frame_acks_;
+-#endif
+ }
+ 
+ AsyncLayerTreeFrameSink::~AsyncLayerTreeFrameSink() {}
+@@ -120,12 +108,6 @@ bool AsyncLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
+     return false;
+ 
+   DCHECK(pipes_.HasUnbound());
+-#if BUILDFLAG(IS_AROS)
+-  const bool aros_had_regular_pipe =
+-      pipes_.compositor_frame_sink_remote.is_valid();
+-  const bool aros_had_associated_pipe =
+-      pipes_.compositor_frame_sink_associated_remote.is_valid();
+-#endif
+   if (pipes_.compositor_frame_sink_remote.is_valid()) {
+     compositor_frame_sink_.Bind(std::move(pipes_.compositor_frame_sink_remote));
+     compositor_frame_sink_.set_disconnect_with_reason_handler(
+@@ -171,24 +153,6 @@ bool AsyncLayerTreeFrameSink::BindToClient(LayerTreeFrameSinkClient* client) {
+   compositor_frame_sink_ptr_->InitializeCompositorFrameSinkType(
+       viz::mojom::CompositorFrameSinkType::kLayerTree);
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS async-sink-bind] instance=" << this
+-             << " thread=" << base::PlatformThread::CurrentId()
+-             << " regular=" << aros_had_regular_pipe
+-             << " associated=" << aros_had_associated_pipe
+-             << " regular_bound=" << compositor_frame_sink_.is_bound()
+-             << " regular_connected="
+-             << (compositor_frame_sink_.is_bound() &&
+-                 compositor_frame_sink_.is_connected())
+-             << " associated_bound="
+-             << compositor_frame_sink_associated_.is_bound()
+-             << " associated_connected="
+-             << (compositor_frame_sink_associated_.is_bound() &&
+-                 compositor_frame_sink_associated_.is_connected())
+-             << " direct_receiver="
+-             << absl::holds_alternative<DirectClientReceiver>(client_receiver_);
+-#endif
+-
+ #if BUILDFLAG(IS_ANDROID)
+   std::vector<int32_t> thread_ids;
+   thread_ids.push_back(base::PlatformThread::CurrentId());
+@@ -222,14 +186,6 @@ void AsyncLayerTreeFrameSink::SetLocalSurfaceId(
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+   DCHECK(local_surface_id.is_valid());
+   local_surface_id_ = local_surface_id;
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_surface_count_++ < 16) {
+-    LOG(ERROR) << "[AROS async-sink-surface] instance=" << this
+-               << " seq=" << aros_surface_count_
+-               << " thread=" << base::PlatformThread::CurrentId()
+-               << " surface=" << local_surface_id_.ToString();
+-  }
+-#endif
+ }
+ 
+ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+@@ -240,36 +196,6 @@ void AsyncLayerTreeFrameSink::SubmitCompositorFrame(
+   DCHECK(frame.metadata.begin_frame_ack.has_damage);
+   DCHECK(frame.metadata.begin_frame_ack.frame_id.IsSequenceValid());
+ 
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_submit_count_ < 16) {
+-    size_t quad_count = 0;
+-    size_t software_resource_count = 0;
+-    for (const auto& pass : frame.render_pass_list)
+-      quad_count += pass->quad_list.size();
+-    for (const auto& resource : frame.resource_list)
+-      software_resource_count += resource.is_software ? 1u : 0u;
+-    ++aros_submit_count_;
+-    LOG(ERROR) << "[AROS renderer-frame] instance=" << this
+-               << " seq=" << aros_submit_count_
+-               << " thread=" << base::PlatformThread::CurrentId()
+-               << " surface=" << local_surface_id_.ToString()
+-               << " size=" << frame.size_in_pixels().ToString()
+-               << " passes=" << frame.render_pass_list.size()
+-               << " quads=" << quad_count
+-               << " resources=" << frame.resource_list.size()
+-               << " software_resources=" << software_resource_count
+-               << " regular_bound=" << compositor_frame_sink_.is_bound()
+-               << " regular_connected="
+-               << (compositor_frame_sink_.is_bound() &&
+-                   compositor_frame_sink_.is_connected())
+-               << " associated_bound="
+-               << compositor_frame_sink_associated_.is_bound()
+-               << " associated_connected="
+-               << (compositor_frame_sink_associated_.is_bound() &&
+-                   compositor_frame_sink_associated_.is_connected());
+-  }
+-#endif
+-
+   if (auto_needs_begin_frame_ && !needs_begin_frames_) {
+     UpdateNeedsBeginFramesInternal(/*needs_begin_frames=*/true);
+   }
+@@ -355,17 +281,6 @@ void AsyncLayerTreeFrameSink::DidNotProduceFrame(const viz::BeginFrameAck& ack,
+   DCHECK(compositor_frame_sink_ptr_);
+   DCHECK(!ack.has_damage);
+   DCHECK(ack.frame_id.IsSequenceValid());
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_no_frame_count_ < 16) {
+-    ++aros_no_frame_count_;
+-    LOG(ERROR) << "[AROS async-sink-no-frame] instance=" << this
+-               << " seq=" << aros_no_frame_count_
+-               << " thread=" << base::PlatformThread::CurrentId()
+-               << " source=" << ack.frame_id.source_id
+-               << " sequence=" << ack.frame_id.sequence_number
+-               << " reason=" << static_cast<int>(reason);
+-  }
+-#endif
+   TRACE_EVENT(
+       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
+       perfetto::Flow::Global(ack.trace_id), [&](perfetto::EventContext ctx) {
+@@ -417,20 +332,6 @@ void AsyncLayerTreeFrameSink::OnBeginFrame(
+     const viz::FrameTimingDetailsMap& timing_details,
+     bool frame_ack,
+     std::vector<viz::ReturnedResource> resources) {
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_begin_frame_count_ < 16) {
+-    ++aros_begin_frame_count_;
+-    LOG(ERROR) << "[AROS async-sink-begin] instance=" << this
+-               << " seq=" << aros_begin_frame_count_
+-               << " thread=" << base::PlatformThread::CurrentId()
+-               << " source=" << args.frame_id.source_id
+-               << " sequence=" << args.frame_id.sequence_number
+-               << " paused=" << begin_frames_paused_
+-               << " needs=" << needs_begin_frames_
+-               << " frame_ack=" << frame_ack
+-               << " returned_resources=" << resources.size();
+-  }
+-#endif
+   viz::BeginFrameArgs adjusted_args = args;
+   adjusted_args.client_arrival_time = base::TimeTicks::Now();
+   if (features::IsOnBeginFrameAcksEnabled()) {
+@@ -507,17 +408,6 @@ void AsyncLayerTreeFrameSink::OnSurfaceEvicted(
+ 
+ void AsyncLayerTreeFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
+   DCHECK(compositor_frame_sink_ptr_);
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_needs_begin_frame_count_ < 16) {
+-    ++aros_needs_begin_frame_count_;
+-    LOG(ERROR) << "[AROS async-sink-needs-begin] instance=" << this
+-               << " seq=" << aros_needs_begin_frame_count_
+-               << " thread=" << base::PlatformThread::CurrentId()
+-               << " old=" << needs_begin_frames_
+-               << " new=" << needs_begin_frames
+-               << " auto=" << auto_needs_begin_frame_;
+-  }
+-#endif
+ 
+   // If `auto_needs_begin_frame_` is set to true, rely on unsolicited frames
+   // instead of SetNeedsBeginFrame(true) to indicate that the client needs
+@@ -534,12 +424,6 @@ void AsyncLayerTreeFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
+ void AsyncLayerTreeFrameSink::OnMojoConnectionError(
+     uint32_t custom_reason,
+     const std::string& description) {
+-#if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS async-sink-disconnect] instance=" << this
+-             << " thread=" << base::PlatformThread::CurrentId()
+-             << " reason=" << custom_reason
+-             << " description=" << description;
+-#endif
+   // TODO(rivr): Use DLOG(FATAL) once crbug.com/1043899 is resolved.
+   if (custom_reason)
+     DLOG(ERROR) << description;
+diff --git a/cc/mojo_embedder/async_layer_tree_frame_sink.h b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+index 5e41819622..9d0b26a62d 100644
+--- a/cc/mojo_embedder/async_layer_tree_frame_sink.h
++++ b/cc/mojo_embedder/async_layer_tree_frame_sink.h
+@@ -212,14 +212,6 @@ class CC_MOJO_EMBEDDER_EXPORT AsyncLayerTreeFrameSink
+ 
+   bool use_begin_frame_presentation_feedback_ = false;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  size_t aros_submit_count_ = 0;
+-  size_t aros_surface_count_ = 0;
+-  size_t aros_begin_frame_count_ = 0;
+-  size_t aros_no_frame_count_ = 0;
+-  size_t aros_needs_begin_frame_count_ = 0;
+-#endif
+-
+   base::WeakPtrFactory<AsyncLayerTreeFrameSink> weak_factory_{this};
+ };
+ 
+diff --git a/cc/raster/categorized_worker_pool.cc b/cc/raster/categorized_worker_pool.cc
+index 0d0f3eec64..201abcc324 100644
+--- a/cc/raster/categorized_worker_pool.cc
++++ b/cc/raster/categorized_worker_pool.cc
+@@ -5,7 +5,6 @@
+ #include "cc/raster/categorized_worker_pool.h"
+ 
+ #include <algorithm>
+-#include <atomic>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -15,7 +14,6 @@
+ #include "base/containers/contains.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+-#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+@@ -34,16 +32,6 @@
+ namespace cc {
+ namespace {
+ 
+-#if BUILDFLAG(IS_AROS)
+-std::atomic<int> g_aros_raster_pool_log_count{0};
+-
+-bool ShouldLogArosRasterPoolTask() {
+-  return g_aros_raster_pool_log_count.fetch_add(1,
+-                                                 std::memory_order_relaxed) <
+-         128;
+-}
+-#endif
+-
+ BASE_FEATURE(kUseCompositorJob,
+              "UseCompositorJob",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -398,25 +386,10 @@ void CategorizedWorkerPoolImpl::RunTaskInCategoryWithLockAcquired(
+   // There may be more work available, so wake up another worker thread.
+   SignalHasReadyToRunTasksWithLockAcquired();
+ 
+-#if BUILDFLAG(IS_AROS)
+-  const bool log_aros_task = ShouldLogArosRasterPoolTask();
+-  if (log_aros_task) {
+-    LOG(ERROR) << "[AROS_RASTER_POOL] impl-start task="
+-               << prioritized_task.task.get()
+-               << " category=" << static_cast<int>(category);
+-  }
+-#endif
+   {
+     base::AutoUnlock unlock(lock_);
+     prioritized_task.task->RunOnWorkerThread();
+   }
+-#if BUILDFLAG(IS_AROS)
+-  if (log_aros_task) {
+-    LOG(ERROR) << "[AROS_RASTER_POOL] impl-finish task="
+-               << prioritized_task.task.get()
+-               << " category=" << static_cast<int>(category);
+-  }
+-#endif
+ 
+   auto* task_namespace = prioritized_task.task_namespace.get();
+   work_queue_.CompleteTask(std::move(prioritized_task));
+@@ -574,20 +547,7 @@ void CategorizedWorkerPoolJob::Run(base::span<const TaskCategory> categories,
+         });
+ 
+     base::ScopedAllowBaseSyncPrimitives allow;
+-#if BUILDFLAG(IS_AROS)
+-    const bool log_aros_task = ShouldLogArosRasterPoolTask();
+-    if (log_aros_task) {
+-      LOG(ERROR) << "[AROS_RASTER_POOL] job-start task="
+-                 << prioritized_task->task.get();
+-    }
+-#endif
+     prioritized_task->task->RunOnWorkerThread();
+-#if BUILDFLAG(IS_AROS)
+-    if (log_aros_task) {
+-      LOG(ERROR) << "[AROS_RASTER_POOL] job-finish task="
+-                 << prioritized_task->task.get();
+-    }
+-#endif
+ 
+     {
+       base::AutoLock lock(lock_);
+diff --git a/cc/raster/zero_copy_raster_buffer_provider.cc b/cc/raster/zero_copy_raster_buffer_provider.cc
+index ec88b0b65e..19f606b91e 100644
+--- a/cc/raster/zero_copy_raster_buffer_provider.cc
++++ b/cc/raster/zero_copy_raster_buffer_provider.cc
+@@ -7,10 +7,8 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
+-#include <atomic>
+ #include <utility>
+ 
+-#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/trace_event/process_memory_dump.h"
+ #include "base/trace_event/trace_event.h"
+@@ -20,7 +18,6 @@
+ #include "components/viz/common/gpu/raster_context_provider.h"
+ #include "components/viz/common/resources/platform_color.h"
+ #include "components/viz/common/resources/shared_image_format_utils.h"
+-#include "build/build_config.h"
+ #include "gpu/command_buffer/client/client_shared_image.h"
+ #include "gpu/command_buffer/client/shared_image_interface.h"
+ #include "gpu/command_buffer/common/shared_image_trace_utils.h"
+@@ -30,10 +27,6 @@
+ namespace cc {
+ namespace {
+ 
+-#if BUILDFLAG(IS_AROS)
+-std::atomic<int> g_aros_zero_copy_playback_log_count{0};
+-#endif
+-
+ constexpr static auto kBufferUsage = gfx::BufferUsage::GPU_READ_CPU_READ_WRITE;
+ 
+ // Subclass for InUsePoolResource that holds ownership of a zero-copy backing
+@@ -119,17 +112,6 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+                 const GURL& url) override {
+     TRACE_EVENT0("cc", "ZeroCopyRasterBuffer::Playback");
+ 
+-#if BUILDFLAG(IS_AROS)
+-    const bool log_aros_playback =
+-        g_aros_zero_copy_playback_log_count.fetch_add(
+-            1, std::memory_order_relaxed) < 64;
+-    if (log_aros_playback) {
+-      LOG(ERROR) << "[AROS_ZERO_COPY] enter buffer=" << this
+-                 << " has_image=" << !!backing_->shared_image
+-                 << " size=" << resource_size_.ToString()
+-                 << " rect=" << raster_full_rect.ToString();
+-    }
+-#endif
+     gpu::SharedImageInterface* sii = backing_->shared_image_interface;
+ 
+     // Create a MappableSI if necessary.
+@@ -144,11 +126,6 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+         LOG(ERROR) << "Creation of MappableSharedImage failed.";
+         return;
+       }
+-#if BUILDFLAG(IS_AROS)
+-      if (log_aros_playback) {
+-        LOG(ERROR) << "[AROS_ZERO_COPY] image-created buffer=" << this;
+-      }
+-#endif
+     }
+ 
+     std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> mapping =
+@@ -159,12 +136,6 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+                               std::move(backing_->shared_image));
+       return;
+     }
+-#if BUILDFLAG(IS_AROS)
+-    if (log_aros_playback) {
+-      LOG(ERROR) << "[AROS_ZERO_COPY] mapped buffer=" << this
+-                 << " stride=" << mapping->Stride(0);
+-    }
+-#endif
+ 
+     // TODO(danakj): Implement partial raster with raster_dirty_rect.
+     RasterBufferProvider::PlaybackToMemory(
+@@ -172,11 +143,6 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
+         raster_source, raster_full_rect, raster_full_rect, transform,
+         resource_color_space_,
+         /*gpu_compositing=*/true, playback_settings);
+-#if BUILDFLAG(IS_AROS)
+-    if (log_aros_playback) {
+-      LOG(ERROR) << "[AROS_ZERO_COPY] playback-complete buffer=" << this;
+-    }
+-#endif
+   }
+ 
+   bool SupportsBackgroundThreadPriority() const override { return true; }
+diff --git a/cc/scheduler/scheduler.cc b/cc/scheduler/scheduler.cc
+index 3db595fdee..f5bda964fa 100644
+--- a/cc/scheduler/scheduler.cc
++++ b/cc/scheduler/scheduler.cc
+@@ -5,7 +5,6 @@
+ #include "cc/scheduler/scheduler.h"
+ 
+ #include <algorithm>
+-#include <iomanip>
+ #include <utility>
+ #include <vector>
+ 
+@@ -13,7 +12,6 @@
+ #include "base/check_op.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+-#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/task/delay_policy.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -159,46 +157,8 @@ void Scheduler::NotifyPaintWorkletStateChange(PaintWorkletState state) {
+ }
+ 
+ void Scheduler::SetNeedsBeginMainFrame() {
+-#if BUILDFLAG(IS_AROS)
+-  const bool trace_request =
+-      aros_begin_main_frame_request_probe_count_++ < 32;
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] scheduler-needs-begin-before scheduler="
+-               << this << " host_id=" << layer_tree_host_id_
+-               << " blockers=0x" << std::hex
+-               << state_machine_.ArosBeginMainFrameBlockersForDiagnostics()
+-               << std::dec
+-               << " next_action="
+-               << static_cast<int>(state_machine_.NextAction())
+-               << " begin_frame_needed=" << state_machine_.BeginFrameNeeded();
+-  }
+-#endif
+   state_machine_.SetNeedsBeginMainFrame();
+-#if BUILDFLAG(IS_AROS)
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] scheduler-needs-begin-after scheduler="
+-               << this << " host_id=" << layer_tree_host_id_
+-               << " blockers=0x" << std::hex
+-               << state_machine_.ArosBeginMainFrameBlockersForDiagnostics()
+-               << std::dec
+-               << " next_action="
+-               << static_cast<int>(state_machine_.NextAction())
+-               << " begin_frame_needed=" << state_machine_.BeginFrameNeeded();
+-  }
+-#endif
+   ProcessScheduledActions();
+-#if BUILDFLAG(IS_AROS)
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] scheduler-needs-begin-return scheduler="
+-               << this << " host_id=" << layer_tree_host_id_
+-               << " blockers=0x" << std::hex
+-               << state_machine_.ArosBeginMainFrameBlockersForDiagnostics()
+-               << std::dec
+-               << " next_action="
+-               << static_cast<int>(state_machine_.NextAction())
+-               << " begin_frame_needed=" << state_machine_.BeginFrameNeeded();
+-  }
+-#endif
+ }
+ 
+ void Scheduler::SetNeedsOneBeginImplFrame() {
+diff --git a/cc/scheduler/scheduler.h b/cc/scheduler/scheduler.h
+index 5d6bef1828..6f6877d21e 100644
+--- a/cc/scheduler/scheduler.h
++++ b/cc/scheduler/scheduler.h
+@@ -13,7 +13,6 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+-#include "build/build_config.h"
+ #include "cc/cc_export.h"
+ #include "cc/metrics/event_metrics.h"
+ #include "cc/scheduler/begin_frame_tracker.h"
+@@ -350,10 +349,6 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
+   // arrive so that |client_| can be informed about changes.
+   base::TimeDelta last_frame_interval_;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  uint32_t aros_begin_main_frame_request_probe_count_ = 0;
+-#endif
+-
+  private:
+   // Posts the deadline task if needed by checking
+   // SchedulerStateMachine::CurrentBeginImplFrameDeadlineMode(). This only
+diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
+index 2164df7915..67abc45f11 100644
+--- a/cc/scheduler/scheduler_state_machine.cc
++++ b/cc/scheduler/scheduler_state_machine.cc
+@@ -622,61 +622,6 @@ bool SchedulerStateMachine::ShouldSendBeginMainFrame() const {
+   return true;
+ }
+ 
+-#if BUILDFLAG(IS_AROS)
+-uint32_t SchedulerStateMachine::ArosBeginMainFrameBlockersForDiagnostics()
+-    const {
+-  uint32_t blockers = 0;
+-  if (!needs_begin_main_frame_)
+-    blockers |= 1u << 0;
+-  if (!visible_)
+-    blockers |= 1u << 1;
+-  if (begin_frame_source_paused_)
+-    blockers |= 1u << 2;
+-  if (defer_begin_main_frame_)
+-    blockers |= 1u << 3;
+-  if (pause_rendering_)
+-    blockers |= 1u << 4;
+-  if (did_send_begin_main_frame_for_current_frame_)
+-    blockers |= 1u << 5;
+-  if (begin_main_frame_state_ == BeginMainFrameState::SENT)
+-    blockers |= 1u << 6;
+-  if (begin_main_frame_state_ == BeginMainFrameState::READY_TO_COMMIT &&
+-      (!settings_.main_frame_before_commit_enabled ||
+-       next_begin_main_frame_state_ != BeginMainFrameState::IDLE)) {
+-    blockers |= 1u << 7;
+-  }
+-
+-  const bool can_send_main_frame_with_pending_tree =
+-      settings_.main_frame_before_activation_enabled ||
+-      current_pending_tree_is_impl_side_;
+-  if (has_pending_tree_ && !can_send_main_frame_with_pending_tree)
+-    blockers |= 1u << 8;
+-  if (settings_.commit_to_active_tree && active_tree_needs_first_draw_)
+-    blockers |= 1u << 9;
+-  if (settings_.commit_to_active_tree && IsDrawThrottled())
+-    blockers |= 1u << 10;
+-  if (ImplLatencyTakesPriority() && has_pending_tree_)
+-    blockers |= 1u << 11;
+-  if (ImplLatencyTakesPriority() && active_tree_needs_first_draw_)
+-    blockers |= 1u << 12;
+-  if (!settings_.using_synchronous_renderer_compositor &&
+-      begin_impl_frame_state_ == BeginImplFrameState::IDLE) {
+-    blockers |= 1u << 13;
+-  }
+-
+-  const bool forced_commit =
+-      forced_redraw_state_ == ForcedRedrawOnTimeoutState::WAITING_FOR_COMMIT;
+-  if (!forced_commit && !HasInitializedLayerTreeFrameSink())
+-    blockers |= 1u << 14;
+-  const bool just_submitted_in_deadline =
+-      begin_impl_frame_state_ == BeginImplFrameState::INSIDE_DEADLINE &&
+-      did_submit_in_last_frame_;
+-  if (!forced_commit && IsDrawThrottled() && !just_submitted_in_deadline)
+-    blockers |= 1u << 15;
+-  return blockers;
+-}
+-#endif
+-
+ bool SchedulerStateMachine::ShouldCommit() const {
+   if (begin_main_frame_state_ != BeginMainFrameState::READY_TO_COMMIT)
+     return false;
+diff --git a/cc/scheduler/scheduler_state_machine.h b/cc/scheduler/scheduler_state_machine.h
+index d0e57a1f5c..e91f6b23e8 100644
+--- a/cc/scheduler/scheduler_state_machine.h
++++ b/cc/scheduler/scheduler_state_machine.h
+@@ -8,7 +8,6 @@
+ #include <stdint.h>
+ 
+ #include "base/tracing/protos/chrome_track_event.pbzero.h"
+-#include "build/build_config.h"
+ #include "cc/cc_export.h"
+ #include "cc/scheduler/commit_earlyout_reason.h"
+ #include "cc/scheduler/draw_result.h"
+@@ -261,9 +260,6 @@ class CC_EXPORT SchedulerStateMachine {
+   // the impl thread to main.
+   void SetNeedsBeginMainFrame();
+   bool needs_begin_main_frame() const { return needs_begin_main_frame_; }
+-#if BUILDFLAG(IS_AROS)
+-  uint32_t ArosBeginMainFrameBlockersForDiagnostics() const;
+-#endif
+ 
+   void SetMainThreadWantsBeginMainFrameNotExpectedMessages(bool new_state);
+ 
+diff --git a/cc/tiles/tile_manager.cc b/cc/tiles/tile_manager.cc
+index 83d2601533..af19f6cf71 100644
+--- a/cc/tiles/tile_manager.cc
++++ b/cc/tiles/tile_manager.cc
+@@ -30,7 +30,6 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/memory_dump_manager.h"
+ #include "base/trace_event/traced_value.h"
+-#include "build/build_config.h"
+ #include "cc/base/devtools_instrumentation.h"
+ #include "cc/base/features.h"
+ #include "cc/base/histograms.h"
+@@ -144,20 +143,9 @@ class RasterTaskImpl : public TileTask {
+ 
+     DCHECK(raster_source_);
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[AROS_RASTER_TASK] playback-enter task=" << this
+-               << " tile_id=" << tile_id_
+-               << " prepare_id=" << source_prepare_tiles_id_
+-               << " rect=" << content_rect_.ToString();
+-#endif
+     raster_buffer_->Playback(raster_source_.get(), content_rect_,
+                              invalid_content_rect_, new_content_id_,
+                              raster_transform_, playback_settings_, url_);
+-#if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[AROS_RASTER_TASK] playback-exit task=" << this
+-               << " tile_id=" << tile_id_
+-               << " prepare_id=" << source_prepare_tiles_id_;
+-#endif
+   }
+ 
+   // Overridden from TileTask:
+@@ -167,12 +155,6 @@ class RasterTaskImpl : public TileTask {
+     // Here calling state().IsCanceled() is thread-safe, because this task is
+     // already concluded as FINISHED or CANCELLED and no longer will be worked
+     // upon by task graph runner.
+-#if BUILDFLAG(IS_AROS)
+-    LOG(ERROR) << "[AROS_RASTER_TASK] origin-complete task=" << this
+-               << " tile_id=" << tile_id_
+-               << " prepare_id=" << source_prepare_tiles_id_
+-               << " canceled=" << state().IsCanceled();
+-#endif
+     raster_buffer_ = nullptr;
+     tile_manager_->OnRasterTaskCompleted(tile_id_, std::move(resource_),
+                                          state().IsCanceled());
+@@ -663,13 +645,6 @@ void TileManager::DidFinishRunningTileTasksRequiredForActivation() {
+   // TODO(vmpstr): Temporary check to debug crbug.com/642927.
+   CHECK(tile_task_manager_);
+   signals_.activate_tile_tasks_completed = true;
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] activation-tasks-complete manager=" << this
+-               << " prepare_seq=" << prepare_tiles_count_
+-               << " has_pending_tree=" << client_->HasPendingTree();
+-  }
+-#endif
+   signals_check_notifier_.Schedule();
+ }
+ 
+@@ -681,12 +656,6 @@ void TileManager::DidFinishRunningTileTasksRequiredForDraw() {
+   // TODO(vmpstr): Temporary check to debug crbug.com/642927.
+   CHECK(tile_task_manager_);
+   signals_.draw_tile_tasks_completed = true;
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] draw-tasks-complete manager=" << this
+-               << " prepare_seq=" << prepare_tiles_count_;
+-  }
+-#endif
+   signals_check_notifier_.Schedule();
+ }
+ 
+@@ -698,17 +667,6 @@ void TileManager::DidFinishRunningAllTileTasks(bool has_pending_queries) {
+ 
+   has_scheduled_tile_tasks_ = false;
+   has_pending_queries_ = has_pending_queries;
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] all-tasks-complete manager=" << this
+-               << " prepare_seq=" << prepare_tiles_count_
+-               << " pending_queries=" << has_pending_queries
+-               << " all_raster_scheduled="
+-               << all_tiles_that_need_to_be_rasterized_are_scheduled_
+-               << " resource_usage_high="
+-               << resource_pool_->ResourceUsageTooHigh();
+-  }
+-#endif
+ 
+   if (all_tiles_that_need_to_be_rasterized_are_scheduled_ &&
+       !resource_pool_->ResourceUsageTooHigh()) {
+@@ -740,15 +698,6 @@ bool TileManager::PrepareTiles(
+                          TRACE_EVENT_SCOPE_THREAD);
+     return false;
+   }
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] prepare-begin manager=" << this
+-               << " seq=" << prepare_tiles_count_
+-               << " renderer_process=" << running_on_renderer_process_
+-               << " has_pending_tree=" << client_->HasPendingTree()
+-               << " tracked_tiles=" << tiles_.size();
+-  }
+-#endif
+ 
+   signals_ = Signals();
+   global_state_ = state;
+@@ -770,17 +719,6 @@ bool TileManager::PrepareTiles(
+     FreeResourcesForOccludedTiles();
+ 
+   PrioritizedWorkToSchedule prioritized_work = AssignGpuMemoryToTiles();
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] prepare-assigned manager=" << this
+-               << " seq=" << prepare_tiles_count_
+-               << " raster_tiles=" << prioritized_work.tiles_to_raster.size()
+-               << " image_tiles="
+-               << prioritized_work.tiles_to_process_for_images.size()
+-               << " extra_images="
+-               << prioritized_work.extra_prepaint_images.size();
+-  }
+-#endif
+ 
+   // Inform the client that will likely require a draw if the highest priority
+   // tile that will be rasterized is required for draw.
+@@ -1408,19 +1346,6 @@ void TileManager::ScheduleTasks(PrioritizedWorkToSchedule work_to_schedule) {
+   InsertNodeForTask(&graph_, all_done_task.get(),
+                     TASK_CATEGORY_NONCONCURRENT_FOREGROUND,
+                     kAllDoneTaskPriority, all_count);
+-#if BUILDFLAG(IS_AROS)
+-  if (prepare_tiles_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] schedule manager=" << this
+-               << " prepare_seq=" << prepare_tiles_count_
+-               << " raster_tiles="
+-               << tiles_that_need_to_be_rasterized.size()
+-               << " required_activate=" << required_for_activate_count
+-               << " required_draw=" << required_for_draw_count
+-               << " all=" << all_count << " graph_nodes="
+-               << graph_.nodes.size() << " graph_edges="
+-               << graph_.edges.size();
+-  }
+-#endif
+ 
+   // Schedule running of |raster_queue_|. This replaces any previously
+   // scheduled tasks and effectively cancels all tasks not present
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index d4269e7a60..ecd8ee4fcf 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -402,21 +402,6 @@ std::unique_ptr<CommitState> LayerTreeHost::WillCommit(
+     bool has_updates) {
+   DCHECK(IsMainThread());
+   DCHECK(!commit_completion_event_);
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_++ < 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] host will-commit host=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " has_updates=" << has_updates
+-               << " source_frame="
+-               << pending_commit_state()->source_frame_number
+-               << " local_surface_id="
+-               << pending_commit_state()
+-                      ->local_surface_id_from_parent.ToString()
+-               << " local_surface_valid="
+-               << pending_commit_state()
+-                      ->local_surface_id_from_parent.is_valid();
+-  }
+-#endif
+   std::unique_ptr<CommitState> result;
+   if (has_updates)
+     result = ActivateCommitState();
+@@ -1583,19 +1568,6 @@ void LayerTreeHost::SetExternalPageScaleFactor(
+ 
+ void LayerTreeHost::SetLocalSurfaceIdFromParent(
+     const viz::LocalSurfaceId& local_surface_id_from_parent) {
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_surface_probe_count_++ < 16) {
+-    LOG(ERROR) << "[AROS_VISUAL] layer host=" << this
+-               << " seq=" << aros_surface_probe_count_
+-               << " old_local_surface_id="
+-               << pending_commit_state()
+-                      ->local_surface_id_from_parent.ToString()
+-               << " new_local_surface_id="
+-               << local_surface_id_from_parent.ToString()
+-               << " new_local_surface_valid="
+-               << local_surface_id_from_parent.is_valid();
+-  }
+-#endif
+   // If the viz::LocalSurfaceId is invalid we will be hitting the early exit.
+   // However creating a hash for tracing of an invalid id throw an error. So
+   // exit here. This is either from unit testing where no ids are being setup,
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 946f7a3f44..3ba3f912b9 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -28,7 +28,6 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+-#include "build/build_config.h"
+ #include "cc/base/completion_event.h"
+ #include "cc/benchmarks/micro_benchmark.h"
+ #include "cc/benchmarks/micro_benchmark_controller.h"
+@@ -1088,11 +1087,6 @@ class CC_EXPORT LayerTreeHost : public MutatorHostClient {
+ 
+   bool syncing_deltas_for_test_ = false;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  size_t aros_surface_probe_count_ = 0;
+-  size_t aros_commit_probe_count_ = 0;
+-#endif
+-
+   base::WeakPtrFactory<LayerTreeHost> weak_ptr_factory_{this};
+ };
+ 
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+index b96f70fc67..32c7422453 100644
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -645,18 +645,6 @@ void LayerTreeHostImpl::BeginCommit(int source_frame_number,
+     CreatePendingTree();
+   sync_tree()->set_source_frame_number(source_frame_number);
+   sync_tree()->set_trace_id(trace_id);
+-#if BUILDFLAG(IS_AROS)
+-  ++aros_commit_probe_count_;
+-  if (aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl begin host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " source_frame=" << source_frame_number
+-               << " commit_to_active=" << CommitToActiveTree()
+-               << " sync_tree=" << sync_tree()
+-               << " sync_local_surface_id="
+-               << sync_tree()->local_surface_id_from_parent().ToString();
+-  }
+-#endif
+ }
+ 
+ // This function commits the LayerTreeHost, as represented by CommitState, to an
+@@ -671,29 +659,7 @@ void LayerTreeHostImpl::FinishCommit(
+     const ThreadUnsafeCommitState& unsafe_state) {
+   TRACE_EVENT0("cc,benchmark", "LayerTreeHostImpl::FinishCommit");
+   LayerTreeImpl* tree = sync_tree();
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl finish-before host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " tree=" << tree
+-               << " state_local_surface_id="
+-               << state.local_surface_id_from_parent.ToString()
+-               << " tree_local_surface_id="
+-               << tree->local_surface_id_from_parent().ToString();
+-  }
+-#endif
+   tree->PullPropertiesFrom(state, unsafe_state);
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl finish-after host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " tree=" << tree
+-               << " tree_local_surface_id="
+-               << tree->local_surface_id_from_parent().ToString()
+-               << " tree_local_surface_valid="
+-               << tree->local_surface_id_from_parent().is_valid();
+-  }
+-#endif
+ 
+   // Check whether the impl scroll animating node was removed by the commit.
+   if (ElementId impl_only_scrolling_element =
+@@ -744,15 +710,6 @@ void LayerTreeHostImpl::RecordGpuRasterizationHistogram() {
+ 
+ void LayerTreeHostImpl::CommitComplete() {
+   TRACE_EVENT0("cc", "LayerTreeHostImpl::CommitComplete");
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] commit-complete-begin host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " commit_to_active=" << CommitToActiveTree()
+-               << " pending_tree=" << pending_tree_.get()
+-               << " pending_fully_painted=" << pending_tree_fully_painted_;
+-  }
+-#endif
+ 
+   if (input_delegate_)
+     input_delegate_->DidCommit();
+@@ -785,15 +742,6 @@ void LayerTreeHostImpl::CommitComplete() {
+     AnimatePendingTreeAfterCommit();
+ 
+   UpdateSyncTreeAfterCommitOrImplSideInvalidation();
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] commit-complete-after-update host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " pending_tree=" << pending_tree_.get()
+-               << " pending_fully_painted=" << pending_tree_fully_painted_
+-               << " ready_to_activate=" << IsReadyToActivate();
+-  }
+-#endif
+   micro_benchmark_controller_.DidCompleteCommit();
+ 
+   if (mutator_host_->CurrentFrameHadRAF())
+@@ -987,26 +935,11 @@ void LayerTreeHostImpl::NotifyPendingTreeFullyPainted() {
+   // ongoing dispatch.
+   DCHECK(!paint_worklet_painter_ ||
+          !paint_worklet_painter_->HasOngoingDispatch());
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] pending-painted host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " pending_tree=" << pending_tree_.get()
+-               << " tile_priorities_dirty=" << tile_priorities_dirty_;
+-  }
+-#endif
+ 
+   // Start working on newly created tiles immediately if needed.
+   // TODO(vmpstr): Investigate always having PrepareTiles issue
+   // NotifyReadyToActivate, instead of handling it here.
+   bool did_prepare_tiles = PrepareTiles();
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] pending-painted-prepare host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " did_prepare_tiles=" << did_prepare_tiles;
+-  }
+-#endif
+   if (!did_prepare_tiles) {
+     NotifyReadyToActivate();
+ 
+@@ -1116,30 +1049,14 @@ void LayerTreeHostImpl::AnimateInternal() {
+ }
+ 
+ bool LayerTreeHostImpl::PrepareTiles() {
+-  if (!tile_priorities_dirty_) {
+-#if BUILDFLAG(IS_AROS)
+-    if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-      LOG(ERROR) << "[AROS_TILE] host-prepare-skip host_impl=" << this
+-                 << " seq=" << aros_commit_probe_count_
+-                 << " tile_priorities_dirty=0";
+-    }
+-#endif
++  if (!tile_priorities_dirty_)
+     return false;
+-  }
+ 
+   client_->WillPrepareTiles();
+   bool did_prepare_tiles = tile_manager_.PrepareTiles(global_tile_state_);
+   if (did_prepare_tiles)
+     tile_priorities_dirty_ = false;
+   client_->DidPrepareTiles();
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] host-prepare-result host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " did_prepare_tiles=" << did_prepare_tiles
+-               << " tile_priorities_dirty=" << tile_priorities_dirty_;
+-  }
+-#endif
+   return did_prepare_tiles;
+ }
+ 
+@@ -2087,23 +2004,8 @@ void LayerTreeHostImpl::NotifyReadyToActivate() {
+   // scheduler we are ready to activate in that case, as if we do it will
+   // immediately activate once we call NotifyPaintWorkletStateChange, rather
+   // than wait for the TileManager to actually raster the content!
+-  if (!pending_tree_fully_painted_) {
+-#if BUILDFLAG(IS_AROS)
+-    if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-      LOG(ERROR) << "[AROS_TILE] ready-to-activate-blocked host_impl=" << this
+-                 << " seq=" << aros_commit_probe_count_
+-                 << " pending_fully_painted=0";
+-    }
+-#endif
++  if (!pending_tree_fully_painted_)
+     return;
+-  }
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] ready-to-activate-forward host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " pending_tree=" << pending_tree_.get();
+-  }
+-#endif
+   client_->NotifyReadyToActivate();
+ }
+ 
+@@ -2117,13 +2019,6 @@ void LayerTreeHostImpl::NotifyReadyToDraw() {
+ }
+ 
+ void LayerTreeHostImpl::NotifyAllTileTasksCompleted() {
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_TILE] host-all-tasks-complete host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " pending_tree=" << pending_tree_.get();
+-  }
+-#endif
+   // The tile tasks started by the most recent call to PrepareTiles have
+   // completed. Now is a good time to free resources if necessary.
+   if (global_tile_state_.hard_memory_limit_in_bytes == 0) {
+@@ -3488,19 +3383,6 @@ void LayerTreeHostImpl::PushScrollbarOpacitiesFromActiveToPending() {
+ 
+ void LayerTreeHostImpl::ActivateSyncTree() {
+   TRACE_EVENT0("cc,benchmark", "LayerTreeHostImpl::ActivateSyncTree()");
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl activate-entry host_impl=" << this
+-               << " seq=" << aros_commit_probe_count_
+-               << " pending_tree=" << pending_tree_.get()
+-               << " pending_local_surface_id="
+-               << (pending_tree_
+-                       ? pending_tree_->local_surface_id_from_parent().ToString()
+-                       : std::string("<none>"))
+-               << " active_local_surface_id="
+-               << active_tree()->local_surface_id_from_parent().ToString();
+-  }
+-#endif
+   if (pending_tree_) {
+     TRACE_EVENT_NESTABLE_ASYNC_END1(
+         "cc", "PendingTree:waiting", TRACE_ID_LOCAL(pending_tree_.get()),
+@@ -3584,19 +3466,6 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+     DidModifyTilePriorities();
+ 
+   // Update the child's LocalSurfaceId.
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl activate-before-allocator host_impl="
+-               << this << " seq=" << aros_commit_probe_count_
+-               << " active_local_surface_id="
+-               << active_tree()->local_surface_id_from_parent().ToString()
+-               << " active_local_surface_valid="
+-               << active_tree()->local_surface_id_from_parent().is_valid()
+-               << " child_local_surface_id="
+-               << child_local_surface_id_allocator_.GetCurrentLocalSurfaceId()
+-                      .ToString();
+-  }
+-#endif
+   if (active_tree()->local_surface_id_from_parent().is_valid()) {
+     child_local_surface_id_allocator_.UpdateFromParent(
+         active_tree()->local_surface_id_from_parent());
+@@ -3613,15 +3482,6 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+       resource_provider_->SetEvicted(false);
+     }
+   }
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_commit_probe_count_ > 0 && aros_commit_probe_count_ <= 16) {
+-    LOG(ERROR) << "[AROS_COMMIT] impl activate-after-allocator host_impl="
+-               << this << " seq=" << aros_commit_probe_count_
+-               << " child_local_surface_id="
+-               << child_local_surface_id_allocator_.GetCurrentLocalSurfaceId()
+-                      .ToString();
+-  }
+-#endif
+ 
+   client_->OnCanDrawStateChanged(CanDraw());
+   client_->DidActivateSyncTree();
+diff --git a/cc/trees/layer_tree_host_impl.h b/cc/trees/layer_tree_host_impl.h
+index 3f4695c554..edc02784cc 100644
+--- a/cc/trees/layer_tree_host_impl.h
++++ b/cc/trees/layer_tree_host_impl.h
+@@ -27,7 +27,6 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+-#include "build/build_config.h"
+ #include "cc/benchmarks/micro_benchmark_controller_impl.h"
+ #include "cc/cc_export.h"
+ #include "cc/input/actively_scrolling_type.h"
+@@ -1325,10 +1324,6 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
+   bool downsample_metrics_ = true;
+   base::MetricsSubSampler metrics_subsampler_;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  size_t aros_commit_probe_count_ = 0;
+-#endif
+-
+   // Must be the last member to ensure this is destroyed first in the
+   // destruction order and invalidates all weak pointers.
+   base::WeakPtrFactory<LayerTreeHostImpl> weak_factory_{this};
+diff --git a/cc/trees/proxy_impl.cc b/cc/trees/proxy_impl.cc
+index 47e683a048..0805098f74 100644
+--- a/cc/trees/proxy_impl.cc
++++ b/cc/trees/proxy_impl.cc
+@@ -238,20 +238,7 @@ void ProxyImpl::SetNeedsRedrawOnImpl(const gfx::Rect& damage_rect) {
+ }
+ 
+ void ProxyImpl::SetNeedsCommitOnImpl() {
+-#if BUILDFLAG(IS_AROS)
+-  const bool trace_request = aros_commit_request_probe_count_++ < 32;
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] impl-commit-receive proxy=" << this
+-               << " host_id=" << layer_tree_host_id_;
+-  }
+-#endif
+   SetNeedsCommitOnImplThread();
+-#if BUILDFLAG(IS_AROS)
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] impl-commit-return proxy=" << this
+-               << " host_id=" << layer_tree_host_id_;
+-  }
+-#endif
+ }
+ 
+ void ProxyImpl::SetTargetLocalSurfaceIdOnImpl(
+diff --git a/cc/trees/proxy_impl.h b/cc/trees/proxy_impl.h
+index c658cf7409..b4af00da14 100644
+--- a/cc/trees/proxy_impl.h
++++ b/cc/trees/proxy_impl.h
+@@ -232,7 +232,6 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
+ 
+ #if BUILDFLAG(IS_AROS)
+   uint32_t aros_begin_main_frame_probe_count_ = 0;
+-  uint32_t aros_commit_request_probe_count_ = 0;
+   uint32_t aros_ready_commit_probe_count_ = 0;
+ #endif
+ };
+diff --git a/cc/trees/proxy_main.cc b/cc/trees/proxy_main.cc
+index ac7ac7937a..7f195b626b 100644
+--- a/cc/trees/proxy_main.cc
++++ b/cc/trees/proxy_main.cc
+@@ -873,34 +873,15 @@ bool ProxyMain::SendCommitRequestToImplThreadIfNeeded(
+     CommitPipelineStage required_stage) {
+   DCHECK(IsMainThread());
+   DCHECK_NE(NO_PIPELINE_STAGE, required_stage);
+-  const CommitPipelineStage previous_stage = max_requested_pipeline_stage_;
+   bool already_posted = max_requested_pipeline_stage_ != NO_PIPELINE_STAGE;
+   max_requested_pipeline_stage_ =
+       std::max(max_requested_pipeline_stage_, required_stage);
+-#if BUILDFLAG(IS_AROS)
+-  const bool trace_request = aros_commit_request_probe_count_++ < 32;
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] main-commit-request proxy_main=" << this
+-               << " host_id=" << layer_tree_host_id_
+-               << " required_stage=" << required_stage
+-               << " previous_stage=" << previous_stage
+-               << " effective_stage=" << max_requested_pipeline_stage_
+-               << " already_posted=" << already_posted;
+-  }
+-#endif
+   if (already_posted)
+     return false;
+   ImplThreadTaskRunner()->PostTask(
+       FROM_HERE, base::BindOnce(&ProxyImpl::SetNeedsCommitOnImpl,
+                                 base::Unretained(proxy_impl_.get())));
+   layer_tree_host_->OnCommitRequested();
+-#if BUILDFLAG(IS_AROS)
+-  if (trace_request) {
+-    LOG(ERROR) << "[AROS_SCHED] main-commit-posted proxy_main=" << this
+-               << " host_id=" << layer_tree_host_id_
+-               << " effective_stage=" << max_requested_pipeline_stage_;
+-  }
+-#endif
+   return true;
+ }
+ 
+diff --git a/cc/trees/proxy_main.h b/cc/trees/proxy_main.h
+index c7ccbdac78..52920e290a 100644
+--- a/cc/trees/proxy_main.h
++++ b/cc/trees/proxy_main.h
+@@ -198,7 +198,6 @@ class CC_EXPORT ProxyMain : public Proxy {
+ 
+ #if BUILDFLAG(IS_AROS)
+   uint32_t aros_begin_main_frame_probe_count_ = 0;
+-  uint32_t aros_commit_request_probe_count_ = 0;
+ #endif
+ 
+   // WeakPtrs generated by this factory will be invalidated when
+diff --git a/content/browser/child_process_launcher_helper.cc b/content/browser/child_process_launcher_helper.cc
+index 3792dd5dc9..725d2966c9 100644
+--- a/content/browser/child_process_launcher_helper.cc
++++ b/content/browser/child_process_launcher_helper.cc
+@@ -246,10 +246,6 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
+   }
+ 
+   std::unique_ptr<FileMappedForLaunch> files_to_register = GetFilesToMap();
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] files-to-map ready type='"
+-               << GetProcessType() << "'";
+-#endif
+ 
+   bool is_synchronous_launch = true;
+   int launch_result = LAUNCH_RESULT_FAILURE;
+@@ -265,42 +261,18 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
+ 
+   // Update the command line and launch options to pass the histogram and
+   // field trial shared memory region handles.
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] histogram handoff begin type='"
+-               << GetProcessType() << "'";
+-#endif
+   PassHistogramSharedMemoryHandle(std::move(histogram_memory_region_),
+                                   command_line(), options_ptr,
+                                   files_to_register.get());
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] histogram handoff complete type='"
+-               << GetProcessType() << "'";
+-#endif
+   PassFieldTrialSharedMemoryHandle(command_line(), options_ptr,
+                                    files_to_register.get());
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] field-trial handoff complete type='"
+-               << GetProcessType() << "'";
+-#endif
+ 
+   // Transfer logging switches & handles if necessary.
+   PassLoggingSwitches(options_ptr, command_line());
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] logging handoff complete type='"
+-               << GetProcessType() << "'";
+-#endif
+ 
+   // Launch the child process.
+   Process process;
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] platform preparation begin type='"
+-               << GetProcessType() << "'";
+-#endif
+   if (BeforeLaunchOnLauncherThread(*files_to_register, options_ptr)) {
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:ChildLaunch] native spawn begin type='"
+-                 << GetProcessType() << "'";
+-#endif
+     process =
+         LaunchProcessOnLauncherThread(options_ptr, std::move(files_to_register),
+ #if BUILDFLAG(IS_ANDROID)
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+index 700f95b04b..3572110ed2 100644
+--- a/content/browser/child_process_launcher_helper_aros.cc
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -49,9 +49,7 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+   DCHECK(options);
+   DCHECK(mojo_channel_);
+ 
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] Mojo endpoint handoff begin";
+   mojo_channel_->PrepareToPassRemoteEndpoint(options, command_line());
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] Mojo endpoint handoff complete";
+   return true;
+ }
+ 
+@@ -66,10 +64,7 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
+   *is_synchronous_launch = true;
+ 
+   Process process;
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] base::LaunchProcess enter";
+   process.process = base::LaunchProcess(*command_line(), *options);
+-  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] base::LaunchProcess leave valid="
+-               << process.process.IsValid();
+   *launch_result = process.process.IsValid() ? LAUNCH_RESULT_SUCCESS
+                                              : LAUNCH_RESULT_FAILURE;
+   return process;
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index 6b9236508d..c916d68d3f 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -28,7 +28,6 @@
+ #include "base/i18n/rtl.h"
+ #include "base/lazy_instance.h"
+ #include "base/location.h"
+-#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/metrics/field_trial.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -922,19 +921,6 @@ blink::VisualProperties RenderWidgetHostImpl::GetInitialVisualProperties() {
+   // will be incorrect with a fresh RenderWidget.
+   ResetStateForCreatedRenderWidget(initial_props);
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(ERROR) << "[AROS_VISUAL] browser initial host=" << this
+-             << " routing_id=" << GetRoutingID()
+-             << " local_surface_valid="
+-             << initial_props.local_surface_id.has_value()
+-             << " local_surface_id="
+-             << (initial_props.local_surface_id.has_value()
+-                     ? initial_props.local_surface_id->ToString()
+-                     : std::string("<none>"))
+-             << " new_size=" << initial_props.new_size.ToString()
+-             << " compositor_viewport="
+-             << initial_props.compositor_viewport_pixel_rect.ToString();
+-#endif
+   return initial_props;
+ }
+ 
+@@ -1120,21 +1106,6 @@ blink::VisualProperties RenderWidgetHostImpl::GetVisualProperties() {
+     visual_properties.local_surface_id = local_surface_id;
+   }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  static int aros_visual_properties_count = 0;
+-  if (aros_visual_properties_count++ < 32) {
+-    LOG(ERROR) << "[AROS_VISUAL] browser generated host=" << this
+-               << " routing_id=" << GetRoutingID()
+-               << " top_most=" << is_top_most_widget
+-               << " child_frame=" << is_child_frame_widget
+-               << " view_local_surface_id=" << local_surface_id.ToString()
+-               << " local_surface_valid=" << local_surface_id.is_valid()
+-               << " new_size=" << visual_properties.new_size.ToString()
+-               << " compositor_viewport="
+-               << visual_properties.compositor_viewport_pixel_rect.ToString();
+-  }
+-#endif
+-
+   if (screen_orientation_type_for_testing_) {
+     current_screen_info.orientation_type =
+         *screen_orientation_type_for_testing_;
+@@ -1221,24 +1192,6 @@ bool RenderWidgetHostImpl::SynchronizeVisualProperties(
+   visual_properties->scroll_focused_node_into_view =
+       scroll_focused_node_into_view;
+ 
+-#if BUILDFLAG(IS_AROS)
+-  static int aros_visual_send_count = 0;
+-  if (aros_visual_send_count++ < 32) {
+-    LOG(ERROR) << "[AROS_VISUAL] browser send host=" << this
+-               << " routing_id=" << GetRoutingID()
+-               << " propagate=" << propagate
+-               << " local_surface_valid="
+-               << visual_properties->local_surface_id.has_value()
+-               << " local_surface_id="
+-               << (visual_properties->local_surface_id.has_value()
+-                       ? visual_properties->local_surface_id->ToString()
+-                       : std::string("<none>"))
+-               << " new_size=" << visual_properties->new_size.ToString()
+-               << " compositor_viewport="
+-               << visual_properties->compositor_viewport_pixel_rect.ToString();
+-  }
+-#endif
+-
+   if (propagate) {
+     blink_widget_->UpdateVisualProperties(*visual_properties);
+   }
+diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+index fd2cf81add..58b4e0b7c7 100644
+--- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
++++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+@@ -8,11 +8,9 @@
+ 
+ #include "base/containers/circular_deque.h"
+ #include "base/functional/bind.h"
+-#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+-#include "build/build_config.h"
+ #include "cc/base/features.h"
+ #include "cc/metrics/event_metrics.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -483,14 +481,6 @@ void MainThreadEventQueue::PossiblyScheduleMainFrame() {
+ void MainThreadEventQueue::DispatchEvents() {
+   size_t events_to_process;
+   size_t queue_size;
+-#if BUILDFLAG(IS_AROS)
+-  const base::TimeTicks aros_dispatch_start = base::TimeTicks::Now();
+-  size_t aros_queue_size_at_start = 0;
+-  size_t aros_events_dispatched = 0;
+-  size_t aros_input_events_dispatched = 0;
+-  size_t aros_closures_dispatched = 0;
+-  size_t aros_raw_updates_dispatched = 0;
+-#endif
+ 
+   // Record the queue size so that we only process
+   // that maximum number of events.
+@@ -498,9 +488,6 @@ void MainThreadEventQueue::DispatchEvents() {
+     base::AutoLock lock(shared_state_lock_);
+     shared_state_.sent_post_task_ = false;
+     events_to_process = shared_state_.events_.size();
+-#if BUILDFLAG(IS_AROS)
+-    aros_queue_size_at_start = events_to_process;
+-#endif
+ 
+     // Don't process rAF aligned events at tail of queue.
+     while (events_to_process > 0 &&
+@@ -518,16 +505,6 @@ void MainThreadEventQueue::DispatchEvents() {
+       task = shared_state_.events_.Pop();
+     }
+ 
+-#if BUILDFLAG(IS_AROS)
+-    ++aros_events_dispatched;
+-    if (task->IsWebInputEvent()) {
+-      ++aros_input_events_dispatched;
+-      if (IsRawUpdateEvent(task))
+-        ++aros_raw_updates_dispatched;
+-    } else {
+-      ++aros_closures_dispatched;
+-    }
+-#endif
+     HandleEventResampling(task, base::TimeTicks::Now());
+     // Dispatching the event is outside of critical section.
+     task->Dispatch(this);
+@@ -567,44 +544,14 @@ void MainThreadEventQueue::DispatchEvents() {
+     }
+ 
+     // Dispatching the event is outside of critical section.
+-    if (task) {
+-#if BUILDFLAG(IS_AROS)
+-      ++aros_events_dispatched;
+-      ++aros_input_events_dispatched;
+-      ++aros_raw_updates_dispatched;
+-#endif
++    if (task)
+       task->Dispatch(this);
+-    }
+   }
+ 
+   PossiblyScheduleMainFrame();
+ 
+   if (client_)
+     client_->InputEventsDispatched(/*raf_aligned=*/false);
+-
+-#if BUILDFLAG(IS_AROS)
+-  size_t aros_queue_size_remaining;
+-  {
+-    base::AutoLock lock(shared_state_lock_);
+-    aros_queue_size_remaining = shared_state_.events_.size();
+-  }
+-  const base::TimeDelta aros_dispatch_duration =
+-      base::TimeTicks::Now() - aros_dispatch_start;
+-  static thread_local uint32_t aros_dispatch_reports = 0;
+-  if (aros_dispatch_reports < 16 &&
+-      (aros_dispatch_duration >= base::Milliseconds(250) ||
+-       aros_queue_size_at_start >= 16)) {
+-    LOG(ERROR) << "[AROS_INPUT_QUEUE] dispatch duration_us="
+-               << aros_dispatch_duration.InMicroseconds()
+-               << " initial=" << aros_queue_size_at_start
+-               << " dispatched=" << aros_events_dispatched
+-               << " input=" << aros_input_events_dispatched
+-               << " closures=" << aros_closures_dispatched
+-               << " raw_updates=" << aros_raw_updates_dispatched
+-               << " remaining=" << aros_queue_size_remaining;
+-    ++aros_dispatch_reports;
+-  }
+-#endif
+ }
+ 
+ static bool IsAsyncTouchMove(
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
+index 444916f12c..a928cad454 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.cc
++++ b/third_party/blink/renderer/platform/widget/widget_base.cc
+@@ -392,25 +392,6 @@ void WidgetBase::UpdateVisualProperties(
+     const VisualProperties& visual_properties_from_browser) {
+   TRACE_EVENT0("renderer", "WidgetBase::UpdateVisualProperties");
+ 
+-#if BUILDFLAG(IS_AROS)
+-  static int aros_visual_receive_count = 0;
+-  if (aros_visual_receive_count++ < 32) {
+-    LOG(ERROR) << "[AROS_VISUAL] renderer receive widget=" << this
+-               << " local_surface_valid="
+-               << visual_properties_from_browser.local_surface_id.has_value()
+-               << " local_surface_id="
+-               << (visual_properties_from_browser.local_surface_id.has_value()
+-                       ? visual_properties_from_browser.local_surface_id
+-                             ->ToString()
+-                       : std::string("<none>"))
+-               << " new_size="
+-               << visual_properties_from_browser.new_size.ToString()
+-               << " compositor_viewport="
+-               << visual_properties_from_browser.compositor_viewport_pixel_rect
+-                      .ToString();
+-  }
+-#endif
+-
+   // UpdateVisualProperties is used to receive properties from the browser
+   // process for this WidgetBase. There are roughly 4 types of
+   // VisualProperties.
+@@ -1674,19 +1655,6 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
+     const viz::LocalSurfaceId& new_local_surface_id,
+     const gfx::Rect& compositor_viewport_pixel_rect,
+     const display::ScreenInfos& screen_infos) {
+-#if BUILDFLAG(IS_AROS)
+-  static int aros_surface_apply_count = 0;
+-  if (aros_surface_apply_count++ < 32) {
+-    LOG(ERROR) << "[AROS_VISUAL] renderer apply widget=" << this
+-               << " old_local_surface_id="
+-               << local_surface_id_from_parent_.ToString()
+-               << " new_local_surface_id=" << new_local_surface_id.ToString()
+-               << " new_local_surface_valid="
+-               << new_local_surface_id.is_valid()
+-               << " compositor_viewport="
+-               << compositor_viewport_pixel_rect.ToString();
+-  }
+-#endif
+   display::ScreenInfos new_screen_infos = screen_infos;
+   display::ScreenInfo& new_screen_info = new_screen_infos.mutable_current();
+ 
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index ff539d42dc..53d2c3101e 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -812,11 +812,6 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   const bool released = (code & IECODE_UP_PREFIX) != 0;
+   const uint16_t raw_code = code & ~IECODE_UP_PREFIX;
+ 
+-  // This marks the boundary between Intuition's IDCMP stream and Chromium's
+-  // text input pipeline while the hosted keyboard regression is investigated.
+-  LOG(INFO) << "[Chromium:Ozone:AROS] raw-key received raw=" << raw_code
+-            << " released=" << released << " qualifier=" << qualifier;
+-
+   if (IsMouseWheelRawKey(raw_code)) {
+     if (released || !window_) {
+       return;
+@@ -853,7 +848,7 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+ 
+   const DomCode dom_code = DomCodeFromRawKey(raw_code);
+   if (dom_code == DomCode::NONE) {
+-    LOG(INFO) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
++    VLOG(1) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
+     return;
+   }
+ 
+@@ -871,11 +866,6 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   KeyEvent event(released ? ET_KEY_RELEASED : ET_KEY_PRESSED, key_code,
+                  dom_code, flags, dom_key, EventTimeForNow());
+   event.InitializeNative();
+-  LOG(INFO) << "[Chromium:Ozone:AROS] raw-key dispatch raw=" << raw_code
+-            << " dom_code=" << static_cast<int>(dom_code)
+-            << " key_code=" << static_cast<int>(key_code)
+-            << " character=" << static_cast<uint32_t>(event.GetCharacter())
+-            << " released=" << released;
+   delegate_->DispatchEvent(&event);
+ }
+ 

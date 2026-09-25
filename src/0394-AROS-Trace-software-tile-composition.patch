@@ -1,0 +1,164 @@
+From c377902ecd45b6e21593799c1d90377b9a0c2b04 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 02:25:45 -0500
+Subject: [PATCH 394/638] [AROS] Trace software tile composition
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: investigating
+
+OBSERVED: Runtime 34 proved live SharedImage pixels reach Viz while the solid-red renderer viewport remains white, and disproved cached SkImage identity as the cause.
+
+FIX_REASON: Add bounded AROS-only fingerprints at DrawTileQuad source/destination and at the root canvas immediately before EndPaint to localize the first pixel discontinuity.
+
+SCOPE: components/viz/service/display/software_renderer.cc only; diagnostics are AROS-gated and capped at 128 tiles and 16 output frames.
+
+VALIDATION: Cross-compile passed after replacing unsupported geometry stream operators; diff check passes. A final coherent rebuild follows this commit because formatting cleanup changed the source timestamp after the first successful link.
+
+AI_DECISION_CHAIN: runtime 34 -> runtime 35
+---
+ .../viz/service/display/software_renderer.cc  | 94 ++++++++++++++++++-
+ 1 file changed, 93 insertions(+), 1 deletion(-)
+
+diff --git a/components/viz/service/display/software_renderer.cc b/components/viz/service/display/software_renderer.cc
+index 134c15eefe..56885878ef 100644
+--- a/components/viz/service/display/software_renderer.cc
++++ b/components/viz/service/display/software_renderer.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/process/memory.h"
+ #include "base/trace_event/trace_event.h"
+@@ -41,6 +42,7 @@
+ #include "third_party/skia/include/core/SkImageFilter.h"
+ #include "third_party/skia/include/core/SkMatrix.h"
+ #include "third_party/skia/include/core/SkPath.h"
++#include "third_party/skia/include/core/SkPixmap.h"
+ #include "third_party/skia/include/core/SkPoint.h"
+ #include "third_party/skia/include/core/SkShader.h"
+ #include "third_party/skia/include/core/SkSwizzle.h"
+@@ -52,6 +54,30 @@
+ 
+ namespace viz {
+ namespace {
++
++#if BUILDFLAG(IS_AROS)
++uint32_t ArosPixmapFingerprint(const SkPixmap& pixmap) {
++  if (!pixmap.addr() || pixmap.width() <= 0 || pixmap.height() <= 0) {
++    return 0;
++  }
++
++  uint32_t hash = 2166136261u;
++  for (int sample_y = 0; sample_y < 8; ++sample_y) {
++    const int y = sample_y * (pixmap.height() - 1) / 7;
++    for (int sample_x = 0; sample_x < 8; ++sample_x) {
++      const int x = sample_x * (pixmap.width() - 1) / 7;
++      uint32_t color = pixmap.getColor(x, y);
++      for (int byte = 0; byte < 4; ++byte) {
++        hash ^= color & 0xffu;
++        hash *= 16777619u;
++        color >>= 8;
++      }
++    }
++  }
++  return hash;
++}
++#endif
++
+ class AnimatedImagesProvider : public cc::ImageProvider {
+  public:
+   AnimatedImagesProvider(
+@@ -106,6 +132,26 @@ void SoftwareRenderer::BeginDrawingFrame() {
+ 
+ void SoftwareRenderer::FinishDrawingFrame() {
+   TRACE_EVENT0("viz", "SoftwareRenderer::FinishDrawingFrame");
++#if BUILDFLAG(IS_AROS)
++  static uint32_t aros_output_sequence = 0;
++  if (root_canvas_ && aros_output_sequence < 16) {
++    ++aros_output_sequence;
++    SkPixmap pixmap;
++    const bool peeked = root_canvas_->peekPixels(&pixmap);
++    const int center_x = peeked ? pixmap.width() / 2 : 0;
++    const int center_y = peeked ? pixmap.height() / 2 : 0;
++    const int lower_y = peeked ? pixmap.height() * 3 / 4 : 0;
++    LOG(ERROR) << "[AROS software-output] seq=" << aros_output_sequence
++               << " peeked=" << peeked
++               << " width=" << (peeked ? pixmap.width() : 0)
++               << " height=" << (peeked ? pixmap.height() : 0)
++               << " fingerprint="
++               << (peeked ? ArosPixmapFingerprint(pixmap) : 0) << " center="
++               << (peeked ? pixmap.getColor(center_x, center_y) : 0)
++               << " lower="
++               << (peeked ? pixmap.getColor(center_x, lower_y) : 0);
++  }
++#endif
+   // `current_canvas_` may be pointing to `current_framebuffer_canvas_`. Make
+   // sure to reset it before destroying `current_framebuffer_canvas_`.
+   current_canvas_ = nullptr;
+@@ -488,9 +534,26 @@ void SoftwareRenderer::DrawTileQuad(const TileDrawQuad* quad) {
+   DisplayResourceProviderSoftware::ScopedReadLockSkImage lock(
+       resource_provider(), quad->resource_id(),
+       quad->is_premultiplied ? kPremul_SkAlphaType : kUnpremul_SkAlphaType);
+-  if (!lock.valid())
++#if BUILDFLAG(IS_AROS)
++  static uint32_t aros_tile_sequence = 0;
++  const uint32_t aros_tile_current = ++aros_tile_sequence;
++  const bool aros_log_tile = aros_tile_current <= 128;
++  if (aros_log_tile && !lock.valid()) {
++    LOG(ERROR) << "[AROS software-tile] seq=" << aros_tile_current
++               << " resource=" << quad->resource_id() << " valid=0"
++               << " rect=" << quad->rect.ToString()
++               << " visible=" << quad->visible_rect.ToString();
++  }
++#endif
++  if (!lock.valid()) {
+     return;
++  }
+ 
++#if BUILDFLAG(IS_AROS)
++  SkPixmap aros_source_pixmap;
++  const bool aros_source_peeked =
++      aros_log_tile && lock.sk_image()->peekPixels(&aros_source_pixmap);
++#endif
+   gfx::RectF visible_tex_coord_rect = cc::MathUtil::ScaleRectProportional(
+       quad->tex_coord_rect, gfx::RectF(quad->rect),
+       gfx::RectF(quad->visible_rect));
+@@ -504,6 +567,35 @@ void SoftwareRenderer::DrawTileQuad(const TileDrawQuad* quad) {
+       lock.sk_image(), uv_rect, gfx::RectFToSkRect(visible_quad_vertex_rect),
+       sampling, &current_paint_, SkCanvas::kStrict_SrcRectConstraint);
+ 
++#if BUILDFLAG(IS_AROS)
++  if (aros_log_tile) {
++    SkPixmap destination_pixmap;
++    const bool destination_peeked =
++        current_canvas_->peekPixels(&destination_pixmap);
++    LOG(ERROR)
++        << "[AROS software-tile] seq=" << aros_tile_current
++        << " resource=" << quad->resource_id() << " valid=1"
++        << " image=" << lock.sk_image()->uniqueID()
++        << " rect=" << quad->rect.ToString()
++        << " visible=" << quad->visible_rect.ToString()
++        << " tex=" << quad->tex_coord_rect.ToString()
++        << " source_peeked=" << aros_source_peeked << " source_width="
++        << (aros_source_peeked ? aros_source_pixmap.width() : 0)
++        << " source_height="
++        << (aros_source_peeked ? aros_source_pixmap.height() : 0)
++        << " source_fingerprint="
++        << (aros_source_peeked ? ArosPixmapFingerprint(aros_source_pixmap) : 0)
++        << " source_center="
++        << (aros_source_peeked
++                ? aros_source_pixmap.getColor(aros_source_pixmap.width() / 2,
++                                              aros_source_pixmap.height() / 2)
++                : 0)
++        << " destination_peeked=" << destination_peeked
++        << " destination_fingerprint="
++        << (destination_peeked ? ArosPixmapFingerprint(destination_pixmap) : 0);
++  }
++#endif
++
+   if (software_toggle_capture()) {
+     SkPixmap pixmap;
+     if (lock.sk_image()->peekPixels(&pixmap)) {

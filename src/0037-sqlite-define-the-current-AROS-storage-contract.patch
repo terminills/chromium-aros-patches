@@ -1,0 +1,104 @@
+From bfb354626c4c8f2cfb8f30092e19f17f990c2467 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:59:41 -0500
+Subject: [PATCH 037/638] sqlite: define the current AROS storage contract
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: SQLite enabled mmap/WAL and pread/pwrite that AROS does not implement, while pthread.h redefined SQLite's internal GLOBAL macro through exec/types.h.
+
+FIX_REASON: Use rollback journals, disable mmap and direct positioned I/O, preload and contain the AROS qualifier macro, and request only the POSIX declarations SQLite consumes.
+
+SCOPE: third_party/sqlite/BUILD.gn, third_party/sqlite/sqlite3_shim_fixups.h
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/third_party/sqlite/chromium_sqlite3/sqlite3_shim.o
+
+RISK: medium; AROS uses SQLite's supported portable journal and positioned-I/O fallbacks until MMU/shared-memory and pread/pwrite exist.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/sqlite/BUILD.gn              | 24 ++++++++++++++++++------
+ third_party/sqlite/sqlite3_shim_fixups.h | 17 +++++++++++++++++
+ 2 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/third_party/sqlite/BUILD.gn b/third_party/sqlite/BUILD.gn
+index 392f0d88ac..5fbdc24631 100644
+--- a/third_party/sqlite/BUILD.gn
++++ b/third_party/sqlite/BUILD.gn
+@@ -41,6 +41,16 @@ config("common_sqlite3_compile_options") {
+     "SQLITE_TEMP_STORE=3",
+   ]
+ 
++  if (is_aros) {
++    # AROS does not expose POSIX mmap-backed shared memory yet. Keep SQLite on
++    # rollback journals until the MMU-backed mapping contract exists.
++    defines -= [ "SQLITE_MAX_MMAP_SIZE=268435456" ]
++    defines += [
++      "SQLITE_MAX_MMAP_SIZE=0",
++      "SQLITE_OMIT_WAL",
++    ]
++  }
++
+   # On OSX, SQLite has extra logic for detecting the use of network
+   # filesystems (e.g., AFS, NFS) and for working around locking problems in
+   # these filesystems. This logic is gated by SQLITE_ENABLE_LOCKING_STYLE, which
+@@ -209,10 +219,11 @@ component("chromium_sqlite3") {
+       # databases via the busy callback.  Browser profile databases are mostly
+       # exclusive, but renderer databases may allow for contention.
+       "HAVE_USLEEP=1",
+-
+-      # Use pread/pwrite directly rather than emulating them.
+-      "USE_PREAD=1",
+     ]
++    if (!is_aros) {
++      # Use pread/pwrite directly rather than emulating them.
++      defines += [ "USE_PREAD=1" ]
++    }
+   }
+ 
+   include_dirs = [
+@@ -288,10 +299,11 @@ source_set("dev_sqlite3") {
+       # databases via the busy callback.  Browser profile databases are mostly
+       # exclusive, but renderer databases may allow for contention.
+       "HAVE_USLEEP=1",
+-
+-      # Use pread/pwrite directly rather than emulating them.
+-      "USE_PREAD=1",
+     ]
++    if (!is_aros) {
++      # Use pread/pwrite directly rather than emulating them.
++      defines += [ "USE_PREAD=1" ]
++    }
+   }
+ 
+   include_dirs = [
+diff --git a/third_party/sqlite/sqlite3_shim_fixups.h b/third_party/sqlite/sqlite3_shim_fixups.h
+index d927981a57..6f827aae8c 100644
+--- a/third_party/sqlite/sqlite3_shim_fixups.h
++++ b/third_party/sqlite/sqlite3_shim_fixups.h
+@@ -8,6 +8,23 @@
+ // This file contains various fixups for the amalgamated SQLite code.
+ // It is intended to be included in sqlite3_shim.c only.
+ 
++#if defined(__AROS__)
++// SQLite includes pthread.h after defining its internal GLOBAL(t, v) macro.
++// AROS exec/types.h also defines GLOBAL as a linkage qualifier. Load the
++// guarded system declarations first, then release that qualifier so SQLite's
++// later definition remains intact.
++#if !defined(_POSIX_C_SOURCE)
++#define _POSIX_C_SOURCE 200809L
++#endif
++#include <pthread.h>
++#undef GLOBAL
++
++// posixc implements getcwd(), but its current strict-C header grouping does
++// not expose the POSIX.1 declaration. Keep the compatibility declaration
++// local to SQLite's shim.
++extern char* getcwd(char* buffer, size_t size);
++#endif
++
+ #if defined(SQLITE_OMIT_COMPILEOPTION_DIAGS)
+ // When SQLITE_OMIT_COMPILEOPTION_DIAGS is defined, sqlite3.h emits macros
+ // instead of declarations for sqlite3_compileoption_{get,used}().

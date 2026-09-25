@@ -1,0 +1,108 @@
+From 1b2566e18b04514ce94d70bbd2ea7efaabebd70e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:20:19 -0500
+Subject: [PATCH 434/638] [AROS] Quiet expected AROS startup probes
+
+Stop reporting every absent optional profile directory and retire resource/persistent-histogram startup checkpoints. Preserve zero-initialized stat handling, real user-profile override failures, and normal NOTREACHED enforcement.
+
+---
+ base/files/file_util_posix.cc      | 11 -----------
+ chrome/app/chrome_main_delegate.cc | 28 ----------------------------
+ 2 files changed, 39 deletions(-)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 78d1cee56f..d4ecbe78f1 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -553,17 +553,6 @@ bool DirectoryExists(const FilePath& path) {
+   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
+   stat_wrapper_t file_info = {};
+   const int stat_result = File::Stat(path.value().c_str(), &file_info);
+-#if BUILDFLAG(IS_AROS)
+-  if (stat_result != 0) {
+-    PLOG(ERROR) << "[Chromium:AROS:Files] stat failed for '"
+-                << path.value() << "'";
+-  } else if (!S_ISDIR(file_info.st_mode)) {
+-    LOG(ERROR) << "[Chromium:AROS:Files] stat classified '" << path.value()
+-               << "' as mode=" << file_info.st_mode
+-               << ", stat_size=" << sizeof(file_info)
+-               << ", mode_offset=" << offsetof(stat_wrapper_t, st_mode);
+-  }
+-#endif
+   if (stat_result != 0)
+     return false;
+   return S_ISDIR(file_info.st_mode);
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 29a6c75899..487c65f9a4 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1689,10 +1689,6 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   InitLogging(process_type);
+ #endif
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] PreSandbox logging ready";
+-#endif
+-
+ #if BUILDFLAG(IS_WIN)
+   // TODO(zturner): Throbber icons and cursors are still stored in chrome.dll,
+   // this can be killed once those are merged into resources.pak. See
+@@ -1701,9 +1697,6 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   ui::SetResourcesDataDLL(_AtlBaseModule.GetResourceInstance());
+ #endif
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] ResourceBundle begin";
+-#endif
+   if (SubprocessNeedsResourceBundle(process_type)) {
+     // Initialize ResourceBundle which handles files loaded from external
+     // sources.  The language should have been passed in to us from the
+@@ -1808,10 +1801,6 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ #endif  // BUILDFLAG(IS_ANDROID)
+     CHECK(!loaded_locale.empty()) << "Locale could not be found for " << locale;
+   }
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] ResourceBundle complete";
+-#endif
+-
+   if (!cef::IsChromeRuntimeEnabled()) {
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_AROS)
+   // Zygote needs to call InitCrashReporter() in RunZygote().
+@@ -1854,9 +1843,6 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ #if BUILDFLAG(ENABLE_PDF)
+   MaybePatchGdiGetFontData();
+ #endif
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] PreSandbox complete";
+-#endif
+ }
+ 
+ void ChromeMainDelegate::SandboxInitialized(const std::string& process_type) {
+@@ -1887,27 +1873,13 @@ void ChromeMainDelegate::SandboxInitialized(const std::string& process_type) {
+   immediate_histogram_init = !chromeos::IsLaunchedWithPostLoginParams();
+ #endif
+   if (immediate_histogram_init && process_type.empty()) {
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms browser init begin";
+-    LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms path lookup begin";
+-#endif
+     base::FilePath metrics_dir;
+     if (base::PathService::Get(chrome::DIR_USER_DATA, &metrics_dir)) {
+-#if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms path lookup complete";
+-      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms mapped-file init begin";
+-#endif
+       InstantiatePersistentHistograms(
+           metrics_dir,
+           /*persistent_histograms_enabled=*/true,
+           /*storage=*/kPersistentHistogramStorageMappedFile);
+-#if BUILDFLAG(IS_AROS)
+-      LOG(WARNING) << "[Chromium:AROS:Startup] PersistentHistograms mapped-file init complete";
+-#endif
+     } else {
+-#if BUILDFLAG(IS_AROS)
+-      LOG(ERROR) << "[Chromium:AROS:Startup] PersistentHistograms path lookup failed";
+-#endif
+       NOTREACHED();
+     }
+   }

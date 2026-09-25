@@ -1,0 +1,52 @@
+From fda8ff4e60197ff433f4fe806a5cd27d9b54331b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 15:23:06 -0500
+Subject: [PATCH 240/638] chrome: enable the in-browser notification center on
+ AROS [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS enabled the portable ui::MessageCenter layer but chrome/common omitted AROS from enable_chrome_notifications, so NotificationPlatformBridgeDelegator had neither a native system bridge nor Chromium\047s MessageCenter fallback. Enabling that path also exposed that fullscreen_ozone.cc was incorrectly nested under a Linux/Lacros-only source block despite AROS using Ozone.
+
+FIX_REASON: Compile Chrome\047s portable MessageCenter notification bridge for AROS and register the existing Ozone fullscreen implementation in the AROS browser source list. Native system notifications remain disabled until AROS provides an OS notification service.
+
+SCOPE: chrome/common/features.gni; chrome/browser/BUILD.gn
+
+VALIDATION: ninja -C out/aros-chrome -j48 chrome completed; the 789624-section output was merged to a 23-section AROS ELF and booted under hosted AROS. Chrome crossed the prior NotificationPlatformBridgeDelegator::message_center_bridge_ fatal, initialized profile and network services, launched 33 worker tasks, navigated chrome://new-tab-page/, and reached first-browser tab construction.
+
+RISK: AROS uses Chromium\047s in-browser notification UI rather than claiming unsupported native system notifications. fullscreen_ozone.cc inspects existing Browser windows only, matching the upstream Ozone contract.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap; ACD-chromium-aros-native-window-system;
+---
+ chrome/browser/BUILD.gn    | 1 +
+ chrome/common/features.gni | 3 ++-
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 45a9f6af64..f5767485d6 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6568,6 +6568,7 @@ static_library("browser") {
+       "download/download_status_updater_aros.cc",
+       "first_run/first_run_internal_aros.cc",
+       "first_run/upgrade_util_aros.cc",
++      "fullscreen_ozone.cc",
+       "icon_loader_aros.cc",
+       "memory_details_aros.cc",
+       "media/webrtc/window_icon_util_ozone.cc",
+diff --git a/chrome/common/features.gni b/chrome/common/features.gni
+index d0ecba8c5b..548ec8df48 100644
+--- a/chrome/common/features.gni
++++ b/chrome/common/features.gni
+@@ -52,7 +52,8 @@ declare_args() {
+   enable_background_mode = !is_android && !is_chromeos
+ 
+   # Enables usage of notifications via Chrome's MessageCenter.
+-  enable_chrome_notifications = is_mac || is_win || is_linux || is_fuchsia
++  enable_chrome_notifications =
++      is_mac || is_win || is_linux || is_fuchsia || is_aros
+ 
+   # Disable Click to Call on Fuchsia.
+   enable_click_to_call = !is_fuchsia

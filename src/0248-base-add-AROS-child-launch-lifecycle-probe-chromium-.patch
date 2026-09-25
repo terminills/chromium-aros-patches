@@ -1,0 +1,160 @@
+From dfa7edce78e6f68ea1f55c848682230546a1e783 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 15:55:05 -0500
+Subject: [PATCH 248/638] base: add AROS child launch lifecycle probe
+ [chromium] [aros]
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: hosted-validated, native-pending
+
+ROOT_CAUSE: The new AROS LaunchProcess implementation lacked a focused executable proving argument quoting, distinct process identity, concurrent lifetime, exit propagation, and WaitForExit behavior independently of Chromium child-role plumbing.
+
+FIX_REASON: Add an AROS-only probe that launches itself with difficult arguments, validates them in the child, remains visible as a separate process, exits with a sentinel status, and verifies that status in the parent.
+
+SCOPE: base/test/BUILD.gn and base/test/launch_process_aros_probe.cc only.
+
+VALIDATION: ninja -C out/aros-windowed launch_process_aros_probe passed. Clean hosted AROS observed parent 35 and child 36, exact argv validation, child exit 23, parent WaitForExit success, and probe return 0. Evidence: /home/terminills/Documents/GitHub/chromium-aros/test-artifacts/hosted-20260716-process-model. Native SMP replay is.
+
+RISK: low. Test-only AROS target; native validation remains pending.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap,,
+---
+ base/test/BUILD.gn                     |   8 ++
+ base/test/launch_process_aros_probe.cc | 108 +++++++++++++++++++++++++
+ 2 files changed, 116 insertions(+)
+ create mode 100644 base/test/launch_process_aros_probe.cc
+
+diff --git a/base/test/BUILD.gn b/base/test/BUILD.gn
+index 158aa383e5..ca4d55331f 100644
+--- a/base/test/BUILD.gn
++++ b/base/test/BUILD.gn
+@@ -532,6 +532,14 @@ executable("test_child_process") {
+   sources = [ "test_child_process.cc" ]
+ }
+ 
++if (is_aros) {
++  executable("launch_process_aros_probe") {
++    testonly = true
++    sources = [ "launch_process_aros_probe.cc" ]
++    deps = [ "//base" ]
++  }
++}
++
+ if (enable_base_tracing) {
+   perfetto_cc_proto_descriptor("gen_cc_chrome_track_event_descriptor") {
+     descriptor_name = "chrome_track_event.descriptor"
+diff --git a/base/test/launch_process_aros_probe.cc b/base/test/launch_process_aros_probe.cc
+new file mode 100644
+index 0000000000..499503049e
+--- /dev/null
++++ b/base/test/launch_process_aros_probe.cc
+@@ -0,0 +1,108 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <array>
++#include <string_view>
++
++#include "base/at_exit.h"
++#include "base/base_paths.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/logging.h"
++#include "base/path_service.h"
++#include "base/process/launch.h"
++#include "base/process/process.h"
++#include "base/process/process_handle.h"
++#include "base/threading/platform_thread.h"
++#include "base/time/time.h"
++
++namespace {
++
++constexpr char kChildSwitch[] = "--aros-launch-probe-child";
++constexpr int kChildExitCode = 23;
++constexpr std::array<std::string_view, 4> kExpectedArguments = {
++    "alpha beta",
++    "quote\"value",
++    "star*value",
++    "plain",
++};
++
++int RunChild(int argc, char** argv) {
++  const int expected_argc = static_cast<int>(kExpectedArguments.size()) + 2;
++  if (argc != expected_argc) {
++    LOG(ERROR) << "[Chromium:AROS:LaunchProbe] child argc=" << argc
++               << " expected=" << expected_argc;
++    return 80;
++  }
++
++  for (size_t index = 0; index < kExpectedArguments.size(); ++index) {
++    const std::string_view actual(argv[index + 2]);
++    if (actual != kExpectedArguments[index]) {
++      LOG(ERROR) << "[Chromium:AROS:LaunchProbe] argv[" << index + 2
++                 << "]='" << actual << "' expected='"
++                 << kExpectedArguments[index] << "'";
++      return 81;
++    }
++  }
++
++  LOG(INFO) << "[Chromium:AROS:LaunchProbe] child pid="
++            << base::GetCurrentProcId()
++            << " validated argv; remaining alive for SysMon";
++  base::PlatformThread::Sleep(base::Seconds(3));
++  LOG(INFO) << "[Chromium:AROS:LaunchProbe] child exiting "
++            << kChildExitCode;
++  return kChildExitCode;
++}
++
++int RunParent() {
++  base::FilePath executable;
++  if (!base::PathService::Get(base::FILE_EXE, &executable)) {
++    LOG(ERROR) << "[Chromium:AROS:LaunchProbe] FILE_EXE unavailable";
++    return 82;
++  }
++
++  base::CommandLine child_command(executable);
++  child_command.AppendArg(kChildSwitch);
++  for (const std::string_view argument : kExpectedArguments)
++    child_command.AppendArg(argument);
++
++  base::LaunchOptions options;
++  options.current_directory = executable.DirName();
++  base::Process child = base::LaunchProcess(child_command, options);
++  if (!child.IsValid()) {
++    PLOG(ERROR) << "[Chromium:AROS:LaunchProbe] LaunchProcess failed";
++    return 83;
++  }
++
++  LOG(INFO) << "[Chromium:AROS:LaunchProbe] parent pid="
++            << base::GetCurrentProcId() << " child pid=" << child.Pid();
++
++  int exit_code = 0;
++  if (!child.WaitForExit(&exit_code)) {
++    PLOG(ERROR) << "[Chromium:AROS:LaunchProbe] WaitForExit failed for pid="
++                << child.Pid();
++    return 84;
++  }
++  if (exit_code != kChildExitCode) {
++    LOG(ERROR) << "[Chromium:AROS:LaunchProbe] child exit=" << exit_code
++               << " expected=" << kChildExitCode;
++    return 85;
++  }
++
++  LOG(INFO) << "[Chromium:AROS:LaunchProbe] PASS child pid=" << child.Pid()
++            << " exit=" << exit_code;
++  return 0;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  base::AtExitManager at_exit_manager;
++  if (!base::CommandLine::Init(argc, argv))
++    return 86;
++
++  if (argc > 1 && std::string_view(argv[1]) == kChildSwitch)
++    return RunChild(argc, argv);
++  return RunParent();
++}

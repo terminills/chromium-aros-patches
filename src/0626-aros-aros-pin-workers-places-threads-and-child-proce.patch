@@ -1,0 +1,366 @@
+From 14dc789be5eefd5a44eb13d3d8d711de8caeb30a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:08:59 -0500
+Subject: [PATCH 626/638] aros: --aros-pin-workers places threads and child
+ processes round-robin from CPU 1
+
+AROS never migrates a task and a new task inherits only its creator's
+CPU, so Chromium sized its pools from KrnGetCPUCount() and then ran every
+thread on CPU 0. MaybePinThreadRoundRobin() gives each pthread an
+affinity mask for the next core (starting at 1: CPU 0 already carries
+the main thread, Intuition, input and the handlers); ArosAllocChildCpuMask()
+does the same for CreateNewProc() via NP_Affinity, which exec takes
+ownership of. Both print one "[Chromium:SMP]" line per placement on
+serial so placement is grep-able rather than inferred.
+
+The switch is re-checked until CommandLine is initialised, then latched:
+threads are created before CommandLine::Init() in some processes and a
+static-const-bool at the call site latched "off" for the process.
+
+The AROS kernel headers stay in platform_thread_aros.cc: <aros/kernel.h>
+defines an Allocate macro that collides with PartitionAlloc's
+state_bitmap.h when pulled into platform_thread_posix.cc.
+
+Note this only works with the sysroot libpthread (12856aa052); with the
+stale hosted archive collect-aros used to link, pthread_attr_t had no
+cpuaffinity field and this placed nothing.
+
+
+---
+ base/process/launch_aros.cc                   |  20 +-
+ base/threading/platform_thread_aros.cc        | 191 ++++++++++++++++++
+ .../platform_thread_internal_posix.h          |  34 ++++
+ base/threading/platform_thread_posix.cc       |   9 +
+ 4 files changed, 252 insertions(+), 2 deletions(-)
+
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index 8c9ca341c8..475975e079 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -15,6 +15,7 @@
+ #include "base/command_line.h"
+ #include "base/logging.h"
+ #include "base/process/process_metrics.h"
++#include "base/threading/platform_thread_internal_posix.h"
+ #include "base/threading/scoped_blocking_call.h"
+ 
+ #include <dos/dos.h>
+@@ -229,7 +230,20 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+   if (!process_name || !*process_name)
+     process_name = dos_executable.c_str();
+ 
++  // Place the child on a core of its own. A child process inherits its
++  // launcher's CPU exactly as a thread inherits its creator's, so without this
++  // every renderer's main thread lands on CPU 0 next to the browser's - which
++  // is precisely what the multi-process model exists to avoid, and the main
++  // thread is what the frame-time measurements show to be the bottleneck.
++  //
++  // nullptr unless --aros-pin-workers is on, and NP_Affinity with a NULL value
++  // is ignored by CreateNewProc (rom/dos/createnewproc.c only diverts to
++  // NewAddTask when the tag carries a mask), so the default path is unchanged.
++  // exec takes ownership of the mask and frees it with the task.
++  void* child_affinity = internal::ArosAllocChildCpuMask();
++
+   struct TagItem tags[] = {
++      {NP_Affinity, reinterpret_cast<IPTR>(child_affinity)},
+       {NP_Seglist, reinterpret_cast<IPTR>(segment)},
+       {NP_FreeSeglist, TRUE},
+       {NP_StackSize, kChromiumChildStackSize},
+@@ -246,8 +260,10 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+   };
+ 
+   if (current_directory != BNULL) {
+-    tags[7].ti_Tag = NP_CurrentDir;
+-    tags[7].ti_Data = reinterpret_cast<IPTR>(current_directory);
++    // Index 8, not 7: NP_Affinity was inserted at the front, shifting the
++    // TAG_IGNORE placeholder along by one.
++    tags[8].ti_Tag = NP_CurrentDir;
++    tags[8].ti_Data = reinterpret_cast<IPTR>(current_directory);
+   }
+ 
+   struct ::Process* child = CreateNewProc(tags);
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 347d1b22fe..365ffa87df 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -6,18 +6,209 @@
+ 
+ #include <pthread.h>
+ 
++#include <cstdio>
+ #include <optional>
+ 
+ #include <exec/tasks.h>
+ #include <proto/exec.h>
+ 
++#include <atomic>
++
++// SCHED_RR guard mirrors base/system/sys_info_posix.cc: <aros/kernel.h> defines
++// its own, and the POSIX one is what the scheduling code here expects.
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <proto/kernel.h>
++
+ #include "base/aros/socket_library.h"
++#include "base/base_switches.h"
++#include "base/command_line.h"
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/threading/platform_thread_internal_posix.h"
+ 
+ namespace base {
+ namespace internal {
+ 
++// Pin each Chromium thread to a CPU, round-robin, when --aros-pin-workers is
++// given.
++//
++// AROS does not balance tasks. A new task inherits an affinity mask containing
++// only the CPU that created it (rom/exec/exec_util.c, Exec_InitETask) and is
++// never migrated, so Chromium - which already sizes its pools correctly from
++// KrnGetCPUCount() - creates the right number of threads and then runs every
++// one of them on whichever core created it. Placement is the entire difference
++// between "N threads" and "N cores"; see
++// aros-adt-src/CHROMIUM-SMP-ROADMAP.md.
++//
++// Round-robin starts at CPU 1, not 0: CPU 0 already carries the main thread,
++// Intuition, input and the handlers, and the priority mapping below
++// deliberately leaves compositing at nice 0 so as not to starve
++// graphics.library. Adding a pinned worker there would fight the browser's own
++// UI thread.
++//
++// OFF BY DEFAULT. With threads really on other cores the guest wedges in the
++// kernel's spinlock priority-inheritance path (see kArosPinWorkers in
++// base/base_switches.cc), so enabling this unconditionally would trade a
++// working single-core browser for a hung multi-core one. As a flag the same
++// binary is either, and multicore becomes testable the moment the kernel side
++// lands - with no rebuild.
++//
++// Note the attribute only reaches exec when pthread_create comes from the
++// sysroot libpthread: with the stale hosted archive collect-aros used to pull
++// in (fixed in base/BUILD.gn, 12856aa052) the affinity field did not exist and
++// this function placed nothing, silently. The "[Chromium:SMP] pin" line below
++// is what makes the difference visible.
++//
++// The mask is handed to exec, which frees it with the task: one per thread,
++// never shared, never freed here.
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++namespace {
++
++// True when --aros-pin-workers was given.
++//
++// NOT a `static const bool` at any call site. Threads and child processes are
++// both created before CommandLine::Init() runs in some processes, and a
++// one-shot initialiser evaluated on such a call latches "off" for the life of
++// the process. The switch then silently does nothing - the browser just keeps
++// running everything on one core, exactly as it does without it, with no
++// symptom to notice. Re-check until the command line exists, then latch.
++bool MaybePinWorkersEnabled() {
++  static std::atomic<int> state{0};  // 0 unknown, 1 pin, 2 do not pin
++  int known = state.load(std::memory_order_relaxed);
++  if (known != 0)
++    return known == 1;
++  if (!base::CommandLine::InitializedForCurrentProcess())
++    return false;  // too early to tell; ask again next time
++  known = base::CommandLine::ForCurrentProcess()->HasSwitch(
++              switches::kArosPinWorkers)
++              ? 1
++              : 2;
++  state.store(known, std::memory_order_relaxed);
++  return known == 1;
++}
++
++}  // namespace
++
++void MaybePinThreadRoundRobin(pthread_attr_t* attributes) {
++  if (!MaybePinWorkersEnabled())
++    return;
++
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return;
++
++  const int cpus = static_cast<int>(KrnGetCPUCount());
++  if (cpus < 2)
++    return;
++
++  static std::atomic<unsigned> next{0};
++  const unsigned slot = next.fetch_add(1, std::memory_order_relaxed);
++  const int cpu = 1 + static_cast<int>(slot % static_cast<unsigned>(cpus - 1));
++
++  void* mask = KrnAllocCPUMask();
++  if (!mask)
++    return;
++  KrnClearCPUMask(mask);
++  KrnGetCPUMask(cpu, mask);
++  pthread_attr_setaffinity_np(attributes, 0, mask);
++
++  // Say so on the serial log. Whether a thread was actually placed on another
++  // core is the one thing this whole switch exists to establish, and it cannot
++  // be read off a screenshot: System Monitor's task list shows a CPU column,
++  // but the window ends up behind a full-screen browser and, once a crash
++  // requester is up, cannot be brought forward at all. One line per pinned
++  // thread turns the question into grep. Threads are created in the low
++  // hundreds, so this does not flood the log the way the PA tracing does.
++  char line[96];
++  std::snprintf(line, sizeof(line), "[Chromium:SMP] pin thread slot=%u cpu=%d of %d\n",
++                slot, cpu, cpus);
++  ArosKPutStr(line);
++}
++
++int ArosCurrentCpu() {
++  // KernelBase is cached: this is called on every thread-pool dispatch, with
++  // ThreadGroupImpl's lock_ held, and re-opening the resource each time would
++  // put an OpenResource() on the hot path of every task enqueue. The kernel
++  // resource is opened once per process and never closed, which is what
++  // OpenResource() is for - it returns the same base to every caller and has
++  // no matching close.
++  static APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return -1;
++  return static_cast<int>(KrnGetCPUNumber());
++}
++
++void* ArosAllocChildCpuMask() {
++  // A cpumask placing the next CHILD PROCESS on a core, round-robin from 1.
++  //
++  // CreateNewProc() in base/process/launch_aros.cc passes no NP_Affinity, so a
++  // renderer inherits the launcher's core exactly as a thread inherits its
++  // creator's - every child process lands on CPU 0 with the browser's main
++  // thread. With --aros-multi-process that would put every tab's renderer main
++  // thread on one core, which is the thing multi-process exists to avoid.
++  //
++  // Round-robin starts at 1 for the same reason the thread version does: CPU 0
++  // already carries the browser main thread, Intuition, input and the handlers.
++  //
++  // The caller hands this to NP_Affinity and exec TAKES OWNERSHIP: PrepareContext
++  // stores the pointer raw and CleanupETask frees it with the task. One mask per
++  // child, never shared, never freed by the caller.
++  //
++  // Gated on --aros-pin-workers rather than --aros-multi-process so the two axes
++  // can be tested separately: multi-process alone answers "do renderers spawn
++  // and work at all", and adding the pin switch answers "does placing them
++  // help".
++  if (!MaybePinWorkersEnabled())
++    return nullptr;
++
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return nullptr;
++
++  const int cpus = static_cast<int>(KrnGetCPUCount());
++  if (cpus < 2)
++    return nullptr;
++
++  static std::atomic<unsigned> next{0};
++  const unsigned slot = next.fetch_add(1, std::memory_order_relaxed);
++  const int cpu = 1 + static_cast<int>(slot % static_cast<unsigned>(cpus - 1));
++
++  void* mask = KrnAllocCPUMask();
++  if (!mask)
++    return nullptr;
++  KrnClearCPUMask(mask);
++  KrnGetCPUMask(cpu, mask);
++
++  char line[96];
++  std::snprintf(line, sizeof(line),
++                "[Chromium:SMP] child process slot=%u cpu=%d of %d\n", slot, cpu,
++                cpus);
++  ArosKPutStr(line);
++  return mask;
++}
++
++bool ArosNativeThreadPoolEnabled() {
++  // Same latch shape as MaybePinThreadRoundRobin, and for the same reason: the
++  // thread pool starts before CommandLine::Init() in some processes, and a
++  // function-local `static const bool` evaluated on the first such call would
++  // latch "off" for the life of the process with no visible symptom.
++  static std::atomic<int> state{0};  // 0 unknown, 1 on, 2 off
++  int known = state.load(std::memory_order_relaxed);
++  if (known != 0)
++    return known == 1;
++  if (!base::CommandLine::InitializedForCurrentProcess())
++    return false;  // too early to tell; ask again next time
++  known = base::CommandLine::ForCurrentProcess()->HasSwitch(
++              switches::kArosNativeThreadPool)
++              ? 1
++              : 2;
++  state.store(known, std::memory_order_relaxed);
++  return known == 1;
++}
++
+ const ThreadPriorityToNiceValuePairForTest
+     kThreadPriorityToNiceValueMapForTest[7] = {
+         {ThreadPriorityForTest::kRealtimeAudio, -10},
+diff --git a/base/threading/platform_thread_internal_posix.h b/base/threading/platform_thread_internal_posix.h
+index 09c01e31d8..ae963cfcbe 100644
+--- a/base/threading/platform_thread_internal_posix.h
++++ b/base/threading/platform_thread_internal_posix.h
+@@ -9,12 +9,46 @@
+ 
+ #include "base/base_export.h"
+ #include "base/threading/platform_thread.h"
++#include <pthread.h>
++
+ #include "build/build_config.h"
+ 
+ namespace base {
+ 
+ namespace internal {
+ 
++#if BUILDFLAG(IS_AROS)
++// Pin the thread about to be created to a CPU, round-robin, when
++// --aros-pin-workers is given. Defined in platform_thread_aros.cc, NOT here:
++// <aros/kernel.h> defines an Allocate macro that collides with PartitionAlloc's
++// state_bitmap.h and clashes with identifiers platform_thread_posix.cc pulls
++// in, so AROS headers stay in the AROS translation unit.
++void MaybePinThreadRoundRobin(pthread_attr_t* attributes);
++
++// The CPU the CALLING thread is running on, or -1 if it cannot be determined.
++// Same reason as above for living in platform_thread_aros.cc: this wraps
++// KrnGetCPUNumber(), and <proto/kernel.h> must not be pulled into large C++
++// translation units such as base/task/thread_pool/worker_thread.cc.
++//
++// Only meaningful because AROS never migrates a task - see the comment at the
++// call site in WorkerThread::ThreadMain().
++int ArosCurrentCpu();
++
++// True when --aros-native-threadpool was given: the thread pool should choose
++// which worker to wake by the load on that worker's core, rather than taking
++// whichever idle worker happens to be at the front of the set.
++bool ArosNativeThreadPoolEnabled();
++
++// A cpumask placing the next CHILD PROCESS on a core, round-robin, or nullptr
++// when --aros-pin-workers is off, the machine is single-core, or allocation
++// fails. Pass it to CreateNewProc() as NP_Affinity: exec takes ownership and
++// frees it with the task, so never free it here and never reuse one mask for
++// two processes. Lives in platform_thread_aros.cc for the usual reason - it
++// calls KrnAllocCPUMask()/KrnGetCPUMask(), and AROS kernel headers must not be
++// pulled into other translation units.
++void* ArosAllocChildCpuMask();
++#endif
++
+ struct ThreadTypeToNiceValuePair {
+   ThreadType thread_type;
+   int nice_value;
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index dc2a36a01b..ad0417963a 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -153,6 +153,15 @@ bool CreateThread(size_t stack_size,
+   if (stack_size > 0)
+     pthread_attr_setstacksize(&attributes, stack_size);
+ 
++#if BUILDFLAG(IS_AROS)
++  // Implemented in platform_thread_aros.cc: <aros/kernel.h> cannot be included
++  // here. It defines an Allocate macro that collides with PartitionAlloc's
++  // state_bitmap.h and clashes with identifiers this translation unit pulls in
++  // (50 errors when tried). Keeping AROS headers in the AROS file is the fix,
++  // not more #undef guards.
++  internal::MaybePinThreadRoundRobin(&attributes);
++#endif
++
+   std::unique_ptr<ThreadParams> params(new ThreadParams);
+   params->delegate = delegate;
+   params->joinable = joinable;

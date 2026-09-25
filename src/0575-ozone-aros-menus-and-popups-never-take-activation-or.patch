@@ -1,0 +1,301 @@
+From 843ccc98af6b380ae3ba975a0f2de52be494523c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 15:17:14 -0500
+Subject: [PATCH 575/638] ozone/aros: menus and popups never take activation or
+ keyboard focus
+
+Intuition activates whichever window is clicked, so a click on a menu item
+deactivated the browser window and MenuPreTargetHandlerAura cancelled the
+menu before the press was seen: no app-menu or context-menu item could be
+picked with the mouse.  X11 makes these windows override-redirect; do the
+equivalent here: menu/tooltip/popup/drag and non-activatable windows credit
+their Intuition activation to the focus owner up the parent_widget chain,
+deliver their keys there, ignore the owner's INACTIVEWINDOW when activation
+moved into one of them, and hand Intuition activation back to the owner
+before they hide or close.
+---
+ ui/ozone/platform/aros/aros_window.cc         | 109 +++++++++++++++---
+ ui/ozone/platform/aros/aros_window.h          |  16 +++
+ ui/ozone/platform/aros/aros_window_manager.cc |  26 +++++
+ ui/ozone/platform/aros/aros_window_manager.h  |   5 +
+ 4 files changed, 137 insertions(+), 19 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 5617f13fd8..ed835bcaf8 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -385,7 +385,15 @@ bool IsMouseWheelRawKey(uint16_t code) {
+ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+                        ArosWindowManager* manager,
+                        PlatformWindowInitProperties properties)
+-    : delegate_(delegate), manager_(manager), bounds_(properties.bounds) {
++    : delegate_(delegate),
++      manager_(manager),
++      bounds_(properties.bounds),
++      activatable_(properties.activatable &&
++                   properties.type != PlatformWindowType::kMenu &&
++                   properties.type != PlatformWindowType::kTooltip &&
++                   properties.type != PlatformWindowType::kPopup &&
++                   properties.type != PlatformWindowType::kDrag),
++      parent_widget_(properties.parent_widget) {
+   bounds_.set_width(PositiveOrDefault(bounds_.width(), kDefaultWindowWidth));
+   bounds_.set_height(PositiveOrDefault(bounds_.height(), kDefaultWindowHeight));
+   const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+@@ -439,6 +447,8 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+               << widget_ << " native=" << window_
+               << " client=" << bounds_.ToString()
+               << " type=" << static_cast<int>(properties.type)
++              << " activatable=" << activatable_
++              << " parent=" << parent_widget_
+               << " standard_frame=" << use_standard_frame
+               << " work_area=" << work_area.ToString();
+   }
+@@ -449,6 +459,7 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+ ArosWindow::~ArosWindow() {
+   shutting_down_ = true;
+   if (window_) {
++    ReturnIntuitionActivationToOwner();
+     DisableNativeEvents();
+     ResetNativeCursor();
+     ReleaseNativeBackingStore();
+@@ -462,7 +473,7 @@ ArosWindow::~ArosWindow() {
+ void ArosWindow::Show(bool inactive) {
+   if (window_) {
+     ShowWindow(window_, nullptr);
+-    if (!inactive) {
++    if (!inactive && activatable_) {
+       ActivateWindow(window_);
+     }
+   }
+@@ -471,6 +482,7 @@ void ArosWindow::Show(bool inactive) {
+ 
+ void ArosWindow::Hide() {
+   if (window_) {
++    ReturnIntuitionActivationToOwner();
+     HideWindow(window_);
+   }
+   visible_ = false;
+@@ -592,19 +604,83 @@ PlatformWindowState ArosWindow::GetPlatformWindowState() const {
+ }
+ 
+ void ArosWindow::Activate() {
++  if (!activatable_) {
++    return;
++  }
+   if (window_) {
+     ActivateWindow(window_);
+   }
+-  if (!active_) {
+-    active_ = true;
+-    delegate_->OnActivationChanged(true);
+-  }
++  SetActive(true);
+ }
+ 
+ void ArosWindow::Deactivate() {
+-  if (active_) {
+-    active_ = false;
+-    delegate_->OnActivationChanged(false);
++  SetActive(false);
++}
++
++void ArosWindow::SetActive(bool active) {
++  if (active_ != active) {
++    active_ = active;
++    delegate_->OnActivationChanged(active);
++  }
++}
++
++ArosWindow* ArosWindow::FocusOwner() {
++  ArosWindow* owner = this;
++  // Bounded: the parent chain is a tree, but a stale widget id could point
++  // anywhere, so never loop more than the number of hops a menu tree needs.
++  for (int hops = 0; !owner->activatable_ && hops < 16; ++hops) {
++    ArosWindow* const parent = owner->parent_widget_ == gfx::kNullAcceleratedWidget
++                                   ? nullptr
++                                   : manager_->GetWindow(owner->parent_widget_);
++    if (!parent) {
++      break;
++    }
++    owner = parent;
++  }
++  return owner;
++}
++
++bool ArosWindow::OwnsIntuitionActivation() {
++  ArosWindow* const active = manager_->GetIntuitionActiveWindow();
++  return active && (active == this || active->FocusOwner() == this);
++}
++
++void ArosWindow::HandleActiveWindow() {
++  if (activatable_) {
++    SetActive(true);
++    return;
++  }
++  // Intuition activated a menu/popup on click; Chromium's activation stays
++  // with the focus owner, which is where the keys will be delivered.
++  ArosWindow* const owner = FocusOwner();
++  if (owner != this) {
++    owner->SetActive(true);
++  }
++}
++
++void ArosWindow::HandleInactiveWindow() {
++  mouse_button_flags_ = EF_NONE;
++  // Activation moving into one of this window's own popups is not a
++  // deactivation from Chromium's point of view; MenuPreTargetHandlerAura
++  // cancels the menu on any activation change, which is exactly what a
++  // click on a menu item must not do.
++  ArosWindow* const owner = activatable_ ? this : FocusOwner();
++  if (owner->active_ && !owner->OwnsIntuitionActivation()) {
++    owner->SetActive(false);
++  }
++}
++
++void ArosWindow::ReturnIntuitionActivationToOwner() {
++  // Closing or hiding Intuition's active window leaves no window active,
++  // and keys would then reach nobody.  A popup that was activated by a
++  // click hands the activation back to its owner first.
++  if (activatable_ || !window_) {
++    return;
++  }
++  ArosWindow* const owner = FocusOwner();
++  if (owner != this && owner->window_ &&
++      manager_->GetIntuitionActiveWindow() == this) {
++    ActivateWindow(owner->window_);
+   }
+ }
+ 
+@@ -770,17 +846,10 @@ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+       }
+       break;
+     case IDCMP_ACTIVEWINDOW:
+-      if (!active_) {
+-        active_ = true;
+-        delegate_->OnActivationChanged(true);
+-      }
++      HandleActiveWindow();
+       break;
+     case IDCMP_INACTIVEWINDOW:
+-      if (active_) {
+-        active_ = false;
+-        delegate_->OnActivationChanged(false);
+-      }
+-      mouse_button_flags_ = EF_NONE;
++      HandleInactiveWindow();
+       break;
+     case IDCMP_MOUSEMOVE:
+       DispatchMouseMove(qualifier, mouse_x, mouse_y);
+@@ -920,7 +989,9 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   KeyEvent event(released ? ET_KEY_RELEASED : ET_KEY_PRESSED, key_code,
+                  dom_code, flags, dom_key, EventTimeForNow());
+   event.InitializeNative();
+-  delegate_->DispatchEvent(&event);
++  // Keys arrive at Intuition's active window; a menu or popup that was
++  // activated by a click delivers them where its keyboard focus lives.
++  FocusOwner()->delegate_->DispatchEvent(&event);
+ }
+ 
+ bool ArosWindow::PresentPixels(const void* pixels,
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 3ee44ed8cd..421d4e9dd6 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -53,6 +53,15 @@ class ArosWindow : public PlatformWindow {
+                      const gfx::Size& pixel_size,
+                      const gfx::Rect& damage);
+ 
++  // Whether this window carries Chromium activation and keyboard focus of
++  // its own.  Menus, tooltips, popups and drag windows do not (the X11
++  // platform makes them override-redirect so the window manager never
++  // focuses them); Intuition still activates whichever window is clicked,
++  // so the activation those windows receive is credited to their focus
++  // owner instead, and the keys they receive are delivered there.
++  bool activatable() const { return activatable_; }
++  ArosWindow* FocusOwner();
++
+  private:
+   void Show(bool inactive) override;
+   void Hide() override;
+@@ -92,6 +101,11 @@ class ArosWindow : public PlatformWindow {
+   bool BlitNativeBackingStore(const gfx::Rect& damage);
+   void ResetNativeCursor();
+   void DisableNativeEvents();
++  bool OwnsIntuitionActivation();
++  void SetActive(bool active);
++  void HandleActiveWindow();
++  void HandleInactiveWindow();
++  void ReturnIntuitionActivationToOwner();
+   void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
+   void DispatchMouseButton(uint16_t code,
+                            uint16_t qualifier,
+@@ -117,6 +131,8 @@ class ArosWindow : public PlatformWindow {
+   std::string title_;
+   PlatformWindowState window_state_ = PlatformWindowState::kNormal;
+   bool visible_ = false;
++  bool activatable_ = true;
++  gfx::AcceleratedWidget parent_widget_ = gfx::kNullAcceleratedWidget;
+   bool active_ = false;
+   bool capture_ = false;
+   bool shutting_down_ = false;
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index f4a194c2d2..4ce2e1334c 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -12,7 +12,9 @@
+ 
+ #include <exec/ports.h>
+ #include <intuition/intuition.h>
++#include <intuition/intuitionbase.h>
+ #include <proto/exec.h>
++#include <proto/intuition.h>
+ 
+ #undef Remove
+ 
+@@ -178,6 +180,30 @@ struct Window* ArosWindowManager::GetNativeWindow(
+   return nullptr;
+ }
+ 
++ArosWindow* ArosWindowManager::GetWindow(gfx::AcceleratedWidget widget) {
++  base::AutoLock lock(lock_);
++  const auto window_it = windows_.find(widget);
++  return window_it == windows_.end() ? nullptr : window_it->second.get();
++}
++
++ArosWindow* ArosWindowManager::GetWindowForNative(
++    struct Window* native_window) {
++  if (!native_window) {
++    return nullptr;
++  }
++  base::AutoLock lock(lock_);
++  const auto it = native_windows_.find(native_window);
++  return it == native_windows_.end() ? nullptr : it->second.get();
++}
++
++ArosWindow* ArosWindowManager::GetIntuitionActiveWindow() {
++  // intuitionbase.h: LockIBase() before reading the struct.
++  const ULONG ibase_lock = LockIBase(0);
++  struct Window* const active_window = IntuitionBase->ActiveWindow;
++  UnlockIBase(ibase_lock);
++  return GetWindowForNative(active_window);
++}
++
+ void ArosWindowManager::ProcessNativeEvents() {
+   if (event_port_) {
+     while (auto* message =
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 5f02d49402..92083543f3 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -49,6 +49,11 @@ class ArosWindowManager {
+   void ReleaseNativeResources();
+ 
+   struct Window* GetNativeWindow(gfx::AcceleratedWidget widget);
++  ArosWindow* GetWindow(gfx::AcceleratedWidget widget);
++  ArosWindow* GetWindowForNative(struct Window* native_window);
++  // The ArosWindow owning Intuition's currently active window, if it is
++  // one of ours.
++  ArosWindow* GetIntuitionActiveWindow();
+ 
+   bool PresentCanvas(gfx::AcceleratedWidget widget,
+                      const void* pixels,

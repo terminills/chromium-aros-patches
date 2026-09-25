@@ -1,0 +1,27 @@
+From fee98982ba2512be3234a3178c755cc094dc101b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 6 Aug 2026 20:59:17 -0500
+Subject: [PATCH 510/638] Disable HangWatcher on AROS
+
+---
+ base/threading/hang_watcher.cc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/base/threading/hang_watcher.cc b/base/threading/hang_watcher.cc
+index 3b0041d8c5..b3e80081bc 100644
+--- a/base/threading/hang_watcher.cc
++++ b/base/threading/hang_watcher.cc
+@@ -346,6 +346,13 @@ void HangWatcher::InitializeOnMainThread(ProcessType process_type,
+   if (process_type == ProcessType::kGPUProcess)
+     enable_hang_watcher = false;
+ 
++#if BUILDFLAG(IS_AROS)
++  // HangWatcher is intentionally leaked in production. AROS pthread process
++  // teardown currently joins live joinable tasks, so the leaked HangWatcher
++  // task can keep a child process alive after Chromium has returned from main.
++  enable_hang_watcher = false;
++#endif
++
+   g_use_hang_watcher.store(enable_hang_watcher, std::memory_order_relaxed);
+ 
+   // Keep the process type.

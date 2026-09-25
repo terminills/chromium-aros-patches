@@ -1,0 +1,480 @@
+From f411748ffcdb6195f5b057a0f4df0adc03396e53 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:46:29 -0500
+Subject: [PATCH 002/638] base: define the pre-MMU AROS allocation substrate
+ [chromium] [aros]
+
+AI_PHASE: chromium-base-runtime
+
+AI_STATUS: wip
+
+ROOT_CAUSE: PartitionAlloc assumes reservable virtual address space, page-state transitions, process-local TLS, and platform stack diagnostics; AROS currently exposes Exec allocation but not the complete mmap/mprotect reservation contract.
+
+FIX_REASON: Add an explicit AROS allocator backend and platform adapters that preserve allocation ownership and compilation while exposing the current protection limitations. This is a bring-up substrate, not a claim that W^X or sparse reservations already work.
+
+SCOPE: base/allocator dispatcher TLS, PartitionAlloc page allocation, entropy, thread identity, stack trace, and StarScan compatibility.
+
+VALIDATION: the native Chromium base probe passed under SMP QEMU and the headless graph compiled through PartitionAlloc consumers into Mojo and Skia.
+
+RISK: high until OPAL/MMU page mapping and protection transitions replace the allocation-backed reservation model.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/allocator/dispatcher/tls.cc              |  27 +++
+ base/allocator/partition_alloc_support.cc     |   1 +
+ .../src/partition_alloc/BUILD.gn              |   9 +-
+ .../src/partition_alloc/page_allocator.cc     |   2 +
+ .../page_allocator_internals_aros.h           | 199 ++++++++++++++++++
+ .../debug/stack_trace_aros.cc                 |  37 ++++
+ .../memory/page_size_posix.cc                 |   2 +-
+ .../partition_alloc_base/no_destructor.h      |   2 +-
+ .../partition_alloc_base/rand_util_posix.cc   |   5 +-
+ .../threading/platform_thread_posix.cc        |   2 +
+ .../starscan/stats_collector.cc               |   3 +-
+ 11 files changed, 283 insertions(+), 6 deletions(-)
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/debug/stack_trace_aros.cc
+
+diff --git a/base/allocator/dispatcher/tls.cc b/base/allocator/dispatcher/tls.cc
+index 9cad125cfc..cd7800f639 100644
+--- a/base/allocator/dispatcher/tls.cc
++++ b/base/allocator/dispatcher/tls.cc
+@@ -12,7 +12,17 @@
+ #include "base/immediate_crash.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <exec/memory.h>
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#else
+ #include <sys/mman.h>
++#endif
+ 
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+ #include <sys/prctl.h>
+@@ -47,6 +57,13 @@ void Swap(std::atomic_bool& lh_op, std::atomic_bool& rh_op) {
+ }  // namespace
+ 
+ void* MMapAllocator::AllocateMemory(size_t size_in_bytes) {
++#if BUILDFLAG(IS_AROS)
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase) {
++    return nullptr;
++  }
++  return KrnAllocPages(nullptr, size_in_bytes, MEMF_PUBLIC | MEMF_CLEAR);
++#else
+   void* const mmap_res = mmap(nullptr, size_in_bytes, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+@@ -62,12 +79,22 @@ void* MMapAllocator::AllocateMemory(size_t size_in_bytes) {
+ #endif
+ 
+   return (mmap_res != MAP_FAILED) ? mmap_res : nullptr;
++#endif
+ }
+ 
+ bool MMapAllocator::FreeMemoryForTesting(void* pointer_to_allocated,
+                                          size_t size_in_bytes) {
++#if BUILDFLAG(IS_AROS)
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase) {
++    return false;
++  }
++  KrnFreePages(pointer_to_allocated, size_in_bytes);
++  return true;
++#else
+   auto const munmap_res = munmap(pointer_to_allocated, size_in_bytes);
+   return (munmap_res == 0);
++#endif
+ }
+ 
+ PThreadTLSSystem::PThreadTLSSystem() = default;
+diff --git a/base/allocator/partition_alloc_support.cc b/base/allocator/partition_alloc_support.cc
+index 2136ace07d..217dda37af 100644
+--- a/base/allocator/partition_alloc_support.cc
++++ b/base/allocator/partition_alloc_support.cc
+@@ -924,6 +924,7 @@ bool PartitionAllocSupport::ShouldEnableMemoryTagging(
+     case base::features::MemoryTaggingEnabledProcesses::kAllProcesses:
+       return true;
+   }
++  return false;
+ }
+ 
+ // static
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+index b885c18946..c2ee205575 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
++++ b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+@@ -480,6 +480,8 @@ if (is_clang_or_gcc) {
+         "page_allocator_internals_win.h",
+         "partition_tls_win.cc",
+       ]
++    } else if (is_aros) {
++      sources += [ "page_allocator_internals_aros.h" ]
+     } else if (is_posix) {
+       sources += [
+         "page_allocator_internals_posix.cc",
+@@ -660,7 +662,6 @@ if (is_clang_or_gcc) {
+       ]
+     } else if (is_posix) {
+       sources += [
+-        "partition_alloc_base/debug/stack_trace_posix.cc",
+         "partition_alloc_base/files/file_util.h",
+         "partition_alloc_base/files/file_util_posix.cc",
+         "partition_alloc_base/memory/page_size_posix.cc",
+@@ -673,6 +674,12 @@ if (is_clang_or_gcc) {
+         "partition_alloc_base/time/time_conversion_posix.cc",
+       ]
+ 
++      if (is_aros) {
++        sources += [ "partition_alloc_base/debug/stack_trace_aros.cc" ]
++      } else {
++        sources += [ "partition_alloc_base/debug/stack_trace_posix.cc" ]
++      }
++
+       if (is_linux || is_chromeos) {
+         sources += [ "partition_alloc_base/debug/stack_trace_linux.cc" ]
+       }
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+index 280624c1ed..18ed5efafb 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
+@@ -21,6 +21,8 @@
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "partition_alloc/page_allocator_internals_win.h"
++#elif BUILDFLAG(IS_AROS)
++#include "partition_alloc/page_allocator_internals_aros.h"
+ #elif BUILDFLAG(IS_POSIX)
+ #include "partition_alloc/page_allocator_internals_posix.h"
+ #elif BUILDFLAG(IS_FUCHSIA)
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+new file mode 100644
+index 0000000000..3dce5d33c3
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -0,0 +1,199 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_AROS_H_
++#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_AROS_H_
++
++#include <algorithm>
++#include <atomic>
++#include <cerrno>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <exec/memory.h>
++#include <proto/exec.h>
++#include <proto/kernel.h>
++
++#include "partition_alloc/page_allocator.h"
++#include "partition_alloc/page_allocator_constants.h"
++#include "partition_alloc/partition_alloc_check.h"
++
++namespace partition_alloc::internal {
++
++// KrnAllocPages treats a non-null address as an exact physical-page request.
++constexpr bool kHintIsAdvisory = false;
++std::atomic<int32_t> s_allocPageErrorCode{0};
++
++namespace {
++
++APTR OpenKernelResource() {
++  return OpenResource("kernel.resource");
++}
++
++KRN_MapAttr GetAccessFlags(PageAccessibilityConfiguration accessibility) {
++  switch (accessibility.permissions) {
++    case PageAccessibilityConfiguration::kRead:
++      return MAP_Readable;
++    case PageAccessibilityConfiguration::kReadWriteTagged:
++    case PageAccessibilityConfiguration::kReadWrite:
++      return static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable);
++    case PageAccessibilityConfiguration::kReadExecuteProtected:
++    case PageAccessibilityConfiguration::kReadExecute:
++      return static_cast<KRN_MapAttr>(MAP_Readable | MAP_Executable);
++    case PageAccessibilityConfiguration::kReadWriteExecuteProtected:
++    case PageAccessibilityConfiguration::kReadWriteExecute:
++      return static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
++                                      MAP_Executable);
++    case PageAccessibilityConfiguration::kInaccessible:
++    case PageAccessibilityConfiguration::kInaccessibleWillJitLater:
++      return static_cast<KRN_MapAttr>(0);
++  }
++  return static_cast<KRN_MapAttr>(0);
++}
++
++void SetProtection(APTR KernelBase,
++                   uintptr_t address,
++                   size_t length,
++                   KRN_MapAttr flags) {
++  constexpr size_t kMaxChunk =
++      static_cast<size_t>(std::numeric_limits<uint32_t>::max()) & ~size_t{4095};
++
++  while (length) {
++    const size_t chunk = std::min(length, kMaxChunk);
++    KrnSetProtection(reinterpret_cast<void*>(address),
++                     static_cast<uint32_t>(chunk), flags);
++    address += chunk;
++    length -= chunk;
++  }
++}
++
++}  // namespace
++
++uintptr_t SystemAllocPagesInternal(
++    uintptr_t hint,
++    size_t length,
++    PageAccessibilityConfiguration accessibility,
++    PageTag,
++    int file_descriptor_for_shared_alloc) {
++  if (file_descriptor_for_shared_alloc != -1) {
++    s_allocPageErrorCode = ENOTSUP;
++    return 0;
++  }
++
++  APTR KernelBase = OpenKernelResource();
++  if (!KernelBase) {
++    s_allocPageErrorCode = ENOSYS;
++    return 0;
++  }
++
++  ULONG flags = MEMF_PUBLIC | MEMF_CLEAR;
++  if (accessibility.permissions ==
++          PageAccessibilityConfiguration::kInaccessibleWillJitLater ||
++      (GetAccessFlags(accessibility) & MAP_Executable)) {
++    flags |= MEMF_EXECUTABLE;
++  }
++
++  void* result = KrnAllocPages(reinterpret_cast<void*>(hint), length, flags);
++  if (!result) {
++    s_allocPageErrorCode = ENOMEM;
++    return 0;
++  }
++
++  SetProtection(KernelBase, reinterpret_cast<uintptr_t>(result), length,
++                GetAccessFlags(accessibility));
++  s_allocPageErrorCode = 0;
++  return reinterpret_cast<uintptr_t>(result);
++}
++
++bool TrySetSystemPagesAccessInternal(
++    uintptr_t address,
++    size_t length,
++    PageAccessibilityConfiguration accessibility) {
++  APTR KernelBase = OpenKernelResource();
++  if (!KernelBase) {
++    return false;
++  }
++  SetProtection(KernelBase, address, length, GetAccessFlags(accessibility));
++  return true;
++}
++
++void SetSystemPagesAccessInternal(
++    uintptr_t address,
++    size_t length,
++    PageAccessibilityConfiguration accessibility) {
++  PA_CHECK(TrySetSystemPagesAccessInternal(address, length, accessibility));
++}
++
++void FreePagesInternal(uintptr_t address, size_t length) {
++  APTR KernelBase = OpenKernelResource();
++  PA_CHECK(KernelBase);
++  KrnFreePages(reinterpret_cast<void*>(address), length);
++}
++
++uintptr_t TrimMappingInternal(uintptr_t base_address,
++                              size_t,
++                              size_t trim_length,
++                              PageAccessibilityConfiguration,
++                              size_t pre_slack,
++                              size_t post_slack) {
++  uintptr_t result = base_address;
++  if (pre_slack) {
++    FreePages(base_address, pre_slack);
++    result += pre_slack;
++  }
++  if (post_slack) {
++    FreePages(result + trim_length, post_slack);
++  }
++  return result;
++}
++
++void DecommitSystemPagesInternal(
++    uintptr_t address,
++    size_t length,
++    PageAccessibilityDisposition) {
++  APTR KernelBase = OpenKernelResource();
++  PA_CHECK(KernelBase);
++  SetProtection(KernelBase, address, length,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  std::memset(reinterpret_cast<void*>(address), 0, length);
++  SetProtection(KernelBase, address, length, static_cast<KRN_MapAttr>(0));
++}
++
++bool DecommitAndZeroSystemPagesInternal(uintptr_t address,
++                                        size_t length,
++                                        PageTag) {
++  DecommitSystemPagesInternal(
++      address, length, PageAccessibilityDisposition::kRequireUpdate);
++  return true;
++}
++
++void RecommitSystemPagesInternal(
++    uintptr_t address,
++    size_t length,
++    PageAccessibilityConfiguration accessibility,
++    PageAccessibilityDisposition) {
++  SetSystemPagesAccess(address, length, accessibility);
++}
++
++bool TryRecommitSystemPagesInternal(
++    uintptr_t address,
++    size_t length,
++    PageAccessibilityConfiguration accessibility,
++    PageAccessibilityDisposition) {
++  return TrySetSystemPagesAccess(address, length, accessibility);
++}
++
++void DiscardSystemPagesInternal(uintptr_t, size_t) {
++  // AROS cannot currently discard physical backing while retaining the
++  // virtual address reservation. Decommit still zeroes and protects pages.
++}
++
++}  // namespace partition_alloc::internal
++
++#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_AROS_H_
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/debug/stack_trace_aros.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/debug/stack_trace_aros.cc
+new file mode 100644
+index 0000000000..41d0ada9f7
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/debug/stack_trace_aros.cc
+@@ -0,0 +1,37 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "partition_alloc/partition_alloc_base/debug/stack_trace.h"
++
++#include "partition_alloc/partition_alloc_base/debug/debugging_buildflags.h"
++#include "partition_alloc/partition_alloc_base/logging.h"
++#include "partition_alloc/partition_alloc_base/strings/safe_sprintf.h"
++
++namespace partition_alloc::internal::base::debug {
++
++size_t CollectStackTrace(const void** trace, size_t count) {
++#if BUILDFLAG(PA_CAN_UNWIND_WITH_FRAME_POINTERS)
++  return TraceStackFramePointers(trace, count, 0);
++#else
++  return 0;
++#endif
++}
++
++void OutputStackTrace(unsigned index,
++                      uintptr_t address,
++                      uintptr_t,
++                      const char*,
++                      uintptr_t) {
++  char buffer[96];
++  strings::SafeSPrintf(buffer, "#%02d 0x%0x\n", index, address);
++  PA_RAW_LOG(INFO, buffer);
++}
++
++void PrintStackTrace(const void** trace, size_t count) {
++  for (size_t i = 0; i < count; ++i) {
++    OutputStackTrace(i, reinterpret_cast<uintptr_t>(trace[i]), 0, nullptr, 0);
++  }
++}
++
++}  // namespace partition_alloc::internal::base::debug
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
+index 245bc5898c..05e3a5e510 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
+@@ -12,7 +12,7 @@ size_t GetPageSize() {
+   static const size_t pagesize = []() -> size_t {
+   // For more information see getpagesize(2). Portable applications should use
+   // sysconf(_SC_PAGESIZE) rather than getpagesize() if it's available.
+-#if defined(_SC_PAGESIZE)
++#if defined(__AROS__) || defined(_SC_PAGESIZE)
+     return static_cast<size_t>(sysconf(_SC_PAGESIZE));
+ #else
+     return getpagesize();
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/no_destructor.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/no_destructor.h
+index d267101510..2f30590e76 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/no_destructor.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/no_destructor.h
+@@ -123,7 +123,7 @@ class NoDestructor {
+     }
+ 
+     const T* get() const {
+-      return const_cast<PlacementStorage*>(this)->storage();
++      return const_cast<PlacementStorage*>(this)->get();
+     }
+     T* get() { return reinterpret_cast<T*>(storage_); }
+ 
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
+index 357696f9e5..6bb4805298 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/rand_util_posix.cc
+@@ -5,7 +5,6 @@
+ #include "partition_alloc/partition_alloc_base/rand_util.h"
+ 
+ #include <fcntl.h>
+-#include <sys/syscall.h>
+ #include <unistd.h>
+ 
+ #include <cerrno>
+@@ -20,6 +19,10 @@
+ #include "partition_alloc/partition_alloc_base/no_destructor.h"
+ #include "partition_alloc/partition_alloc_base/posix/eintr_wrapper.h"
+ 
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#include <sys/syscall.h>
++#endif
++
+ #if BUILDFLAG(IS_MAC)
+ // TODO(crbug.com/995996): Waiting for this header to appear in the iOS SDK.
+ // (See below.)
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
+index 0bef6890ef..d0a1d4eef3 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
+@@ -115,6 +115,8 @@ PlatformThreadId PlatformThread::CurrentId() {
+   return gettid();
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return zx_thread_self();
++#elif BUILDFLAG(IS_AROS)
++  return pthread_self();
+ #elif BUILDFLAG(IS_SOLARIS) || BUILDFLAG(IS_QNX)
+   return pthread_self();
+ #elif BUILDFLAG(IS_POSIX) && BUILDFLAG(IS_AIX)
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/starscan/stats_collector.cc b/base/allocator/partition_allocator/src/partition_alloc/starscan/stats_collector.cc
+index e05f045f6b..711031edd6 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/starscan/stats_collector.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/starscan/stats_collector.cc
+@@ -2,9 +2,8 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-#include "partition_alloc/starscan/stats_collector.h"
+-
+ #include "partition_alloc/internal_allocator.h"
++#include "partition_alloc/starscan/stats_collector.h"
+ #include "partition_alloc/partition_alloc_base/time/time.h"
+ #include "partition_alloc/starscan/logging.h"
+ #include "partition_alloc/starscan/stats_reporter.h"

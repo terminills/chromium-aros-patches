@@ -1,0 +1,39 @@
+From e1cdddf9d44b8cc2516e6dfc60c8e44d242622d6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 09:13:01 -0500
+Subject: [PATCH 043/638] build: use GNU language modes for AROS GCC
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: AROS's GCC cross-toolchain fell through to strict C++20 mode even though Chromium's source uses GNU comma-elision for empty variadic macros.
+
+FIX_REASON: Route AROS through Chromium's existing non-Clang GCC dialect branch instead of rewriting V8 and Chromium macro callsites individually.
+
+SCOPE: build/config/compiler/BUILD.gn
+
+VALIDATION: generated AROS V8 flags use -std=gnu++2a while host V8 remains -std=c++20; target baseline.o passes
+
+RISK: medium; this changes the C/C++ dialect for all AROS target objects, but exactly matches Chromium's documented GCC requirement and preserves the language standard level.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ build/config/compiler/BUILD.gn | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+index 59c46e1b69..3ed383c876 100644
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -641,8 +641,8 @@ config("compiler") {
+ 
+   # C11/C++11 compiler flags setup.
+   # ---------------------------
+-  if (is_linux || is_chromeos || is_android || (is_nacl && is_clang) ||
+-      current_os == "aix") {
++  if (is_linux || is_chromeos || is_android || is_aros ||
++      (is_nacl && is_clang) || current_os == "aix") {
+     if (is_clang) {
+       standard_prefix = "c"
+ 

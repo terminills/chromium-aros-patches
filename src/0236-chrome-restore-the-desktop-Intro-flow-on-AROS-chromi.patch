@@ -1,0 +1,45 @@
+From 601d25ef41e72402874d6d92de424492b01dc6ac Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 06:36:56 -0500
+Subject: [PATCH 236/638] chrome: restore the desktop Intro flow on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS enabled Chromium's portable desktop DICE graph and packaged Intro resources, but a platform subtraction removed IntroUI and left the real first-run controller with three undefined symbols.
+
+FIX_REASON: Restore the upstream Intro handler and controller. DICE is Chromium's web-account implementation used by desktop Linux and does not require native OS account integration.
+
+SCOPE: chrome/browser/ui/BUILD.gn
+
+VALIDATION: Compiled intro_ui.cc and intro_handler.cc and rebuilt //chrome/browser/ui:ui for AROS.
+
+RISK: First launch may now enter Chromium's standard DICE Intro flow; runtime network and profile behavior still require hosted validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap; ACD-chromium-aros-native-window-system;
+---
+ chrome/browser/ui/BUILD.gn | 9 ---------
+ 1 file changed, 9 deletions(-)
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 11895162e0..94fdb5ed2a 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4321,15 +4321,6 @@ static_library("ui") {
+       "//components/country_codes",
+     ]
+ 
+-    if (is_aros) {
+-      sources -= [
+-        "webui/intro/intro_handler.cc",
+-        "webui/intro/intro_handler.h",
+-        "webui/intro/intro_ui.cc",
+-        "webui/intro/intro_ui.h",
+-      ]
+-    }
+-
+     if (enable_dice_support) {
+       sources += [
+         "profiles/signin_intercept_first_run_experience_dialog.cc",

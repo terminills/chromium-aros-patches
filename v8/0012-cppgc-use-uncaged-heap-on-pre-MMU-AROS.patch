@@ -1,0 +1,33 @@
+From 91d3ac5a3cb542a5bdcc54e5af4623a101264c55 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 20:18:58 -0500
+Subject: [PATCH 12/28] cppgc: use uncaged heap on pre-MMU AROS
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: complete
+ROOT_CAUSE: Hosted Chromium run 0123 reaches cppgc cage setup, where V8 requests sparse 8 GiB hinted and 17 GiB worst-case reservations; AROS pre-MMU page allocation physically backs reservations and cannot satisfy that virtual-address contract.
+FIX_REASON: Select V8's supported uncaged cppgc configuration on AROS until OPAL/MMU supplies sparse virtual reservations; the derived cppgc young-generation and pointer-compression features remain disabled consistently.
+SCOPE: BUILD.gn
+VALIDATION: Filtered headless GN regeneration removed CPPGC_CAGED_HEAP, CPPGC_YOUNG_GENERATION, and CPPGC_POINTER_COMPRESSION from the AROS cppgc edge; autoninja cppgc_base cross-compiled 105 affected targets.
+RISK: AROS temporarily loses cppgc cage-derived young-generation and pointer-compression optimizations; memory safety and functionality take precedence over an impossible pre-MMU reservation.
+AI_DECISION_CHAIN: run 0122 zero-page contract -> run 0123 cage reservation OOM -> supported uncaged cppgc -> re-enable after MMU sparse reservations
+---
+ BUILD.gn | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 67af209..7e855b1 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -320,8 +320,9 @@ declare_args() {
+ 
+   # Enable heap reservation of size 4GB. Only possible for 64bit archs.
+   cppgc_enable_caged_heap =
+-      v8_current_cpu == "x64" || v8_current_cpu == "arm64" ||
+-      v8_current_cpu == "loong64" || v8_current_cpu == "riscv64"
++      target_os != "aros" &&
++      (v8_current_cpu == "x64" || v8_current_cpu == "arm64" ||
++       v8_current_cpu == "loong64" || v8_current_cpu == "riscv64")
+ 
+   # Enables additional heap verification phases and checks.
+   cppgc_enable_verify_heap = ""

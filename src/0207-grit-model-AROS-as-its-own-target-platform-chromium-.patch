@@ -1,0 +1,92 @@
+From 2b08d739c372d5ff7b5fd5a16b719efb9e285690 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:07:15 -0500
+Subject: [PATCH 207/638] grit: model AROS as its own target platform
+ [chromium] [aros]
+
+Statement:
+AROS target resource generation inherited the Linux host platform, producing GTK/Qt message IDs while AROS C++ selected non-Linux resources.
+
+Decision:
+Pass aros as GRIT's target platform, expose is_aros, and classify it as POSIX without classifying it as Linux.
+
+Evidence:
+The GRIT node unit suite passes all 9 tests. Regenerating the AROS Settings resources emits IDS_SETTINGS_RESET_TO_DEFAULT_THEME and omits GTK theme IDs; settings_localized_strings_provider.o compiles.
+
+Chain:
+Depends on the AROS GN target identity and unblocks the upstream Chrome resource graph for.
+---
+ tools/grit/grit/node/base.py          | 8 +++++---
+ tools/grit/grit/node/base_unittest.py | 4 ++++
+ tools/grit/grit_args.gni              | 3 +++
+ 3 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/tools/grit/grit/node/base.py b/tools/grit/grit/node/base.py
+index 319ad95b4f..081005fcff 100644
+--- a/tools/grit/grit/node/base.py
++++ b/tools/grit/grit/node/base.py
+@@ -499,6 +499,8 @@ class Node:
+ 
+       elif name == 'is_linux':
+         value = target_platform == 'linux'
++      elif name == 'is_aros':
++        value = target_platform == 'aros'
+       elif name == 'is_chromeos':
+         value = target_platform == 'chromeos'
+       elif name == 'is_macosx':
+@@ -515,7 +517,7 @@ class Node:
+         value = 'bsd' in target_platform
+       elif name == 'is_posix':
+         value = (target_platform in ('linux', 'darwin', 'sunos5', 'android',
+-                                     'ios', 'chromeos')
++                                     'aros', 'ios', 'chromeos')
+                  or 'bsd' in target_platform)
+ 
+       elif name == 'pp_ifdef':
+@@ -555,8 +557,8 @@ class Node:
+       - 'os' is the current platform (likely 'linux', 'win32' or 'darwin').
+       - 'pp_ifdef(symbol)' is a shorthand for "symbol in defs".
+       - 'pp_if(symbol)' is a shorthand for "symbol in defs and defs[symbol]".
+-      - 'is_linux', 'is_macosx', 'is_win', 'is_posix' are true if 'os'
+-           matches the given platform.
++      - 'is_aros', 'is_linux', 'is_macosx', 'is_win', 'is_posix' are true if
++           'os' matches the given platform.
+     '''
+     root = self.GetRoot()
+     lang = getattr(root, 'output_language', '')
+diff --git a/tools/grit/grit/node/base_unittest.py b/tools/grit/grit/node/base_unittest.py
+index 963d749696..2f22fa32d1 100755
+--- a/tools/grit/grit/node/base_unittest.py
++++ b/tools/grit/grit/node/base_unittest.py
+@@ -214,6 +214,9 @@ class NodeUnittest(unittest.TestCase):
+     AssertExpr(False, "is_linux", {}, 'foollinux', {})
+     AssertExpr(False, "is_linux", {'chromeos_ash': True}, 'chromeos', {})
+     AssertExpr(False, "is_linux", {'chromeos_lacros': True}, 'chromeos', {})
++    AssertExpr(False, "is_linux", {}, 'aros', {})
++    AssertExpr(True, "is_aros", {}, 'aros', {})
++    AssertExpr(False, "is_aros", {}, 'linux', {})
+     # `is_chromeos` is not used with GRIT and is thus ignored.
+     AssertExpr(True, "is_linux", {'is_chromeos': True}, 'linux', {})
+     AssertExpr(True, "is_chromeos", {'chromeos_ash': True}, 'chromeos', {})
+@@ -234,6 +237,7 @@ class NodeUnittest(unittest.TestCase):
+     AssertExpr(True, "is_posix", {'chromeos_lacros': True}, 'chromeos', {})
+     AssertExpr(True, "is_posix", {}, 'darwin', {})
+     AssertExpr(True, "is_posix", {}, 'android', {})
++    AssertExpr(True, "is_posix", {}, 'aros', {})
+     AssertExpr(True, "is_posix", {}, 'ios', {})
+     AssertExpr(True, "is_posix", {}, 'freebsd7', {})
+     AssertExpr(False, "is_posix", {}, 'fuchsia', {})
+diff --git a/tools/grit/grit_args.gni b/tools/grit/grit_args.gni
+index f2094758df..0f37bbb04c 100644
+--- a/tools/grit/grit_args.gni
++++ b/tools/grit/grit_args.gni
+@@ -85,6 +85,9 @@ if (current_toolchain != host_toolchain || is_chromeos) {
+   if (is_android) {
+     _target_platform = "android"
+   }
++  if (is_aros) {
++    _target_platform = "aros"
++  }
+   if (is_fuchsia) {
+     _target_platform = "fuchsia"
+   }

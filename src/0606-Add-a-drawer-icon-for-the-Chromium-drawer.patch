@@ -1,0 +1,34 @@
+From cb8261336d6e431d4669c5d32a0a883d77a54281 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 10 Sep 2026 11:57:16 -0500
+Subject: [PATCH 606/638] Add a drawer icon for the Chromium drawer
+
+SYS:Applications/Internet/Chromium had no .info of its own. Wanderer only
+shows an object that has one, so the drawer was invisible from Workbench and
+the tool icon inside it could not be reached at all - the browser was
+installed with no way to get to it short of a shell.
+
+TYPE = DRAWER, sharing Chromium.png so the drawer is branded rather than a
+generic folder. No tooltypes and no STACK: those belong on the tool icon.
+---
+ chrome/app/theme/aros/ChromiumDrawer.info.src | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+ create mode 100644 chrome/app/theme/aros/ChromiumDrawer.info.src
+
+diff --git a/chrome/app/theme/aros/ChromiumDrawer.info.src b/chrome/app/theme/aros/ChromiumDrawer.info.src
+new file mode 100644
+index 0000000000..c64e20aafb
+--- /dev/null
++++ b/chrome/app/theme/aros/ChromiumDrawer.info.src
+@@ -0,0 +1,11 @@
++; Drawer icon for SYS:Applications/Internet/Chromium.
++;
++; Distinct from Chromium.info.src, which is the TOOL icon for the executable
++; *inside* this drawer. Wanderer only shows an object that has its own .info,
++; so without this the Chromium drawer is invisible from Workbench and the
++; program icon inside it cannot be reached at all - the browser is installed
++; and there is no way to get to it without a shell.
++;
++; No tooltypes and no STACK here: those belong to the tool icon. A drawer icon
++; carries only its appearance and the window geometry Wanderer opens it with.
++TYPE = DRAWER

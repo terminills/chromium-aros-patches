@@ -1,0 +1,214 @@
+From d9c0c8d7d25a58fb31cc4837a582572fbb066195 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:01:46 -0500
+Subject: [PATCH 2/7] [AROS] Run Perfetto tasks without poll descriptors
+
+AI_PHASE: Chromium Phase 3 tracing substrate
+AI_STATUS: Perfetto immediate and delayed tasks run on AROS without EventFd or poll.
+ROOT_CAUSE: UnixTaskRunner required pollable wake descriptors, while AROS bring-up has task scheduling but no compatible descriptor-wakeup contract.
+FIX_REASON: Use a condition variable for queue wakeups and fail explicitly if unsupported descriptor watches are requested.
+SCOPE: Perfetto UnixTaskRunner AROS scheduling path.
+VALIDATION: unix_task_runner.o, platform_posix.o, and Chromium traced-process objects build in out/aros-headless.
+RISK: Perfetto features requiring descriptor watches remain unavailable until an AROS wait-set adapter exists.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ include/perfetto/ext/base/unix_task_runner.h | 13 ++++--
+ src/base/unix_task_runner.cc                 | 44 ++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 3 deletions(-)
+
+diff --git a/include/perfetto/ext/base/unix_task_runner.h b/include/perfetto/ext/base/unix_task_runner.h
+index 8d1ab6d..290eaff 100644
+--- a/include/perfetto/ext/base/unix_task_runner.h
++++ b/include/perfetto/ext/base/unix_task_runner.h
+@@ -26,12 +26,14 @@
+ #include "perfetto/ext/base/thread_checker.h"
+ 
+ #include <chrono>
++#include <condition_variable>
+ #include <deque>
+ #include <map>
+ #include <mutex>
+ #include <vector>
+ 
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <poll.h>
+ #endif
+ 
+@@ -92,18 +94,23 @@ class UnixTaskRunner : public TaskRunner {
+   ThreadChecker thread_checker_;
+   PlatformThreadId created_thread_id_ = GetThreadId();
+ 
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   EventFd event_;
++#endif
+ 
+ // The array of fds/handles passed to poll(2) / WaitForMultipleObjects().
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   std::vector<PlatformHandle> poll_fds_;
+-#else
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   std::vector<struct pollfd> poll_fds_;
+ #endif
+ 
+   // --- Begin lock-protected members ---
+ 
+   std::mutex lock_;
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  std::condition_variable wake_condition_;
++#endif
+ 
+   std::deque<std::function<void()>> immediate_tasks_;
+   std::multimap<TimeMillis, std::function<void()>> delayed_tasks_;
+@@ -116,7 +123,7 @@ class UnixTaskRunner : public TaskRunner {
+     // polling it again until the queued task runs. On Windows we can't do that.
+     // Instead we keep track of its state here.
+     bool pending = false;
+-#else
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+     size_t poll_fd_index;  // Index into |poll_fds_|.
+ #endif
+   };
+diff --git a/src/base/unix_task_runner.cc b/src/base/unix_task_runner.cc
+index 9fc8f3c..121cdb1 100644
+--- a/src/base/unix_task_runner.cc
++++ b/src/base/unix_task_runner.cc
+@@ -38,16 +38,22 @@ namespace perfetto {
+ namespace base {
+ 
+ UnixTaskRunner::UnixTaskRunner() {
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   AddFileDescriptorWatch(event_.fd(), [] {
+     // Not reached -- see PostFileDescriptorWatches().
+     PERFETTO_DFATAL("Should be unreachable.");
+   });
++#endif
+ }
+ 
+ UnixTaskRunner::~UnixTaskRunner() = default;
+ 
+ void UnixTaskRunner::WakeUp() {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  wake_condition_.notify_one();
++#else
+   event_.Notify();
++#endif
+ }
+ 
+ void UnixTaskRunner::Run() {
+@@ -55,6 +61,19 @@ void UnixTaskRunner::Run() {
+   created_thread_id_ = GetThreadId();
+   quit_ = false;
+   for (;;) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++    std::unique_lock<std::mutex> lock(lock_);
++    if (quit_)
++      return;
++    int poll_timeout_ms = GetDelayMsToNextTaskLocked();
++    if (poll_timeout_ms < 0) {
++      wake_condition_.wait(lock);
++    } else if (poll_timeout_ms > 0) {
++      wake_condition_.wait_for(lock,
++                               std::chrono::milliseconds(poll_timeout_ms));
++    }
++    lock.unlock();
++#else
+     int poll_timeout_ms;
+     {
+       std::lock_guard<std::mutex> lock(lock_);
+@@ -84,6 +103,7 @@ void UnixTaskRunner::Run() {
+     platform::AfterMaybeBlockingSyscall();
+     PERFETTO_CHECK(ret >= 0);
+     PostFileDescriptorWatches(0 /*ignored*/);
++#endif
+ #endif
+ 
+     // To avoid starvation we always interleave all types of tasks -- immediate,
+@@ -110,6 +130,9 @@ bool UnixTaskRunner::IsIdleForTesting() {
+ 
+ void UnixTaskRunner::UpdateWatchTasksLocked() {
+   PERFETTO_DCHECK_THREAD(thread_checker_);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  return;
++#else
+ #if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   if (!watch_tasks_changed_)
+     return;
+@@ -127,6 +150,7 @@ void UnixTaskRunner::UpdateWatchTasksLocked() {
+     poll_fds_.push_back({handle, POLLIN | POLLHUP, 0});
+ #endif
+   }
++#endif
+ }
+ 
+ void UnixTaskRunner::RunImmediateAndDelayedTask() {
+@@ -159,6 +183,10 @@ void UnixTaskRunner::RunImmediateAndDelayedTask() {
+ 
+ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
+   PERFETTO_DCHECK_THREAD(thread_checker_);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(windows_wait_result);
++  PERFETTO_DFATAL("File descriptor watches are not supported on AROS");
++#else
+   for (size_t i = 0; i < poll_fds_.size(); i++) {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+     const PlatformHandle handle = poll_fds_[i];
+@@ -204,9 +232,14 @@ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
+     poll_fds_[i].fd = -poll_fds_[i].fd;
+ #endif
+   }
++#endif
+ }
+ 
+ void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd);
++  PERFETTO_DFATAL("File descriptor watches are not supported on AROS");
++#else
+   std::function<void()> task;
+   {
+     std::lock_guard<std::mutex> lock(lock_);
+@@ -235,6 +268,7 @@ void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
+   }
+   errno = 0;
+   RunTaskWithWatchdogGuard(task);
++#endif
+ }
+ 
+ int UnixTaskRunner::GetDelayMsToNextTaskLocked() const {
+@@ -271,6 +305,10 @@ void UnixTaskRunner::PostDelayedTask(std::function<void()> task,
+ 
+ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
+                                             std::function<void()> task) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd, task);
++  PERFETTO_FATAL("File descriptor watches are not supported on AROS");
++#else
+   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
+   {
+     std::lock_guard<std::mutex> lock(lock_);
+@@ -285,9 +323,14 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
+     watch_tasks_changed_ = true;
+   }
+   WakeUp();
++#endif
+ }
+ 
+ void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd);
++  PERFETTO_FATAL("File descriptor watches are not supported on AROS");
++#else
+   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
+   {
+     std::lock_guard<std::mutex> lock(lock_);
+@@ -296,6 +339,7 @@ void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
+     watch_tasks_changed_ = true;
+   }
+   // No need to schedule a wake-up for this.
++#endif
+ }
+ 
+ bool UnixTaskRunner::RunsTasksOnCurrentThread() const {

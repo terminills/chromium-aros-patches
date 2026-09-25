@@ -1,0 +1,40 @@
+From 4cd5fce5831a179c7a9f32ff6b907011aa279f14 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 02:37:26 -0500
+Subject: [PATCH 528/638] Skip doomed AROS large anonymous kernel probes
+
+For large unhinted PartitionAlloc reservations, the transition-era AROS kernel backend cannot provide anonymous pages yet, so KrnAllocPages(nullptr, large) only logs ENOMEM before the tracked Exec bridge succeeds. Route those large unhinted requests straight to the Exec bridge while preserving exact-address kernel probes and smaller allocation behavior.
+
+Evidence: build123 completed with ninja: Entering directory `out/aros-chrome'
+ninja: no work to do. through LINK ./chrome. Installed chrome sha256 ae952add23b423de36711566805a7d83b96ae27c0e7bb6d4a16176a93194e656. Hosted run36 wrote result marker 0, had no STDC:SIGNAL/FATAL/socket/profile/Shortcuts/Quota/DEMUXER/PIPELINE/MEDIA_LOG matches, reached CrBrowserMain ProgramEnd and ServiceWorker RemTask, and removed unhinted kernel len=537128960 error=12 probes from 2 in run35 to 0 while Exec fallback remained 2/2.
+---
+ .../partition_alloc/page_allocator_internals_aros.h   | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index aa28258e85..42d8e6451f 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -317,13 +317,20 @@ uintptr_t SystemAllocPagesInternal(
+   const IPTR largest =
+       log_request ? AvailMem(MEMF_PUBLIC | MEMF_LARGEST) : 0;
+   const KRN_MapAttr protection = GetAccessFlags(accessibility);
+-  void* result = KrnAllocPages(reinterpret_cast<void*>(hint), length, flags);
++  // The transition-era kernel backend cannot yet provide anonymous pages for
++  // large unhinted reservations. Go straight to the tracked Exec bridge for
++  // those requests instead of paying for a known-failing kernel probe.
++  const bool skip_kernel_anonymous_probe = !hint && log_request;
++  void* result = skip_kernel_anonymous_probe
++                     ? nullptr
++                     : KrnAllocPages(reinterpret_cast<void*>(hint), length,
++                                     flags);
+   bool exec_owned = false;
+   void* allocation_base = result;
+   size_t allocation_length = length;
+ 
+   if (!result) {
+-    if (log_request) {
++    if (log_request && !skip_kernel_anonymous_probe) {
+       LogLargePageAllocation(hint, length, protection, available, largest,
+                              "kernel", result, ENOMEM);
+     }

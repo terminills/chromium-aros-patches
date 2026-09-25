@@ -1,0 +1,78 @@
+From 2e370e15848459bebcfb9b08d1ea0121195300f7 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 10 Sep 2026 06:45:49 -0500
+Subject: [PATCH 604/638] Put the cache somewhere writable when booted from
+ read-only media
+
+DIR_CACHE resolved to <executable dir>/Cache unconditionally. PROGDIR: is
+the boot medium, so on a Live CD that is the CD itself: the directory
+cannot be created and every cache write fails with
+"mkdir failed ... errno=1214" (ERROR_DISK_WRITE_PROTECTED). Harmless in
+effect but constant in the logs, and it meant the browser ran with no
+cache at all from CD.
+
+Probe by creating the directory - which succeeds when it already exists -
+and fall back to RAM:Chromium/Cache when it cannot be made. An installed
+system is unaffected and keeps a persistent cache beside the executable.
+
+Fixed in the path provider rather than in chrome_paths_aros.cc so every
+DIR_CACHE consumer gets it, not just the profile's cache path. Same
+policy as the profile location, and it belongs in the same place that
+one does - an AROS launcher rather than the browser. See
+.acd/decisions/ACD-chromium-aros-profile-location.
+---
+ base/base_paths_aros.cc | 26 +++++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+index c7f21f6145..eb8f782cea 100644
+--- a/base/base_paths_aros.cc
++++ b/base/base_paths_aros.cc
+@@ -14,11 +14,16 @@
+ #include <proto/exec.h>
+ 
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/path_service.h"
+ 
+ namespace base {
+ namespace {
+ 
++// RAM: is the one volatile location every AROS system has, and the only place
++// a cache can go when the boot medium is read-only.
++constexpr char kVolatileCacheDirectory[] = "RAM:Chromium/Cache";
++
+ bool GetExecutablePath(FilePath* result) {
+   char directory[PATH_MAX];
+   char program[PATH_MAX];
+@@ -71,12 +76,27 @@ bool PathProviderPosix(int key, FilePath* result) {
+       return true;
+     }
+     case DIR_CACHE: {
++      // The cache sits beside the executable, but PROGDIR: is the boot medium
++      // and a Live CD boot makes that medium read-only: the directory cannot
++      // be created and every cache write fails with
++      // "mkdir failed ... errno=1214" (ERROR_DISK_WRITE_PROTECTED). Probe by
++      // creating it - which succeeds when it already exists - and fall back to
++      // RAM: when it cannot be made. An installed system is unaffected and
++      // keeps a persistent cache beside the executable.
++      //
++      // This mirrors the profile-location policy and belongs in the same place
++      // it does: an AROS launcher that prepares these directories and passes
++      // them in, rather than the browser probing at startup. See
++      // .acd/decisions/ACD-chromium-aros-profile-location.
+       FilePath path;
+       if (GetExecutablePath(&path)) {
+-        *result = path.DirName().Append("Cache");
+-      } else {
+-        *result = FilePath("PROGDIR:Cache");
++        const FilePath cache = path.DirName().Append("Cache");
++        if (CreateDirectory(cache)) {
++          *result = cache;
++          return true;
++        }
+       }
++      *result = FilePath(kVolatileCacheDirectory);
+       return true;
+     }
+     case DIR_USER_DESKTOP:

@@ -1,0 +1,59 @@
+From 9fd0c0d22e9aac8b564aaca9d6bdea67ad862681 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 00:12:00 -0500
+Subject: [PATCH 34/43] AROS: finish native CEF widget teardown
+
+AI_PHASE: electron-visible-shell
+
+AI_STATUS: archive-clean-runtime-pending
+
+ROOT_CAUSE: The direct Aura host has no X11/Win32 wrapper to forward widget destruction into AlloyBrowserHostImpl::WindowDestroyed(), leaving CloseBrowser waiting forever after a successful renderer handoff.
+
+FIX_REASON: Treat deletion of the AROS-hosted Aura widget as the native-window lifecycle boundary and notify Alloy before the platform delegate is destroyed.
+
+SCOPE: AROS-only branch in the existing native Aura widget deletion callback.
+
+VALIDATION: capped -j32 //cef:libcef rebuild passed 1803/1803; hosted clean-close replay pending.
+
+AI_LIMITATIONS: Does not add cancellable close-request semantics for user-initiated window close; validates forced lifecycle close used by the integration shell.
+
+AI_DECISION_CHAIN:; preserved direct-close hang; compared X11/Win32 WindowDestroyed handoffs; add missing AROS equivalent.
+
+Evidence:-electron-visible-shell-20260727/23-direct-close-handoff-verdict.txt
+
+Job:
+---
+ .../native/browser_platform_delegate_native_aura.cc | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/libcef/browser/native/browser_platform_delegate_native_aura.cc b/libcef/browser/native/browser_platform_delegate_native_aura.cc
+index 83c12771..f5af3264 100644
+--- a/libcef/browser/native/browser_platform_delegate_native_aura.cc
++++ b/libcef/browser/native/browser_platform_delegate_native_aura.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "libcef/browser/native/browser_platform_delegate_native_aura.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "libcef/browser/alloy/alloy_browser_host_impl.h"
++#endif
+ #include "libcef/browser/native/menu_runner_views_aura.h"
+ #include "libcef/browser/views/view_util.h"
+ 
+@@ -288,6 +291,16 @@ int CefBrowserPlatformDelegateNativeAura::TranslateUiChangedButtonFlags(
+ void CefBrowserPlatformDelegateNativeAura::WidgetDeleted() {
+   DCHECK(window_widget_);
+   window_widget_ = nullptr;
++
++#if BUILDFLAG(IS_AROS)
++  // X11 and Win32 have an outer native-window wrapper that forwards native
++  // destruction to AlloyBrowserHostImpl::WindowDestroyed(). AROS hosts the
++  // browser directly in this Aura widget, so its deletion is that lifecycle
++  // boundary.
++  if (browser_) {
++    static_cast<AlloyBrowserHostImpl*>(browser_)->WindowDestroyed();
++  }
++#endif
+ }
+ 
+ content::RenderWidgetHostViewAura*

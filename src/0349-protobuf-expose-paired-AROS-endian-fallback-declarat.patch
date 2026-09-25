@@ -1,0 +1,36 @@
+From c4949d85e8eede79837695fe36defefc46075aa2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:57:51 -0500
+Subject: [PATCH 349/638] protobuf: expose paired AROS endian fallback
+ declarations
+
+Match the AROS-only out-of-line definitions from eb636ac6b9 with class declarations. The first rebuild correctly rejected definitions hidden by the little-endian header condition; preserve that failure and complete the contract.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: compile-contract-corrected-after-preserved-failure
+
+AI_VALIDATION: first rebuild failed at coded_stream.cc:869/892 with no matching declarations
+
+AI_LIMITATIONS: corrected object compile and native CEF link remain pending
+
+AI_EVIDENCE: out/aros-cef-bootstrap/test-artifacts/-cef-exact-44-fix-20260725/03-archive-rebuild.log
+
+AI_DECISION_CHAIN:; eb636ac6b9
+---
+ third_party/protobuf/src/google/protobuf/io/coded_stream.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/protobuf/src/google/protobuf/io/coded_stream.h b/third_party/protobuf/src/google/protobuf/io/coded_stream.h
+index 1024b40086..adb3c7ffac 100644
+--- a/third_party/protobuf/src/google/protobuf/io/coded_stream.h
++++ b/third_party/protobuf/src/google/protobuf/io/coded_stream.h
+@@ -957,7 +957,7 @@ class PROTOBUF_EXPORT EpsCopyOutputStream {
+ 
+   template <int S>
+   uint8_t* WriteRawLittleEndian(const void* data, int size, uint8_t* ptr);
+-#ifndef PROTOBUF_LITTLE_ENDIAN
++#if !defined(PROTOBUF_LITTLE_ENDIAN) || defined(__AROS__)
+   uint8_t* WriteRawLittleEndian32(const void* data, int size, uint8_t* ptr);
+   uint8_t* WriteRawLittleEndian64(const void* data, int size, uint8_t* ptr);
+ #endif

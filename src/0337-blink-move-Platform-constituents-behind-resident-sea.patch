@@ -1,0 +1,242 @@
+From af534b63c8967a20ca782a27680242e79aebe356 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 20:43:15 -0500
+Subject: [PATCH 337/638] blink: move Platform constituents behind resident
+ seam
+
+In the AROS resident Platform consumer mode, retain each constituent target's generated-header, configuration, and dependency contract while suppressing its implementation sources. Core reaches callable Platform/WTF APIs through the already generated blink_platform.library bridge.
+
+AI_PHASE: chromium-blink-core-library
+
+AI_STATUS: platform-constituent-suppression-assumption-checkpoint
+
+AI_ASSUMPTION: removing the 244 retained Platform constituent objects will expose the real Core-to-Platform data ABI boundary without breaking compile-time header generation
+
+AI_VALIDATION: first focused Core archive passed 14951/14951 and classified constituents as scheduler=73, loader=66, wtf=46, network=19, image-decoders=16, instrumentation=13, heap=5, blob=5, avx=1
+
+AI_EVIDENCE: out/aros-blink-core/test-artifacts/-blink-core-library-20260725/04-focused-core-archive-audit.log
+
+AI_LIMITATIONS: focused GN regeneration and archive rebuild are pending; 646 known data-object crossings are not synthesized by the callable bridge
+
+AI_DECISION_CHAIN:; 1d3cc6f4e1; V8 d1f9493
+---
+ third_party/blink/renderer/platform/BUILD.gn             | 3 +++
+ third_party/blink/renderer/platform/blob/BUILD.gn        | 5 +++++
+ third_party/blink/renderer/platform/heap/BUILD.gn        | 5 +++++
+ .../blink/renderer/platform/image-decoders/BUILD.gn      | 5 +++++
+ .../blink/renderer/platform/instrumentation/BUILD.gn     | 9 +++++++++
+ third_party/blink/renderer/platform/loader/BUILD.gn      | 5 +++++
+ third_party/blink/renderer/platform/network/BUILD.gn     | 5 +++++
+ third_party/blink/renderer/platform/scheduler/BUILD.gn   | 5 +++++
+ third_party/blink/renderer/platform/wtf/BUILD.gn         | 5 +++++
+ 9 files changed, 47 insertions(+)
+
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index 622994b38d..3f2a733513 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -2515,6 +2515,9 @@ if (current_cpu == "x86" || current_cpu == "x64") {
+     } else {
+       cflags = [ "-mavx" ]
+     }
++    if (is_aros && aros_blink_platform_use_library) {
++      sources = []
++    }
+   }
+ }
+ 
+diff --git a/third_party/blink/renderer/platform/blob/BUILD.gn b/third_party/blink/renderer/platform/blob/BUILD.gn
+index 5a8ca53de8..ea606a7b30 100644
+--- a/third_party/blink/renderer/platform/blob/BUILD.gn
++++ b/third_party/blink/renderer/platform/blob/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//third_party/blink/renderer/platform/platform.gni")
+ 
+ # Intentionally depends on generator targets so to depend only on generated
+@@ -37,6 +38,10 @@ blink_platform_sources("blob") {
+     "//third_party/blink/renderer/platform/instrumentation:instrumentation",
+     "//third_party/blink/renderer/platform/scheduler:scheduler",
+   ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/heap/BUILD.gn b/third_party/blink/renderer/platform/heap/BUILD.gn
+index 9f7789ddc3..cca83dc347 100644
+--- a/third_party/blink/renderer/platform/heap/BUILD.gn
++++ b/third_party/blink/renderer/platform/heap/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+ 
+ import("//build/buildflag_header.gni")
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//testing/test.gni")
+@@ -98,6 +99,10 @@ blink_platform_sources("heap") {
+     "//third_party/blink/renderer/platform/loader:loader",
+     "//third_party/blink/renderer/platform/scheduler:scheduler",
+   ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("test_support") {
+diff --git a/third_party/blink/renderer/platform/image-decoders/BUILD.gn b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
+index 3f45cc710a..c4a2711ab6 100644
+--- a/third_party/blink/renderer/platform/image-decoders/BUILD.gn
++++ b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//media/media_options.gni")
+ import("//testing/test.gni")
+@@ -83,6 +84,10 @@ component("image_decoders") {
+       "//third_party/libavifinfo",
+     ]
+   }
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/instrumentation/BUILD.gn b/third_party/blink/renderer/platform/instrumentation/BUILD.gn
+index 140993fe0e..8c9d6f21f3 100644
+--- a/third_party/blink/renderer/platform/instrumentation/BUILD.gn
++++ b/third_party/blink/renderer/platform/instrumentation/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//third_party/blink/renderer/platform/platform.gni")
+ 
+ blink_platform_sources("instrumentation") {
+@@ -40,6 +41,10 @@ blink_platform_sources("instrumentation") {
+     "//third_party/blink/renderer/platform/heap:heap",
+   ]
+   allow_circular_includes_from = public_deps
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ component("histogram") {
+@@ -58,6 +63,10 @@ component("histogram") {
+     "//third_party/blink/renderer/platform:platform_export",
+     "//third_party/blink/renderer/platform/wtf:wtf",
+   ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/loader/BUILD.gn b/third_party/blink/renderer/platform/loader/BUILD.gn
+index da5070066f..59cd0df893 100644
+--- a/third_party/blink/renderer/platform/loader/BUILD.gn
++++ b/third_party/blink/renderer/platform/loader/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//third_party/blink/renderer/build/scripts/scripts.gni")
+ import("//third_party/blink/renderer/platform/platform.gni")
+ import("//third_party/blink/renderer/platform/platform_generated.gni")
+@@ -202,6 +203,10 @@ blink_platform_sources("loader") {
+   ]
+   allow_circular_includes_from =
+       [ "//third_party/blink/renderer/platform/network:network" ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/network/BUILD.gn b/third_party/blink/renderer/platform/network/BUILD.gn
+index 39b5619701..e423fc3b28 100644
+--- a/third_party/blink/renderer/platform/network/BUILD.gn
++++ b/third_party/blink/renderer/platform/network/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//third_party/blink/renderer/build/scripts/scripts.gni")
+ import("//third_party/blink/renderer/platform/platform.gni")
+ import("//third_party/blink/renderer/platform/platform_generated.gni")
+@@ -72,6 +73,10 @@ blink_platform_sources("network") {
+     "//third_party/blink/renderer/platform/blob:blob",
+     "//third_party/blink/renderer/platform/scheduler:scheduler",
+   ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/scheduler/BUILD.gn b/third_party/blink/renderer/platform/scheduler/BUILD.gn
+index 195494a09d..f2936fb4a8 100644
+--- a/third_party/blink/renderer/platform/scheduler/BUILD.gn
++++ b/third_party/blink/renderer/platform/scheduler/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//testing/libfuzzer/fuzzer_test.gni")
+ import("//third_party/blink/renderer/platform/platform.gni")
+ import("//third_party/protobuf/proto_library.gni")
+@@ -196,6 +197,10 @@ blink_platform_sources("scheduler") {
+     "//third_party/blink/renderer/platform/heap:heap",
+     "//third_party/blink/renderer/platform/instrumentation",
+   ]
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ source_set("test_support") {
+diff --git a/third_party/blink/renderer/platform/wtf/BUILD.gn b/third_party/blink/renderer/platform/wtf/BUILD.gn
+index dca40eb878..011894f9f7 100644
+--- a/third_party/blink/renderer/platform/wtf/BUILD.gn
++++ b/third_party/blink/renderer/platform/wtf/BUILD.gn
+@@ -7,6 +7,7 @@ import("//build/config/features.gni")
+ assert(use_blink)
+ 
+ import("//build/buildflag_header.gni")
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//testing/test.gni")
+ import("//third_party/blink/public/public_features.gni")
+@@ -278,6 +279,10 @@ component("wtf") {
+ 
+   configs -= [ "//build/config/compiler:default_symbols" ]
+   configs += blink_symbols_config
++
++  if (is_aros && aros_blink_platform_use_library) {
++    sources = []
++  }
+ }
+ 
+ test("wtf_unittests") {

@@ -1,0 +1,51 @@
+From 95fe9bfb7f3dab1ef2e98cd3cbe5d19326221537 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 18:49:19 -0500
+Subject: [PATCH 480/638] AROS: trace Mojo child endpoint handoff
+
+---
+ content/browser/child_process_launcher_helper_aros.cc | 7 +++++++
+ mojo/public/cpp/platform/platform_channel_endpoint.cc | 5 +++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+index 3572110ed2..d9f086e582 100644
+--- a/content/browser/child_process_launcher_helper_aros.cc
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -50,6 +50,13 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+   DCHECK(mojo_channel_);
+ 
+   mojo_channel_->PrepareToPassRemoteEndpoint(options, command_line());
++  LOG(INFO) << "[Chromium:AROS:Mojo] prepared child endpoint present="
++            << command_line()->HasSwitch(
++                   mojo::PlatformChannel::kHandleSwitch)
++            << " value='"
++            << command_line()->GetSwitchValueASCII(
++                   mojo::PlatformChannel::kHandleSwitch)
++            << "' argc=" << command_line()->argv().size();
+   return true;
+ }
+ 
+diff --git a/mojo/public/cpp/platform/platform_channel_endpoint.cc b/mojo/public/cpp/platform/platform_channel_endpoint.cc
+index ac83ba6463..dff164acba 100644
+--- a/mojo/public/cpp/platform/platform_channel_endpoint.cc
++++ b/mojo/public/cpp/platform/platform_channel_endpoint.cc
+@@ -119,6 +119,9 @@ void PlatformChannelEndpoint::PrepareToPass(HandlePassingInfo& info,
+   const uintptr_t state = reinterpret_cast<uintptr_t>(channel.state);
+   CHECK_EQ(state & uintptr_t{1}, uintptr_t{0});
+   value = base::NumberToString(state | channel.side);
++  LOG(INFO) << "[Chromium:AROS:Mojo] encoded endpoint state="
++            << channel.state << " side=" << static_cast<int>(channel.side)
++            << " value='" << value << "'";
+ #else
+   // Arbitrary sanity check to ensure the loop below terminates reasonably
+   // quickly.
+@@ -211,6 +214,8 @@ PlatformChannelEndpoint PlatformChannelEndpoint::RecoverFromString(
+ #elif BUILDFLAG(IS_POSIX)
+ #if BUILDFLAG(IS_AROS)
+   uint64_t encoded = 0;
++  LOG(INFO) << "[Chromium:AROS:Mojo] recovering endpoint value='" << value
++            << "'";
+   if (value.empty() || !base::StringToUint64(value, &encoded) ||
+       (encoded & ~uint64_t{1}) == 0) {
+     DLOG(ERROR) << "Invalid AROS PlatformChannel endpoint string.";

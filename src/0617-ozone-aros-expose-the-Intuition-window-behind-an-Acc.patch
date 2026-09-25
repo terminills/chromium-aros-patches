@@ -1,0 +1,125 @@
+From f58c5e0c9b93461047accf3f3658c1b2c3860b53 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 03:57:21 -0500
+Subject: [PATCH 617/638] ozone/aros: expose the Intuition window behind an
+ AcceleratedWidget
+
+GetArosNativeWindow(widget) resolves a widget to its struct Window*
+through the process's window manager, for embedders that must drive a
+window through the window system (CEF fills CefWindowInfo::window from
+it).  The platform target is made visible to //cef for that one header.
+---
+ ui/ozone/platform/aros/BUILD.gn               |  7 +++++-
+ ui/ozone/platform/aros/aros_native_window.h   | 25 +++++++++++++++++++
+ ui/ozone/platform/aros/aros_window_manager.cc | 15 +++++++++++
+ 3 files changed, 46 insertions(+), 1 deletion(-)
+ create mode 100644 ui/ozone/platform/aros/aros_native_window.h
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+index 450824255f..8022266660 100644
+--- a/ui/ozone/platform/aros/BUILD.gn
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -2,12 +2,17 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-visibility = [ "//ui/ozone/*" ]
++# //cef resolves CefWindowInfo::window through aros_native_window.h.
++visibility = [
++  "//cef/*",
++  "//ui/ozone/*",
++]
+ 
+ source_set("aros") {
+   sources = [
+     "aros_egl_library.cc",
+     "aros_egl_library.h",
++    "aros_native_window.h",
+     "aros_screen.cc",
+     "aros_screen.h",
+     "aros_surface_factory.cc",
+diff --git a/ui/ozone/platform/aros/aros_native_window.h b/ui/ozone/platform/aros/aros_native_window.h
+new file mode 100644
+index 0000000000..1f61f706f0
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_native_window.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_NATIVE_WINDOW_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_NATIVE_WINDOW_H_
++
++#include "ui/gfx/native_widget_types.h"
++
++struct Window;
++
++namespace ui {
++
++// The Intuition window behind |widget|, or nullptr when |widget| is not an
++// open window of the AROS Ozone platform.  This is the platform's native
++// window handle in the sense of CefWindowInfo::window / X11's ::Window: an
++// embedder that must drive the window through the window system (move,
++// resize, retitle, activate) gets it from here and uses Intuition directly;
++// the platform picks the resulting IDCMP traffic up like any user action.
++// Browser-process UI thread; valid until the owning PlatformWindow closes.
++struct Window* GetArosNativeWindow(gfx::AcceleratedWidget widget);
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_NATIVE_WINDOW_H_
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 651c1e15a7..587954c324 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
++#include "ui/ozone/platform/aros/aros_native_window.h"
+ 
+ #include <utility>
+ 
+@@ -24,6 +25,10 @@ namespace {
+ 
+ constexpr char kPresentationPortName[] = "Chromium.Ozone.AROS.Presentation";
+ 
++// The browser process has one window manager (OzonePlatformAros owns it);
++// GetArosNativeWindow() resolves handles through it.
++ArosWindowManager* g_window_manager = nullptr;
++
+ struct ArosPresentMessage {
+   Message message = {};
+   gfx::AcceleratedWidget widget = gfx::kNullAcceleratedWidget;
+@@ -41,6 +46,8 @@ struct ArosPresentMessage {
+ }  // namespace
+ 
+ ArosWindowManager::ArosWindowManager() {
++  DCHECK(!g_window_manager);
++  g_window_manager = this;
+   event_port_ = CreateMsgPort();
+   CHECK(event_port_);
+   LOG(INFO) << "[Chromium:Ozone:AROS] shared IDCMP port=" << event_port_
+@@ -48,6 +55,9 @@ ArosWindowManager::ArosWindowManager() {
+ }
+ 
+ ArosWindowManager::~ArosWindowManager() {
++  if (g_window_manager == this) {
++    g_window_manager = nullptr;
++  }
+   {
+     base::AutoLock lock(lock_);
+     DCHECK(native_windows_.empty());
+@@ -213,6 +223,11 @@ struct Window* ArosWindowManager::GetNativeWindow(
+   return nullptr;
+ }
+ 
++struct Window* GetArosNativeWindow(gfx::AcceleratedWidget widget) {
++  return g_window_manager ? g_window_manager->GetNativeWindow(widget)
++                          : nullptr;
++}
++
+ ArosWindow* ArosWindowManager::GetWindow(gfx::AcceleratedWidget widget) {
+   base::AutoLock lock(lock_);
+   const auto window_it = windows_.find(widget);

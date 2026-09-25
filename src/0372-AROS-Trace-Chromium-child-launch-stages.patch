@@ -1,0 +1,103 @@
+From 82c4876a9002e036d1ecdc8d52fa6fcf550e8b3d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 13:35:18 -0500
+Subject: [PATCH 372/638] [AROS] Trace Chromium child launch stages
+
+AI_PHASE: chromium-process-model
+AI_STATUS: browser-open-child-pre-spawn-stall-instrumented
+ROOT_CAUSE: The first full no-single-process Chrome run opened the browser window but never reached the native LaunchProcess marker, leaving a black renderer surface.
+FIX_REASON: Add AROS-only stage markers around histogram, field-trial, logging, Mojo endpoint, and native spawn handoffs so the next hosted replay discriminates the blocked boundary without guessing.
+SCOPE: content/browser/child_process_launcher_helper.cc, content/browser/child_process_launcher_helper_aros.cc
+VALIDATION: ninja -C out/aros-chrome -j32 chrome rebuilt both launcher objects and linked the full Chrome executable successfully.
+RISK: Diagnostic logging is intentionally retained during bring-up; the next hosted run still must prove an actual child Process and rendered page.
+AI_DECISION_CHAIN: visible browser != renderer proof -> no spawn marker -> preserve failure -> instrument ordered launch stages -> full link PASS.
+Evidence:-chromium-browser-renderer-20260728/runtime-01.log,-chromium-browser-renderer-20260728/runtime-01-aros-window.png,-chromium-browser-renderer-20260728/build-13-child-launch-diagnostics.log
+Job:
+---
+ .../browser/child_process_launcher_helper.cc  | 28 +++++++++++++++++++
+ .../child_process_launcher_helper_aros.cc     |  5 ++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/content/browser/child_process_launcher_helper.cc b/content/browser/child_process_launcher_helper.cc
+index 725d2966c9..3792dd5dc9 100644
+--- a/content/browser/child_process_launcher_helper.cc
++++ b/content/browser/child_process_launcher_helper.cc
+@@ -246,6 +246,10 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
+   }
+ 
+   std::unique_ptr<FileMappedForLaunch> files_to_register = GetFilesToMap();
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] files-to-map ready type='"
++               << GetProcessType() << "'";
++#endif
+ 
+   bool is_synchronous_launch = true;
+   int launch_result = LAUNCH_RESULT_FAILURE;
+@@ -261,18 +265,42 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
+ 
+   // Update the command line and launch options to pass the histogram and
+   // field trial shared memory region handles.
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] histogram handoff begin type='"
++               << GetProcessType() << "'";
++#endif
+   PassHistogramSharedMemoryHandle(std::move(histogram_memory_region_),
+                                   command_line(), options_ptr,
+                                   files_to_register.get());
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] histogram handoff complete type='"
++               << GetProcessType() << "'";
++#endif
+   PassFieldTrialSharedMemoryHandle(command_line(), options_ptr,
+                                    files_to_register.get());
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] field-trial handoff complete type='"
++               << GetProcessType() << "'";
++#endif
+ 
+   // Transfer logging switches & handles if necessary.
+   PassLoggingSwitches(options_ptr, command_line());
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] logging handoff complete type='"
++               << GetProcessType() << "'";
++#endif
+ 
+   // Launch the child process.
+   Process process;
++#if BUILDFLAG(IS_AROS)
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] platform preparation begin type='"
++               << GetProcessType() << "'";
++#endif
+   if (BeforeLaunchOnLauncherThread(*files_to_register, options_ptr)) {
++#if BUILDFLAG(IS_AROS)
++    LOG(WARNING) << "[Chromium:AROS:ChildLaunch] native spawn begin type='"
++                 << GetProcessType() << "'";
++#endif
+     process =
+         LaunchProcessOnLauncherThread(options_ptr, std::move(files_to_register),
+ #if BUILDFLAG(IS_ANDROID)
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+index 3572110ed2..700f95b04b 100644
+--- a/content/browser/child_process_launcher_helper_aros.cc
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -49,7 +49,9 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
+   DCHECK(options);
+   DCHECK(mojo_channel_);
+ 
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] Mojo endpoint handoff begin";
+   mojo_channel_->PrepareToPassRemoteEndpoint(options, command_line());
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] Mojo endpoint handoff complete";
+   return true;
+ }
+ 
+@@ -64,7 +66,10 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
+   *is_synchronous_launch = true;
+ 
+   Process process;
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] base::LaunchProcess enter";
+   process.process = base::LaunchProcess(*command_line(), *options);
++  LOG(WARNING) << "[Chromium:AROS:ChildLaunch] base::LaunchProcess leave valid="
++               << process.process.IsValid();
+   *launch_result = process.process.IsValid() ? LAUNCH_RESULT_SUCCESS
+                                              : LAUNCH_RESULT_FAILURE;
+   return process;

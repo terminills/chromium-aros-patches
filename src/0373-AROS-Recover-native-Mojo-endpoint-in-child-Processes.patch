@@ -1,0 +1,33 @@
+From b7733491ce59fac7a13c22cf11a039c96520b314 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 13:50:07 -0500
+Subject: [PATCH 373/638] [AROS] Recover native Mojo endpoint in child
+ Processes
+
+AI_PHASE: chromium-process-model
+AI_STATUS: first-native-child-endpoint-fatal-fixed
+ROOT_CAUSE: ChildThreadImpl treated AROS as generic POSIX and rebuilt the incoming Mojo transport from GlobalDescriptors, yielding a kFd PlatformHandle while ChannelAros requires kArosChannel.
+FIX_REASON: Recover the command-line PlatformChannel endpoint on AROS exactly as the native launcher prepared it, preserving the ArosChannel handle type and rendezvous state.
+SCOPE: content/child/child_thread_impl.cc
+VALIDATION: ninja -C out/aros-chrome -j32 chrome rebuilt child_thread_impl.o, libchild.a, and linked full Chrome successfully. Prior runtime spawned GPU pid=71 and provided a fully symbolized discriminating fatal at ChannelAros construction.
+RISK: Next hosted replay must prove invitation traffic survives beyond ChannelAros construction; each 970 MB child still pays current ELF LoadSeg relocation cost.
+AI_DECISION_CHAIN: child Process spawn PASS -> endpoint type fatal 3 vs 2 -> locate generic POSIX GlobalDescriptors reconstruction -> route AROS to native command-line recovery -> full link PASS.
+Evidence:-chromium-browser-renderer-20260728/runtime-02.log,-chromium-browser-renderer-20260728/build-14-aros-child-endpoint-recovery.log
+Job:
+---
+ content/child/child_thread_impl.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/content/child/child_thread_impl.cc b/content/child/child_thread_impl.cc
+index 9dacd330bc..91dbdf83cb 100644
+--- a/content/child/child_thread_impl.cc
++++ b/content/child/child_thread_impl.cc
+@@ -222,7 +222,7 @@ mojo::IncomingInvitation InitializeMojoIPCChannel() {
+         *base::CommandLine::ForCurrentProcess());
+     flags |= MOJO_ACCEPT_INVITATION_FLAG_ELEVATED;
+   }
+-#elif BUILDFLAG(IS_FUCHSIA)
++#elif BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+   endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
+       *base::CommandLine::ForCurrentProcess());
+ #elif BUILDFLAG(IS_APPLE)

@@ -1,0 +1,42 @@
+From 0e4d74099f9380de36154b44a08dd61db18b11b9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 4 Aug 2026 14:29:14 -0500
+Subject: [PATCH 503/638] gpu: gate AROS shared-image read telemetry
+
+The first 64 successful shared-memory image reads were logged at ERROR and hashed up to 256 bytes on the Viz hot path. Keep the diagnostic available at VLOG(1) without perturbing normal rendering or disguising successful reads as failures.
+
+
+
+---
+ .../shared_image/shared_memory_image_backing.cc | 17 ++++++++---------
+ 1 file changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc b/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
+index 1e192be196..95e684699d 100644
+--- a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
++++ b/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
+@@ -58,16 +58,15 @@ class MemoryImageRepresentationImpl : public MemoryImageRepresentation {
+     SkPixmap pixmap = shared_image_shared_memory()->pixmaps()[0];
+ #if BUILDFLAG(IS_AROS)
+     static size_t aros_read_access_count = 0;
+-    if (aros_read_access_count < 64) {
++    if (VLOG_IS_ON(1) && aros_read_access_count < 64) {
+       ++aros_read_access_count;
+-      LOG(ERROR) << "[AROS viz-shared-image] seq=" << aros_read_access_count
+-                 << " mailbox=" << mailbox().ToDebugString()
+-                 << " size=" << size().ToString()
+-                 << " row_bytes=" << pixmap.rowBytes()
+-                 << " pixels=" << pixmap.addr()
+-                 << " fingerprint="
+-                 << ArosByteFingerprint(pixmap.addr(),
+-                                        pixmap.computeByteSize());
++      VLOG(1) << "[AROS viz-shared-image] seq=" << aros_read_access_count
++              << " mailbox=" << mailbox().ToDebugString()
++              << " size=" << size().ToString()
++              << " row_bytes=" << pixmap.rowBytes()
++              << " pixels=" << pixmap.addr()
++              << " fingerprint="
++              << ArosByteFingerprint(pixmap.addr(), pixmap.computeByteSize());
+     }
+ #endif
+     return pixmap;

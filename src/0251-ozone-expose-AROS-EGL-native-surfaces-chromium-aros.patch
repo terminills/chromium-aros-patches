@@ -1,0 +1,354 @@
+From 1e681deb6ed281d30e3dccb54e9f2a764812a8ed Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 16 Jul 2026 20:05:46 -0500
+Subject: [PATCH 251/638] ozone: expose AROS EGL native surfaces [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-5-gpu-bridge
+
+AI_STATUS: build-validated, runtime-pending
+
+ROOT_CAUSE: The AROS SurfaceFactoryOzone advertised no GL implementation, so Chromium's Ozone GL initializer hit its fail-closed path and unattended recovery removed Chrome_InProcGpuThread, leaving a live browser with a stale compositor surface.
+
+FIX_REASON: Advertise EGL/GLES2, resolve entry points through the linked AROS egl.library, map each AcceleratedWidget back to its real Intuition Window, and create native EGL window and pbuffer surfaces so Chromium enters AROS's existing HIDD/Gallium renderer ladder.
+
+SCOPE: ui/ozone/platform/aros only. Renderer policy remains owned by AROS EGL/Gallium; this does not claim VirGL, Venus, llvmpipe, or hardware acceleration until runtime GL identity proves the selected backend.
+
+HOSTED_NATIVE: shared implementation; focused compilation uses the native x86_64-smp AROS sysroot. Hosted and native runtime validation remain pending.
+
+VALIDATION: bundled clang-format; git diff --cached --check; //ui/ozone/platform/aros:aros cross-build passed. Full chrome link is running under the relay-owned out/aros-windowed scope.
+
+RISK: Medium. The current in-process GPU model shares the ArosWindowManager; a future out-of-process GPU model will require explicit native-window transport.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ ui/ozone/platform/aros/BUILD.gn               |  6 ++
+ ui/ozone/platform/aros/aros_egl_library.cc    | 19 ++++++
+ ui/ozone/platform/aros/aros_egl_library.h     | 16 +++++
+ .../platform/aros/aros_surface_factory.cc     | 13 +++-
+ ui/ozone/platform/aros/aros_surface_factory.h |  5 ++
+ ui/ozone/platform/aros/aros_window_manager.cc | 16 +++++
+ ui/ozone/platform/aros/aros_window_manager.h  |  2 +
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc   | 67 +++++++++++++++++++
+ ui/ozone/platform/aros/gl_ozone_egl_aros.h    | 42 ++++++++++++
+ 9 files changed, 184 insertions(+), 2 deletions(-)
+ create mode 100644 ui/ozone/platform/aros/aros_egl_library.cc
+ create mode 100644 ui/ozone/platform/aros/aros_egl_library.h
+ create mode 100644 ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+ create mode 100644 ui/ozone/platform/aros/gl_ozone_egl_aros.h
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+index 25a43504a3..be59acff10 100644
+--- a/ui/ozone/platform/aros/BUILD.gn
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -6,6 +6,8 @@ visibility = [ "//ui/ozone/*" ]
+ 
+ source_set("aros") {
+   sources = [
++    "aros_egl_library.cc",
++    "aros_egl_library.h",
+     "aros_screen.cc",
+     "aros_screen.h",
+     "aros_surface_factory.cc",
+@@ -16,6 +18,8 @@ source_set("aros") {
+     "aros_window_manager.h",
+     "client_native_pixmap_factory_aros.cc",
+     "client_native_pixmap_factory_aros.h",
++    "gl_ozone_egl_aros.cc",
++    "gl_ozone_egl_aros.h",
+     "ozone_platform_aros.cc",
+     "ozone_platform_aros.h",
+   ]
+@@ -33,12 +37,14 @@ source_set("aros") {
+     "//ui/events/ozone/layout",
+     "//ui/events/platform",
+     "//ui/gfx/geometry",
++    "//ui/gl",
+     "//ui/ozone:ozone_base",
+     "//ui/ozone/common",
+     "//ui/platform_window",
+   ]
+ 
+   libs = [
++    "EGL",
+     "cybergraphics",
+     "graphics",
+     "intuition",
+diff --git a/ui/ozone/platform/aros/aros_egl_library.cc b/ui/ozone/platform/aros/aros_egl_library.cc
+new file mode 100644
+index 0000000000..a0dc4a0d58
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_egl_library.cc
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/aros_egl_library.h"
++
++#include <EGL/egl.h>
++
++#ifdef eglGetProcAddress
++#undef eglGetProcAddress
++#endif
++
++namespace ui {
++
++gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name) {
++  return reinterpret_cast<gl::GLFunctionPointerType>(eglGetProcAddress(name));
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_egl_library.h b/ui/ozone/platform/aros/aros_egl_library.h
+new file mode 100644
+index 0000000000..c2e342cf43
+--- /dev/null
++++ b/ui/ozone/platform/aros/aros_egl_library.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_AROS_EGL_LIBRARY_H_
++#define UI_OZONE_PLATFORM_AROS_AROS_EGL_LIBRARY_H_
++
++#include "ui/gl/gl_implementation.h"
++
++namespace ui {
++
++gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name);
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_AROS_EGL_LIBRARY_H_
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+index 39044b9964..621167a237 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.cc
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -15,6 +15,7 @@
+ #include "third_party/skia/include/core/SkSurfaceProps.h"
+ #include "ui/gfx/vsync_provider.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
++#include "ui/ozone/platform/aros/gl_ozone_egl_aros.h"
+ #include "ui/ozone/public/surface_ozone_canvas.h"
+ 
+ namespace ui {
+@@ -83,13 +84,21 @@ class ArosCanvasSurface : public SurfaceOzoneCanvas {
+ }  // namespace
+ 
+ ArosSurfaceFactory::ArosSurfaceFactory(ArosWindowManager* window_manager)
+-    : window_manager_(window_manager) {}
++    : window_manager_(window_manager),
++      egl_implementation_(std::make_unique<GLOzoneEGLAros>(window_manager)) {}
+ 
+ ArosSurfaceFactory::~ArosSurfaceFactory() = default;
+ 
+ std::vector<gl::GLImplementationParts>
+ ArosSurfaceFactory::GetAllowedGLImplementations() {
+-  return {};
++  return {gl::GLImplementationParts(gl::kGLImplementationEGLGLES2)};
++}
++
++GLOzone* ArosSurfaceFactory::GetGLOzone(
++    const gl::GLImplementationParts& implementation) {
++  return implementation.gl == gl::kGLImplementationEGLGLES2
++             ? egl_implementation_.get()
++             : nullptr;
+ }
+ 
+ std::unique_ptr<SurfaceOzoneCanvas> ArosSurfaceFactory::CreateCanvasForWidget(
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.h b/ui/ozone/platform/aros/aros_surface_factory.h
+index 33517b0d9d..f6a0a90de8 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.h
++++ b/ui/ozone/platform/aros/aros_surface_factory.h
+@@ -5,12 +5,15 @@
+ #ifndef UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
+ #define UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
+ 
++#include <memory>
++
+ #include "base/memory/raw_ptr.h"
+ #include "ui/ozone/public/surface_factory_ozone.h"
+ 
+ namespace ui {
+ 
+ class ArosWindowManager;
++class GLOzoneEGLAros;
+ 
+ class ArosSurfaceFactory : public SurfaceFactoryOzone {
+  public:
+@@ -18,11 +21,13 @@ class ArosSurfaceFactory : public SurfaceFactoryOzone {
+   ~ArosSurfaceFactory() override;
+ 
+   std::vector<gl::GLImplementationParts> GetAllowedGLImplementations() override;
++  GLOzone* GetGLOzone(const gl::GLImplementationParts& implementation) override;
+   std::unique_ptr<SurfaceOzoneCanvas> CreateCanvasForWidget(
+       gfx::AcceleratedWidget widget) override;
+ 
+  private:
+   raw_ptr<ArosWindowManager> window_manager_;
++  std::unique_ptr<GLOzoneEGLAros> egl_implementation_;
+ };
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index c7dec31683..fab22c04c1 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -82,6 +82,22 @@ uint32_t ArosWindowManager::event_signal_mask() const {
+   return event_port_ ? uint32_t{1} << event_port_->mp_SigBit : 0;
+ }
+ 
++struct Window* ArosWindowManager::GetNativeWindow(
++    gfx::AcceleratedWidget widget) {
++  base::AutoLock lock(lock_);
++  const auto window_it = windows_.find(widget);
++  if (window_it == windows_.end()) {
++    return nullptr;
++  }
++
++  for (const auto& native_window : native_windows_) {
++    if (native_window.second == window_it->second) {
++      return native_window.first;
++    }
++  }
++  return nullptr;
++}
++
+ void ArosWindowManager::ProcessNativeEvents() {
+   if (!event_port_) {
+     return;
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 1532d1f73e..ce82cd9fd0 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -47,6 +47,8 @@ class ArosWindowManager {
+   uint32_t event_signal_mask() const;
+   void ProcessNativeEvents();
+ 
++  struct Window* GetNativeWindow(gfx::AcceleratedWidget widget);
++
+   bool PresentCanvas(gfx::AcceleratedWidget widget,
+                      const void* pixels,
+                      size_t row_bytes,
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+new file mode 100644
+index 0000000000..783fe4db5d
+--- /dev/null
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/ozone/platform/aros/gl_ozone_egl_aros.h"
++
++#include <stdint.h>
++
++#include "base/logging.h"
++#include "base/memory/scoped_refptr.h"
++#include "ui/gl/gl_surface.h"
++#include "ui/gl/gl_surface_egl.h"
++#include "ui/ozone/platform/aros/aros_egl_library.h"
++#include "ui/ozone/platform/aros/aros_window_manager.h"
++
++namespace ui {
++
++GLOzoneEGLAros::GLOzoneEGLAros(ArosWindowManager* window_manager)
++    : window_manager_(window_manager) {}
++
++GLOzoneEGLAros::~GLOzoneEGLAros() = default;
++
++scoped_refptr<gl::GLSurface> GLOzoneEGLAros::CreateViewGLSurface(
++    gl::GLDisplay* display,
++    gfx::AcceleratedWidget window) {
++  struct Window* native_window = window_manager_->GetNativeWindow(window);
++  if (!native_window) {
++    LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] no Intuition window for widget="
++               << window;
++    return nullptr;
++  }
++
++  auto* egl_display = display->GetAs<gl::GLDisplayEGL>();
++  const EGLNativeWindowType egl_window = static_cast<EGLNativeWindowType>(
++      reinterpret_cast<intptr_t>(native_window));
++  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] creating window surface widget="
++            << window << " native=" << native_window;
++  return gl::InitializeGLSurface(
++      base::MakeRefCounted<gl::NativeViewGLSurfaceEGL>(egl_display, egl_window,
++                                                       nullptr));
++}
++
++scoped_refptr<gl::GLSurface> GLOzoneEGLAros::CreateOffscreenGLSurface(
++    gl::GLDisplay* display,
++    const gfx::Size& size) {
++  return gl::InitializeGLSurface(base::MakeRefCounted<gl::PbufferGLSurfaceEGL>(
++      display->GetAs<gl::GLDisplayEGL>(), size));
++}
++
++gl::EGLDisplayPlatform GLOzoneEGLAros::GetNativeDisplay() {
++  return gl::EGLDisplayPlatform(EGL_DEFAULT_DISPLAY);
++}
++
++bool GLOzoneEGLAros::LoadGLES2Bindings(
++    const gl::GLImplementationParts& implementation) {
++  if (implementation.gl != gl::kGLImplementationEGLGLES2 ||
++      !GetArosEGLProcAddress("eglGetDisplay")) {
++    LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable";
++    return false;
++  }
++
++  gl::SetGLGetProcAddressProc(&GetArosEGLProcAddress);
++  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using egl.library entry points";
++  return true;
++}
++
++}  // namespace ui
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.h b/ui/ozone/platform/aros/gl_ozone_egl_aros.h
+new file mode 100644
+index 0000000000..3d6a4e2ece
+--- /dev/null
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_OZONE_PLATFORM_AROS_GL_OZONE_EGL_AROS_H_
++#define UI_OZONE_PLATFORM_AROS_GL_OZONE_EGL_AROS_H_
++
++#include "base/memory/raw_ptr.h"
++#include "ui/ozone/common/gl_ozone_egl.h"
++
++namespace ui {
++
++class ArosWindowManager;
++
++class GLOzoneEGLAros final : public GLOzoneEGL {
++ public:
++  explicit GLOzoneEGLAros(ArosWindowManager* window_manager);
++
++  GLOzoneEGLAros(const GLOzoneEGLAros&) = delete;
++  GLOzoneEGLAros& operator=(const GLOzoneEGLAros&) = delete;
++
++  ~GLOzoneEGLAros() override;
++
++  scoped_refptr<gl::GLSurface> CreateViewGLSurface(
++      gl::GLDisplay* display,
++      gfx::AcceleratedWidget window) override;
++  scoped_refptr<gl::GLSurface> CreateOffscreenGLSurface(
++      gl::GLDisplay* display,
++      const gfx::Size& size) override;
++
++ protected:
++  gl::EGLDisplayPlatform GetNativeDisplay() override;
++  bool LoadGLES2Bindings(
++      const gl::GLImplementationParts& implementation) override;
++
++ private:
++  raw_ptr<ArosWindowManager> window_manager_;
++};
++
++}  // namespace ui
++
++#endif  // UI_OZONE_PLATFORM_AROS_GL_OZONE_EGL_AROS_H_

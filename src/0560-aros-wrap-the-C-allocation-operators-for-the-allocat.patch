@@ -1,0 +1,199 @@
+From 85e2e233624be4d79fd9703845e76fd6c482c658 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 05:04:59 -0500
+Subject: [PATCH 560/638] aros: wrap the C++ allocation operators for the
+ allocator shim
+
+libstdc++ is linked statically and read before the program's objects so that
+its members are placed by the relocatable section script. The members that
+get extracted that way reference operator new/delete, which makes the archive
+supply them ahead of the allocator shim and fail the link on duplicates.
+
+Wrap the operators in the toolchain (only when the shim is enabled) and give
+the shim the __wrap_ names as aliases of its own definitions, so libstdc++'s
+copies are never extracted.
+---
+ .../partition_alloc/shim/allocator_shim.cc    |  6 ++
+ ...llocator_shim_override_aros_wrap_symbols.h | 83 +++++++++++++++++++
+ build/toolchain/aros/BUILD.gn                 | 40 ++++++++-
+ 3 files changed, 128 insertions(+), 1 deletion(-)
+ create mode 100644 base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_aros_wrap_symbols.h
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc
+index 808a0c5154..29470b18a6 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc
+@@ -32,6 +32,12 @@
+ // allocator_shim::internal::PartitionMallocUnchecked through the shim layer.
+ #include "partition_alloc/shim/allocator_shim_override_cpp_symbols.h"
+ 
++#if BUILDFLAG(IS_AROS)
++// The AROS toolchain wraps the C++ allocation operators so that the static
++// libstdc++ cannot supply them ahead of the definitions above.
++#include "partition_alloc/shim/allocator_shim_override_aros_wrap_symbols.h"
++#endif
++
+ #include "partition_alloc/shim/allocator_shim_override_libc_symbols.h"
+ 
+ // Some glibc versions (until commit 6c444ad6e953dbdf9c7be065308a0a777)
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_aros_wrap_symbols.h b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_aros_wrap_symbols.h
+new file mode 100644
+index 0000000000..22fd2adcdc
+--- /dev/null
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_aros_wrap_symbols.h
+@@ -0,0 +1,83 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifdef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_AROS_WRAP_SYMBOLS_H_
++#error This header is meant to be included only once by allocator_shim.cc
++#endif
++
++#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_AROS_WRAP_SYMBOLS_H_
++#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_AROS_WRAP_SYMBOLS_H_
++
++#include "partition_alloc/partition_alloc_buildflags.h"
++
++#if BUILDFLAG(USE_ALLOCATOR_SHIM)
++// AROS links libstdc++ statically, and its archive has to be read before the
++// relocatable section script (see //build/toolchain/aros/BUILD.gn), i.e.
++// before any object of the program. The members that get extracted there
++// reference the C++ allocation operators, which would pull libstdc++'s own
++// definitions in ahead of the shim's and make the link fail on duplicates.
++//
++// The toolchain therefore wraps those operators (-Wl,--wrap), so every
++// reference resolves to the __wrap_ name instead. These aliases point the
++// wrapped names at the shim definitions from allocator_shim_override_cpp_symbols.h.
++
++#include <cstddef>
++#include <new>
++
++#define SHIM_WRAP_ALIAS(mangled) \
++  __attribute__((alias(#mangled), visibility("default")))
++
++extern "C" {
++
++void* __wrap__Znwm(std::size_t) SHIM_WRAP_ALIAS(_Znwm);
++void* __wrap__Znam(std::size_t) SHIM_WRAP_ALIAS(_Znam);
++void* __wrap__ZnwmRKSt9nothrow_t(std::size_t, const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZnwmRKSt9nothrow_t);
++void* __wrap__ZnamRKSt9nothrow_t(std::size_t, const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZnamRKSt9nothrow_t);
++void* __wrap__ZnwmSt11align_val_t(std::size_t, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZnwmSt11align_val_t);
++void* __wrap__ZnamSt11align_val_t(std::size_t, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZnamSt11align_val_t);
++void* __wrap__ZnwmSt11align_val_tRKSt9nothrow_t(std::size_t,
++                                                std::align_val_t,
++                                                const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZnwmSt11align_val_tRKSt9nothrow_t);
++void* __wrap__ZnamSt11align_val_tRKSt9nothrow_t(std::size_t,
++                                                std::align_val_t,
++                                                const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZnamSt11align_val_tRKSt9nothrow_t);
++
++void __wrap__ZdlPv(void*) SHIM_WRAP_ALIAS(_ZdlPv);
++void __wrap__ZdaPv(void*) SHIM_WRAP_ALIAS(_ZdaPv);
++void __wrap__ZdlPvm(void*, std::size_t) SHIM_WRAP_ALIAS(_ZdlPvm);
++void __wrap__ZdaPvm(void*, std::size_t) SHIM_WRAP_ALIAS(_ZdaPvm);
++void __wrap__ZdlPvRKSt9nothrow_t(void*, const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZdlPvRKSt9nothrow_t);
++void __wrap__ZdaPvRKSt9nothrow_t(void*, const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZdaPvRKSt9nothrow_t);
++void __wrap__ZdlPvSt11align_val_t(void*, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZdlPvSt11align_val_t);
++void __wrap__ZdaPvSt11align_val_t(void*, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZdaPvSt11align_val_t);
++void __wrap__ZdlPvmSt11align_val_t(void*, std::size_t, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZdlPvmSt11align_val_t);
++void __wrap__ZdaPvmSt11align_val_t(void*, std::size_t, std::align_val_t)
++    SHIM_WRAP_ALIAS(_ZdaPvmSt11align_val_t);
++void __wrap__ZdlPvSt11align_val_tRKSt9nothrow_t(void*,
++                                                std::align_val_t,
++                                                const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZdlPvSt11align_val_tRKSt9nothrow_t);
++void __wrap__ZdaPvSt11align_val_tRKSt9nothrow_t(void*,
++                                                std::align_val_t,
++                                                const std::nothrow_t&)
++    SHIM_WRAP_ALIAS(_ZdaPvSt11align_val_tRKSt9nothrow_t);
++
++}  // extern "C"
++
++#undef SHIM_WRAP_ALIAS
++
++#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
++
++#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_SHIM_ALLOCATOR_SHIM_OVERRIDE_AROS_WRAP_SYMBOLS_H_
+diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
+index a9961f1930..deb6bcd6f1 100644
+--- a/build/toolchain/aros/BUILD.gn
++++ b/build/toolchain/aros/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//base/allocator/partition_allocator/partition_alloc.gni")
+ import("//build/toolchain/gcc_toolchain.gni")
+ 
+ declare_args() {
+@@ -9,6 +10,31 @@ declare_args() {
+   aros_sysroot = ""
+ }
+ 
++# The C++ allocation operators, in the order they appear in
++# //base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_cpp_symbols.h.
++_cpp_allocation_operators = [
++  "_Znwm",
++  "_ZdlPv",
++  "_Znam",
++  "_ZdaPv",
++  "_ZnwmRKSt9nothrow_t",
++  "_ZnamRKSt9nothrow_t",
++  "_ZdlPvRKSt9nothrow_t",
++  "_ZdaPvRKSt9nothrow_t",
++  "_ZdlPvm",
++  "_ZdaPvm",
++  "_ZnwmSt11align_val_t",
++  "_ZnwmSt11align_val_tRKSt9nothrow_t",
++  "_ZdlPvSt11align_val_t",
++  "_ZdlPvmSt11align_val_t",
++  "_ZdlPvSt11align_val_tRKSt9nothrow_t",
++  "_ZnamSt11align_val_t",
++  "_ZnamSt11align_val_tRKSt9nothrow_t",
++  "_ZdaPvSt11align_val_t",
++  "_ZdaPvmSt11align_val_t",
++  "_ZdaPvSt11align_val_tRKSt9nothrow_t",
++]
++
+ assert(aros_toolchain_root != "",
+        "Set aros_toolchain_root to the AROS cross-toolchain directory.")
+ 
+@@ -23,6 +49,18 @@ if (aros_sysroot != "") {
+ _relocatable_script =
+     rebase_path("aros-relocatable.lds", root_build_dir)
+ 
++# libstdc++ is read before the program's own objects (see extra_ldflags), and
++# the members extracted there reference operator new/delete, so the archive
++# would supply them ahead of the allocator shim. Wrapping the operators keeps
++# libstdc++'s definitions out of the link; the shim provides the __wrap_ names
++# (allocator_shim_override_aros_wrap_symbols.h).
++_allocation_operator_wraps = ""
++if (use_allocator_shim) {
++  foreach(symbol, _cpp_allocation_operators) {
++    _allocation_operator_wraps += " -Wl,--wrap=$symbol"
++  }
++}
++
+ gcc_toolchain("x64") {
+   cc = "${_toolprefix}gcc"
+   cxx = "${_toolprefix}g++"
+@@ -43,7 +81,7 @@ gcc_toolchain("x64") {
+   extra_ldflags =
+       "-m64 -mcmodel=large -nix" + _sysroot_flag +
+       " -Wl,-u,__cxa_pure_virtual -lstdc++" +
+-      _pthread_archive +
++      _allocation_operator_wraps + _pthread_archive +
+       " -Wl,--force-group-allocation -Wl,-T${_relocatable_script}"
+ 
+   toolchain_args = {

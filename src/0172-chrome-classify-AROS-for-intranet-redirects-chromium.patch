@@ -1,0 +1,32 @@
+From eb4fbb0c0bf22264b597b02ee3d6002337a8c720 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:19:51 -0500
+Subject: [PATCH 172/638] chrome: classify AROS for intranet redirects
+ [chromium] [aros]
+
+Statement: The portable intranet redirect detector is part of the desktop browser graph but its compile-time platform guard omitted AROS.
+
+Decision: Admit AROS to the existing desktop capability set without changing detector behavior.
+
+Evidence: Building the real browser object reached the detector's unsupported-platform preprocessor error before this classification.
+
+Validation: intranet_redirect_detector.o compiles in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ chrome/browser/intranet_redirect_detector.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/intranet_redirect_detector.h b/chrome/browser/intranet_redirect_detector.h
+index 555923f8d0..e8b76a907b 100644
+--- a/chrome/browser/intranet_redirect_detector.h
++++ b/chrome/browser/intranet_redirect_detector.h
+@@ -25,7 +25,7 @@ class SimpleURLLoader;
+ class PrefRegistrySimple;
+ 
+ #if !(BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+-      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA))
++      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS))
+ #error "IntranetRedirectDetector should only be built on Desktop platforms."
+ #endif
+ 

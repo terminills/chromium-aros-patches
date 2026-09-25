@@ -1,0 +1,201 @@
+From f945930ccaced55968d6e28fcc1aed3b89ab1f3c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:52:17 -0500
+Subject: [PATCH 364/638] [AROS] Exercise framed Mojo channels hosted
+
+AI_PHASE: chromium-process-model
+AI_STATUS: channel-aros-runtime-pass
+ROOT_CAUSE: The MessagePort substrate passed directly, but ChannelAros still lacked runtime proof that Chromium framing, IO-runner dispatch, and attached-handle decoding agree.
+FIX_REASON: Add a focused AROS-only core probe with two real Channel instances, early duplex writes, an attached PlatformChannel endpoint, callback validation, and orderly shutdown.
+SCOPE: mojo/core/BUILD.gn; mojo/core/channel_aros_probe.cc
+VALIDATION: Hosted 16 GiB run reported PASS framed=2 duplex=1 handles=1 shutdown=1 and exited zero in 4.91 seconds.
+RISK: NodeController invitations and browser/renderer Process launch remain unproven; this test uses two endpoints within one Process and dedicated reader tasks.
+AI_DECISION_CHAIN: substrate PASS -> focused Channel harness -> visibility failure -> AROS macro collision -> corrected include order -> framed hosted PASS.
+Evidence:-channel-aros-core-20260728
+Job:
+---
+ mojo/core/BUILD.gn              |  15 ++++
+ mojo/core/channel_aros_probe.cc | 141 ++++++++++++++++++++++++++++++++
+ 2 files changed, 156 insertions(+)
+ create mode 100644 mojo/core/channel_aros_probe.cc
+
+diff --git a/mojo/core/BUILD.gn b/mojo/core/BUILD.gn
+index 9e6d2d7d69..7eeb8023a2 100644
+--- a/mojo/core/BUILD.gn
++++ b/mojo/core/BUILD.gn
+@@ -24,6 +24,9 @@ component("embedder_internal") {
+     "//mojo/core/embedder",
+     "//mojo/core/test:test_support",
+   ]
++  if (is_aros) {
++    visibility += [ ":channel_aros_probe" ]
++  }
+ }
+ 
+ # Bits of the EDK library which do not depend on public API linkage. It is
+@@ -361,6 +364,18 @@ group("core_impl_for_fuzzers") {
+   public_deps = [ ":impl_for_embedder" ]
+ }
+ 
++if (is_aros) {
++  executable("channel_aros_probe") {
++    testonly = true
++    sources = [ "channel_aros_probe.cc" ]
++    deps = [
++      ":embedder_internal",
++      "//base",
++      "//mojo/public/cpp/platform",
++    ]
++  }
++}
++
+ fuzzer_test("mojo_core_channel_fuzzer") {
+   sources = [ "channel_fuzzer.cc" ]
+   deps = [
+diff --git a/mojo/core/channel_aros_probe.cc b/mojo/core/channel_aros_probe.cc
+new file mode 100644
+index 0000000000..a6e7e7e322
+--- /dev/null
++++ b/mojo/core/channel_aros_probe.cc
+@@ -0,0 +1,141 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <cstring>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/at_exit.h"
++#include "base/run_loop.h"
++#include "base/task/single_thread_task_executor.h"
++#include "mojo/core/channel.h"
++#include "mojo/core/connection_params.h"
++#include "mojo/public/cpp/platform/platform_channel.h"
++
++#include <aros/debug.h>
++
++namespace {
++
++constexpr char kLocalPayload[] = "remote-to-local";
++constexpr char kRemotePayload[] = "local-to-remote-with-handle";
++
++struct ProbeState {
++  int messages = 0;
++  bool failed = false;
++  base::RunLoop* run_loop = nullptr;
++
++  void CompleteOne() {
++    if (++messages == 2)
++      run_loop->Quit();
++  }
++
++  void Fail() {
++    failed = true;
++    run_loop->Quit();
++  }
++};
++
++class ProbeDelegate final : public mojo::core::Channel::Delegate {
++ public:
++  ProbeDelegate(ProbeState* state,
++                std::string_view expected,
++                bool expect_handle)
++      : state_(state),
++        expected_(expected),
++        expect_handle_(expect_handle) {}
++
++  void OnChannelMessage(
++      const void* payload,
++      size_t payload_size,
++      std::vector<mojo::PlatformHandle> handles) override {
++    const bool payload_ok =
++        payload_size == expected_.size() + 1 &&
++        std::memcmp(payload, expected_.data(), expected_.size()) == 0 &&
++        static_cast<const char*>(payload)[expected_.size()] == '\0';
++    const bool handles_ok =
++        expect_handle_
++            ? handles.size() == 1 && handles[0].is_aros_channel()
++            : handles.empty();
++    if (!payload_ok || !handles_ok) {
++      state_->Fail();
++      return;
++    }
++    state_->CompleteOne();
++  }
++
++  void OnChannelError(mojo::core::Channel::Error error) override {
++    state_->Fail();
++  }
++
++ private:
++  ProbeState* const state_;
++  const std::string_view expected_;
++  const bool expect_handle_;
++};
++
++mojo::core::Channel::MessagePtr MakeMessage(std::string_view payload) {
++  auto message = mojo::core::Channel::Message::CreateMessage(
++      payload.size() + 1, 1,
++      mojo::core::Channel::Message::MessageType::NORMAL);
++  std::memcpy(message->mutable_payload(), payload.data(), payload.size());
++  static_cast<char*>(message->mutable_payload())[payload.size()] = '\0';
++  return message;
++}
++
++}  // namespace
++
++int main() {
++  base::AtExitManager at_exit_manager;
++  base::SingleThreadTaskExecutor task_executor(base::MessagePumpType::IO);
++
++  mojo::PlatformChannel transport;
++  if (!transport.local_endpoint().is_valid() ||
++      !transport.remote_endpoint().is_valid()) {
++    bug("[Mojo:AROS:CoreChannelProbe] FAIL endpoint creation\n");
++    return 30;
++  }
++
++  base::RunLoop run_loop;
++  ProbeState state{.run_loop = &run_loop};
++  ProbeDelegate local_delegate(&state, kRemotePayload, true);
++  ProbeDelegate remote_delegate(&state, kLocalPayload, false);
++  auto io_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
++
++  scoped_refptr<mojo::core::Channel> local = mojo::core::Channel::Create(
++      &local_delegate,
++      mojo::core::ConnectionParams(transport.TakeLocalEndpoint()),
++      mojo::core::Channel::HandlePolicy::kAcceptHandles, io_runner);
++  scoped_refptr<mojo::core::Channel> remote = mojo::core::Channel::Create(
++      &remote_delegate,
++      mojo::core::ConnectionParams(transport.TakeRemoteEndpoint()),
++      mojo::core::Channel::HandlePolicy::kAcceptHandles, io_runner);
++  local->Start();
++  remote->Start();
++
++  mojo::PlatformChannel transferred_channel;
++  std::vector<mojo::PlatformHandle> handles;
++  handles.push_back(
++      transferred_channel.TakeLocalEndpoint().TakePlatformHandle());
++  auto to_local = MakeMessage(kRemotePayload);
++  to_local->SetHandles(std::move(handles));
++  remote->Write(std::move(to_local));
++  local->Write(MakeMessage(kLocalPayload));
++
++  run_loop.Run();
++  local->ShutDown();
++  remote->ShutDown();
++  base::RunLoop().RunUntilIdle();
++  local = nullptr;
++  remote = nullptr;
++
++  if (state.failed || state.messages != 2) {
++    bug("[Mojo:AROS:CoreChannelProbe] FAIL messages=%ld error=%ld\n",
++        static_cast<long>(state.messages), static_cast<long>(state.failed));
++    return 31;
++  }
++  bug("[Mojo:AROS:CoreChannelProbe] PASS framed=2 duplex=1 handles=1 "
++      "shutdown=1\n");
++  return 0;
++}

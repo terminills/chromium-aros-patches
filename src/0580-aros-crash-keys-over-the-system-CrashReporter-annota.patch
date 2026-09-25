@@ -1,0 +1,563 @@
+From d1899ce7953bf9bc860f29d9d793a2fcb257879b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 17:27:27 -0500
+Subject: [PATCH 580/638] aros: crash keys over the system CrashReporter
+ annotation block
+
+Replace the crash key stubs on AROS with an implementation of the
+Breakpad-style CrashKeyString interface over a CrashAnnotationBlock
+(base/aros/crash_annotations) registered with exec under
+CrashReporter.annotations. The system CrashReporter copies the block
+into the report when any task of the process traps, so url-chunk,
+top-origin, the switches, GPU keys and the rest appear in its
+[Annotations] section. chrome_main_delegate sets the Product: header
+and the ptype/pid keys.
+---
+ base/BUILD.gn                                 |   2 +
+ base/aros/crash_annotations.cc                | 210 ++++++++++++++++++
+ base/aros/crash_annotations.h                 |  53 +++++
+ chrome/app/chrome_main_delegate.cc            |  17 ++
+ components/crash/core/common/BUILD.gn         |  14 +-
+ .../crash/core/common/crash_key_aros.cc       | 160 +++++++++++++
+ 6 files changed, 453 insertions(+), 3 deletions(-)
+ create mode 100644 base/aros/crash_annotations.cc
+ create mode 100644 base/aros/crash_annotations.h
+ create mode 100644 components/crash/core/common/crash_key_aros.cc
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 591a67a396..34a4303dfa 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1709,6 +1709,8 @@ component("base") {
+       }
+       if (is_aros) {
+         sources += [
++          "aros/crash_annotations.cc",
++          "aros/crash_annotations.h",
+           "aros/in6addr.cc",
+           "aros/socket_library.cc",
+           "aros/socket_library.h",
+diff --git a/base/aros/crash_annotations.cc b/base/aros/crash_annotations.cc
+new file mode 100644
+index 0000000000..ed6ca8a3b9
+--- /dev/null
++++ b/base/aros/crash_annotations.cc
+@@ -0,0 +1,210 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/aros/crash_annotations.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++
++#include <exec/memory.h>
++#include <exec/nodes.h>
++#include <exec/ports.h>
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++#if __has_include(<crashreporter/annotations.h>)
++#include <crashreporter/annotations.h>
++#else
++// Mirror of crashreporter/annotations.h (AROS CrashReporter, contract v1).
++// Only ever append fields; the reader validates magic, version and sizes.
++#define CRA_PORTNAME "CrashReporter.annotations"
++#define CRA_MAGIC 0x43524131 /* 'CRA1' */
++#define CRA_VERSION 1
++#define CRA_KEYSIZE 40
++#define CRA_VALUESIZE 128
++#define CRA_PRODUCTLEN 96
++struct CrashAnnotationEntry {
++  TEXT cae_Key[CRA_KEYSIZE];
++  TEXT cae_Value[CRA_VALUESIZE];
++};
++struct CrashAnnotationBlock {
++  struct MsgPort cab_Port;
++  ULONG cab_Magic;
++  ULONG cab_Version;
++  ULONG cab_Size;
++  ULONG cab_Entries;
++  ULONG cab_KeySize;
++  ULONG cab_ValueSize;
++  struct Task* cab_Owner;
++  APTR cab_Reserved;
++  TEXT cab_Product[CRA_PRODUCTLEN];
++  struct CrashAnnotationEntry cab_Entry[0];
++};
++#define CRA_BLOCKSIZE(n) \
++  (sizeof(struct CrashAnnotationBlock) + (n) * sizeof(struct CrashAnnotationEntry))
++#endif
++
++static_assert(CRA_KEYSIZE == base::aros::kCrashAnnotationKeySize);
++static_assert(CRA_VALUESIZE == base::aros::kCrashAnnotationValueSize);
++static_assert(CRA_PRODUCTLEN == base::aros::kCrashAnnotationProductLength);
++
++namespace base::aros {
++
++namespace {
++
++constexpr ULONG kBlockSize = CRA_BLOCKSIZE(kCrashAnnotationEntries);
++
++CrashAnnotationBlock* g_block = nullptr;
++bool g_block_failed = false;
++
++// Serialises slot allocation and removal only; value writes are lock-free
++// by design (see the header).
++Lock& BlockLock() {
++  static NoDestructor<Lock> lock;
++  return *lock;
++}
++
++// TEXT is unsigned char on AROS; the block is byte storage.
++char* Chars(TEXT* p) {
++  return reinterpret_cast<char*>(p);
++}
++
++void CopyBounded(TEXT* dst_text, size_t dst_size, const char* src) {
++  char* dst = Chars(dst_text);
++  size_t n = src ? strnlen(src, dst_size - 1) : 0;
++  // Write the terminator first so a reader racing with a rewrite never
++  // sees a longer stale tail than the new value.
++  dst[n] = 0;
++  memcpy(dst, src, n);
++}
++
++void ReleaseBlock() {
++  CrashAnnotationBlock* block = g_block;
++  if (!block) {
++    return;
++  }
++  g_block = nullptr;
++  g_block_failed = true;
++  RemPort(&block->cab_Port);
++  FreeMem(block, kBlockSize);
++}
++
++CrashAnnotationBlock* Block() {
++  if (g_block || g_block_failed) {
++    return g_block;
++  }
++  AutoLock lock(BlockLock());
++  if (g_block || g_block_failed) {
++    return g_block;
++  }
++  CrashAnnotationBlock* block = static_cast<CrashAnnotationBlock*>(
++      AllocMem(kBlockSize, MEMF_PUBLIC | MEMF_CLEAR));
++  if (!block) {
++    g_block_failed = true;
++    return nullptr;
++  }
++  block->cab_Magic = CRA_MAGIC;
++  block->cab_Version = CRA_VERSION;
++  block->cab_Size = kBlockSize;
++  block->cab_Entries = kCrashAnnotationEntries;
++  block->cab_KeySize = CRA_KEYSIZE;
++  block->cab_ValueSize = CRA_VALUESIZE;
++  block->cab_Owner = FindTask(nullptr);
++  // The port is the registry entry only: nothing is ever PutMsg()'d to it.
++  block->cab_Port.mp_Node.ln_Name = const_cast<char*>(CRA_PORTNAME);
++  block->cab_Port.mp_Node.ln_Type = NT_MSGPORT;
++  block->cab_Port.mp_Node.ln_Pri = 0;
++  block->cab_Port.mp_Flags = PA_IGNORE;
++  block->cab_Port.mp_SigBit = 0;
++  block->cab_Port.mp_SigTask = nullptr;
++  NEWLIST(&block->cab_Port.mp_MsgList);
++  AddPort(&block->cab_Port);
++  atexit(ReleaseBlock);
++  g_block = block;
++  return block;
++}
++
++size_t FindKey(CrashAnnotationBlock* block, const char* key) {
++  for (size_t i = 0; i < kCrashAnnotationEntries; ++i) {
++    if (block->cab_Entry[i].cae_Key[0] &&
++        strncmp(Chars(block->cab_Entry[i].cae_Key), key, CRA_KEYSIZE) == 0) {
++      return i;
++    }
++  }
++  return kCrashAnnotationInvalidIndex;
++}
++
++}  // namespace
++
++bool EnsureCrashAnnotationBlock() {
++  return Block() != nullptr;
++}
++
++void SetCrashAnnotationProduct(const char* product) {
++  CrashAnnotationBlock* block = Block();
++  if (block) {
++    CopyBounded(block->cab_Product, CRA_PRODUCTLEN, product);
++  }
++}
++
++size_t SetCrashAnnotation(const char* key, const char* value) {
++  CrashAnnotationBlock* block = Block();
++  if (!block || !key || !key[0]) {
++    return kCrashAnnotationInvalidIndex;
++  }
++  AutoLock lock(BlockLock());
++  size_t index = FindKey(block, key);
++  if (index == kCrashAnnotationInvalidIndex) {
++    for (size_t i = 0; i < kCrashAnnotationEntries; ++i) {
++      if (!block->cab_Entry[i].cae_Key[0]) {
++        index = i;
++        break;
++      }
++    }
++    if (index == kCrashAnnotationInvalidIndex) {
++      return index;
++    }
++    // Value before key: a reader that sees the key sees a value.
++    CopyBounded(block->cab_Entry[index].cae_Value, CRA_VALUESIZE, value);
++    CopyBounded(block->cab_Entry[index].cae_Key, CRA_KEYSIZE, key);
++    return index;
++  }
++  CopyBounded(block->cab_Entry[index].cae_Value, CRA_VALUESIZE, value);
++  return index;
++}
++
++void SetCrashAnnotationAtIndex(size_t index, const char* value) {
++  CrashAnnotationBlock* block = Block();
++  if (!block || index >= kCrashAnnotationEntries) {
++    return;
++  }
++  CopyBounded(block->cab_Entry[index].cae_Value, CRA_VALUESIZE, value);
++}
++
++void RemoveCrashAnnotationAtIndex(size_t index) {
++  CrashAnnotationBlock* block = Block();
++  if (!block || index >= kCrashAnnotationEntries) {
++    return;
++  }
++  AutoLock lock(BlockLock());
++  block->cab_Entry[index].cae_Key[0] = 0;
++  block->cab_Entry[index].cae_Value[0] = 0;
++}
++
++const char* GetCrashAnnotation(const char* key) {
++  CrashAnnotationBlock* block = Block();
++  if (!block || !key) {
++    return nullptr;
++  }
++  AutoLock lock(BlockLock());
++  size_t index = FindKey(block, key);
++  return index == kCrashAnnotationInvalidIndex
++             ? nullptr
++             : Chars(block->cab_Entry[index].cae_Value);
++}
++
++}  // namespace base::aros
+diff --git a/base/aros/crash_annotations.h b/base/aros/crash_annotations.h
+new file mode 100644
+index 0000000000..327effaefa
+--- /dev/null
++++ b/base/aros/crash_annotations.h
+@@ -0,0 +1,53 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef BASE_AROS_CRASH_ANNOTATIONS_H_
++#define BASE_AROS_CRASH_ANNOTATIONS_H_
++
++#include <stddef.h>
++
++#include "base/base_export.h"
++
++namespace base::aros {
++
++// The process's crash annotation block: a fixed table of key/value strings
++// in public memory, registered with AROS exec under a well-known port name
++// so that the system CrashReporter (SYS:WBStartup/CrashReporter) can copy it
++// into the report when any of this process's tasks reaches Alert(). The
++// layout is CrashReporter's contract (crashreporter/annotations.h in the
++// AROS SDK; the .cc carries a mirror for SDKs that predate it).
++//
++// crash_reporter::CrashKeyString is implemented on top of this table
++// (components/crash/core/common/crash_key_aros.cc), so every crash key
++// Chromium already sets lands in the report without further plumbing.
++//
++// Entries are written without locking, from any thread: CrashReporter reads
++// them from the crashing task with bounded copies and tolerates torn values.
++
++inline constexpr size_t kCrashAnnotationKeySize = 40;    // incl. NUL
++inline constexpr size_t kCrashAnnotationValueSize = 128;  // incl. NUL
++inline constexpr size_t kCrashAnnotationEntries = 200;
++inline constexpr size_t kCrashAnnotationProductLength = 96;
++inline constexpr size_t kCrashAnnotationInvalidIndex = kCrashAnnotationEntries;
++
++// Creates and registers the block on first use. Returns false when exec
++// memory could not be obtained; every other call then becomes a no-op.
++BASE_EXPORT bool EnsureCrashAnnotationBlock();
++
++// "Chromium 124.0.6367.0" — the Product: header of the report.
++BASE_EXPORT void SetCrashAnnotationProduct(const char* product);
++
++// Stores |value| under |key| (both truncated to the slot sizes), reusing the
++// key's existing slot. Returns the slot index, or kCrashAnnotationInvalidIndex
++// when the table is full.
++BASE_EXPORT size_t SetCrashAnnotation(const char* key, const char* value);
++BASE_EXPORT void SetCrashAnnotationAtIndex(size_t index, const char* value);
++BASE_EXPORT void RemoveCrashAnnotationAtIndex(size_t index);
++// nullptr when |key| is not set; the pointer stays valid until the entry
++// is removed (it points into the table).
++BASE_EXPORT const char* GetCrashAnnotation(const char* key);
++
++}  // namespace base::aros
++
++#endif  // BASE_AROS_CRASH_ANNOTATIONS_H_
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 050e70dc12..12a24153cc 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -102,6 +102,9 @@
+ #include "ui/base/ui_base_switches.h"
+ 
+ #if BUILDFLAG(IS_AROS)
++#include "base/aros/crash_annotations.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
+ #include "chrome/app/aros_user_data_dir.h"
+ #endif
+ 
+@@ -1607,6 +1610,20 @@ void ChromeMainDelegate::PreSandboxStartup() {
+   if (!cef::IsChromeRuntimeEnabled()) {
+   crash_reporter::InitializeCrashKeys();
+ 
++#if BUILDFLAG(IS_AROS)
++  // The system CrashReporter reads these from the annotation block when any
++  // task of this process traps; give it the Product: header and the process
++  // identity that breakpad would otherwise put in the minidump.
++  base::aros::SetCrashAnnotationProduct(
++      base::StrCat({version_info::GetProductName(), " ",
++                    version_info::GetVersionNumber()})
++          .c_str());
++  static crash_reporter::CrashKeyString<32> aros_ptype_key("ptype");
++  aros_ptype_key.Set(process_type.empty() ? "browser" : process_type);
++  static crash_reporter::CrashKeyString<16> aros_pid_key("pid");
++  aros_pid_key.Set(base::NumberToString(base::GetCurrentProcId()));
++#endif
++
+ #if BUILDFLAG(IS_CHROMEOS_LACROS)
+   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kEnableLacrosForkZygotesAtLoginScreen)) {
+diff --git a/components/crash/core/common/BUILD.gn b/components/crash/core/common/BUILD.gn
+index 15c8ce5e77..aeb35a3c0e 100644
+--- a/components/crash/core/common/BUILD.gn
++++ b/components/crash/core/common/BUILD.gn
+@@ -9,7 +9,7 @@ import("//components/gwp_asan/buildflags/buildflags.gni")
+ 
+ declare_args() {
+   # If set to true, this will stub out and disable the entire crash key system.
+-  use_crash_key_stubs = is_fuchsia || is_aros
++  use_crash_key_stubs = is_fuchsia
+ }
+ 
+ group("common") {
+@@ -31,9 +31,15 @@ use_crashpad_annotation =
+     (is_mac || is_ios || is_win || is_android || is_chromeos ||
+      (is_linux && !is_castos)) && !use_crash_key_stubs
+ 
++# AROS has no crash handler in-process: the Breakpad-style crash key interface
++# is implemented over the system CrashReporter's annotation block instead
++# (base/aros/crash_annotations.h).
++use_aros_annotation = is_aros && !use_crash_key_stubs
++
+ # Make sure that breakpad use is limited to is_castos here so that there's no
+ # unknown unenumerated target.
+-assert(use_crash_key_stubs || use_crashpad_annotation || is_castos)
++assert(use_crash_key_stubs || use_crashpad_annotation || use_aros_annotation ||
++       is_castos)
+ 
+ buildflag_header("crash_buildflags") {
+   header = "crash_buildflags.h"
+@@ -52,7 +58,7 @@ group("crash_key") {
+ # Breakpad implementation uses a static global variable, so ensure there is
+ # only one instance of the symbol in the component build by making this
+ # target a component.
+-if (use_crash_key_stubs || use_crashpad_annotation) {
++if (use_crash_key_stubs || use_crashpad_annotation || use_aros_annotation) {
+   crash_key_target_type = "static_library"
+ } else {
+   crash_key_target_type = "component"
+@@ -93,6 +99,8 @@ target(crash_key_target_type, "crash_key_lib") {
+   } else if (use_crashpad_annotation) {
+     sources += [ "crash_key_crashpad.cc" ]
+     public_deps += [ "//third_party/crashpad/crashpad/client" ]
++  } else if (use_aros_annotation) {
++    sources += [ "crash_key_aros.cc" ]
+   } else {
+     include_dirs = [ "//third_party/breakpad/breakpad/src" ]
+ 
+diff --git a/components/crash/core/common/crash_key_aros.cc b/components/crash/core/common/crash_key_aros.cc
+new file mode 100644
+index 0000000000..52173a3e34
+--- /dev/null
++++ b/components/crash/core/common/crash_key_aros.cc
+@@ -0,0 +1,160 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// NOTE: This file is only compiled on AROS. It implements the Breakpad-style
++// crash key interface (crash_key.h) over the AROS CrashReporter annotation
++// block (base/aros/crash_annotations.h), so that crash keys set anywhere in
++// Chromium end up in the [Annotations] section of the system crash report.
++// The chunking logic mirrors crash_key_breakpad.cc.
++
++#include "components/crash/core/common/crash_key.h"
++
++#include "base/aros/crash_annotations.h"
++#include "base/debug/crash_logging.h"
++#include "base/format_macros.h"
++#include "base/strings/string_piece.h"
++#include "base/strings/stringprintf.h"
++#include "build/build_config.h"
++#include "components/crash/core/common/crash_key_base_support.h"
++
++#if !BUILDFLAG(IS_AROS)
++#error "This file is the AROS crash key implementation."
++#endif
++
++namespace crash_reporter {
++namespace internal {
++
++namespace {
++
++// String used to format chunked key names. The __1 through __N syntax is
++// recognized by the crash collector, which will then stitch the numbered
++// parts back into a single string value.
++const char kChunkFormatString[] = "%s__%" PRIuS;
++
++constexpr size_t kUnsetStorageSlotSentinel = kCrashKeyStorageNumEntries;
++
++static_assert(kCrashKeyStorageKeySize == base::aros::kCrashAnnotationKeySize);
++static_assert(kCrashKeyStorageValueSize ==
++              base::aros::kCrashAnnotationValueSize);
++static_assert(kCrashKeyStorageNumEntries ==
++              base::aros::kCrashAnnotationEntries);
++static_assert(kUnsetStorageSlotSentinel ==
++              base::aros::kCrashAnnotationInvalidIndex);
++
++}  // namespace
++
++void CrashKeyStringImpl::Set(base::StringPiece value) {
++  // This check cannot be in the constructor because it is constexpr. Use _LT
++  // rather than _LE to account for the terminating \0.
++  DCHECK_LT(strlen(name_), kCrashKeyStorageKeySize);
++
++  const size_t kValueMaxLength = index_array_count_ * kCrashKeyStorageValueSize;
++
++  value = value.substr(0, kValueMaxLength);
++
++  // If there is only one slot for the value, then handle it directly.
++  if (index_array_count_ == 1) {
++    std::string value_string(value);
++    if (is_set()) {
++      base::aros::SetCrashAnnotationAtIndex(index_array_[0],
++                                            value_string.c_str());
++    } else {
++      index_array_[0] =
++          base::aros::SetCrashAnnotation(name_, value_string.c_str());
++    }
++    return;
++  }
++
++  // If the value fits in a single slot, the name of the key should not
++  // end with the __1 suffix of the chunked format.
++  if (value.length() < kCrashKeyStorageValueSize - 1) {
++    std::string value_string(value);
++    if (index_array_[1] != kUnsetStorageSlotSentinel) {
++      // If switching from chunked to non-chunked, clear all the values.
++      Clear();
++      index_array_[0] =
++          base::aros::SetCrashAnnotation(name_, value_string.c_str());
++    } else if (index_array_[0] != kUnsetStorageSlotSentinel) {
++      // The single entry was previously set.
++      base::aros::SetCrashAnnotationAtIndex(index_array_[0],
++                                            value_string.c_str());
++    } else {
++      // This key was not previously set.
++      index_array_[0] =
++          base::aros::SetCrashAnnotation(name_, value_string.c_str());
++    }
++    return;
++  }
++
++  // If the key was previously set, but only using one slot, then the chunk
++  // name will change (from |name| to |name__1|).
++  if (index_array_[0] != kUnsetStorageSlotSentinel &&
++      index_array_[1] == kUnsetStorageSlotSentinel) {
++    base::aros::RemoveCrashAnnotationAtIndex(index_array_[0]);
++    index_array_[0] = kUnsetStorageSlotSentinel;
++  }
++
++  // Otherwise, break the value into chunks labeled name__1 through name__N,
++  // where N is |index_array_count_|.
++  size_t offset = 0;
++  for (size_t i = 0; i < index_array_count_; ++i) {
++    if (offset < value.length()) {
++      // The storage NUL-terminates the value, so ensure that a byte is
++      // not lost when setting individual chunks.
++      std::string chunk(value.substr(offset, kCrashKeyStorageValueSize - 1));
++      offset += chunk.length();
++
++      if (index_array_[i] == kUnsetStorageSlotSentinel) {
++        std::string chunk_name =
++            base::StringPrintf(kChunkFormatString, name_, i + 1);
++        index_array_[i] =
++            base::aros::SetCrashAnnotation(chunk_name.c_str(), chunk.c_str());
++      } else {
++        base::aros::SetCrashAnnotationAtIndex(index_array_[i], chunk.c_str());
++      }
++    } else {
++      base::aros::RemoveCrashAnnotationAtIndex(index_array_[i]);
++      index_array_[i] = kUnsetStorageSlotSentinel;
++    }
++  }
++}
++
++void CrashKeyStringImpl::Clear() {
++  for (size_t i = 0; i < index_array_count_; ++i) {
++    base::aros::RemoveCrashAnnotationAtIndex(index_array_[i]);
++    index_array_[i] = kUnsetStorageSlotSentinel;
++  }
++}
++
++bool CrashKeyStringImpl::is_set() const {
++  return index_array_[0] != kUnsetStorageSlotSentinel;
++}
++
++}  // namespace internal
++
++void InitializeCrashKeys() {
++  base::aros::EnsureCrashAnnotationBlock();
++  InitializeCrashKeyBaseSupport();
++}
++
++std::string GetCrashKeyValue(const std::string& key_name) {
++  const char* value = base::aros::GetCrashAnnotation(key_name.c_str());
++  if (value)
++    return value;
++  return std::string();
++}
++
++void InitializeCrashKeysForTesting() {
++  InitializeCrashKeys();
++}
++
++void ResetCrashKeysForTesting() {
++  // The block is process-wide and registered with exec; empty it rather
++  // than tear it down.
++  for (size_t i = 0; i < internal::kCrashKeyStorageNumEntries; ++i)
++    base::aros::RemoveCrashAnnotationAtIndex(i);
++  base::debug::SetCrashKeyImplementation(nullptr);
++}
++
++}  // namespace crash_reporter

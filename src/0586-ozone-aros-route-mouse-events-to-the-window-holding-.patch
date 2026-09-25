@@ -1,0 +1,271 @@
+From ff50583a93ae00065b980dd8d6956ef8b24552d9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 19:55:42 -0500
+Subject: [PATCH 586/638] ozone/aros: route mouse events to the window holding
+ capture
+
+Intuition reports a mouse event to the window under the pointer, while
+views' MenuController expects the menu host, which took capture, to see
+every located event.  Track the capture holder in ArosWindowManager and
+have the receiving ArosWindow hand the event over in the holder's client
+coordinates, as the Wayland platform does with its located-events grabber.
+A click outside an open context menu now reaches MenuController and closes
+it; before, the menu stayed up until an item was picked.
+---
+ ui/ozone/platform/aros/aros_window.cc         | 98 +++++++++++++------
+ ui/ozone/platform/aros/aros_window.h          |  8 ++
+ ui/ozone/platform/aros/aros_window_manager.cc | 18 ++++
+ ui/ozone/platform/aros/aros_window_manager.h  | 11 +++
+ 4 files changed, 104 insertions(+), 31 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 2e3ffc76dc..bb2f53b5ef 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -474,6 +474,7 @@ ArosWindow::~ArosWindow() {
+     CloseWindow(window_);
+     window_ = nullptr;
+   }
++  manager_->ClearCaptureWindow(this);
+   manager_->RemoveWindow(widget_, this);
+ }
+ 
+@@ -558,9 +559,11 @@ void ArosWindow::SetTitle(const std::u16string& title) {
+ 
+ void ArosWindow::SetCapture() {
+   capture_ = true;
++  manager_->SetCaptureWindow(this);
+ }
+ 
+ void ArosWindow::ReleaseCapture() {
++  manager_->ClearCaptureWindow(this);
+   if (capture_) {
+     capture_ = false;
+     delegate_->OnLostCapture();
+@@ -903,6 +906,37 @@ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+   }
+ }
+ 
++ArosWindow* ArosWindow::MouseEventTarget(int16_t mouse_x,
++                                         int16_t mouse_y,
++                                         gfx::Point* location,
++                                         gfx::Point* root_location) {
++  *root_location =
++      gfx::Point(window_->LeftEdge + mouse_x, window_->TopEdge + mouse_y);
++
++  // Intuition reports the event to the window under the pointer.  While
++  // another window holds capture (a menu host, for the life of its menu)
++  // the event belongs to it instead, in its own client coordinates and
++  // regardless of its bounds: that is what lets MenuController see the
++  // click outside the menu that dismisses it.
++  ArosWindow* const grabber = manager_->capture_window();
++  if (grabber && grabber != this && grabber->window_) {
++    *location = *root_location -
++                gfx::Vector2d(grabber->window_->LeftEdge +
++                                  grabber->window_->BorderLeft,
++                              grabber->window_->TopEdge +
++                                  grabber->window_->BorderTop);
++    return grabber;
++  }
++
++  *location =
++      gfx::Point(mouse_x - window_->BorderLeft, mouse_y - window_->BorderTop);
++  const gfx::Rect client_bounds(bounds_.size());
++  if (!capture_ && !client_bounds.Contains(*location)) {
++    return nullptr;
++  }
++  return this;
++}
++
+ void ArosWindow::DispatchMouseMove(uint16_t qualifier,
+                                    int16_t mouse_x,
+                                    int16_t mouse_y) {
+@@ -910,20 +944,20 @@ void ArosWindow::DispatchMouseMove(uint16_t qualifier,
+     return;
+   }
+ 
+-  const gfx::Point location(mouse_x - window_->BorderLeft,
+-                            mouse_y - window_->BorderTop);
+-  const gfx::Rect client_bounds(bounds_.size());
+-  if (!capture_ && !client_bounds.Contains(location)) {
++  gfx::Point location;
++  gfx::Point root_location;
++  ArosWindow* const target =
++      MouseEventTarget(mouse_x, mouse_y, &location, &root_location);
++  if (!target) {
+     return;
+   }
+ 
+-  mouse_button_flags_ = MouseFlagsFromQualifier(qualifier);
+-  const gfx::Point root_location(window_->LeftEdge + mouse_x,
+-                                 window_->TopEdge + mouse_y);
++  target->mouse_button_flags_ = MouseFlagsFromQualifier(qualifier);
+   MouseEvent event(ET_MOUSE_MOVED, location, root_location, EventTimeForNow(),
+-                   ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_,
++                   ModifierFlagsFromQualifier(qualifier) |
++                       target->mouse_button_flags_,
+                    EF_NONE);
+-  delegate_->DispatchEvent(&event);
++  target->delegate_->DispatchEvent(&event);
+ }
+ 
+ void ArosWindow::DispatchMouseButton(uint16_t code,
+@@ -939,31 +973,33 @@ void ArosWindow::DispatchMouseButton(uint16_t code,
+     return;
+   }
+ 
++  gfx::Point location;
++  gfx::Point root_location;
++  ArosWindow* const target =
++      MouseEventTarget(mouse_x, mouse_y, &location, &root_location);
++
++  // Button state follows the window the event is delivered to; a press
++  // ignored for landing outside our client area still updates ours.
++  ArosWindow* const state_owner = target ? target : this;
+   const bool released = (code & IECODE_UP_PREFIX) != 0;
+   if (released) {
+-    mouse_button_flags_ &= ~changed_button;
++    state_owner->mouse_button_flags_ &= ~changed_button;
+   } else {
+-    mouse_button_flags_ |= changed_button;
++    state_owner->mouse_button_flags_ |= changed_button;
+   }
+-
+-  const gfx::Point location(mouse_x - window_->BorderLeft,
+-                            mouse_y - window_->BorderTop);
+-  const gfx::Rect client_bounds(bounds_.size());
+-  if (!capture_ && !client_bounds.Contains(location)) {
++  if (!target) {
+     return;
+   }
+ 
+-  const gfx::Point root_location(window_->LeftEdge + mouse_x,
+-                                 window_->TopEdge + mouse_y);
+   // Release events still identify the changed button after persistent state
+   // has been cleared.
+   MouseEvent event(released ? ET_MOUSE_RELEASED : ET_MOUSE_PRESSED, location,
+                    root_location, EventTimeForNow(),
+-                   ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_ |
+-                       changed_button,
++                   ModifierFlagsFromQualifier(qualifier) |
++                       target->mouse_button_flags_ | changed_button,
+                    changed_button);
+   event.InitializeNative();
+-  delegate_->DispatchEvent(&event);
++  target->delegate_->DispatchEvent(&event);
+ }
+ 
+ void ArosWindow::DispatchRawKey(uint16_t code,
+@@ -977,14 +1013,13 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+     if (released || !window_) {
+       return;
+     }
+-    const gfx::Point location(mouse_x - window_->BorderLeft,
+-                              mouse_y - window_->BorderTop);
+-    const gfx::Rect client_bounds(bounds_.size());
+-    if (!capture_ && !client_bounds.Contains(location)) {
++    gfx::Point location;
++    gfx::Point root_location;
++    ArosWindow* const target =
++        MouseEventTarget(mouse_x, mouse_y, &location, &root_location);
++    if (!target) {
+       return;
+     }
+-    const gfx::Point root_location(window_->LeftEdge + mouse_x,
+-                                   window_->TopEdge + mouse_y);
+     gfx::Vector2d offset;
+     switch (raw_code) {
+       case RAWKEY_NM_WHEEL_UP:
+@@ -1000,10 +1035,11 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+         offset.set_x(-MouseWheelEvent::kWheelDelta);
+         break;
+     }
+-    MouseWheelEvent event(
+-        offset, location, root_location, EventTimeForNow(),
+-        ModifierFlagsFromQualifier(qualifier) | mouse_button_flags_, EF_NONE);
+-    delegate_->DispatchEvent(&event);
++    MouseWheelEvent event(offset, location, root_location, EventTimeForNow(),
++                          ModifierFlagsFromQualifier(qualifier) |
++                              target->mouse_button_flags_,
++                          EF_NONE);
++    target->delegate_->DispatchEvent(&event);
+     return;
+   }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 0716c316cd..13266c9a69 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -107,6 +107,14 @@ class ArosWindow : public PlatformWindow {
+   void HandleInactiveWindow();
+   void ReturnIntuitionActivationToOwner();
+   void RequestIntuitionActivation();
++  // The window a mouse event reported to this one (window-relative
++  // mouse_x/mouse_y) is delivered to -- this window, the capture holder, or
++  // nullptr when it falls outside our client area -- and the event's location
++  // in the target's client coordinates plus its screen location.
++  ArosWindow* MouseEventTarget(int16_t mouse_x,
++                               int16_t mouse_y,
++                               gfx::Point* location,
++                               gfx::Point* root_location);
+   void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
+   void DispatchMouseButton(uint16_t code,
+                            uint16_t qualifier,
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 98af5b389b..651c1e15a7 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -150,6 +150,24 @@ gfx::AcceleratedWidget ArosWindowManager::requested_activation() const {
+   return requested_activation_;
+ }
+ 
++void ArosWindowManager::SetCaptureWindow(ArosWindow* window) {
++  if (capture_window_ == window) {
++    return;
++  }
++  // The PlatformWindow interface is where ReleaseCapture() is public.
++  PlatformWindow* previous = capture_window_;
++  capture_window_ = window;
++  if (previous) {
++    previous->ReleaseCapture();
++  }
++}
++
++void ArosWindowManager::ClearCaptureWindow(ArosWindow* window) {
++  if (capture_window_ == window) {
++    capture_window_ = nullptr;
++  }
++}
++
+ void ArosWindowManager::AttachNativeWindow(gfx::AcceleratedWidget widget,
+                                            ArosWindow* window,
+                                            struct Window* native_window) {
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index d57dd2394a..ab9354e7e3 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -63,6 +63,16 @@ class ArosWindowManager {
+   void ClearRequestedActivation();
+   gfx::AcceleratedWidget requested_activation() const;
+ 
++  // The window holding mouse capture (a menu host while a menu is open).
++  // Intuition delivers mouse events to the window under the pointer, so an
++  // ArosWindow that receives one while another window has capture reroutes
++  // it there (ArosWindow::DispatchMouseButton and friends); that is how a
++  // click outside a menu reaches MenuController and closes it.  At most one
++  // window has capture: taking it releases the previous holder.
++  void SetCaptureWindow(ArosWindow* window);
++  void ClearCaptureWindow(ArosWindow* window);
++  ArosWindow* capture_window() const { return capture_window_; }
++
+   bool PresentCanvas(gfx::AcceleratedWidget widget,
+                      const void* pixels,
+                      size_t row_bytes,
+@@ -82,6 +92,7 @@ class ArosWindowManager {
+   bool owns_presentation_port_ = false;
+   bool native_resources_released_ = false;
+   gfx::AcceleratedWidget requested_activation_ = gfx::kNullAcceleratedWidget;
++  raw_ptr<ArosWindow> capture_window_ = nullptr;
+   bool logged_received_present_ GUARDED_BY(lock_) = false;
+   bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;

@@ -1,0 +1,77 @@
+From ecd546b38de782593ed8f9fba216d61bfce1ce1f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 15:17:13 -0500
+Subject: [PATCH 375/638] [AROS] Coalesce final relocatable image sections
+
+AI_PHASE: chromium-process-model
+AI_STATUS: renderer-rel32-loader-failure-fixed
+ROOT_CAUSE: The 970 MB Chrome ET_REL retained 699814 sections and 464070 allocatable hunks. Hosted W^X allocations placed .eh_frame more than 2 GiB from its PC32 code target during the renderer child load.
+FIX_REASON: Coalesce code, constants, exception tables, and unwind metadata into one AX output hunk while keeping writable data separate. Extract pure.o before the script so its trailing libstdc++ FDE is included; the remaining four-byte .eh_frame terminator has no relocations.
+SCOPE: build/toolchain/aros/BUILD.gn, build/toolchain/aros/aros-relocatable.lds
+VALIDATION: gn gen plus ninja -C out/aros-chrome -j32 chrome passed. Chrome fell from 699814 to 34 sections and 970 MB to 917 MB; .text is AX, data remains WA, and no .rela.eh_frame remains.
+RISK: Hosted runtime must still prove repeated child LoadSeg and page paint; uncommon allocatable orphan sections remain separately loaded.
+AI_DECISION_CHAIN: renderer LoadSeg PC32 range failure -> identify .rela.eh_frame -> bounded coalescing probe -> reject WAX second-link shortcut -> order pure.o before final layout -> clean full link.
+Evidence:-chromium-browser-renderer-20260728/runtime-04.log,-chromium-browser-renderer-20260728/build-19-coalesced-runtime-tail.log
+Job:
+---
+ build/toolchain/aros/BUILD.gn             | 11 ++++++++++-
+ build/toolchain/aros/aros-relocatable.lds | 21 +++++++++++++++++++++
+ 2 files changed, 31 insertions(+), 1 deletion(-)
+ create mode 100644 build/toolchain/aros/aros-relocatable.lds
+
+diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
+index 9f516313f7..b880855d1a 100644
+--- a/build/toolchain/aros/BUILD.gn
++++ b/build/toolchain/aros/BUILD.gn
+@@ -17,6 +17,8 @@ _sysroot_flag = ""
+ if (aros_sysroot != "") {
+   _sysroot_flag = " --sysroot=$aros_sysroot"
+ }
++_relocatable_script =
++    rebase_path("aros-relocatable.lds", root_build_dir)
+ 
+ gcc_toolchain("x64") {
+   cc = "${_toolprefix}gcc"
+@@ -31,7 +33,14 @@ gcc_toolchain("x64") {
+       " -fno-asynchronous-unwind-tables -fno-omit-frame-pointer" + _sysroot_flag
+   # Select AROS's POSIX-aware startup, which initializes posixc path and
+   # process-local environment semantics before ChromiumMain runs.
+-  extra_ldflags = "-m64 -mcmodel=large -nix" + _sysroot_flag
++  #
++  # Pull pure.o before evaluating the section script. GCC would otherwise
++  # extract it from its implicit trailing libstdc++ archive after the script,
++  # leaving its .eh_frame PC32 relocation in a separate LoadSeg hunk.
++  extra_ldflags =
++      "-m64 -mcmodel=large -nix" + _sysroot_flag +
++      " -Wl,-u,__cxa_pure_virtual -lstdc++" +
++      " -Wl,--force-group-allocation -Wl,-T${_relocatable_script}"
+ 
+   toolchain_args = {
+     current_cpu = "x64"
+diff --git a/build/toolchain/aros/aros-relocatable.lds b/build/toolchain/aros/aros-relocatable.lds
+new file mode 100644
+index 0000000000..eeb41bb917
+--- /dev/null
++++ b/build/toolchain/aros/aros-relocatable.lds
+@@ -0,0 +1,21 @@
++/*
++ * AROS loads ET_REL executables one allocatable section at a time. Large C++
++ * programs otherwise retain hundreds of thousands of COMDAT sections, and
++ * hosted executable-page allocations can place .eh_frame more than 2 GiB from
++ * the code addressed by its signed PC-relative relocations.
++ *
++ * Coalesce the ordinary section families at the final relocatable link. Keep
++ * unwind metadata and read-only constants with code so their PC-relative
++ * references are intra-hunk. Writable data remains separate.
++ */
++SECTIONS
++{
++  .text : {
++    *(.text .text.*)
++    *(.rodata .rodata.*)
++    *(.eh_frame)
++    *(.gcc_except_table .gcc_except_table.*)
++  }
++  .data : { *(.data .data.*) }
++  .bss : { *(.bss .bss.* COMMON) }
++}

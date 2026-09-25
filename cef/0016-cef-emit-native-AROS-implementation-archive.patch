@@ -1,0 +1,51 @@
+From 9cd4dfb7d69ca3f69afe2aaf124587f37315ec11 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 17:04:21 -0500
+Subject: [PATCH 16/43] cef: emit native AROS implementation archive
+
+Keep upstream shared-library packaging on other platforms, but produce a complete static archive on AROS for the resident cef.library build to engulf.
+
+AI_PHASE: chromium-cef-native-library
+
+AI_STATUS: native-archive-packaging-under-validation
+
+AI_ASSUMPTION: cef.library will consume libcef.a with v8 kept external through the proven generated v8.library import layer
+
+AI_VALIDATION: GN generation passes; //cef:libcef reports static_library; dependency audit finds v8_library_imports and -lv8 with no v8_base, v8_snapshot, or v8_monolith
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/25-libcef-native-archive.log
+
+AI_DECISION_CHAIN:; f8780270; AROS workbench/libs/v8/mmakefile.src; AROS workbench/libs/ffmpeg/mmakefile.src
+---
+ BUILD.gn | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 8480fa4a..18ae43b3 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1667,10 +1667,23 @@ if (is_mac) {
+     }
+   }
+ 
+-  shared_library("libcef") {
++  if (is_aros) {
++    # AROS runtime libraries are resident *.library modules, not ELF shared
++    # objects.  Emit one complete archive here for the native cef.library
++    # build to engulf; its generated link library is the client-facing seam.
++    libcef_target_type = "static_library"
++  } else {
++    libcef_target_type = "shared_library"
++  }
++
++  target(libcef_target_type, "libcef") {
+     # Necessary because the libcef_test_support target is testonly.
+     testonly = true
+ 
++    if (is_aros) {
++      complete_static_lib = true
++    }
++
+     sources = includes_common +
+               gypi_paths.autogen_cpp_includes +
+               gypi_paths2.includes_capi +

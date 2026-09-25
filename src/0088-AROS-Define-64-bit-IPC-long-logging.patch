@@ -1,0 +1,30 @@
+From 4e1232e3aff175d9ef7b3c249c53e5f2bdb48cd4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 18:29:09 -0500
+Subject: [PATCH 088/638] [AROS] Define 64-bit IPC long logging
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: AROS long ParamTraits declarations and logging definitions now share one width guard.
+ROOT_CAUSE: The header enabled long serialization for 64-bit AROS, but ipc_message_utils.cc omitted AROS from the matching Log definitions.
+FIX_REASON: Mirror the existing ARCH_CPU_64_BITS condition without changing Pickle wire encoding.
+SCOPE: IPC numeric ParamTraits logging definitions.
+VALIDATION: ipc_message_utils.o and libipc.a build; both long Log specializations are defined.
+RISK: None beyond activating already-declared diagnostic formatting on the supported 64-bit target.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ ipc/ipc_message_utils.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/ipc/ipc_message_utils.cc b/ipc/ipc_message_utils.cc
+index 533e46f940..d87abaf981 100644
+--- a/ipc/ipc_message_utils.cc
++++ b/ipc/ipc_message_utils.cc
+@@ -399,6 +399,7 @@ void ParamTraits<unsigned int>::Log(const param_type& p, std::string* l) {
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+     BUILDFLAG(IS_FUCHSIA) ||                                              \
++    (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_64_BITS)) ||                  \
+     (BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_64_BITS))
+ void ParamTraits<long>::Log(const param_type& p, std::string* l) {
+   l->append(base::NumberToString(p));

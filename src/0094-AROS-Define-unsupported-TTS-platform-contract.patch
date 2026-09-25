@@ -1,0 +1,91 @@
+From b51fe12171369bf71e48a9ca3b9ea5f3e207fc47 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:43:01 -0500
+Subject: [PATCH 094/638] [AROS] Define unsupported TTS platform contract
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Content has an explicit fail-closed AROS TTS singleton.
+ROOT_CAUSE: TtsPlatformImpl::GetInstance had no AROS definition, leaving speech callers with an unresolved platform service.
+FIX_REASON: Report unsupported/uninitialized, expose no voices, and complete Speak requests with failure so callers cannot hang on a nonexistent backend.
+SCOPE: Content browser TTS source selection and AROS platform implementation.
+VALIDATION: Filtered GN generation succeeded; tts_aros.o and browser.stamp build; nm confirms TtsPlatformImpl::GetInstance.
+RISK: Speech synthesis remains unavailable until a native AROS TTS engine or broker is integrated.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ content/browser/BUILD.gn           |  4 +++
+ content/browser/speech/tts_aros.cc | 50 ++++++++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+)
+ create mode 100644 content/browser/speech/tts_aros.cc
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 7c53d9b201..82d7672010 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2438,6 +2438,10 @@ source_set("browser") {
+     ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "speech/tts_aros.cc" ]
++  }
++
+   # ChromeOS also defines linux but their memory-monitors conflict.
+   if (is_chromeos_ash) {
+     sources += [
+diff --git a/content/browser/speech/tts_aros.cc b/content/browser/speech/tts_aros.cc
+new file mode 100644
+index 0000000000..aa870b24ca
+--- /dev/null
++++ b/content/browser/speech/tts_aros.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/browser/speech/tts_platform_impl.h"
++
++#include <utility>
++
++#include "base/functional/callback.h"
++#include "base/no_destructor.h"
++
++namespace content {
++namespace {
++
++class TtsPlatformImplAros final : public TtsPlatformImpl {
++ public:
++  TtsPlatformImplAros() = default;
++  TtsPlatformImplAros(const TtsPlatformImplAros&) = delete;
++  TtsPlatformImplAros& operator=(const TtsPlatformImplAros&) = delete;
++
++  bool PlatformImplSupported() override { return false; }
++  bool PlatformImplInitialized() override { return false; }
++  void Speak(int,
++             const std::string&,
++             const std::string&,
++             const VoiceData&,
++             const UtteranceContinuousParameters&,
++             base::OnceCallback<void(bool)> on_speak_finished) override {
++    std::move(on_speak_finished).Run(false);
++  }
++  bool StopSpeaking() override { return false; }
++  bool IsSpeaking() override { return false; }
++  void GetVoices(std::vector<VoiceData>*) override {}
++  void Pause() override {}
++  void Resume() override {}
++
++  static TtsPlatformImplAros* GetInstance() {
++    static base::NoDestructor<TtsPlatformImplAros> tts_platform;
++    return tts_platform.get();
++  }
++};
++
++}  // namespace
++
++// static
++TtsPlatformImpl* TtsPlatformImpl::GetInstance() {
++  return TtsPlatformImplAros::GetInstance();
++}
++
++}  // namespace content

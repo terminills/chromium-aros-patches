@@ -1,0 +1,45 @@
+From 999e23da8a125498f38298b5c2cbdbb3b7e9aa1f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 08:29:51 -0500
+Subject: [PATCH 541/638] AROS: quiet expected Chromium startup warnings
+
+---
+ chrome/app/chrome_main_delegate.cc                        | 4 ++++
+ chrome/browser/signin/account_consistency_mode_manager.cc | 5 +++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 84c2a5aeb1..0e2f6055ff 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -798,8 +798,12 @@ void InitLogging(const std::string& process_type) {
+   // Log the Chrome version for information. Do so at WARNING level as that's
+   // the min level on ChromeOS.
+   if (process_type.empty()) {
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "This is Chrome version " << chrome::kChromeVersion;
++#else
+     LOG(WARNING) << "This is Chrome version " << chrome::kChromeVersion
+                  << " (not a warning)";
++#endif
+   }
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
+index d2c034c279..d544e1000b 100644
+--- a/chrome/browser/signin/account_consistency_mode_manager.cc
++++ b/chrome/browser/signin/account_consistency_mode_manager.cc
+@@ -74,8 +74,13 @@ bool CanEnableDiceForBuild() {
+ 
+   // Only log this once.
+   [[maybe_unused]] static bool logged_warning = []() {
++#if BUILDFLAG(IS_AROS)
++    VLOG(1) << "Desktop Identity Consistency disabled; OAuth client ID and "
++               "client secret are not configured.";
++#else
+     LOG(WARNING) << "Desktop Identity Consistency cannot be enabled as no "
+                     "OAuth client ID and client secret have been configured.";
++#endif
+     return true;
+   }();
+ 

@@ -1,0 +1,163 @@
+From 0d11ea2b80e22055fa0e84b7482a583cf5cc2476 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 20:02:01 -0500
+Subject: [PATCH 3/7] [AROS] Back Perfetto storage with Exec memory and files
+
+AI_PHASE: Chromium Phase 3 tracing substrate
+AI_STATUS: Perfetto can allocate page-aligned storage and temporary directories without mmap.
+ROOT_CAUSE: Perfetto assumed anonymous mappings, madvise, and mkdtemp semantics unavailable in the current AROS runtime.
+FIX_REASON: Track the original Exec allocation for aligned frees, make page discard explicitly unsupported, and construct temporary directories from supported file primitives.
+SCOPE: Perfetto paged memory, shared-memory ABI headers, and temporary storage.
+VALIDATION: paged_memory.o, shared_memory_abi.o, and temp_file.o build in out/aros-headless.
+RISK: Guard pages, lazy commit, discard, and MMU protection remain accounting-only until OPAL-backed virtual memory lands.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-opal-mmu-backed-enforcement-roadmap
+---
+ include/perfetto/ext/base/paged_memory.h |  5 +++++
+ src/base/paged_memory.cc                 | 28 +++++++++++++++++++++++-
+ src/base/temp_file.cc                    | 17 ++++++++++++++
+ src/tracing/core/shared_memory_abi.cc    |  3 ++-
+ 4 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/include/perfetto/ext/base/paged_memory.h b/include/perfetto/ext/base/paged_memory.h
+index e907976..8aaa13f 100644
+--- a/include/perfetto/ext/base/paged_memory.h
++++ b/include/perfetto/ext/base/paged_memory.h
+@@ -94,6 +94,11 @@ class PagedMemory {
+   // the system page size.
+   size_t size_ = 0;
+ 
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  void* allocation_base_ = nullptr;
++  size_t allocation_size_ = 0;
++#endif
++
+ #if TRACK_COMMITTED_SIZE()
+   size_t committed_size_ = 0u;
+ #endif  // TRACK_COMMITTED_SIZE()
+diff --git a/src/base/paged_memory.cc b/src/base/paged_memory.cc
+index c009672..a0a401e 100644
+--- a/src/base/paged_memory.cc
++++ b/src/base/paged_memory.cc
+@@ -19,9 +19,14 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstddef>
++#include <cstdint>
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <Windows.h>
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#include <exec/memory.h>
++#include <proto/exec.h>
++#undef Allocate
+ #else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <sys/mman.h>
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+@@ -61,6 +66,18 @@ PagedMemory PagedMemory::Allocate(size_t req_size, int flags) {
+     return PagedMemory();
+   PERFETTO_CHECK(ptr);
+   char* usable_region = reinterpret_cast<char*>(ptr) + GuardSize();
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  const size_t allocation_size = outer_size + GetSysPageSize() - 1;
++  void* allocation_base =
++      AllocMem(allocation_size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (!allocation_base && (flags & kMayFail))
++    return PagedMemory();
++  PERFETTO_CHECK(allocation_base);
++  uintptr_t aligned =
++      (reinterpret_cast<uintptr_t>(allocation_base) + GetSysPageSize() - 1) &
++      ~(static_cast<uintptr_t>(GetSysPageSize()) - 1);
++  void* ptr = reinterpret_cast<void*>(aligned);
++  char* usable_region = reinterpret_cast<char*>(ptr) + GuardSize();
+ #else   // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   void* ptr = mmap(nullptr, outer_size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+@@ -74,6 +91,10 @@ PagedMemory PagedMemory::Allocate(size_t req_size, int flags) {
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ 
+   auto memory = PagedMemory(usable_region, req_size);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  memory.allocation_base_ = allocation_base;
++  memory.allocation_size_ = allocation_size;
++#endif
+ #if TRACK_COMMITTED_SIZE()
+   size_t initial_commit = req_size;
+   if (flags & kDontCommit)
+@@ -110,6 +131,9 @@ PagedMemory::~PagedMemory() {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   BOOL res = VirtualFree(start, 0, MEM_RELEASE);
+   PERFETTO_CHECK(res != 0);
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  ignore_result(start);
++  FreeMem(allocation_base_, allocation_size_);
+ #else   // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   const size_t outer_size = RoundUpToSysPageSize(size_) + GuardSize() * 2;
+   int res = munmap(start, outer_size);
+@@ -122,7 +146,9 @@ bool PagedMemory::AdviseDontNeed(void* p, size_t size) {
+   PERFETTO_DCHECK(p_);
+   PERFETTO_DCHECK(p >= p_);
+   PERFETTO_DCHECK(static_cast<char*>(p) + size <= p_ + size_);
+-#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) ||    \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) ||  \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   // Discarding pages on Windows has more CPU cost than is justified for the
+   // possible memory savings.
+   return false;
+diff --git a/src/base/temp_file.cc b/src/base/temp_file.cc
+index 26092d3..f9307be 100644
+--- a/src/base/temp_file.cc
++++ b/src/base/temp_file.cc
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <errno.h>
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <Windows.h>
+@@ -28,6 +29,7 @@
+ #include <fileapi.h>
+ #include <io.h>
+ #else
++#include <sys/stat.h>
+ #include <unistd.h>
+ #endif
+ 
+@@ -136,6 +138,21 @@ TempDir TempDir::Create() {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   temp_dir.path_ = GetTempFilePathWin();
+   PERFETTO_CHECK(_mkdir(temp_dir.path_.c_str()) == 0);
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  bool created = false;
++  for (int attempt = 0; attempt < 100 && !created; ++attempt) {
++    temp_dir.path_ = GetSysTempDir() + "/perfetto-XXXXXXXX";
++    int fd = mkstemp(&temp_dir.path_[0]);
++    PERFETTO_CHECK(fd >= 0);
++    PERFETTO_CHECK(close(fd) == 0);
++    PERFETTO_CHECK(unlink(temp_dir.path_.c_str()) == 0);
++    if (mkdir(temp_dir.path_.c_str(), 0700) == 0) {
++      created = true;
++    } else {
++      PERFETTO_CHECK(errno == EEXIST);
++    }
++  }
++  PERFETTO_CHECK(created);
+ #else
+   temp_dir.path_ = GetSysTempDir() + "/perfetto-XXXXXXXX";
+   PERFETTO_CHECK(mkdtemp(&temp_dir.path_[0]));
+diff --git a/src/tracing/core/shared_memory_abi.cc b/src/tracing/core/shared_memory_abi.cc
+index ee9fb75..95b1b38 100644
+--- a/src/tracing/core/shared_memory_abi.cc
++++ b/src/tracing/core/shared_memory_abi.cc
+@@ -18,7 +18,8 @@
+ #include "perfetto/base/build_config.h"
+ #include "perfetto/base/time.h"
+ 
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <sys/mman.h>
+ #endif
+ 

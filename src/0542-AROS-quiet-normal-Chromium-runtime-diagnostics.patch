@@ -1,0 +1,125 @@
+From e8b7950819c0dff5261013c8b1341b4738f07146 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 08:53:40 -0500
+Subject: [PATCH 542/638] AROS: quiet normal Chromium runtime diagnostics
+
+---
+ base/message_loop/message_pump_aros.cc          | 17 ++++++++---------
+ cc/scheduler/scheduler_state_machine.cc         |  4 ++--
+ .../media/prefs/capture_device_ranking.h        |  6 ++++++
+ .../browser/browser_child_process_host_impl.cc  | 12 ++++++------
+ 4 files changed, 22 insertions(+), 17 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 487971980a..70320a178f 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -143,9 +143,9 @@ MessagePumpAROS::MessagePumpAROS() {
+                       reinterpret_cast<IORequest*>(timer_request_), 0),
+            0);
+ 
+-  LOG(INFO) << "[Chromium:IO] AROS WaitSelect/Exec/timer.device pump task="
+-            << pump_task_ << " wake-signal=" << wakeup_signal_
+-            << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit);
++  VLOG(1) << "[Chromium:IO] AROS WaitSelect/Exec/timer.device pump task="
++          << pump_task_ << " wake-signal=" << wakeup_signal_
++          << " timer-signal=" << static_cast<int>(timer_port_->mp_SigBit);
+   RegisterLivePump(this);
+ }
+ 
+@@ -246,9 +246,9 @@ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+     controller->watcher_ = delegate;
+     controller->generation_ = next_generation_++;
+     wait_select_error_reported_ = false;
+-    LOG(INFO) << "[Chromium:IO] updated watch task=" << pump_task_
+-              << " fd=" << fd << " mode=" << controller->mode_
+-              << " persistent=" << controller->persistent_;
++    VLOG(2) << "[Chromium:IO] updated watch task=" << pump_task_
++            << " fd=" << fd << " mode=" << controller->mode_
++            << " persistent=" << controller->persistent_;
+     return true;
+   }
+ 
+@@ -260,9 +260,8 @@ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+   controller->generation_ = next_generation_++;
+   controllers_.push_back(controller);
+   wait_select_error_reported_ = false;
+-  LOG(INFO) << "[Chromium:IO] registered watch task=" << pump_task_
+-            << " fd=" << fd << " mode=" << mode
+-            << " persistent=" << persistent;
++  VLOG(2) << "[Chromium:IO] registered watch task=" << pump_task_
++          << " fd=" << fd << " mode=" << mode << " persistent=" << persistent;
+   return true;
+ }
+ 
+diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
+index 868ef4c63c..768dfd052d 100644
+--- a/cc/scheduler/scheduler_state_machine.cc
++++ b/cc/scheduler/scheduler_state_machine.cc
+@@ -1196,8 +1196,8 @@ void SchedulerStateMachine::SetPauseRendering(bool pause_rendering) {
+   // so it can never happen.
+ #if BUILDFLAG(IS_AROS)
+   if (!pause_rendering_ && has_pending_tree_) {
+-    LOG(ERROR) << "[Chromium:AROS:CompositorShutdown] resume rendering with "
+-                  "pending tree; allowing scheduler drain";
++    VLOG(1) << "[Chromium:AROS:CompositorShutdown] resume rendering with "
++               "pending tree; allowing scheduler drain";
+   } else {
+     DCHECK(pause_rendering_ || !has_pending_tree_);
+   }
+diff --git a/chrome/browser/media/prefs/capture_device_ranking.h b/chrome/browser/media/prefs/capture_device_ranking.h
+index 2fa88c031a..ac2bacb0bb 100644
+--- a/chrome/browser/media/prefs/capture_device_ranking.h
++++ b/chrome/browser/media/prefs/capture_device_ranking.h
+@@ -10,6 +10,7 @@
+ #include "components/prefs/pref_registry_simple.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
++#include "build/build_config.h"
+ #include "media/audio/audio_device_description.h"
+ #include "media/capture/video/video_capture_device_info.h"
+ #include "third_party/blink/public/common/mediastream/media_devices.h"
+@@ -252,8 +253,13 @@ const base::Value::List& GetAndMaybeMigratePref(PrefService& prefs,
+   }
+ 
+   if (!prefs.HasPrefPath(default_device_pref_name)) {
++#if BUILDFLAG(IS_AROS)
++    VLOG(1) << "Can't initialize the value of " << pref_name << " because "
++            << default_device_pref_name << " isn't registered or is empty";
++#else
+     LOG(WARNING) << "Can't initialize the value of " << pref_name << " because "
+                  << default_device_pref_name << " isn't registered or is empty";
++#endif
+     return ranking;
+   }
+ 
+diff --git a/content/browser/browser_child_process_host_impl.cc b/content/browser/browser_child_process_host_impl.cc
+index 745deb6154..b84b33ec87 100644
+--- a/content/browser/browser_child_process_host_impl.cc
++++ b/content/browser/browser_child_process_host_impl.cc
+@@ -499,9 +499,9 @@ void BrowserChildProcessHostImpl::OnChildDisconnected() {
+       delegate_->OnProcessRetiring();
+       aros_retirement_deadline_ =
+           base::TimeTicks::Now() + kArosChildRetirementGracePeriod;
+-      LOG(WARNING) << "[Chromium:AROS:ChildRetirement] IPC disconnected; "
+-                      "waiting for task retirement child_id="
+-                   << data_.id << " process_type=" << data_.process_type;
++      VLOG(1) << "[Chromium:AROS:ChildRetirement] IPC disconnected; "
++                 "waiting for task retirement child_id="
++              << data_.id << " process_type=" << data_.process_type;
+       ScheduleArosChildRetirementPoll(kArosChildRetirementPollInterval);
+       return;
+     }
+@@ -606,9 +606,9 @@ void BrowserChildProcessHostImpl::PollForArosChildRetirement() {
+   const ChildProcessTerminationInfo info =
+       GetTerminationInfo(false /* known_dead */);
+   if (info.status != base::TERMINATION_STATUS_STILL_RUNNING) {
+-    LOG(WARNING) << "[Chromium:AROS:ChildRetirement] task retired child_id="
+-                 << data_.id << " process_type=" << data_.process_type
+-                 << " quarantined=" << aros_retirement_quarantined_;
++    VLOG(1) << "[Chromium:AROS:ChildRetirement] task retired child_id="
++            << data_.id << " process_type=" << data_.process_type
++            << " quarantined=" << aros_retirement_quarantined_;
+     FinalizeChildDisconnected(false /* known_dead */);
+     return;
+   }

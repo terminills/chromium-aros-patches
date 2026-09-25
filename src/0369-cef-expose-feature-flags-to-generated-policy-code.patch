@@ -1,0 +1,31 @@
+From b7eb4fa7f5e280f553cbcb6cd64ab442ee1f32cf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 12:35:23 -0500
+Subject: [PATCH 369/638] cef: expose feature flags to generated policy code
+
+AI_PHASE: chromium-process-model
+AI_STATUS: clean-chrome-cef-policy-dependency
+ROOT_CAUSE: CEF integration made generated policy_constants.h include cef/libcef/features/features.h but omitted the corresponding GN dependency from components/policy:generated.
+FIX_REASON: Publish the always-available CEF buildflag header target through the generated policy library so enable_cef=false Chrome builds remain coherent.
+SCOPE: components/policy/BUILD.gn
+VALIDATION: The previously failing obj/components/policy/generated/policy_constants.o rebuilt successfully in the established AROS Chrome tree.
+RISK: This repairs an incomplete CEF prerequisite patch; the resumed full Chrome build may expose additional clean-build dependency omissions.
+AI_DECISION_CHAIN: full Chrome rebuild -> missing generated CEF header -> inspect generator and feature target -> restore public dependency -> focused object PASS.
+Evidence:-chromium-browser-renderer-20260728/build-05-full-quiet.log;-chromium-browser-renderer-20260728/build-06-policy-cef-feature-dep.log
+Job:
+---
+ components/policy/BUILD.gn | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/components/policy/BUILD.gn b/components/policy/BUILD.gn
+index d34f2a7f5c..38a580ed97 100644
+--- a/components/policy/BUILD.gn
++++ b/components/policy/BUILD.gn
+@@ -266,6 +266,7 @@ static_library("generated") {
+     ":cloud_policy_proto_generated_compile",
+     ":policy_code_generate",
+     "//base",
++    "//cef/libcef/features",
+     "//components/policy/core/common:common_constants",
+     "//components/policy/proto:policy_common_definitions_compile_proto",
+     "//third_party/protobuf:protobuf_lite",

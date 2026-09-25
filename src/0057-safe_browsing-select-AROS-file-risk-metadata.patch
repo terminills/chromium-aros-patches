@@ -1,0 +1,39 @@
+From 01784aebd54d793e3e3ef0457fbc771be91432e6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:44:18 -0500
+Subject: [PATCH 057/638] safe_browsing: select AROS file-risk metadata
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: AROS now receives a generated download-file-types resource instead of failing the Safe Browsing resource action.
+
+ROOT_CAUSE: The build selected unknown_target_arch because the download-file proto has no dedicated AROS platform enum.
+
+FIX_REASON: Chromium 124's Linux entry is the conservative desktop Unix file-risk cohort and can be selected solely for resource generation without changing runtime OS identity.
+
+SCOPE: components/safe_browsing/content/resources/BUILD.gn only.
+
+VALIDATION: Ninja regenerated the resource with -t linux and produced a 7900-byte download_file_types.pb.
+
+RISK: AROS-specific executable extensions use default rules until the Safe Browsing schema gains a native AROS enum and metadata set.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/safe_browsing/content/resources/BUILD.gn | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/components/safe_browsing/content/resources/BUILD.gn b/components/safe_browsing/content/resources/BUILD.gn
+index 8f000bf466..13118d4b20 100644
+--- a/components/safe_browsing/content/resources/BUILD.gn
++++ b/components/safe_browsing/content/resources/BUILD.gn
+@@ -30,7 +30,9 @@ action("make_file_types_protobuf") {
+     target_arch = "win"
+   } else if (is_mac) {
+     target_arch = "mac"
+-  } else if (is_linux) {
++  } else if (is_linux || is_aros) {
++    # The proto has no AROS platform enum. Use its conservative desktop Unix
++    # file-risk cohort without changing the browser's runtime OS identity.
+     target_arch = "linux"
+   } else if (is_fuchsia) {
+     target_arch = "fuchsia"

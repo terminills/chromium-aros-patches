@@ -1,0 +1,72 @@
+From 357bff460a4fe0bac9bf41a2b24f7e4d7ca52a6f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 01:48:59 -0500
+Subject: [PATCH 392/638] [AROS] Refresh mutable software SharedImages
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: candidate-fix
+
+OBSERVED: Runtime 33 proved Viz reads live, changing SharedMemoryImageBacking pixels while the software-composited child viewport remains frozen white.
+
+FIX_REASON: Do not cache an immutable SkImage wrapper for mutable AROS software SharedImages. Recreate the wrapper per read lock so Skia receives a fresh unique image identity and cannot reuse stale sampling state.
+
+SCOPE: AROS software SharedImage SkImage caching only; legacy shared bitmaps and other platforms retain existing caching behavior.
+
+VALIDATION: Display resource provider compiles in out/aros-v8-library and git diff --check passes; full link and solid-renderer runtime 34 follow.
+
+AI_DECISION_CHAIN: runtime 33
+---
+ .../display_resource_provider_software.cc     | 25 ++++++++++++++-----
+ 1 file changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/components/viz/service/display/display_resource_provider_software.cc b/components/viz/service/display/display_resource_provider_software.cc
+index 771f03b66f..c4d2342da2 100644
+--- a/components/viz/service/display/display_resource_provider_software.cc
++++ b/components/viz/service/display/display_resource_provider_software.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/feature_list.h"
+ #include "base/synchronization/waitable_event.h"
++#include "build/build_config.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/service/display/shared_bitmap_manager.h"
+ #include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
+@@ -170,11 +171,22 @@ DisplayResourceProviderSoftware::ScopedReadLockSkImage::ScopedReadLockSkImage(
+   }
+   DCHECK(!resource->is_gpu_resource_type());
+ 
+-  // Use cached SkImage if possible.
+-  auto it = resource_provider_->resource_sk_images_.find(resource_id);
+-  if (it != resource_provider_->resource_sk_images_.end()) {
+-    sk_image_ = it->second;
+-    return;
++  // Use cached SkImage if possible. AROS software SharedImages keep the same
++  // resource identity while raster updates mutate the shared pixmap. Reusing
++  // the immutable SkImage wrapper would also reuse its Skia unique identity,
++  // allowing stale sampling caches to hide the updated pixels.
++#if BUILDFLAG(IS_AROS)
++  const bool can_cache_sk_image =
++      !resource->transferable.mailbox_holder.mailbox.IsSharedImage();
++#else
++  const bool can_cache_sk_image = true;
++#endif
++  if (can_cache_sk_image) {
++    auto it = resource_provider_->resource_sk_images_.find(resource_id);
++    if (it != resource_provider_->resource_sk_images_.end()) {
++      sk_image_ = it->second;
++      return;
++    }
+   }
+ 
+   auto si_image_it =
+@@ -190,7 +202,8 @@ DisplayResourceProviderSoftware::ScopedReadLockSkImage::ScopedReadLockSkImage(
+   } else if (si_image_it != resource_provider->resource_shared_images_.end()) {
+     sk_image_ = SkImages::RasterFromPixmap(
+         si_image_it->second->read_access->pixmap(), nullptr, nullptr);
+-    resource_provider_->resource_sk_images_[resource_id] = sk_image_;
++    if (can_cache_sk_image)
++      resource_provider_->resource_sk_images_[resource_id] = sk_image_;
+   } else {
+     // If a CompositorFrameSink is destroyed, it destroys all SharedBitmapIds
+     // that it registered. In this case, a CompositorFrame can be drawn with

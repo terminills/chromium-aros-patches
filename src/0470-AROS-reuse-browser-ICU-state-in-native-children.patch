@@ -1,0 +1,37 @@
+From a648f0514f41d14d598209e0980c6047f8344b70 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 15:02:43 -0500
+Subject: [PATCH 470/638] AROS: reuse browser ICU state in native children
+
+AROS child processes share the browser address space and ICU runtime. Initialize ICU once in the browser and let native children reuse that established global state instead of violating ICU's one-time initialization contract.
+
+Run 71 proved the preceding PartitionAlloc fix and stopped the GPU child at the duplicate InitializeICU guard.
+
+
+
+---
+ content/app/content_main_runner_impl.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index 7de0c987df..0272103e39 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -971,8 +971,17 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+ // so that it is available before Content::main() is called.
+ // https://crbug.com/1418738
+ #if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_AROS)
++  // Native AROS child processes share the browser's address space and ICU
++  // runtime. The browser initializes that global runtime before it can launch
++  // a child, so repeating InitializeICU() in a child is both unnecessary and
++  // rejected by ICU's one-time initialization contract.
++  if (process_type.empty() && !base::i18n::InitializeICU())
++    return TerminateForFatalInitializationError();
++#else
+   if (!base::i18n::InitializeICU())
+     return TerminateForFatalInitializationError();
++#endif
+ #endif  // BUILDFLAG(IS_ANDROID) && (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE)
+ 
+   LoadV8SnapshotIfNeeded(command_line, process_type);

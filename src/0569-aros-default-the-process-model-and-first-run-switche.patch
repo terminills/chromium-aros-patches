@@ -1,0 +1,84 @@
+From f662f385f9d7bcb0278fd609d55864d814bf6ce9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 12:08:49 -0500
+Subject: [PATCH 569/638] aros: default the process model and first-run
+ switches when none are given
+
+---
+ chrome/app/chrome_main_delegate.cc | 11 +++++++++++
+ content/app/content_main.cc        | 26 ++++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 0e2f6055ff..050e70dc12 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1350,6 +1350,17 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+     LOG(INFO) << "[Chromium:AROS] defaulting to software compositing; pass "
+                  "--aros-enable-gpu-compositing to test GPU compositing";
+   }
++  // No first-run flow or default-browser prompt on AROS: there is no other
++  // browser to import from and no system registration to check, and a launch
++  // from Workbench or OpenURL has nobody to answer the dialogs.
++  if (is_browser) {
++    if (!command_line.HasSwitch(switches::kNoFirstRun))
++      base::CommandLine::ForCurrentProcess()->AppendSwitch(
++          switches::kNoFirstRun);
++    if (!command_line.HasSwitch(switches::kNoDefaultBrowserCheck))
++      base::CommandLine::ForCurrentProcess()->AppendSwitch(
++          switches::kNoDefaultBrowserCheck);
++  }
+ #endif
+ #if BUILDFLAG(IS_WIN)
+   const bool pipes_are_specified_explicitly =
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 8de89ae9cc..ddb66958df 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -55,6 +55,8 @@
+ 
+ #include "base/no_destructor.h"
+ #include "base/synchronization/lock.h"
++#include "sandbox/policy/switches.h"
++#include "ui/gl/gl_switches.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -133,6 +135,26 @@ bool WasContentMainInitializedForCurrentProcess() {
+   return !inserted;
+ }
+ 
++// AROS has no multi-process child launcher and no sandbox, and the GPU
++// process path is not wired to a display driver yet. A launch that does not
++// spell out the process model (a Workbench icon, OpenURL, a bare Shell line)
++// would try to spawn children and fail, so default it here instead of in
++// every launcher script. Explicit switches, and children of an explicit
++// multi-process launch (--type=...), are left alone.
++void ApplyArosProcessModelDefaults(base::CommandLine* command_line) {
++  if (command_line->HasSwitch(switches::kProcessType))
++    return;
++
++  if (!command_line->HasSwitch(switches::kSingleProcess))
++    command_line->AppendSwitch(switches::kSingleProcess);
++  if (!command_line->HasSwitch(sandbox::policy::switches::kNoSandbox))
++    command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
++  // A caller that picked a GL implementation wants the GPU path.
++  if (!command_line->HasSwitch(switches::kDisableGpu) &&
++      !command_line->HasSwitch(switches::kUseGL))
++    command_line->AppendSwitch(switches::kDisableGpu);
++}
++
+ #endif
+ 
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+@@ -291,6 +313,10 @@ int ContentMainInitialize(ContentMainParams params,
+ 
+     base::CommandLine::Init(argc, argv);
+ 
++#if BUILDFLAG(IS_AROS)
++    ApplyArosProcessModelDefaults(base::CommandLine::ForCurrentProcess());
++#endif
++
+ #if BUILDFLAG(IS_POSIX)
+     PopulateFileDescriptorStoreFromFdTable();
+ #endif

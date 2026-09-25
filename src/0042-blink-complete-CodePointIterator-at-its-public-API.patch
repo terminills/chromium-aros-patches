@@ -1,0 +1,57 @@
+From 23464ec4650bc2afe4bdee4bf2dbffc9db27c876 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:56:57 -0500
+Subject: [PATCH 042/638] blink: complete CodePointIterator at its public API
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: StringView and String publicly return CodePointIterator by value while exposing only a forward declaration, so GCC range detection fails in every generated consumer.
+
+FIX_REASON: Include the iterator definition in string_view.h, the owning begin/end declaration boundary, and remove the earlier atomic_string-only stopgap.
+
+SCOPE: string_view.h and atomic_string.cc iterator includes
+
+VALIDATION: atomic_string plus three previously failing generated base_blink Mojo objects compile.
+
+RISK: low; header completeness broadens compile visibility without changing iterator behavior or ABI.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/blink/renderer/platform/wtf/text/atomic_string.cc | 1 -
+ third_party/blink/renderer/platform/wtf/text/string_view.h    | 2 +-
+ 2 files changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/third_party/blink/renderer/platform/wtf/text/atomic_string.cc b/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
+index 3b87a00d14..0b94246284 100644
+--- a/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
++++ b/third_party/blink/renderer/platform/wtf/text/atomic_string.cc
+@@ -28,7 +28,6 @@
+ #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+ #include "third_party/blink/renderer/platform/wtf/text/atomic_string_table.h"
+ #include "third_party/blink/renderer/platform/wtf/text/case_map.h"
+-#include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
+ #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
+ 
+diff --git a/third_party/blink/renderer/platform/wtf/text/string_view.h b/third_party/blink/renderer/platform/wtf/text/string_view.h
+index caaa90f381..5b18f14114 100644
+--- a/third_party/blink/renderer/platform/wtf/text/string_view.h
++++ b/third_party/blink/renderer/platform/wtf/text/string_view.h
+@@ -13,6 +13,7 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+ #include "third_party/blink/renderer/platform/wtf/get_ptr.h"
++#include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
+ 
+ #if DCHECK_IS_ON()
+@@ -22,7 +23,6 @@
+ namespace WTF {
+ 
+ class AtomicString;
+-class CodePointIterator;
+ class String;
+ 
+ enum UTF8ConversionMode {

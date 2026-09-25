@@ -1,0 +1,62 @@
+From a34666561371287dbbaaf75230348a0fd51c5fd5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:12:09 -0500
+Subject: [PATCH 090/638] [AROS] Define no-device audio manager baseline
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Chromium audio-manager construction is explicit and buildable on AROS.
+ROOT_CAUSE: media::CreateAudioManager had no AROS platform definition, while Linux's factory imports ALSA, PulseAudio, and CRAS policy that AROS does not provide.
+FIX_REASON: Select Chromium's existing FakeAudioManager as a zero-device bring-up baseline; a native AHI manager can replace this AROS source without changing the factory contract.
+SCOPE: Media audio source selection and AROS platform factory.
+VALIDATION: Filtered GN regeneration succeeded; audio_manager_aros.o and audio.stamp build; nm confirms media::CreateAudioManager.
+RISK: Playback, capture, device enumeration, and hot-change notifications remain unavailable until the AHI backend lands.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ media/audio/BUILD.gn                   |  4 ++++
+ media/audio/aros/audio_manager_aros.cc | 21 +++++++++++++++++++++
+ 2 files changed, 25 insertions(+)
+ create mode 100644 media/audio/aros/audio_manager_aros.cc
+
+diff --git a/media/audio/BUILD.gn b/media/audio/BUILD.gn
+index 90e093cd2d..7a5f029a01 100644
+--- a/media/audio/BUILD.gn
++++ b/media/audio/BUILD.gn
+@@ -274,6 +274,10 @@ source_set("audio") {
+     sources += [ "linux/audio_manager_linux.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "aros/audio_manager_aros.cc" ]
++  }
++
+   if (use_alsa) {
+     libs += [ "asound" ]
+     sources += [
+diff --git a/media/audio/aros/audio_manager_aros.cc b/media/audio/aros/audio_manager_aros.cc
+new file mode 100644
+index 0000000000..bca115419d
+--- /dev/null
++++ b/media/audio/aros/audio_manager_aros.cc
+@@ -0,0 +1,21 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "media/audio/audio_manager.h"
++
++#include <memory>
++#include <utility>
++
++#include "media/audio/fake_audio_manager.h"
++
++namespace media {
++
++std::unique_ptr<AudioManager> CreateAudioManager(
++    std::unique_ptr<AudioThread> audio_thread,
++    AudioLogFactory* audio_log_factory) {
++  return std::make_unique<FakeAudioManager>(std::move(audio_thread),
++                                            audio_log_factory);
++}
++
++}  // namespace media

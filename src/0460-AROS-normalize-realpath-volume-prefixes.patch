@@ -1,0 +1,48 @@
+From a9e8a17cce3645229ba8b5571acbad1117cd6d57 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 07:32:02 -0500
+Subject: [PATCH 460/638] AROS: normalize realpath volume prefixes
+
+Convert only realpath results shaped like /NAME:/path back to native NAME:/path. This prevents DOS requesters for a synthetic /NAME volume while preserving ordinary POSIX absolute paths.
+
+
+
+---
+ base/files/file_util_posix.cc | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 6707306b87..b64044cac8 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -24,6 +24,7 @@
+ 
+ #include <bit>
+ #include <optional>
++#include <string_view>
+ 
+ #include "base/base_export.h"
+ #include "base/base_switches.h"
+@@ -384,6 +385,22 @@ FilePath MakeAbsoluteFilePath(const FilePath& input) {
+   char full_path[PATH_MAX];
+   if (realpath(input.value().c_str(), full_path) == nullptr)
+     return FilePath();
++#if BUILDFLAG(IS_AROS)
++  // AROS libc may spell a native assign path such as "T:profile" as
++  // "/T:/profile".  That hybrid is not a native AmigaDOS path: APIs below the
++  // POSIX compatibility layer interpret "/T" as the volume name and display a
++  // requester.  Remove only the synthetic slash before an assign delimiter;
++  // ordinary POSIX absolute paths such as "/tmp/profile" remain unchanged.
++  const std::string_view resolved(full_path);
++  if (resolved.size() > 2 && resolved.front() == '/') {
++    const size_t colon = resolved.find(':', 1);
++    const size_t separator = resolved.find('/', 1);
++    if (colon != std::string_view::npos &&
++        (separator == std::string_view::npos || colon < separator)) {
++      return FilePath(std::string(resolved.substr(1)));
++    }
++  }
++#endif
+   return FilePath(full_path);
+ }
+ 

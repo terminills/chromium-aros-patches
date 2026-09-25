@@ -1,0 +1,296 @@
+From e784d6c915a24f1df76524bfa2c79316e1afcf1e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:31:43 -0500
+Subject: [PATCH 179/638] chrome: keep crash surfaces local on AROS [chromium]
+ [aros]
+
+Statement:
+Chromium portable crash UI, consent, and enterprise interfaces pulled Crashpad storage and upload machinery into AROS even though the platform uses debug.resource as its baseline and OPAL for expanded context.
+
+Decision:
+Retain crash-key, chrome://crashes, consent, and enterprise API shapes. Back the upload list with the local text log, make remote enterprise forwarding inert, and exclude Crashpad-only source and dependency edges on AROS.
+
+Evidence:
+The generated Chrome project graph identified every remaining Crashpad route. The affected browser, upload-list, enterprise, and Google settings objects compile; complete crash browser/upload libraries archive successfully. A final Ninja query of chrome returns no components/crash/core/app or third_party/crashpad dependency.
+
+Chain:
+
+ACD-chromium-aros-native-crash-reporting
+---
+ chrome/browser/BUILD.gn                            |  4 +++-
+ chrome/browser/crash_upload_list/BUILD.gn          |  2 +-
+ .../browser/crash_upload_list/crash_upload_list.cc | 14 ++++++++++++--
+ .../reporting/browser_crash_event_router.cc        |  4 ++--
+ .../reporting/crash_reporting_context.cc           |  7 +++++--
+ .../connectors/reporting/crash_reporting_context.h |  6 +++---
+ chrome/browser/google/BUILD.gn                     |  2 +-
+ .../browser/google/google_update_settings_posix.cc |  8 +++++---
+ chrome/browser/ui/BUILD.gn                         |  2 +-
+ chrome/browser/ui/views/first_run_dialog.cc        |  1 -
+ chrome/common/BUILD.gn                             |  2 +-
+ components/crash/core/browser/BUILD.gn             |  2 +-
+ 12 files changed, 35 insertions(+), 19 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index f774ecfb91..12548128ea 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -4662,13 +4662,15 @@ static_library("browser") {
+       "//courgette:courgette_lib",
+       "//services/device/public/cpp/bluetooth",
+       "//services/device/public/cpp/hid",
+-      "//third_party/crashpad/crashpad/client:common",
+       "//third_party/zxcvbn-cpp",
+       "//ui/webui/resources/cr_components/app_management:mojo_bindings",
+       "//ui/webui/resources/cr_components/help_bubble:mojo_bindings",
+       "//ui/webui/resources/cr_components/history_clusters:mojo_bindings",
+       "//ui/webui/resources/cr_components/history_embeddings:mojo_bindings",
+     ]
++    if (!is_aros) {
++      deps += [ "//third_party/crashpad/crashpad/client:common" ]
++    }
+     public_deps += [
+       "//chrome/common:buildflags",
+       "//extensions/buildflags",
+diff --git a/chrome/browser/crash_upload_list/BUILD.gn b/chrome/browser/crash_upload_list/BUILD.gn
+index 93092a6064..acc5258fdc 100644
+--- a/chrome/browser/crash_upload_list/BUILD.gn
++++ b/chrome/browser/crash_upload_list/BUILD.gn
+@@ -43,7 +43,7 @@ static_library("crash_upload_list") {
+     deps += [ "//chrome/android:chrome_jni_headers" ]
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [ "//components/crash/core/app:app" ]
+   }
+ 
+diff --git a/chrome/browser/crash_upload_list/crash_upload_list.cc b/chrome/browser/crash_upload_list/crash_upload_list.cc
+index fe32c48973..e5c64295b6 100644
+--- a/chrome/browser/crash_upload_list/crash_upload_list.cc
++++ b/chrome/browser/crash_upload_list/crash_upload_list.cc
+@@ -14,7 +14,9 @@
+ #include "base/files/file_path.h"
+ #include "base/path_service.h"
+ #include "chrome/common/chrome_paths.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crashpad.h"
++#endif
+ #include "components/upload_list/crash_upload_list.h"
+ #endif
+ 
+@@ -23,13 +25,16 @@
+ #include "chrome/browser/crash_upload_list/crash_upload_list_android.h"
+ #endif
+ 
+-#if !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/browser/crash_upload_list_crashpad.h"
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
++#include "components/upload_list/text_log_upload_list.h"
++#endif
++
+ #if BUILDFLAG(IS_LINUX)
+ #include "components/upload_list/combining_upload_list.h"
+-#include "components/upload_list/text_log_upload_list.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -46,6 +51,11 @@ scoped_refptr<UploadList> CreateCrashUploadList() {
+   return new CrashUploadListAndroid(upload_log_path);
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return new CrashUploadListFuchsia();
++#elif BUILDFLAG(IS_AROS)
++  base::FilePath crash_dir_path;
++  base::PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dir_path);
++  return base::MakeRefCounted<TextLogUploadList>(
++      crash_dir_path.AppendASCII(CrashUploadList::kReporterLogFilename));
+ #elif BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+ 
+   base::FilePath crash_dir_path;
+diff --git a/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc b/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc
+index d051b6d32b..6dd0f60f4e 100644
+--- a/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc
++++ b/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc
+@@ -11,7 +11,7 @@ namespace enterprise_connectors {
+ 
+ BrowserCrashEventRouter::BrowserCrashEventRouter(
+     content::BrowserContext* context) {
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+   CrashReportingContext* crash_reporting_context =
+       CrashReportingContext::GetInstance();
+   Profile* profile = Profile::FromBrowserContext(context);
+@@ -21,7 +21,7 @@ BrowserCrashEventRouter::BrowserCrashEventRouter(
+ }
+ 
+ BrowserCrashEventRouter::~BrowserCrashEventRouter() {
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+   CrashReportingContext* crash_reporting_context =
+       CrashReportingContext::GetInstance();
+   crash_reporting_context->RemoveProfile(this);
+diff --git a/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.cc b/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.cc
+index 35a0399f13..6dbfadf5ae 100644
+--- a/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.cc
++++ b/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.cc
+@@ -12,13 +12,15 @@
+ #include "chrome/browser/enterprise/connectors/reporting/reporting_service_settings.h"
+ #include "chrome/browser/policy/chrome_browser_policy_connector.h"
+ #include "chrome/common/channel_info.h"
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crashpad.h"
++#endif
+ #include "components/prefs/pref_service.h"
+ #include "components/version_info/version_info.h"
+ 
+ namespace enterprise_connectors {
+ 
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+ 
+ namespace {
+ 
+@@ -253,7 +255,8 @@ void CrashReportingContext::RemoveProfile(BrowserCrashEventRouter* router) {
+   }
+ }
+ 
+-#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) &&
++        // !BUILDFLAG(IS_AROS)
+ 
+ CrashReportingContext::~CrashReportingContext() = default;
+ 
+diff --git a/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.h b/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.h
+index 032cc642ab..443d7b90c8 100644
+--- a/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.h
++++ b/chrome/browser/enterprise/connectors/reporting/crash_reporting_context.h
+@@ -10,7 +10,7 @@
+ #include "chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.h"
+ #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
+ 
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+ #include "third_party/crashpad/crashpad/client/crash_report_database.h"
+ #endif
+ 
+@@ -29,7 +29,7 @@ class CrashReportingContext
+   CrashReportingContext operator=(CrashReportingContext&&) = delete;
+   ~CrashReportingContext() override;
+ 
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+   static CrashReportingContext* GetInstance();
+ 
+   void AddProfile(BrowserCrashEventRouter* router, Profile* profile);
+@@ -51,7 +51,7 @@ class CrashReportingContext
+ #endif
+ };
+ 
+-#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS)
++#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_AROS)
+ 
+ // Utility function to parse reports from a crash database that were
+ // created past a given timestamp. Included in header for testing.
+diff --git a/chrome/browser/google/BUILD.gn b/chrome/browser/google/BUILD.gn
+index f139ba0bbd..fc1eb71523 100644
+--- a/chrome/browser/google/BUILD.gn
++++ b/chrome/browser/google/BUILD.gn
+@@ -71,7 +71,7 @@ source_set("google") {
+   if (is_posix || is_fuchsia) {
+     sources += [ "google_update_settings_posix.cc" ]
+   }
+-  if (is_posix) {
++  if (is_posix && !is_aros) {
+     deps += [ "//components/crash/core/app" ]
+   }
+ }
+diff --git a/chrome/browser/google/google_update_settings_posix.cc b/chrome/browser/google/google_update_settings_posix.cc
+index 88c3894464..03c5981925 100644
+--- a/chrome/browser/google/google_update_settings_posix.cc
++++ b/chrome/browser/google/google_update_settings_posix.cc
+@@ -14,7 +14,9 @@
+ #include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
+ #include "chrome/common/chrome_paths.h"
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+ #include "components/crash/core/app/crashpad.h"
++#endif
+ 
+ namespace {
+ 
+@@ -57,9 +59,8 @@ GoogleUpdateSettings::CollectStatsConsentTaskRunner() {
+ // static
+ bool GoogleUpdateSettings::GetCollectStatsConsentFromDir(
+     const base::FilePath& consent_dir) {
+-  if (!base::DirectoryExists(consent_dir)) {
++  if (!base::DirectoryExists(consent_dir))
+     return false;
+-  }
+   base::FilePath consent_file = consent_dir.Append(kConsentToSendStats);
+ 
+   std::string tmp_guid;
+@@ -88,8 +89,9 @@ bool GoogleUpdateSettings::SetCollectStatsConsent(bool consented) {
+ 
+   base::FilePath consent_dir;
+   base::PathService::Get(chrome::DIR_USER_DATA, &consent_dir);
+-  if (!base::DirectoryExists(consent_dir))
++  if (!base::DirectoryExists(consent_dir)) {
+     return false;
++  }
+ 
+   base::AutoLock lock(g_posix_client_id_lock.Get());
+ 
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 3fe3d6eddb..6527710b6f 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -787,7 +787,7 @@ static_library("ui") {
+     ]
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [ "//components/crash/core/app" ]
+   }
+ 
+diff --git a/chrome/browser/ui/views/first_run_dialog.cc b/chrome/browser/ui/views/first_run_dialog.cc
+index 2dac3817f9..67f1d0ba12 100644
+--- a/chrome/browser/ui/views/first_run_dialog.cc
++++ b/chrome/browser/ui/views/first_run_dialog.cc
+@@ -22,7 +22,6 @@
+ #include "chrome/common/url_constants.h"
+ #include "chrome/grit/branded_strings.h"
+ #include "chrome/grit/generated_resources.h"
+-#include "components/crash/core/app/crashpad.h"
+ #include "components/strings/grit/components_strings.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
+index ff0f277322..eb1d826d7c 100644
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -352,7 +352,7 @@ static_library("common_lib") {
+     ]
+   }
+ 
+-  if (!is_fuchsia) {
++  if (!is_fuchsia && !is_aros) {
+     deps += [ "//components/crash/core/app" ]
+   }
+ 
+diff --git a/components/crash/core/browser/BUILD.gn b/components/crash/core/browser/BUILD.gn
+index 5415708c4f..4345a9c51c 100644
+--- a/components/crash/core/browser/BUILD.gn
++++ b/components/crash/core/browser/BUILD.gn
+@@ -14,7 +14,7 @@ static_library("browser") {
+     "//components/upload_list",
+   ]
+ 
+-  if (!is_chromeos && !is_fuchsia) {
++  if (!is_chromeos && !is_fuchsia && !is_aros) {
+     sources += [
+       "crash_upload_list_crashpad.cc",
+       "crash_upload_list_crashpad.h",

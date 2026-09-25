@@ -1,0 +1,246 @@
+From 758624649ee779a6bc868b42c46df21fde7baf3b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 06:27:29 -0500
+Subject: [PATCH 403/638] [AROS] Trace child begin-main-frame handshake
+
+Runtime46 creates the renderer child and browser window but never reaches child WillCommit. Add bounded per-instance markers around impl begin-main-frame send/post, main-thread receipt and update stages, WillCommit, ready-to-commit return, and scheduled commit.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: diagnostic
+
+AI_OBSERVED: Child tile manager exists and its initial empty prepare completes, while the first child compositor commit remains absent.
+
+AI_FIX_REASON: Distinguish a lost posted task, renderer-main-thread stall, WillCommit stall, impl return loss, and scheduler commit stall.
+
+AI_SCOPE: ProxyImpl and ProxyMain cc/h only.
+
+AI_VALIDATION: git diff --check; build and hosted runtime pending by design.
+
+AI_DECISION_CHAIN: runtime46 no WillCommit -> impl-send -> main-receive -> main update -> WillCommit -> impl-ready -> scheduled commit.
+---
+ cc/trees/proxy_impl.cc | 35 +++++++++++++++++++++++++++++++
+ cc/trees/proxy_impl.h  |  8 +++++++
+ cc/trees/proxy_main.cc | 47 ++++++++++++++++++++++++++++++++++++++++++
+ cc/trees/proxy_main.h  |  7 +++++++
+ 4 files changed, 97 insertions(+)
+
+diff --git a/cc/trees/proxy_impl.cc b/cc/trees/proxy_impl.cc
+index c43812419e..0805098f74 100644
+--- a/cc/trees/proxy_impl.cc
++++ b/cc/trees/proxy_impl.cc
+@@ -334,6 +334,17 @@ void ProxyImpl::NotifyReadyToCommitOnImpl(
+     bool scroll_and_viewport_changes_synced,
+     CommitTimestamps* commit_timestamps,
+     bool commit_timeout) {
++#if BUILDFLAG(IS_AROS)
++  ++aros_ready_commit_probe_count_;
++  if (aros_ready_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] impl-ready-to-commit proxy=" << this
++               << " seq=" << aros_ready_commit_probe_count_
++               << " source_frame=" << commit_state->source_frame_number
++               << " commit_args_sequence="
++               << commit_args.frame_id.sequence_number
++               << " host_impl=" << host_impl_.get();
++  }
++#endif
+   {
+     TRACE_EVENT_WITH_FLOW0(
+         "viz,benchmark", "MainFrame.NotifyReadyToCommitOnImpl",
+@@ -690,6 +701,16 @@ void ProxyImpl::WillNotReceiveBeginFrame() {
+ void ProxyImpl::ScheduledActionSendBeginMainFrame(
+     const viz::BeginFrameArgs& args) {
+   DCHECK(IsImplThread());
++#if BUILDFLAG(IS_AROS)
++  ++aros_begin_main_frame_probe_count_;
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] impl-send proxy=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_
++               << " frame_source=" << args.frame_id.source_id
++               << " frame_sequence=" << args.frame_id.sequence_number
++               << " host_impl=" << host_impl_.get();
++  }
++#endif
+ 
+   benchmark_instrumentation::ScopedBeginFrameTask begin_frame_task(
+       benchmark_instrumentation::kSendBeginFrame,
+@@ -731,6 +752,12 @@ void ProxyImpl::ScheduledActionSendBeginMainFrame(
+       FROM_HERE,
+       base::BindOnce(&ProxyMain::BeginMainFrame, proxy_main_weak_ptr_,
+                      std::move(begin_main_frame_state)));
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] impl-posted proxy=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_;
++  }
++#endif
+   host_impl_->DidSendBeginMainFrame(args);
+   devtools_instrumentation::DidRequestMainThreadFrame(layer_tree_host_id_);
+ }
+@@ -754,6 +781,14 @@ DrawResult ProxyImpl::ScheduledActionDrawForced() {
+ }
+ 
+ void ProxyImpl::ScheduledActionCommit() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_ready_commit_probe_count_ > 0 &&
++      aros_ready_commit_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] impl-scheduled-commit proxy=" << this
++               << " seq=" << aros_ready_commit_probe_count_
++               << " data_for_commit=" << data_for_commit_.get();
++  }
++#endif
+   {
+     TRACE_EVENT_WITH_FLOW0(
+         "viz,benchmark", "MainFrame.BeginCommit",
+diff --git a/cc/trees/proxy_impl.h b/cc/trees/proxy_impl.h
+index d78c878b83..b4af00da14 100644
+--- a/cc/trees/proxy_impl.h
++++ b/cc/trees/proxy_impl.h
+@@ -5,6 +5,8 @@
+ #ifndef CC_TREES_PROXY_IMPL_H_
+ #define CC_TREES_PROXY_IMPL_H_
+ 
++#include <stdint.h>
++
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -12,6 +14,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
+ #include "cc/base/completion_event.h"
+ #include "cc/base/delayed_unique_notifier.h"
+ #include "cc/input/browser_controls_state.h"
+@@ -226,6 +229,11 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
+   // Either thread can request deferring BeginMainFrame; keep track of both.
+   bool main_wants_defer_begin_main_frame_ = false;
+   bool impl_wants_defer_begin_main_frame_ = false;
++
++#if BUILDFLAG(IS_AROS)
++  uint32_t aros_begin_main_frame_probe_count_ = 0;
++  uint32_t aros_ready_commit_probe_count_ = 0;
++#endif
+ };
+ 
+ }  // namespace cc
+diff --git a/cc/trees/proxy_main.cc b/cc/trees/proxy_main.cc
+index b0b9daa95c..7f195b626b 100644
+--- a/cc/trees/proxy_main.cc
++++ b/cc/trees/proxy_main.cc
+@@ -130,6 +130,19 @@ void ProxyMain::BeginMainFrame(
+     std::unique_ptr<BeginMainFrameAndCommitState> begin_main_frame_state) {
+   DCHECK(IsMainThread());
+   DCHECK_EQ(NO_PIPELINE_STAGE, current_pipeline_stage_);
++#if BUILDFLAG(IS_AROS)
++  ++aros_begin_main_frame_probe_count_;
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] main-receive proxy_main=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_
++               << " frame_source="
++               << begin_main_frame_state->begin_frame_args.frame_id.source_id
++               << " frame_sequence="
++               << begin_main_frame_state->begin_frame_args.frame_id
++                      .sequence_number
++               << " visible=" << layer_tree_host_->IsVisible();
++  }
++#endif
+ 
+   {
+     TRACE_EVENT_WITH_FLOW0(
+@@ -262,6 +275,12 @@ void ProxyMain::BeginMainFrame(
+   // See LayerTreeHostClient::BeginMainFrame for more documentation on
+   // what this does.
+   layer_tree_host_->BeginMainFrame(frame_args);
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] main-after-client-begin proxy_main=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_;
++  }
++#endif
+ 
+   // Updates cc animations on the main-thread. This is necessary in order
+   // to track animation states such that they are cleaned up properly.
+@@ -281,6 +300,13 @@ void ProxyMain::BeginMainFrame(
+   // See LayerTreeHostClient::MainFrameUpdate for more documentation on
+   // what this does.
+   layer_tree_host_->RequestMainFrameUpdate(true /* report_cc_metrics */);
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] main-after-update proxy_main=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_
++               << " final_stage=" << final_pipeline_stage_;
++  }
++#endif
+ 
+   // At this point the main frame may have deferred main frame updates to
+   // avoid committing right now, or may have allowed commits to go through. So
+@@ -367,8 +393,22 @@ void ProxyMain::BeginMainFrame(
+   bool has_updates = (final_pipeline_stage_ == COMMIT_PIPELINE_STAGE);
+   // Must get unsafe_state before calling WillCommit() to avoid deadlock.
+   auto& unsafe_state = layer_tree_host_->GetUnsafeStateForCommit();
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] main-before-will-commit proxy_main=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_
++               << " has_updates=" << has_updates;
++  }
++#endif
+   std::unique_ptr<CommitState> commit_state = layer_tree_host_->WillCommit(
+       std::move(completion_event_ptr), has_updates);
++#if BUILDFLAG(IS_AROS)
++  if (aros_begin_main_frame_probe_count_ <= 16) {
++    LOG(ERROR) << "[AROS_BMF] main-after-will-commit proxy_main=" << this
++               << " seq=" << aros_begin_main_frame_probe_count_
++               << " commit_state=" << commit_state.get();
++  }
++#endif
+ 
+   DCHECK_EQ(has_updates, (bool)commit_state.get());
+   if (commit_state.get()) {
+@@ -460,6 +500,13 @@ void ProxyMain::BeginMainFrame(
+             std::move(commit_state), &unsafe_state, begin_main_frame_start_time,
+             frame_args, scroll_and_viewport_changes_synced,
+             blocking ? &commit_timestamps : nullptr, commit_timeout));
++#if BUILDFLAG(IS_AROS)
++    if (aros_begin_main_frame_probe_count_ <= 16) {
++      LOG(ERROR) << "[AROS_BMF] main-posted-ready proxy_main=" << this
++                 << " seq=" << aros_begin_main_frame_probe_count_
++                 << " blocking=" << blocking;
++    }
++#endif
+     if (blocking)
+       layer_tree_host_->WaitForProtectedSequenceCompletion();
+   }
+diff --git a/cc/trees/proxy_main.h b/cc/trees/proxy_main.h
+index b4773c3a8c..52920e290a 100644
+--- a/cc/trees/proxy_main.h
++++ b/cc/trees/proxy_main.h
+@@ -5,12 +5,15 @@
+ #ifndef CC_TREES_PROXY_MAIN_H_
+ #define CC_TREES_PROXY_MAIN_H_
+ 
++#include <stdint.h>
++
+ #include <memory>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "cc/cc_export.h"
+ #include "cc/input/browser_controls_state.h"
+ #include "cc/trees/layer_tree_host.h"
+@@ -193,6 +196,10 @@ class CC_EXPORT ProxyMain : public Proxy {
+ 
+   base::OnceClosure synchronous_composite_for_test_callback_;
+ 
++#if BUILDFLAG(IS_AROS)
++  uint32_t aros_begin_main_frame_probe_count_ = 0;
++#endif
++
+   // WeakPtrs generated by this factory will be invalidated when
+   // LayerTreeFrameSink is released.
+   base::WeakPtrFactory<ProxyMain> frame_sink_bound_weak_factory_{this};

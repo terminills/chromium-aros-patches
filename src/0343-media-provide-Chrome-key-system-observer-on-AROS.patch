@@ -1,0 +1,35 @@
+From ec1eb3f1a9b9e5d994f670bc2d6ccc7c039a8bf8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:53:40 -0500
+Subject: [PATCH 343/638] media: provide Chrome key-system observer on AROS
+
+Compile the portable Chrome renderer key-system observer on AROS so CEF's renderer client can register CDM support without an unresolved GetChromeKeySystems seam.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link contained exactly one unresolved GetChromeKeySystems symbol
+
+AI_LIMITATIONS: CDM runtime behavior and CEF native link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ chrome/renderer/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index fd99154d77..34e13eacf6 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -313,7 +313,7 @@ static_library("renderer") {
+     deps += [ "//third_party/widevine/cdm:headers" ]
+   }
+ 
+-  if (enable_library_cdms || is_win || is_android) {
++  if (enable_library_cdms || is_win || is_android || is_aros) {
+     sources += [
+       "media/chrome_key_systems.cc",
+       "media/chrome_key_systems.h",

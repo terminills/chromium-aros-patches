@@ -1,0 +1,418 @@
+From 77a2d01c1ecc8548620a1d0edbd4910e327f9e86 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 10:17:00 -0500
+Subject: [PATCH 361/638] [AROS] Define transferable Mojo channel endpoints
+
+AI_PHASE: chromium-process-model
+AI_STATUS: mojo-platform-endpoint-foundation
+ROOT_CAUSE: PlatformChannel returned invalid endpoints on AROS because the POSIX fd model cannot represent task-owned Exec transport.
+FIX_REASON: Add a MEMF_PUBLIC two-ended channel identity, cross-Process atomic ownership, Mojo ABI encoding, and command-line endpoint transfer without fd remapping.
+SCOPE: mojo/public/c/system/platform_handle.h; mojo/public/cpp/platform/BUILD.gn; mojo/public/cpp/platform/aros_channel.{cc,h}; mojo/public/cpp/platform/platform_channel.cc; mojo/public/cpp/platform/platform_channel_endpoint.cc; mojo/public/cpp/platform/platform_handle.{cc,h}
+VALIDATION: Exact AROS mojo_cpp_platform archive compiles and links at -j32; first missing CHECK_GT include failure was isolated and corrected.
+RISK: This commit establishes endpoint identity and transfer only; MessagePort byte delivery is the next commit and NamedPlatformChannel remains unavailable.
+AI_DECISION_CHAIN: invalid socketpair stub -> shared address-space handle model -> MEMF_PUBLIC endpoint state -> Mojo platform ABI -> child command-line transfer.
+Job:
+---
+ mojo/public/c/system/platform_handle.h        |  5 ++
+ mojo/public/cpp/platform/BUILD.gn             |  5 ++
+ mojo/public/cpp/platform/aros_channel.cc      | 65 +++++++++++++++++++
+ mojo/public/cpp/platform/aros_channel.h       | 31 +++++++++
+ mojo/public/cpp/platform/platform_channel.cc  | 16 ++---
+ .../cpp/platform/platform_channel_endpoint.cc | 22 ++++++-
+ mojo/public/cpp/platform/platform_handle.cc   | 28 ++++++++
+ mojo/public/cpp/platform/platform_handle.h    | 17 ++++-
+ 8 files changed, 177 insertions(+), 12 deletions(-)
+ create mode 100644 mojo/public/cpp/platform/aros_channel.cc
+ create mode 100644 mojo/public/cpp/platform/aros_channel.h
+
+diff --git a/mojo/public/c/system/platform_handle.h b/mojo/public/c/system/platform_handle.h
+index b686ec870d..c31c6a9342 100644
+--- a/mojo/public/c/system/platform_handle.h
++++ b/mojo/public/c/system/platform_handle.h
+@@ -56,6 +56,11 @@ typedef uint32_t MojoPlatformHandleType;
+ #define MOJO_PLATFORM_HANDLE_TYPE_AROS_SHARED_MEMORY \
+   ((MojoPlatformHandleType)6)
+ 
++// The value represents one endpoint of an AROS Exec MessagePort channel. The
++// low bit selects the endpoint side; the remaining bits identify shared
++// MEMF_PUBLIC channel state. Only usable on AROS hosts.
++#define MOJO_PLATFORM_HANDLE_TYPE_AROS_CHANNEL ((MojoPlatformHandleType)7)
++
+ // |MojoPlatformHandle|: A handle to a native platform object.
+ //
+ //     |uint32_t struct_size|: The size of this structure. Used for versioning
+diff --git a/mojo/public/cpp/platform/BUILD.gn b/mojo/public/cpp/platform/BUILD.gn
+index c52582748f..76af3dc026 100644
+--- a/mojo/public/cpp/platform/BUILD.gn
++++ b/mojo/public/cpp/platform/BUILD.gn
+@@ -23,6 +23,11 @@ component("platform") {
+     "platform_handle.cc",
+   ]
+ 
++  if (is_aros) {
++    public += [ "aros_channel.h" ]
++    sources += [ "aros_channel.cc" ]
++  }
++
+   if (is_posix && !is_mac && !is_nacl) {
+     public += [ "socket_utils_posix.h" ]
+     if (is_aros) {
+diff --git a/mojo/public/cpp/platform/aros_channel.cc b/mojo/public/cpp/platform/aros_channel.cc
+new file mode 100644
+index 0000000000..59dd6172df
+--- /dev/null
++++ b/mojo/public/cpp/platform/aros_channel.cc
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "mojo/public/cpp/platform/aros_channel.h"
++
++#include <atomic>
++#include <new>
++
++#include <exec/memory.h>
++#include <proto/exec.h>
++
++#include "base/check.h"
++#include "base/check_op.h"
++
++namespace mojo {
++namespace {
++
++struct ArosChannelState {
++  static constexpr uint64_t kMagic = 0x41524f534d4f4a4fULL;
++
++  uint64_t magic = kMagic;
++  std::atomic_size_t references{2};
++};
++
++ArosChannelState* StateFor(ArosChannelHandle handle) {
++  return static_cast<ArosChannelState*>(handle.state);
++}
++
++bool IsValid(const ArosChannelState* state) {
++  return state && state->magic == ArosChannelState::kMagic;
++}
++
++}  // namespace
++
++std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair() {
++  void* storage = AllocMem(sizeof(ArosChannelState), MEMF_PUBLIC | MEMF_CLEAR);
++  if (!storage)
++    return {};
++  auto* state = new (storage) ArosChannelState;
++  return {{state, 0}, {state, 1}};
++}
++
++void RetainArosChannelHandle(ArosChannelHandle handle) {
++  ArosChannelState* state = StateFor(handle);
++  CHECK(IsValid(state));
++  state->references.fetch_add(1, std::memory_order_relaxed);
++}
++
++void ReleaseArosChannelHandle(ArosChannelHandle handle) {
++  ArosChannelState* state = StateFor(handle);
++  if (!state)
++    return;
++  CHECK(IsValid(state));
++  const size_t previous =
++      state->references.fetch_sub(1, std::memory_order_acq_rel);
++  CHECK_GT(previous, 0u);
++  if (previous != 1)
++    return;
++  state->magic = 0;
++  state->~ArosChannelState();
++  FreeMem(state, sizeof(ArosChannelState));
++}
++
++}  // namespace mojo
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+new file mode 100644
+index 0000000000..84cb58eaff
+--- /dev/null
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MOJO_PUBLIC_CPP_PLATFORM_AROS_CHANNEL_H_
++#define MOJO_PUBLIC_CPP_PLATFORM_AROS_CHANNEL_H_
++
++#include <cstdint>
++#include <utility>
++
++#include "base/component_export.h"
++
++namespace mojo {
++
++struct ArosChannelHandle {
++  void* state = nullptr;
++  uint8_t side = 0;
++
++  bool is_valid() const { return state != nullptr; }
++};
++
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair();
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void RetainArosChannelHandle(ArosChannelHandle handle);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void ReleaseArosChannelHandle(ArosChannelHandle handle);
++
++}  // namespace mojo
++
++#endif  // MOJO_PUBLIC_CPP_PLATFORM_AROS_CHANNEL_H_
+diff --git a/mojo/public/cpp/platform/platform_channel.cc b/mojo/public/cpp/platform/platform_channel.cc
+index f89bed3b84..85a95f2d4e 100644
+--- a/mojo/public/cpp/platform/platform_channel.cc
++++ b/mojo/public/cpp/platform/platform_channel.cc
+@@ -17,6 +17,7 @@
+ 
+ #if BUILDFLAG(IS_AROS)
+ extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#include "mojo/public/cpp/platform/aros_channel.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -126,16 +127,11 @@ void CreateChannel(PlatformHandle* local_endpoint,
+ void CreateChannel(PlatformHandle* local_endpoint,
+                    PlatformHandle* remote_endpoint) {
+ #if BUILDFLAG(IS_AROS)
+-  // AROSTCP has no AF_UNIX socketpair or SCM_RIGHTS equivalent. Do not wrap
+-  // its task-owned socket handles in ScopedFD: close(), dup(), and descriptor
+-  // passing would then operate on the wrong namespace. Single-process AROS
+-  // does not need a bootstrap transport; cross-process use is rejected until
+-  // the native Exec/OPAL channel backend exists.
+-  ArosKPutStr(
+-      "[Chromium:Mojo] platform channel unavailable: native AROS transport "
+-      "is not implemented\n");
+-  *local_endpoint = PlatformHandle();
+-  *remote_endpoint = PlatformHandle();
++  auto [local, remote] = CreateArosChannelPair();
++  *local_endpoint = PlatformHandle(local);
++  *remote_endpoint = PlatformHandle(remote);
++  CHECK(local_endpoint->is_valid());
++  CHECK(remote_endpoint->is_valid());
+ #else
+   int fds[2];
+ #if BUILDFLAG(IS_NACL)
+diff --git a/mojo/public/cpp/platform/platform_channel_endpoint.cc b/mojo/public/cpp/platform/platform_channel_endpoint.cc
+index ce5bf44fb7..ac83ba6463 100644
+--- a/mojo/public/cpp/platform/platform_channel_endpoint.cc
++++ b/mojo/public/cpp/platform/platform_channel_endpoint.cc
+@@ -41,7 +41,8 @@ namespace {
+ // generate a key when setting the file descriptor.
+ constexpr int kAndroidClientHandleDescriptor =
+     base::GlobalDescriptors::kBaseDescriptor + 10000;
+-#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
++#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(MOJO_USE_APPLE_CHANNEL) && \
++    !BUILDFLAG(IS_AROS)
+ bool IsTargetDescriptorUsed(const base::FileHandleMappingVector& mapping,
+                             int target_fd) {
+   for (auto& [i, fd] : mapping) {
+@@ -113,6 +114,12 @@ void PlatformChannelEndpoint::PrepareToPass(HandlePassingInfo& info,
+   DCHECK(it.second) << "Failed to insert port for rendezvous.";
+   value = base::NumberToString(rendezvous_key);
+ #elif BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_AROS)
++  const auto channel = TakePlatformHandle().TakeArosChannel();
++  const uintptr_t state = reinterpret_cast<uintptr_t>(channel.state);
++  CHECK_EQ(state & uintptr_t{1}, uintptr_t{0});
++  value = base::NumberToString(state | channel.side);
++#else
+   // Arbitrary sanity check to ensure the loop below terminates reasonably
+   // quickly.
+   CHECK_LT(info.size(), 1000u);
+@@ -127,6 +134,7 @@ void PlatformChannelEndpoint::PrepareToPass(HandlePassingInfo& info,
+   info.emplace_back(platform_handle().GetFD().get(), target_fd);
+   value = base::NumberToString(target_fd);
+ #endif
++#endif
+ }
+ 
+ void PlatformChannelEndpoint::PrepareToPass(base::LaunchOptions& options,
+@@ -201,6 +209,17 @@ PlatformChannelEndpoint PlatformChannelEndpoint::RecoverFromString(
+   }
+   return PlatformChannelEndpoint(PlatformHandle(std::move(receive)));
+ #elif BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_AROS)
++  uint64_t encoded = 0;
++  if (value.empty() || !base::StringToUint64(value, &encoded) ||
++      (encoded & ~uint64_t{1}) == 0) {
++    DLOG(ERROR) << "Invalid AROS PlatformChannel endpoint string.";
++    return PlatformChannelEndpoint();
++  }
++  return PlatformChannelEndpoint(PlatformHandle(ArosChannelHandle{
++      reinterpret_cast<void*>(static_cast<uintptr_t>(encoded & ~uint64_t{1})),
++      static_cast<uint8_t>(encoded & 1u)}));
++#else
+   int fd = -1;
+   if (value.empty() || !base::StringToInt(value, &fd) ||
+       fd < base::GlobalDescriptors::kBaseDescriptor) {
+@@ -209,6 +228,7 @@ PlatformChannelEndpoint PlatformChannelEndpoint::RecoverFromString(
+   }
+   return PlatformChannelEndpoint(PlatformHandle(base::ScopedFD(fd)));
+ #endif
++#endif
+ }
+ 
+ }  // namespace mojo
+diff --git a/mojo/public/cpp/platform/platform_handle.cc b/mojo/public/cpp/platform/platform_handle.cc
+index 46245636b1..1a0bae380c 100644
+--- a/mojo/public/cpp/platform/platform_handle.cc
++++ b/mojo/public/cpp/platform/platform_handle.cc
+@@ -132,11 +132,18 @@ PlatformHandle::PlatformHandle(
+     base::subtle::ScopedArosSharedMemoryHandle shared_memory)
+     : type_(Type::kArosSharedMemory),
+       aros_shared_memory_(std::move(shared_memory)) {}
++PlatformHandle::PlatformHandle(ArosChannelHandle channel)
++    : type_(Type::kArosChannel), aros_channel_(channel) {}
+ #endif
+ 
+ PlatformHandle::~PlatformHandle() = default;
+ 
+ PlatformHandle& PlatformHandle::operator=(PlatformHandle&& other) {
++  if (this == &other)
++    return *this;
++#if BUILDFLAG(IS_AROS)
++  ReleaseArosChannelHandle(std::exchange(aros_channel_, {}));
++#endif
+   type_ = other.type_;
+   other.type_ = Type::kNone;
+ 
+@@ -155,6 +162,7 @@ PlatformHandle& PlatformHandle::operator=(PlatformHandle&& other) {
+ 
+ #if BUILDFLAG(IS_AROS)
+   aros_shared_memory_ = std::move(other.aros_shared_memory_);
++  aros_channel_ = std::exchange(other.aros_channel_, {});
+ #endif
+ 
+   return *this;
+@@ -205,6 +213,14 @@ void PlatformHandle::ToMojoPlatformHandle(PlatformHandle handle,
+       out_handle->value = region | (shared_memory.read_only ? 1u : 0u);
+       break;
+     }
++    if (handle.is_aros_channel()) {
++      const auto channel = handle.TakeArosChannel();
++      const uintptr_t state = reinterpret_cast<uintptr_t>(channel.state);
++      CHECK_EQ(state & uintptr_t{1}, uintptr_t{0});
++      out_handle->type = MOJO_PLATFORM_HANDLE_TYPE_AROS_CHANNEL;
++      out_handle->value = state | channel.side;
++      break;
++    }
+ #endif
+ 
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+@@ -252,6 +268,12 @@ PlatformHandle PlatformHandle::FromMojoPlatformHandle(
+     return PlatformHandle(
+         base::subtle::ScopedArosSharedMemoryHandle(shared_memory));
+   }
++  if (handle->type == MOJO_PLATFORM_HANDLE_TYPE_AROS_CHANNEL) {
++    const uintptr_t value = static_cast<uintptr_t>(handle->value);
++    return PlatformHandle(
++        ArosChannelHandle{reinterpret_cast<void*>(value & ~uintptr_t{1}),
++                          static_cast<uint8_t>(value & 1u)});
++  }
+ #endif
+ 
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+@@ -279,6 +301,7 @@ void PlatformHandle::reset() {
+ 
+ #if BUILDFLAG(IS_AROS)
+   aros_shared_memory_.reset();
++  ReleaseArosChannelHandle(std::exchange(aros_channel_, {}));
+ #endif
+ }
+ 
+@@ -300,6 +323,7 @@ void PlatformHandle::release() {
+ 
+ #if BUILDFLAG(IS_AROS)
+   std::ignore = aros_shared_memory_.release();
++  std::ignore = std::exchange(aros_channel_, {});
+ #endif
+ }
+ 
+@@ -322,6 +346,10 @@ PlatformHandle PlatformHandle::Clone() const {
+     return PlatformHandle(
+         base::subtle::ScopedArosSharedMemoryHandle(shared_memory));
+   }
++  if (is_valid_aros_channel()) {
++    RetainArosChannelHandle(aros_channel_);
++    return PlatformHandle(aros_channel_);
++  }
+   return PlatformHandle(CloneFD(fd_));
+ #elif BUILDFLAG(IS_POSIX)
+   return PlatformHandle(CloneFD(fd_));
+diff --git a/mojo/public/cpp/platform/platform_handle.h b/mojo/public/cpp/platform/platform_handle.h
+index 6c892e4602..06ea05caac 100644
+--- a/mojo/public/cpp/platform/platform_handle.h
++++ b/mojo/public/cpp/platform/platform_handle.h
+@@ -5,6 +5,8 @@
+ #ifndef MOJO_PUBLIC_CPP_PLATFORM_PLATFORM_HANDLE_H_
+ #define MOJO_PUBLIC_CPP_PLATFORM_PLATFORM_HANDLE_H_
+ 
++#include <utility>
++
+ #include "base/check_op.h"
+ #include "base/component_export.h"
+ #include "base/files/platform_file.h"
+@@ -13,6 +15,7 @@
+ 
+ #if BUILDFLAG(IS_AROS)
+ #include "base/memory/platform_shared_memory_handle.h"
++#include "mojo/public/cpp/platform/aros_channel.h"
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -49,6 +52,7 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+     kNone,
+ #if BUILDFLAG(IS_AROS)
+     kArosSharedMemory,
++    kArosChannel,
+ #endif
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+     kHandle,
+@@ -80,6 +84,7 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+ #if BUILDFLAG(IS_AROS)
+   explicit PlatformHandle(
+       base::subtle::ScopedArosSharedMemoryHandle shared_memory);
++  explicit PlatformHandle(ArosChannelHandle channel);
+ #endif
+ 
+   PlatformHandle(const PlatformHandle&) = delete;
+@@ -179,7 +184,8 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+   }
+ #elif BUILDFLAG(IS_AROS)
+   bool is_valid() const {
+-    return is_valid_fd() || is_valid_aros_shared_memory();
++    return is_valid_fd() || is_valid_aros_shared_memory() ||
++           is_valid_aros_channel();
+   }
+   bool is_valid_aros_shared_memory() const {
+     return aros_shared_memory_.is_valid();
+@@ -196,6 +202,14 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+       type_ = Type::kNone;
+     return std::move(aros_shared_memory_);
+   }
++  bool is_valid_aros_channel() const { return aros_channel_.is_valid(); }
++  bool is_aros_channel() const { return type_ == Type::kArosChannel; }
++  const ArosChannelHandle& GetArosChannel() const { return aros_channel_; }
++  ArosChannelHandle TakeArosChannel() {
++    DCHECK_EQ(type_, Type::kArosChannel);
++    type_ = Type::kNone;
++    return std::exchange(aros_channel_, {});
++  }
+ #elif BUILDFLAG(IS_POSIX)
+   bool is_valid() const { return is_valid_fd(); }
+ #else
+@@ -264,6 +278,7 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) PlatformHandle {
+ 
+ #if BUILDFLAG(IS_AROS)
+   base::subtle::ScopedArosSharedMemoryHandle aros_shared_memory_;
++  ArosChannelHandle aros_channel_;
+ #endif
+ };
+ 

@@ -1,0 +1,41 @@
+From b2e6975809843df98e9cde6bcbe5150475c302c2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 21:26:40 -0500
+Subject: [PATCH 633/638] aros: shrink the BRP pool to what a pool that only
+ has to exist needs
+
+BackupRefPtr support is off in the AROS build (brp_enabled() is a constant
+false, ChoosePool() never returns kBRPPoolHandle), so nothing is ever
+allocated from the BRP pool; it only has to exist. It was still sized at
+kGiB / 2, and on AROS a pool is physically backed and costs twice its size
+until exec grows an aligned allocator - 1 GiB of RAM per process for a pool
+that holds nothing tset12: 3 GiB per process for 1.5 GiB of pools).
+
+32 MiB keeps 16 super pages of headroom and costs 64 MiB per process.
+
+---
+ .../src/partition_alloc/partition_address_space.h     | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
+index e699231866..00801c0861 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h
+@@ -270,9 +270,14 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) PartitionAddressSpace {
+   // ArrayBuffers be located inside of it.
+   static constexpr size_t kRegularPoolSize = kPoolMaxSize;
+ #if BUILDFLAG(IS_AROS)
+-  // Pools are physically backed on AROS (see kPoolMaxSize). BackupRefPtr is
+-  // not supported there, so the BRP pool only needs to exist.
+-  static constexpr size_t kBRPPoolSize = kGiB / 2;
++  // Pools are physically backed on AROS (see kPoolMaxSize), and each one costs
++  // twice its size until exec has an aligned allocator (JOB-0104
++  // exec-allocmemaligned-proposal.md). BackupRefPtr is not supported there
++  // (ENABLE_BACKUP_REF_PTR_SUPPORT is off, so brp_enabled() is a constant
++  // false and ChoosePool() never returns kBRPPoolHandle): the BRP pool only
++  // needs to exist. 32 MiB is 16 super pages of headroom for 64 MiB of RAM per
++  // process, against the 1 GiB the previous kGiB / 2 took.
++  static constexpr size_t kBRPPoolSize = kGiB / 32;
+ #else
+   static constexpr size_t kBRPPoolSize = kPoolMaxSize;
+ #endif

@@ -1,0 +1,139 @@
+From 68d67dac9f5bb58b2e621d79a52394263e4173e9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:50:56 -0500
+Subject: [PATCH 028/638] gpu: remove native pixmaps from the AROS support
+ graph
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: AROS GPU memory-buffer support now advertises no native buffer type and compiles only the shared-memory implementation.
+
+ROOT_CAUSE: Ozone unconditionally selected and built GpuMemoryBufferImplNativePixmap even though AROS handle and Mojo boundaries deliberately omit native pixmap state.
+
+FIX_REASON: Exclude the pixmap source, factory, member, configuration probe, and creation case on AROS; report EMPTY_BUFFER and retain shared-memory buffers as the supported Phase 3 path.
+
+SCOPE: gpu/ipc/common BUILD and GpuMemoryBufferSupport implementation/header
+
+VALIDATION: gpu_memory_buffer_support.o compiled; ninja's transitive headless_shell inputs contain no gpu_memory_buffer_impl_native_pixmap source or object; git diff --check passed.
+
+RISK: Accelerated scanout and zero-copy import remain unavailable until AROS implements native pixmap/shared-image handles and synchronization.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/ipc/common/BUILD.gn                     |  2 +-
+ gpu/ipc/common/gpu_memory_buffer_support.cc | 17 +++++++++++------
+ gpu/ipc/common/gpu_memory_buffer_support.h  |  7 ++++---
+ 3 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/gpu/ipc/common/BUILD.gn b/gpu/ipc/common/BUILD.gn
+index 171873ac77..f894ebb385 100644
+--- a/gpu/ipc/common/BUILD.gn
++++ b/gpu/ipc/common/BUILD.gn
+@@ -104,7 +104,7 @@ source_set("ipc_common_sources") {
+     ]
+     libs = [ "d3d11.lib" ]
+   }
+-  if (use_ozone) {
++  if (use_ozone && !is_aros) {
+     sources += [
+       "gpu_memory_buffer_impl_native_pixmap.cc",
+       "gpu_memory_buffer_impl_native_pixmap.h",
+diff --git a/gpu/ipc/common/gpu_memory_buffer_support.cc b/gpu/ipc/common/gpu_memory_buffer_support.cc
+index cb35f4d689..25fcb71313 100644
+--- a/gpu/ipc/common/gpu_memory_buffer_support.cc
++++ b/gpu/ipc/common/gpu_memory_buffer_support.cc
+@@ -21,12 +21,13 @@
+ #include "gpu/ipc/common/gpu_memory_buffer_impl_io_surface.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)
+ #include "ui/ozone/public/client_native_pixmap_factory_ozone.h"
+ #include "ui/ozone/public/ozone_platform.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if (BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)) || \
++    BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include "gpu/ipc/common/gpu_memory_buffer_impl_native_pixmap.h"
+ #endif
+ 
+@@ -42,7 +43,7 @@
+ namespace gpu {
+ 
+ GpuMemoryBufferSupport::GpuMemoryBufferSupport() {
+-#if BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)
+   client_native_pixmap_factory_ = ui::CreateClientNativePixmapFactoryOzone();
+ #endif
+ }
+@@ -56,6 +57,8 @@ GpuMemoryBufferSupport::GetNativeGpuMemoryBufferType() {
+   return gfx::IO_SURFACE_BUFFER;
+ #elif BUILDFLAG(IS_ANDROID)
+   return gfx::ANDROID_HARDWARE_BUFFER;
++#elif BUILDFLAG(IS_AROS)
++  return gfx::EMPTY_BUFFER;
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
+   return gfx::NATIVE_PIXMAP;
+ #elif BUILDFLAG(IS_WIN)
+@@ -124,6 +127,8 @@ bool GpuMemoryBufferSupport::IsNativeGpuMemoryBufferConfigurationSupported(
+   }
+   NOTREACHED();
+   return false;
++#elif BUILDFLAG(IS_AROS)
++  return false;
+ #elif BUILDFLAG(IS_OZONE)
+   return ui::OzonePlatform::GetInstance()->IsNativePixmapConfigSupported(format,
+                                                                          usage);
+@@ -158,8 +163,8 @@ GpuMemoryBufferConfigurationSet
+ GpuMemoryBufferSupport::GetNativeGpuMemoryBufferConfigurations() {
+   GpuMemoryBufferConfigurationSet configurations;
+ 
+-#if BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_ANDROID)
++#if (BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)) || \
++    BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+   const gfx::BufferFormat kBufferFormats[] = {
+       gfx::BufferFormat::R_8,
+       gfx::BufferFormat::R_16,
+@@ -248,7 +253,7 @@ GpuMemoryBufferSupport::CreateGpuMemoryBufferImplFromHandle(
+       return GpuMemoryBufferImplIOSurface::CreateFromHandle(
+           std::move(handle), size, format, usage, std::move(callback));
+ #endif
+-#if BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)
+     case gfx::NATIVE_PIXMAP:
+       return GpuMemoryBufferImplNativePixmap::CreateFromHandle(
+           client_native_pixmap_factory(), std::move(handle), size, format,
+diff --git a/gpu/ipc/common/gpu_memory_buffer_support.h b/gpu/ipc/common/gpu_memory_buffer_support.h
+index da7ee49222..f83ef33b93 100644
+--- a/gpu/ipc/common/gpu_memory_buffer_support.h
++++ b/gpu/ipc/common/gpu_memory_buffer_support.h
+@@ -21,7 +21,8 @@
+ #include "ui/gfx/geometry/size.h"
+ #include "ui/gfx/gpu_memory_buffer.h"
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
++    (BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS))
+ namespace gfx {
+ class ClientNativePixmapFactory;
+ }  // namespace gfx
+@@ -71,7 +72,7 @@ class GPU_EXPORT GpuMemoryBufferSupport {
+ 
+   static bool IsSizeValid(const gfx::Size& size);
+ 
+-#if BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)
+   gfx::ClientNativePixmapFactory* client_native_pixmap_factory() {
+     return client_native_pixmap_factory_.get();
+   }
+@@ -100,7 +101,7 @@ class GPU_EXPORT GpuMemoryBufferSupport {
+       base::span<uint8_t> premapped_memory = base::span<uint8_t>());
+ 
+  private:
+-#if BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_AROS)
+   std::unique_ptr<gfx::ClientNativePixmapFactory> client_native_pixmap_factory_;
+ #endif
+ };

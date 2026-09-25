@@ -1,0 +1,41 @@
+From 752274a3f0284b15a1858dbce25464f025888f6d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 19:26:11 -0500
+Subject: [PATCH 481/638] AROS: normalize temporary environment assign
+
+Convert POSIXC spellings of the T assignment back to native T: form before Chromium creates temporary files. This prevents startup from requesting a synthetic /T volume even when TMPDIR overrides the platform default.
+
+
+
+---
+ base/files/file_util_posix.cc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
+index 427601cda3..fa4bb46df7 100644
+--- a/base/files/file_util_posix.cc
++++ b/base/files/file_util_posix.cc
+@@ -743,7 +743,23 @@ bool ExecutableExistsInPath(Environment* env,
+ bool GetTempDir(FilePath* path) {
+   const char* tmp = getenv("TMPDIR");
+   if (tmp) {
++#if BUILDFLAG(IS_AROS)
++    // POSIXC may expose an AROS assignment as /T, /T/, or /T:/... .  Do not
++    // pass that spelling back to DOS: it is interpreted as a request for a
++    // volume literally named "/T".  Keep temporary paths in native assign
++    // form at the Chromium platform boundary.
++    std::string native_tmp(tmp);
++    if (native_tmp == "/T" || native_tmp == "/T/") {
++      native_tmp = "T:";
++    } else if (native_tmp.starts_with("/T:/")) {
++      native_tmp.erase(0, 1);
++    } else if (native_tmp.starts_with("/T/")) {
++      native_tmp.replace(0, 3, "T:");
++    }
++    *path = FilePath(native_tmp);
++#else
+     *path = FilePath(tmp);
++#endif
+     return true;
+   }
+ 

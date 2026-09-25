@@ -1,0 +1,41 @@
+From 6187876fcab9ddb0b548b9c601d792260f6b9f2f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:22:19 -0500
+Subject: [PATCH 015/638] gfx: reject unsupported AROS native pixmap transfer
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: NativePixmapHandle only owns transferable backing objects on Linux/ChromeOS and Fuchsia. AROS has plane metadata but no native pixmap ownership or IPC transport, so the generic clone routine stopped the build at an unsupported-OS branch.
+
+FIX_REASON: Keep empty handles valid for the software headless graph, but reject any non-empty AROS native pixmap clone instead of copying metadata and pretending the backing storage was transferred. Emit the rejected plane geometry through Chromium logging for AROS debug.resource visibility.
+
+SCOPE: ui/gfx NativePixmapHandle IPC cloning.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ui/gfx/memory_buffer_sources/native_pixmap_handle.o
+
+RISK: low for software headless rendering; native GPU pixmap sharing remains deliberately unavailable until AROS defines an ownership-bearing handle and Mojo transport.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/gfx/native_pixmap_handle.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ui/gfx/native_pixmap_handle.cc b/ui/gfx/native_pixmap_handle.cc
+index a27f45bd7f..7fea791e5c 100644
+--- a/ui/gfx/native_pixmap_handle.cc
++++ b/ui/gfx/native_pixmap_handle.cc
+@@ -108,6 +108,11 @@ NativePixmapHandle CloneHandleForIPC(const NativePixmapHandle& handle) {
+     cloned_plane.size = plane.size;
+     cloned_plane.vmo = std::move(vmo_dup);
+     clone.planes.push_back(std::move(cloned_plane));
++#elif BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "AROS native pixmap IPC transport is not implemented"
++               << " (stride=" << plane.stride << ", offset=" << plane.offset
++               << ", size=" << plane.size << ")";
++    return NativePixmapHandle();
+ #else
+ #error Unsupported OS
+ #endif

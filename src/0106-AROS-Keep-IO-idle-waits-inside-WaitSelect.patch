@@ -1,0 +1,85 @@
+From b962f960746468e71d5ee33520a175b5ca9da564 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 00:12:40 -0500
+Subject: [PATCH 106/638] [AROS] Keep IO idle waits inside WaitSelect
+
+AI_PHASE: chromium-phase-2-3
+AI_STATUS: in-progress
+ROOT_CAUSE: The first native-pump run used WaitableEvent when no sockets were registered, but BrowserProcessIOThread disallows base sync-primitive waits before entering its run loop.
+FIX_REASON: WaitSelect supports nfds=0 plus an Exec signal mask and timeout, so it can provide the same native scheduler wait without violating Chromium blocking policy.
+SCOPE: base/message_loop/message_pump_aros.{cc,h}
+VALIDATION: message_pump_aros.o cross-compiled after removing WaitableEvent; hosted 0105 log captured the exact thread_restrictions DCHECK at MessagePumpAROS::Run.
+RISK: AROSTCP must be available before an AROS IO pump goes idle; the headless startup contract already starts it before Chromium.
+AI_DECISION_CHAIN: native WaitSelect pump -> BrowserProcessIOThread sync restriction -> descriptor-free WaitSelect idle wait
+Continues: f089213479
+---
+ base/message_loop/message_pump_aros.cc | 14 ++------------
+ base/message_loop/message_pump_aros.h  |  2 --
+ 2 files changed, 2 insertions(+), 14 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 2dc682cf5d..aba8e071d1 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -44,9 +44,7 @@ bool MessagePumpAROS::FdWatchController::StopWatchingFileDescriptor() {
+   return true;
+ }
+ 
+-MessagePumpAROS::MessagePumpAROS()
+-    : idle_event_(WaitableEvent::ResetPolicy::AUTOMATIC,
+-                  WaitableEvent::InitialState::NOT_SIGNALED) {
++MessagePumpAROS::MessagePumpAROS() {
+   pump_task_ = FindTask(nullptr);
+   CHECK(pump_task_);
+ 
+@@ -145,13 +143,7 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+     }
+ 
+     delegate->BeforeWait();
+-    if (controllers_.empty()) {
+-      if (next_work_info.delayed_run_time.is_max()) {
+-        (idle_event_.Wait)();
+-      } else {
+-        idle_event_.TimedWait(next_work_info.remaining_delay());
+-      }
+-    } else if (next_work_info.delayed_run_time.is_max()) {
++    if (next_work_info.delayed_run_time.is_max()) {
+       WaitForSocketEvents(TimeDelta(), true);
+     } else {
+       WaitForSocketEvents(next_work_info.remaining_delay(), false);
+@@ -166,7 +158,6 @@ void MessagePumpAROS::Quit() {
+ }
+ 
+ void MessagePumpAROS::ScheduleWork() {
+-  (idle_event_.Signal)();
+   Signal(pump_task_, wakeup_mask_);
+ }
+ 
+@@ -216,7 +207,6 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+   if (result < 0) {
+     if (errno != EINTR) {
+       LOG(ERROR) << "[Chromium:IO] WaitSelect failed errno=" << errno;
+-      idle_event_.TimedWait(Milliseconds(10));
+     }
+     return false;
+   }
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 3a8b53a3f7..05d75edfe0 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -14,7 +14,6 @@
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "base/message_loop/message_pump.h"
+ #include "base/message_loop/watchable_io_message_pump_posix.h"
+-#include "base/synchronization/waitable_event.h"
+ #include "base/threading/thread_checker.h"
+ 
+ struct Task;
+@@ -91,7 +90,6 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+   RAW_PTR_EXCLUSION Task* pump_task_ = nullptr;
+   int wakeup_signal_ = -1;
+   uint32_t wakeup_mask_ = 0;
+-  WaitableEvent idle_event_;
+   std::vector<raw_ptr<FdWatchController>> controllers_;
+   uint64_t next_generation_ = 1;
+   ThreadChecker watch_file_descriptor_caller_checker_;

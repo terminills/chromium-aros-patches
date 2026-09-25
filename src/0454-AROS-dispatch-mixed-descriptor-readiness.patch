@@ -1,0 +1,214 @@
+From 65051bbd086f68d563803f8b978fd9edd6a6d5fe Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 00:16:04 -0500
+Subject: [PATCH 454/638] AROS: dispatch mixed descriptor readiness
+
+Keep AROSTCP WaitSelect restricted to FD_OWNER_BSDSOCKET descriptors. Poll DOS-backed POSIX reads with WaitForChar and mirror uv1.library's synchronous-write readiness so a mixed Chromium IO pump cannot fail every socket wait with EBADF.
+
+
+
+---
+ base/message_loop/message_pump_aros.cc | 117 +++++++++++++++++++------
+ base/message_loop/message_pump_aros.h  |   2 +
+ 2 files changed, 91 insertions(+), 28 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 2b3a7af0cd..b884e9669c 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -26,11 +26,34 @@
+ 
+ #include <devices/timer.h>
+ #include <exec/io.h>
++#include <exec/libraries.h>
+ #include <exec/ports.h>
+ #include <exec/tasks.h>
++#include <libraries/fd.h>
++#include <defines/fd.h>
++#include <aros/posixc/stdio.h>
++#include <proto/dos.h>
+ #include <proto/exec.h>
+ 
+ namespace base {
++namespace {
++
++constexpr TimeDelta kDosDescriptorPollInterval = Milliseconds(10);
++
++fd_owner_t DescriptorOwner(Library* fd_library, int fd) {
++  return fd_library ? __FD_GetOwner_WB(fd_library, fd) : FD_OWNER_NONE;
++}
++
++bool GetDosHandle(int fd, BPTR* handle) {
++  long native_handle = 0;
++  if (!handle || __get_default_file(fd, &native_handle) != 0) {
++    return false;
++  }
++  *handle = reinterpret_cast<BPTR>(native_handle);
++  return true;
++}
++
++}  // namespace
+ 
+ MessagePumpAROS::FdWatchController::FdWatchController(const Location& from_here)
+     : FdWatchControllerInterface(from_here) {}
+@@ -59,6 +82,9 @@ MessagePumpAROS::MessagePumpAROS() {
+   pump_task_ = FindTask(nullptr);
+   CHECK(pump_task_);
+ 
++  fd_library_ = OpenLibrary("fd.library", 50);
++  CHECK(fd_library_) << "fd.library v50 is required by Chromium's AROS pump";
++
+   wakeup_signal_ = AllocSignal(-1);
+   CHECK_GE(wakeup_signal_, 0);
+   wakeup_mask_ = uint32_t{1} << wakeup_signal_;
+@@ -98,6 +124,9 @@ MessagePumpAROS::~MessagePumpAROS() {
+   if (wakeup_signal_ >= 0) {
+     FreeSignal(wakeup_signal_);
+   }
++  if (fd_library_) {
++    CloseLibrary(fd_library_);
++  }
+ }
+ 
+ bool MessagePumpAROS::WatchFileDescriptor(int fd,
+@@ -253,23 +282,38 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+   FD_ZERO(&read_fds);
+   FD_ZERO(&write_fds);
+ 
+-  bool watch_read = false;
+-  bool watch_write = false;
+-  int max_fd = -1;
++  bool watch_socket_read = false;
++  bool watch_socket_write = false;
++  bool watch_dos_descriptor = false;
++  int max_socket_fd = -1;
+   for (const auto& controller : controllers_) {
+     DCHECK(controller->pump_ == this);
+     DCHECK_GE(controller->fd_, 0);
+-    if (controller->mode_ & WATCH_READ) {
+-      FD_SET(controller->fd_, &read_fds);
+-      watch_read = true;
+-    }
+-    if (controller->mode_ & WATCH_WRITE) {
+-      FD_SET(controller->fd_, &write_fds);
+-      watch_write = true;
++    if (DescriptorOwner(fd_library_, controller->fd_) ==
++        FD_OWNER_BSDSOCKET) {
++      if (controller->mode_ & WATCH_READ) {
++        FD_SET(controller->fd_, &read_fds);
++        watch_socket_read = true;
++      }
++      if (controller->mode_ & WATCH_WRITE) {
++        FD_SET(controller->fd_, &write_fds);
++        watch_socket_write = true;
++      }
++      max_socket_fd = std::max(max_socket_fd, controller->fd_);
++    } else {
++      watch_dos_descriptor = true;
+     }
+-    max_fd = std::max(max_fd, controller->fd_);
+   }
+-  DCHECK_GE(max_fd, 0);
++
++  // DOS handlers expose per-handle read readiness through WaitForChar(), but
++  // there is no native wait-many primitive spanning DOS handles and AROSTCP
++  // sockets.  Poll only while a DOS-backed descriptor is registered; socket-
++  // only pumps retain AROSTCP's blocking WaitSelect path.
++  if (watch_dos_descriptor &&
++      (wait_indefinitely || timeout > kDosDescriptorPollInterval)) {
++    timeout = kDosDescriptorPollInterval;
++    wait_indefinitely = false;
++  }
+ 
+   struct timeval timeout_value = {};
+   struct timeval* timeout_pointer = nullptr;
+@@ -283,14 +327,19 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+   }
+ 
+   uint32_t signal_mask = wakeup_mask_;
+-  const int result =
+-      aros::SocketWaitSelect(max_fd + 1, watch_read ? &read_fds : nullptr,
+-                             watch_write ? &write_fds : nullptr, nullptr,
+-                             timeout_pointer, &signal_mask);
++  int result = 0;
++  if (max_socket_fd >= 0) {
++    result = aros::SocketWaitSelect(
++        max_socket_fd + 1, watch_socket_read ? &read_fds : nullptr,
++        watch_socket_write ? &write_fds : nullptr, nullptr, timeout_pointer,
++        &signal_mask);
++  } else {
++    WaitForIdleEvents(timeout, wait_indefinitely);
++  }
+   if (result < 0) {
+     if (errno != EINTR && !wait_select_error_reported_) {
+       LOG(ERROR) << "[Chromium:IO] WaitSelect failed task=" << pump_task_
+-                 << " errno=" << errno << " nfds=" << max_fd + 1
++                 << " errno=" << errno << " nfds=" << max_socket_fd + 1
+                  << " watches=" << controllers_.size();
+       for (const auto& controller : controllers_) {
+         LOG(ERROR) << "[Chromium:IO] rejected watch fd=" << controller->fd_
+@@ -303,21 +352,33 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+     return false;
+   }
+   wait_select_error_reported_ = false;
+-  if (result == 0) {
+-    return false;
+-  }
+-
+   std::vector<ReadyRegistration> ready;
+   ready.reserve(controllers_.size());
+   for (const auto& controller : controllers_) {
+     int ready_mode = 0;
+-    if ((controller->mode_ & WATCH_READ) &&
+-        FD_ISSET(controller->fd_, &read_fds)) {
+-      ready_mode |= WATCH_READ;
+-    }
+-    if ((controller->mode_ & WATCH_WRITE) &&
+-        FD_ISSET(controller->fd_, &write_fds)) {
+-      ready_mode |= WATCH_WRITE;
++    const fd_owner_t owner = DescriptorOwner(fd_library_, controller->fd_);
++    if (owner == FD_OWNER_BSDSOCKET) {
++      if ((controller->mode_ & WATCH_READ) &&
++          FD_ISSET(controller->fd_, &read_fds)) {
++        ready_mode |= WATCH_READ;
++      }
++      if ((controller->mode_ & WATCH_WRITE) &&
++          FD_ISSET(controller->fd_, &write_fds)) {
++        ready_mode |= WATCH_WRITE;
++      }
++    } else {
++      BPTR handle = BNULL;
++      if (GetDosHandle(controller->fd_, &handle)) {
++        if ((controller->mode_ & WATCH_READ) && WaitForChar(handle, 0)) {
++          ready_mode |= WATCH_READ;
++        }
++        // DOS writes are synchronous.  This mirrors uv1.library's AROS event
++        // backend: dispatch writable and let the owner perform or retire the
++        // operation instead of feeding a non-socket fd to WaitSelect.
++        if (controller->mode_ & WATCH_WRITE) {
++          ready_mode |= WATCH_WRITE;
++        }
++      }
+     }
+     if (ready_mode) {
+       ready.push_back({controller.get(), controller->generation_, ready_mode});
+diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
+index 36b3a2a9df..6aa2534227 100644
+--- a/base/message_loop/message_pump_aros.h
++++ b/base/message_loop/message_pump_aros.h
+@@ -17,6 +17,7 @@
+ #include "base/threading/thread_checker.h"
+ 
+ struct Task;
++struct Library;
+ struct MsgPort;
+ struct timerequest;
+ 
+@@ -91,6 +92,7 @@ class BASE_EXPORT MessagePumpAROS : public MessagePump,
+ 
+   raw_ptr<RunState> run_state_ = nullptr;
+   RAW_PTR_EXCLUSION Task* pump_task_ = nullptr;
++  RAW_PTR_EXCLUSION Library* fd_library_ = nullptr;
+   int wakeup_signal_ = -1;
+   uint32_t wakeup_mask_ = 0;
+   RAW_PTR_EXCLUSION MsgPort* timer_port_ = nullptr;

@@ -1,0 +1,99 @@
+From 43f2212b50605c5535a36135c3582d76ffa77a21 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 05:22:07 -0500
+Subject: [PATCH 228/638] chrome: select portable desktop services on AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-browser-link
+
+AI_STATUS: done
+
+ROOT_CAUSE: The upstream Chrome graph omitted platform-neutral Aura widget creation, Ozone window icons, Firefox profile discovery, no-udev storage monitoring, drive metrics, and obsolete-system handling when target_os was AROS.
+
+FIX_REASON: Admit AROS to the existing portable implementations whose contracts match the platform, while leaving Linux install and process assumptions out for explicit AROS implementations.
+
+SCOPE: Five GN source-selection files covering browser, browser UI, importer, metrics, and storage monitor targets.
+
+VALIDATION: GN regenerated out/aros-chrome for //chrome:chrome; the final linker inventory fell from 75 to 64 unresolved platform contracts; git diff --cached --check passes.
+
+RISK: low; this only selects already portable source files and explicit no-hardware/no-obsolete fallbacks.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ chrome/browser/BUILD.gn             | 7 +++++++
+ chrome/browser/ui/BUILD.gn          | 2 +-
+ chrome/common/importer/BUILD.gn     | 2 +-
+ components/metrics/BUILD.gn         | 2 +-
+ components/storage_monitor/BUILD.gn | 2 +-
+ 5 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index a1edbeffb6..7a967db9f0 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -6563,6 +6563,13 @@ static_library("browser") {
+     }
+   }
+ 
++  if (is_aros) {
++    sources += [
++      "media/webrtc/window_icon_util_ozone.cc",
++      "obsolete_system/obsolete_system_stub.cc",
++    ]
++  }
++
+   if (is_linux && use_dbus) {
+     sources += [
+       "dbus_memory_pressure_evaluator_linux.cc",
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 6e468fce22..119e911b3c 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -6467,7 +6467,7 @@ static_library("ui") {
+       ]
+     }
+ 
+-    if (is_win || is_fuchsia || is_linux || is_chromeos_lacros) {
++    if (is_win || is_fuchsia || is_linux || is_chromeos_lacros || is_aros) {
+       sources += [
+         "views/native_widget_factory.cc",
+         "views/native_widget_factory.h",
+diff --git a/chrome/common/importer/BUILD.gn b/chrome/common/importer/BUILD.gn
+index 2531a4de2f..447d966936 100644
+--- a/chrome/common/importer/BUILD.gn
++++ b/chrome/common/importer/BUILD.gn
+@@ -92,7 +92,7 @@ source_set("importer") {
+     "importer_url_row.h",
+     "pstore_declarations.h",
+   ]
+-  if (is_chromeos || is_linux || is_fuchsia) {
++  if (is_chromeos || is_linux || is_fuchsia || is_aros) {
+     sources += [ "firefox_importer_utils_linux.cc" ]
+   } else if (is_mac) {
+     sources += [
+diff --git a/components/metrics/BUILD.gn b/components/metrics/BUILD.gn
+index 8f547a120d..b64fe1f2bd 100644
+--- a/components/metrics/BUILD.gn
++++ b/components/metrics/BUILD.gn
+@@ -283,7 +283,7 @@ if (!is_cronet_build || is_ios) {
+       sources += [ "machine_id_provider_nonwin.cc" ]
+     }
+ 
+-    if (is_fuchsia) {
++    if (is_fuchsia || is_aros) {
+       sources += [ "drive_metrics_provider_fuchsia.cc" ]
+     }
+ 
+diff --git a/components/storage_monitor/BUILD.gn b/components/storage_monitor/BUILD.gn
+index 4f1e72155a..70242ce64a 100644
+--- a/components/storage_monitor/BUILD.gn
++++ b/components/storage_monitor/BUILD.gn
+@@ -76,7 +76,7 @@ static_library("storage_monitor") {
+       ]
+       deps += [ "//services/device/public/mojom" ]
+     }
+-  } else if (is_linux || is_chromeos_lacros) {
++  } else if (is_linux || is_chromeos_lacros || is_aros) {
+     if (use_udev) {
+       sources += [
+         "mtab_watcher_linux.cc",

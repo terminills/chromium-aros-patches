@@ -1,0 +1,34 @@
+From 5e912c4cf0187952ad382b25800ee43a6d87951d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 02:07:36 -0500
+Subject: [PATCH 208/638] settings: keep PDF OCR behind ScreenAI [chromium]
+ [aros]
+
+Statement:
+The Settings PDF OCR frontend requires the ScreenAI service, which is intentionally disabled in the current AROS Chrome capability set.
+
+Decision:
+Do not admit AROS to the PDF OCR TypeScript bundle until ScreenAI is available. Generic Read Anything remains enabled independently.
+
+Evidence:
+The Settings TypeScript bundle and resources regenerate successfully, and settings_localized_strings_provider.o compiles with the corrected AROS GRIT platform.
+
+Chain:
+Refines the ScreenAI boundary established by 473375da99 and unblocks without hiding portable accessibility features.
+---
+ chrome/browser/resources/settings/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
+index 32755a9415..6a10fe92d1 100644
+--- a/chrome/browser/resources/settings/BUILD.gn
++++ b/chrome/browser/resources/settings/BUILD.gn
+@@ -263,7 +263,7 @@ build_webui("build") {
+   if (is_win || is_mac) {
+     web_component_files += [ "autofill_page/passkeys_subpage.ts" ]
+   }
+-  if (is_win || is_mac || is_linux || is_aros) {
++  if (is_win || is_mac || is_linux) {
+     web_component_files += [ "a11y_page/pdf_ocr_toggle.ts" ]
+   }
+   if (is_chrome_branded) {

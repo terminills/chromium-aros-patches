@@ -1,0 +1,52 @@
+From 484fede4655f7672b329822fcefa40c0eae20192 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 16:30:41 -0500
+Subject: [PATCH 326/638] cef: expose WebUI controller factory
+
+Apply CEF's upstream browser_web_ui_controller_factory patch so its Chrome scheme handler can delegate WebUI URL creation.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: upstream-webui-factory-prerequisite-applied
+
+AI_ASSUMPTION: CEF 52dac911 patch stack is authoritative for Chromium 124.0.6367.0 integration
+
+AI_VALIDATION: build 19 reports WebUIConfigMap has no public controller_factory accessor
+
+AI_EVIDENCE: test-artifacts/-cef-bootstrap-20260724/19-libcef-static-after-version-header.log
+
+AI_DECISION_CHAIN:; 52dac911; 91c5ff0d45
+---
+ content/public/browser/web_ui_controller_factory.h | 3 ---
+ content/public/browser/webui_config_map.h          | 4 ++++
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/content/public/browser/web_ui_controller_factory.h b/content/public/browser/web_ui_controller_factory.h
+index 9d9c17ffd6..4eb79c6536 100644
+--- a/content/public/browser/web_ui_controller_factory.h
++++ b/content/public/browser/web_ui_controller_factory.h
+@@ -47,9 +47,6 @@ class CONTENT_EXPORT WebUIControllerFactory {
+   virtual bool UseWebUIForURL(BrowserContext* browser_context,
+                               const GURL& url) = 0;
+ 
+- private:
+-  friend class ScopedWebUIControllerFactoryRegistration;
+-
+   static void UnregisterFactoryForTesting(WebUIControllerFactory* factory);
+ };
+ 
+diff --git a/content/public/browser/webui_config_map.h b/content/public/browser/webui_config_map.h
+index e7b6a9b841..1c98be86c0 100644
+--- a/content/public/browser/webui_config_map.h
++++ b/content/public/browser/webui_config_map.h
+@@ -68,6 +68,10 @@ class CONTENT_EXPORT WebUIConfigMap {
+   std::vector<WebUIConfigInfo> GetWebUIConfigList(
+       BrowserContext* browser_context);
+ 
++  WebUIControllerFactory* controller_factory() const {
++    return webui_controller_factory_.get();
++  }
++
+  private:
+   void AddWebUIConfigImpl(std::unique_ptr<WebUIConfig> config);
+ 

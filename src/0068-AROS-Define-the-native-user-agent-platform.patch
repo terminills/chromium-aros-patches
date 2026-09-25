@@ -1,0 +1,39 @@
+From 20af619dff4abf896624bb785ad0dacd5f41e57c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:34:19 -0500
+Subject: [PATCH 068/638] [AROS] Define the native user-agent platform
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Chromium user-agent construction now has a distinct stable AROS platform identity.
+ROOT_CAUSE: Both classic-platform and unified-platform helpers enumerated supported OS families explicitly and rejected AROS at compile time.
+FIX_REASON: Let classic UA construction use uname's AROS identity without an X11 prefix, and use the stable AROS x86_64 token for reduced/unified user agents, matching Blink navigator metadata.
+SCOPE: content/common/user_agent.cc only.
+VALIDATION: user_agent.o compiled; object contains the AROS x86_64 token.
+RISK: Low; only AROS network-facing platform metadata changes.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/common/user_agent.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/content/common/user_agent.cc b/content/common/user_agent.cc
+index 070658460e..29e503b46f 100644
+--- a/content/common/user_agent.cc
++++ b/content/common/user_agent.cc
+@@ -45,6 +45,8 @@ std::string GetUserAgentPlatform() {
+   return "";
+ #elif BUILDFLAG(IS_MAC)
+   return "Macintosh; ";
++#elif BUILDFLAG(IS_AROS)
++  return "";
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   return "X11; ";  // strange, but that's what Firefox uses
+ #elif BUILDFLAG(IS_ANDROID)
+@@ -71,6 +73,8 @@ std::string GetUnifiedPlatform() {
+   return "Windows NT 10.0; Win64; x64";
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return "Fuchsia";
++#elif BUILDFLAG(IS_AROS)
++  return "AROS x86_64";
+ #elif BUILDFLAG(IS_LINUX)
+   return "X11; Linux x86_64";
+ #elif BUILDFLAG(IS_IOS)

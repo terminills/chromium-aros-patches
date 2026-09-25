@@ -1,0 +1,43 @@
+From 012c1568b1ac6b673fe41efe12d85c21728a118e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:49:46 -0500
+Subject: [PATCH 09/43] cef: include Ozone cursor support on AROS
+
+Admit AROS to cursor_util_aura's Ozone header path. The implementation already selects BitmapCursor for any Ozone platform; only the Linux-only include guard prevented the type from being visible.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: aros-ozone-cursor-adapter-enabled
+
+AI_ASSUMPTION: AROS Ozone continues using BitmapCursorFactory and platform_data as its cursor handle boundary
+
+AI_VALIDATION: libcef_static build 17 failed because ui::BitmapCursor and CursorType were undefined on AROS
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 7da5f595; ui/ozone/common/bitmap_cursor.h
+---
+ libcef/browser/native/cursor_util_aura.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libcef/browser/native/cursor_util_aura.cc b/libcef/browser/native/cursor_util_aura.cc
+index 7b3580d9..b1f18989 100644
+--- a/libcef/browser/native/cursor_util_aura.cc
++++ b/libcef/browser/native/cursor_util_aura.cc
+@@ -15,14 +15,14 @@
+ #include "ui/display/screen.h"
+ #include "ui/wm/core/cursor_loader.h"
+ 
+-#if BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ #include "ui/base/ozone_buildflags.h"
+ #if BUILDFLAG(IS_OZONE_X11)
+ #include "ui/base/x/x11_cursor.h"
+ #elif BUILDFLAG(IS_OZONE)
+ #include "ui/ozone/common/bitmap_cursor.h"
+ #endif
+-#endif  // BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "ui/base/win/win_cursor.h"

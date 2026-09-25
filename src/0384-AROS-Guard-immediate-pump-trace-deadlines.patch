@@ -1,0 +1,50 @@
+From 5e6e619cae7a9175f678614c304844d47d492cd1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 22:55:26 -0500
+Subject: [PATCH 384/638] [AROS] Guard immediate pump trace deadlines
+
+Runtime 23 proved the standard stripped shared-V8 Chromium module loads immediately, then exposed a diagnostic-only DCHECK: bounded pump telemetry called NextWorkInfo::remaining_delay() for immediate work, whose deadline is null.
+
+Guard the accessor behind both non-immediate and non-max deadline states. Pump scheduling behavior is unchanged.
+
+AI_PHASE: chromium-process-model
+AI_STATUS: renderer-pump-trace-contract-corrected
+ROOT_CAUSE: The bounded trace treated every non-max deadline as delayed work, but immediate work is encoded by a null deadline and remaining_delay() rejects null.
+FIX_REASON: Log delay_us only for a real delayed deadline; preserve -1 for immediate and indefinite states.
+SCOPE: base/message_loop/message_pump_aros.cc
+VALIDATION: capped -j32 build 48 passed 44919/44919 and linked shared-V8 Chrome SHA-256 6d2b5eedd61c61e0bc656bec92e8bbc66331efd20de4557a3f0b480178415d55; .got size remains zero.
+RISK: Runtime 24 is still required to prove the assertion is absent and expose the next renderer boundary.
+AI_DECISION_CHAIN: runtime 23 immediate load -> message_pump.h(56) -> immediate deadline observed -> trace-only guard -> full rebuild/link.
+Evidence: test-artifacts/-chromium-browser-renderer-20260728/runtime-23-stripped-shared-v8-renderer-pump.log; test-artifacts/-chromium-browser-renderer-20260728/build-48-message-pump-trace-contract.log; test-artifacts/-chromium-browser-renderer-20260728/build-48-message-pump-trace-contract-verdict.md
+Job:
+---
+ base/message_loop/message_pump_aros.cc | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index b9e463f307..e8e2d35bea 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -159,6 +159,9 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+   for (;;) {
+     Delegate::NextWorkInfo next_work_info = delegate->DoWork();
+     const bool immediate_work_available = next_work_info.is_immediate();
++    const bool delayed_work_available =
++        !immediate_work_available &&
++        !next_work_info.delayed_run_time.is_max();
+     if (trace_run_iterations_ < 8) {
+       LOG(WARNING) << "[Chromium:IO:PumpTrace] task=" << pump_task_
+                    << " iteration=" << trace_run_iterations_
+@@ -166,9 +169,9 @@ void MessagePumpAROS::Run(Delegate* delegate) {
+                    << " delayed_max="
+                    << next_work_info.delayed_run_time.is_max()
+                    << " delay_us="
+-                   << (next_work_info.delayed_run_time.is_max()
+-                           ? -1
+-                           : next_work_info.remaining_delay().InMicroseconds())
++                   << (delayed_work_available
++                           ? next_work_info.remaining_delay().InMicroseconds()
++                           : -1)
+                    << " watches=" << controllers_.size();
+       ++trace_run_iterations_;
+     }

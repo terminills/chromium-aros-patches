@@ -1,0 +1,39 @@
+From dbb2aec6ff9df0d466f8900b17b00dee767f27f1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 12:42:19 -0500
+Subject: [PATCH 044/638] variations: align AROS field trial generation cohort
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: The field-trial config generator accepted only the closed Variations platform vocabulary and rejected native current_os=aros.
+
+FIX_REASON: Pass Linux only as the generator's desktop-study cohort token, matching AROS runtime Study::PLATFORM_LINUX eligibility while preserving native AROS build identity everywhere else.
+
+SCOPE: components/variations/field_trial_config/BUILD.gn
+
+VALIDATION: ninja -C out/aros-headless -j16 gen/components/variations/field_trial_config/fieldtrial_testing_config.cc
+
+RISK: low; this selects testing-config eligibility data only and introduces no Linux API assumptions.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/variations/field_trial_config/BUILD.gn | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/components/variations/field_trial_config/BUILD.gn b/components/variations/field_trial_config/BUILD.gn
+index 28c629fed2..184f20f5e6 100644
+--- a/components/variations/field_trial_config/BUILD.gn
++++ b/components/variations/field_trial_config/BUILD.gn
+@@ -25,6 +25,10 @@ action("field_trial_testing_config_action") {
+ 
+   if (current_os == "win") {
+     platform = "windows"
++  } else if (is_aros) {
++    # The field-trial schema has no AROS token; match the runtime desktop
++    # cohort without changing the native build identity.
++    platform = "linux"
+   } else if (is_chromeos_lacros) {
+     platform = "chromeos_lacros"
+   } else {

@@ -1,0 +1,112 @@
+From 995f00baabe14f1eb28847174f41078f5dd736c9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 21:21:20 -0500
+Subject: [PATCH 592/638] widevine: register the bundled CDM on AROS x64
+
+AROS takes the Linux bundled-CDM path: the library is a loadable module
+(libwidevinecdm.so), there is no component updater and no glibc gate.
+---
+ chrome/common/media/cdm_registration.cc | 28 ++++++++++++++++++-------
+ third_party/widevine/cdm/widevine.gni   |  1 +
+ 2 files changed, 21 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/common/media/cdm_registration.cc b/chrome/common/media/cdm_registration.cc
+index bbc0499c4f..a1f3755b6b 100644
+--- a/chrome/common/media/cdm_registration.cc
++++ b/chrome/common/media/cdm_registration.cc
+@@ -26,10 +26,15 @@
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+ #include "third_party/widevine/cdm/widevine_cdm_common.h"  // nogncheck
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
++    BUILDFLAG(IS_AROS)
+ #include "base/native_library.h"
+ #include "chrome/common/chrome_paths.h"
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
++        // || BUILDFLAG(IS_AROS)
++#if BUILDFLAG(IS_AROS)
++#include "base/no_destructor.h"
++#endif
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include "base/no_destructor.h"
+ #include "chrome/common/media/component_widevine_cdm_hint_file_linux.h"
+@@ -56,7 +61,7 @@ using Robustness = content::CdmInfo::Robustness;
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+ #if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||            \
+      BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && \
+-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ // Create a CdmInfo for a Widevine CDM, using |version|, |cdm_library_path|, and
+ // |capability|.
+ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
+@@ -76,9 +81,16 @@ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
+ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+     const base::FilePath& cdm_base_path) {
+   // Library should be inside a platform specific directory.
++#if BUILDFLAG(IS_AROS)
++  // The CDM is a loadable module (lib*.so), not an exec library.
++  auto cdm_library_path =
++      media::GetPlatformSpecificDirectory(cdm_base_path)
++          .Append(base::GetLoadableModuleName(kWidevineCdmLibraryName));
++#else
+   auto cdm_library_path =
+       media::GetPlatformSpecificDirectory(cdm_base_path)
+           .Append(base::GetNativeLibraryName(kWidevineCdmLibraryName));
++#endif
+   if (!base::PathExists(cdm_library_path)) {
+     DLOG(ERROR) << __func__ << " no directory: " << cdm_library_path;
+     return nullptr;
+@@ -98,10 +110,10 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+ }
+ #endif  // (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||
+         // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && (BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS))
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ 
+ #if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && \
+-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ // On Linux/ChromeOS we have to preload the CDM since it uses the zygote
+ // sandbox. On Windows and Mac, the bundled CDM is handled by the component
+ // updater.
+@@ -122,7 +134,7 @@ content::CdmInfo* GetBundledWidevine() {
+   return s_cdm_info->get();
+ }
+ #endif  // BUILDFLAG(BUNDLE_WIDEVINE_CDM) &&
+-        // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++        // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+@@ -160,15 +172,15 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
+       /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
+       kWidevineCdmType, base::Version(), base::FilePath());
+ 
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+-#if defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
++#if defined(WIDEVINE_CDM_MIN_GLIBC_VERSION) && !BUILDFLAG(IS_AROS)
+   base::Version glibc_version(gnu_get_libc_version());
+   DCHECK(glibc_version.IsValid());
+   if (glibc_version < base::Version(WIDEVINE_CDM_MIN_GLIBC_VERSION)) {
+     LOG(WARNING) << "Widevine not registered because glibc version is too low";
+     return;
+   }
+-#endif  // defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
++#endif  // defined(WIDEVINE_CDM_MIN_GLIBC_VERSION) && !BUILDFLAG(IS_AROS)
+ 
+   // The Widevine CDM on Linux needs to be registered (and loaded) before the
+   // zygote is locked down. The CDM can be found from the version bundled with
+diff --git a/third_party/widevine/cdm/widevine.gni b/third_party/widevine/cdm/widevine.gni
+index 58f073ca56..504e4ad429 100644
+--- a/third_party/widevine/cdm/widevine.gni
++++ b/third_party/widevine/cdm/widevine.gni
+@@ -28,6 +28,7 @@ library_widevine_cdm_available =
+     (is_chromeos &&
+      (target_cpu == "x64" || target_cpu == "arm" || target_cpu == "arm64")) ||
+     (target_os == "linux" && target_cpu == "x64") ||
++    (target_os == "aros" && target_cpu == "x64") ||
+     (target_os == "mac" && (target_cpu == "x64" || target_cpu == "arm64")) ||
+     (target_os == "win" &&
+      (target_cpu == "x86" || target_cpu == "x64" || target_cpu == "arm64"))

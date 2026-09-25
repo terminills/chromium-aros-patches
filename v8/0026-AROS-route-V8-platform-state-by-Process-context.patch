@@ -1,0 +1,97 @@
+From 9d79b0e5ef157648ad6334b75e81e2ddce5a9b22 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:52:02 -0500
+Subject: [PATCH 26/28] AROS: route V8 platform state by Process context
+
+Keep global engine initialization single-shot in resident v8.library while allowing every real AROS Chromium Process to register its own gin::V8Platform. Later renderers wait for the first initialization and reuse engine globals; GetCurrentPlatform resolves the caller context through an external AROS adapter.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: per-process-v8-platform-routing-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-12 cleared cppgc and failed at V8 InitializePlatform with startup state already kV8Initialized
+
+AI_VALIDATION: source diff check passes; adapter link and hosted replay pending
+
+AI_LIMITATIONS: abrupt Process teardown and V8 Dispose lifecycle are not yet virtualized; adapter must prove worker inheritance
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-12-cppgc-owned-allocator.log; runtime-12-cppgc-owned-allocator.png
+
+AI_DECISION_CHAIN:; V8 8f08620; Chromium 8aa41e9e56
+---
+ src/init/v8.cc | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/src/init/v8.cc b/src/init/v8.cc
+index 15540a7..0afca32 100644
+--- a/src/init/v8.cc
++++ b/src/init/v8.cc
+@@ -39,6 +39,11 @@
+ #include "src/diagnostics/etw-jit-win.h"
+ #endif
+ 
++#if defined(__AROS__)
++extern "C" void __aros_v8_set_current_platform(v8::Platform* platform);
++extern "C" v8::Platform* __aros_v8_get_current_platform();
++#endif
++
+ namespace v8 {
+ namespace internal {
+ 
+@@ -97,9 +102,31 @@ V8_DECLARE_ONCE(init_snapshot_once);
+ 
+ // static
+ void V8::InitializePlatform(v8::Platform* platform) {
++#if defined(__AROS__)
++  CHECK_NOT_NULL(platform);
++  __aros_v8_set_current_platform(platform);
++
++  V8StartupState expected = V8StartupState::kIdle;
++  if (!v8_startup_state_.compare_exchange_strong(
++          expected, V8StartupState::kPlatformInitializing,
++          std::memory_order_acq_rel, std::memory_order_acquire)) {
++    for (;;) {
++      const V8StartupState current =
++          v8_startup_state_.load(std::memory_order_acquire);
++      if (current == V8StartupState::kV8Initialized) return;
++      CHECK(current == V8StartupState::kPlatformInitializing ||
++            current == V8StartupState::kPlatformInitialized ||
++            current == V8StartupState::kV8Initializing);
++      base::OS::Sleep(base::TimeDelta::FromMilliseconds(1));
++    }
++  }
++#else
+   AdvanceStartupState(V8StartupState::kPlatformInitializing);
++#endif
+   CHECK(!platform_);
++#if !defined(__AROS__)
+   CHECK_NOT_NULL(platform);
++#endif
+   platform_ = platform;
+   v8::base::SetPrintStackTrace(platform_->GetStackTracePrinter());
+   v8::tracing::TracingCategoryObserver::SetUp();
+@@ -136,6 +163,12 @@ void V8::InitializePlatformForTesting(v8::Platform* platform) {
+   }
+ 
+ void V8::Initialize() {
++#if defined(__AROS__)
++  if (v8_startup_state_.load(std::memory_order_acquire) ==
++      V8StartupState::kV8Initialized) {
++    return;
++  }
++#endif
+   AdvanceStartupState(V8StartupState::kV8Initializing);
+   CHECK(platform_);
+ 
+@@ -349,6 +382,11 @@ void V8::DisposePlatform() {
+ }
+ 
+ v8::Platform* V8::GetCurrentPlatform() {
++#if defined(__AROS__)
++  if (v8::Platform* platform = __aros_v8_get_current_platform()) {
++    return platform;
++  }
++#endif
+   v8::Platform* platform = reinterpret_cast<v8::Platform*>(
+       base::Relaxed_Load(reinterpret_cast<base::AtomicWord*>(&platform_)));
+   DCHECK(platform);

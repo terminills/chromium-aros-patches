@@ -1,0 +1,44 @@
+From 8f086208e47a16a0da0cface834f85533fdf3dfa Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:38:24 -0500
+Subject: [PATCH 25/28] AROS: own the shared cppgc page allocator
+
+Distinct relocatable Chrome images pass distinct consumer-owned PageAllocator objects to one resident v8.library. Select the library-owned default allocator on AROS so cppgc never retains a renderer image object and every Process converges on one stable engine allocator.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: cppgc-library-owned-allocator-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-11 reached the new identity guard and proved renderer allocators differ by Chrome image placement
+
+AI_VALIDATION: source diff check passes; V8 and hosted runtime rebuild pending
+
+AI_LIMITATIONS: this changes cppgc allocation ownership only on AROS; further shared-engine globals remain failure-driven
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-11-cppgc-shared-process.log; runtime-11-cppgc-shared-process.png
+
+AI_DECISION_CHAIN:; V8 bda916d; Chromium 956044fb74
+---
+ src/heap/cppgc/platform.cc | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/heap/cppgc/platform.cc b/src/heap/cppgc/platform.cc
+index 319e7a8..c339063 100644
+--- a/src/heap/cppgc/platform.cc
++++ b/src/heap/cppgc/platform.cc
+@@ -114,7 +114,15 @@ void InitializeProcess(PageAllocator* page_allocator,
+   CHECK_EQ(0u, internal::kAllocationGranularity % poisoning_granularity);
+ #endif
+ 
++#if V8_OS_AROS
++  // The allocator supplied by Blink belongs to the caller's relocatable Chrome
++  // image. A resident v8.library cannot retain that object after the caller
++  // exits, and each AROS Process maps its own Chrome image at a different
++  // address. Own the shared cppgc allocator in the engine image instead.
++  auto& allocator = internal::CreateAllocatorIfNeeded(nullptr);
++#else
+   auto& allocator = internal::CreateAllocatorIfNeeded(page_allocator);
++#endif
+ 
+ #if V8_OS_AROS
+   if (internal::g_page_allocator) {

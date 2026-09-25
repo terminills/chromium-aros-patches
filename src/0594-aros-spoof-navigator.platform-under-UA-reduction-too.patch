@@ -1,0 +1,45 @@
+From 5d398e63d46083749dcf5e918187e18ae1b47dd2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 22:25:25 -0500
+Subject: [PATCH 594/638] aros: spoof navigator.platform under UA reduction too
+
+With ReduceUserAgentPlatformOsCpu on (the default), navigator.platform
+comes from GetReducedNavigatorPlatform(), not NavigatorID::platform(),
+so --aros-spoof-platform left it at "AROS x86_64" while the User-Agent
+and userAgentData already claimed Linux. Apply the same switch there.
+---
+ .../core/execution_context/navigator_base.cc       | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+index e10e8ea4d5..1133e81b1c 100644
+--- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
++++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+@@ -12,6 +12,10 @@
+ #include "third_party/blink/renderer/core/probe/core_probes.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/platform_spoof.h"
++#endif
++
+ #if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
+ #include <sys/utsname.h>
+ #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
+@@ -32,6 +36,16 @@ String GetReducedNavigatorPlatform() {
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return "";
+ #elif BUILDFLAG(IS_AROS)
++  // Match what the spoofed User-Agent claims (--aros-spoof-platform); with
++  // UA reduction on this, not NavigatorID::platform(), is navigator.platform.
++  switch (base::aros::GetSpoofedPlatform()) {
++    case base::aros::SpoofedPlatform::kLinux:
++      return "Linux x86_64";
++    case base::aros::SpoofedPlatform::kWindows:
++      return "Win32";
++    case base::aros::SpoofedPlatform::kNone:
++      break;
++  }
+   return "AROS x86_64";
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   return "Linux x86_64";

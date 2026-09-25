@@ -1,0 +1,107 @@
+From 08eed004d50425388f52c4bf1ea489d0ad42530e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:53:20 -0500
+Subject: [PATCH 20/43] cef: make unsupported AROS crash reporting inert
+
+Keep CEF's public crash-reporting hooks available but permanently disabled on AROS, where Crashpad is not ported. Exclude the CefCrashReporterClient implementation so whole-archive packaging does not import an unsupported platform base.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered native link attributed 13/44 unresolved symbols to crash_reporter; all originated from the POSIX Crashpad client path
+
+AI_ASSUMPTION: AROS native alert/stack diagnostics remain the crash path until a dedicated Crashpad provider exists
+
+AI_LIMITATIONS: compile, link, and runtime no-op behavior remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn                         |  7 +++++++
+ libcef/common/crash_reporting.cc | 12 +++++++++---
+ 2 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 4f6cd5e7..150bfb13 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -952,6 +952,13 @@ source_set("libcef_static") {
+     "//chrome/app/chrome_main_delegate.h",
+   ]
+ 
++  if (is_aros) {
++    # Crashpad is not available on AROS. crash_reporting.cc keeps the public
++    # CEF hooks as no-ops, so do not pull the Crashpad client implementation
++    # (and its unsupported platform base) into the resident archive.
++    sources -= [ "libcef/common/crash_reporter_client.cc" ]
++  }
++
+   configs += [
+     "libcef/features:config",
+     "//build/config:precompiled_headers",
+diff --git a/libcef/common/crash_reporting.cc b/libcef/common/crash_reporting.cc
+index b827119d..454e074f 100644
+--- a/libcef/common/crash_reporting.cc
++++ b/libcef/common/crash_reporting.cc
+@@ -26,7 +26,7 @@
+ #include "content/public/common/content_paths.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include "base/lazy_instance.h"
+ #include "components/crash/core/app/crashpad.h"
+ #include "libcef/common/crash_reporter_client.h"
+@@ -83,7 +83,7 @@ bool IsCrashReportingEnabledTrampoline() {
+ 
+ bool g_crash_reporting_enabled = false;
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ base::LazyInstance<CefCrashReporterClient>::Leaky g_crash_reporter_client =
+     LAZY_INSTANCE_INITIALIZER;
+ 
+@@ -184,6 +184,8 @@ bool SetCrashKeyValue(const base::StringPiece& key,
+ 
+ #if BUILDFLAG(IS_WIN)
+   return SetCrashKeyValueTrampoline(key, value);
++#elif BUILDFLAG(IS_AROS)
++  return false;
+ #else
+   return g_crash_reporter_client.Pointer()->SetCrashKeyValue(key, value);
+ #endif
+@@ -192,13 +194,15 @@ bool SetCrashKeyValue(const base::StringPiece& key,
+ #if BUILDFLAG(IS_POSIX)
+ // Be aware that logging is not initialized at the time this method is called.
+ void BasicStartupComplete(base::CommandLine* command_line) {
++#if !BUILDFLAG(IS_AROS)
+   g_crash_reporter_client.Pointer()->ReadCrashConfigFile();
++#endif
+ }
+ #endif
+ 
+ void PreSandboxStartup(const base::CommandLine& command_line,
+                        const std::string& process_type) {
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // Initialize crash reporting here on macOS and Linux. Crash reporting on
+   // Windows is initialized from context.cc.
+   InitCrashReporter(command_line, process_type);
+@@ -221,6 +225,7 @@ void PreSandboxStartup(const base::CommandLine& command_line,
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
+ void ZygoteForked(base::CommandLine* command_line,
+                   const std::string& process_type) {
++#if !BUILDFLAG(IS_AROS)
+   InitCrashReporter(*command_line, process_type);
+ 
+   if (g_crash_reporting_enabled) {
+@@ -229,6 +234,7 @@ void ZygoteForked(base::CommandLine* command_line,
+ 
+   // Reset the command line for the newly spawned process.
+   crash_keys::SetSwitchesFromCommandLine(*command_line, &IsBoringCEFSwitch);
++#endif
+ }
+ #endif
+ 

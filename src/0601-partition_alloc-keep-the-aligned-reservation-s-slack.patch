@@ -1,0 +1,132 @@
+From f5dfe1f90fd44077d9a2d0cedf0b44f7aca7d29f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 8 Sep 2026 22:33:04 -0500
+Subject: [PATCH 601/638] partition_alloc: keep the aligned reservation's slack
+ instead of AllocAbs-ing it back
+
+The Exec bridge trimmed an aligned reservation the way LibAllocAligned()
+does: Forbid(); FreeMem(whole); AllocAbs(kept). On the native pc-x86_64-smp
+guest that came back as a corrupted free list - the free block starting at
+the released address carried free_node.next = 0x20, and the next AllocAbs()
+faulted walking it (CR2=0x28, rip=tlsf_allocabs+0x99, alert 0x80000003).
+The fault is raised while the caller holds the MemHeader spinlock, so the
+alert path deadlocks against itself and the machine freezes silently.
+
+Forbid() also does not stop the other CPUs, so the whole block is briefly
+free to every other task. Keep the slack instead; it costs the alignment
+slack in RSS (2 GiB for the regular pool) until exec grows an aligned
+allocator that does not go through AllocAbs.
+---
+ .../page_allocator_internals_aros.h           | 74 +++++++------------
+ 1 file changed, 25 insertions(+), 49 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 26f5ac6393..50eb6ceafb 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -204,71 +204,48 @@ void LogTrimmedExecSlack(uintptr_t result,
+ }
+ 
+ // Exec memory is physically backed, and an aligned pool reservation
+-// over-allocates by its alignment (the 2 GiB regular pool costs 4 GiB before
+-// trimming), so a trimmed reservation must give its slack back or the machine
+-// runs out of memory before the first isolate. Exec's FreeMem() releases only
+-// whole blocks (the hosted MemHeader is TLSF, and its block headers live in
+-// the slack), so the slack is returned the way exec's own LibAllocAligned()
+-// does it: free the whole block and AllocAbs() the wanted part back. Slack
+-// smaller than a page stays with the block so TLSF never has to carve a free
+-// block too small to carry its header.
++// over-allocates by its alignment (the 2 GiB regular pool asks for 4 GiB and
++// trims to 2 GiB), so the slack is dead weight. It used to be given back the
++// way exec's own LibAllocAligned() does it -- Forbid(); FreeMem(whole);
++// AllocAbs(kept) -- but that idiom cannot be used here:
++//
++//   * Forbid() does not stop the other CPUs on an SMP kernel, so the whole
++//     block is briefly free to every other task.
++//   * It drives exec into tlsf_allocabs(), whose split paths are the least
++//     exercised in the allocator. On the native pc-x86_64-smp guest the
++//     released tail came straight back as a corrupted free-list link: the
++//     5 GiB free block that starts at the released address carried
++//     free_node.next = 0x20, and the next AllocAbs() faulted walking it
++//     (CR2=0x28, rip=tlsf_allocabs+0x99, alert 0x80000003). Because the
++//     fault is raised while the caller holds the MemHeader spinlock, the
++//     alert path deadlocks against itself and the machine freezes with no
++//     output (TRIG-1005/1006).
++//
++// So the slack now stays with the block: the reservation keeps the memory it
++// was given, and the record only remembers which window is exposed. This
++// costs the alignment slack in RSS (2 GiB for the regular pool) until exec
++// grows a real aligned allocator that does not go through AllocAbs.
+ void ReleaseTrimmedExecSlack(PageAllocationRecord* record,
+-                             uintptr_t base_address,
+-                             size_t base_length,
+                              uintptr_t result,
+                              size_t trim_length,
+                              PageAccessibilityConfiguration accessibility) {
+-  const size_t granularity = PageAllocationGranularity();
+   const uintptr_t alloc_base =
+       reinterpret_cast<uintptr_t>(record->allocation_base);
+   const uintptr_t alloc_end = alloc_base + record->allocation_length;
+-  const uintptr_t trim_end = result + trim_length;
+-  uintptr_t keep_base = (result - alloc_base >= granularity) ? result
+-                                                             : alloc_base;
+-  uintptr_t keep_end = (alloc_end - trim_end >= granularity) ? trim_end
+-                                                             : alloc_end;
+-  if (keep_base == alloc_base && keep_end == alloc_end) {
++  if (result == alloc_base && result + trim_length == alloc_end) {
+     return;
+   }
+ 
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
+-  constexpr KRN_MapAttr kDefault = static_cast<KRN_MapAttr>(
+-      MAP_Readable | MAP_Writable | MAP_Executable);
+-  // The reservation was mapped with the caller's (usually inaccessible)
+-  // protection over its whole length; the allocator writes block headers
+-  // into what it gets back, and the pool is executable by default (see
+-  // FreePagesInternal).
+-  SetProtection(KernelBase, base_address, base_length, kDefault);
+-
+-  // AllocAbs() may hand back a block starting before the requested address;
+-  // the final free must cover what was actually allocated.
+-  Forbid();
+-  FreeMem(record->allocation_base, record->allocation_length);
+-  void* got =
+-      AllocAbs(keep_end - keep_base, reinterpret_cast<void*>(keep_base));
+-  if (!got) {
+-    // Some other task took the slack first (a window only on SMP, where
+-    // Forbid() does not stop the other CPUs): take the whole block back.
+-    keep_base = alloc_base;
+-    keep_end = alloc_end;
+-    got = AllocAbs(keep_end - keep_base, reinterpret_cast<void*>(keep_base));
+-  }
+-  Permit();
+-  PA_CHECK(got);
+-  const uintptr_t got_base = reinterpret_cast<uintptr_t>(got);
+-  PA_CHECK(got_base <= keep_base);
+ 
+-  record->allocation_base = got;
+-  record->allocation_length = keep_end - got_base;
+   record->protected_base = result;
+   record->protected_length = trim_length;
+ 
+   SetProtection(KernelBase, result, trim_length,
+                 GetAccessFlags(accessibility));
+-  LogTrimmedExecSlack(result, trim_length,
+-                      (alloc_end - alloc_base) - record->allocation_length,
+-                      got, record->allocation_length);
++  LogTrimmedExecSlack(result, trim_length, 0, record->allocation_base,
++                      record->allocation_length);
+ }
+ 
+ bool RetainTrimmedPageAllocation(uintptr_t base_address,
+@@ -294,8 +271,7 @@ bool RetainTrimmedPageAllocation(uintptr_t base_address,
+   // The record belongs to the caller's reservation alone, so its backing can
+   // be reshaped outside the list lock.
+   if (found && found->exec_owned) {
+-    ReleaseTrimmedExecSlack(found, base_address, base_length, result,
+-                            trim_length, accessibility);
++    ReleaseTrimmedExecSlack(found, result, trim_length, accessibility);
+   }
+   return found != nullptr;
+ }

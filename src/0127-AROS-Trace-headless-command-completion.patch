@@ -1,0 +1,126 @@
+From 47a256d4402c7d23d1a61c7ec2d9bc3d95bfbf9f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 23:10:39 -0500
+Subject: [PATCH 127/638] [AROS] Trace headless command completion
+
+AI_PHASE: chromium-headless-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted run 0127 completed V8 initialization and valid partial-tail releases, built the browser context and WebContents, posted headless command processing, then exited with code 0 without producing the requested screenshot. Existing logs cannot distinguish a missing screenshot switch, an empty command dictionary, a harness evaluation result without image data, or an output write failure.
+FIX_REASON: Add AROS-only Chromium logging for command switch decoding, harness load, parsed command count, Runtime.evaluate completion fields, file-write completion, and final handler result. Chromium logging already reaches debug.resource, the hosted kernel log, and Sashimi.
+SCOPE: components/headless/command_handler/headless_command_handler.cc
+VALIDATION: AROS command_handler/headless_command_handler.o cross-compiled; run 0127 artifact 29 records normal process exit with no page screenshot.
+RISK: Diagnostic INFO lines add startup log volume on AROS only and do not change command execution or completion semantics.
+AI_DECISION_CHAIN: run 0127 V8 success -> command handler exits 0 without artifact -> instrument parser/evaluate/write boundaries
+---
+ .../headless_command_handler.cc               | 48 +++++++++++++++++--
+ 1 file changed, 45 insertions(+), 3 deletions(-)
+
+diff --git a/components/headless/command_handler/headless_command_handler.cc b/components/headless/command_handler/headless_command_handler.cc
+index 813f9616bb..a3e40c34df 100644
+--- a/components/headless/command_handler/headless_command_handler.cc
++++ b/components/headless/command_handler/headless_command_handler.cc
+@@ -138,6 +138,14 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
+   const base::CommandLine* command_line =
+       base::CommandLine::ForCurrentProcess();
+ 
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] switches screenshot="
++            << command_line->HasSwitch(switches::kScreenshot)
++            << " dump-dom=" << command_line->HasSwitch(switches::kDumpDom)
++            << " print-to-pdf="
++            << command_line->HasSwitch(switches::kPrintToPDF);
++#endif
++
+   // --dump-dom
+   if (command_line->HasSwitch(switches::kDumpDom)) {
+     commands->Set("dumpDom", true);
+@@ -177,6 +185,11 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
+     }
+     *screenshot_file_path = path;
+ 
++#if BUILDFLAG(IS_AROS)
++    LOG(INFO) << "[Chromium:headless-command] screenshot path="
++              << path.value();
++#endif
++
+     base::FilePath::StringType extension =
+         base::ToLowerASCII(path.FinalExtension());
+ 
+@@ -261,6 +274,10 @@ bool GetCommandDictAndOutputPaths(base::Value::Dict* commands,
+ }
+ 
+ bool WriteFileTask(base::FilePath file_path, std::string file_data) {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] writing " << file_data.size()
++            << " bytes to " << file_path.value();
++#endif
+   auto file_span = base::make_span(
+       reinterpret_cast<const uint8_t*>(file_data.data()), file_data.size());
+   if (!base::WriteFile(file_path, file_span)) {
+@@ -345,10 +362,17 @@ void HeadlessCommandHandler::ProcessCommands(
+ }
+ 
+ void HeadlessCommandHandler::DocumentOnLoadCompletedInPrimaryMainFrame() {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] harness document loaded";
++#endif
+   base::Value::Dict commands;
+-  if (!GetCommandDictAndOutputPaths(&commands, &pdf_file_path_,
+-                                    &screenshot_file_path_) ||
+-      commands.empty()) {
++  const bool commands_valid = GetCommandDictAndOutputPaths(
++      &commands, &pdf_file_path_, &screenshot_file_path_);
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] parsed valid=" << commands_valid
++            << " count=" << commands.size();
++#endif
++  if (!commands_valid || commands.empty()) {
+     PostDone();
+     return;
+   }
+@@ -380,6 +404,9 @@ void HeadlessCommandHandler::DocumentOnLoadCompletedInPrimaryMainFrame() {
+       "Runtime.evaluate", std::move(params),
+       base::BindOnce(&HeadlessCommandHandler::OnCommandsResult,
+                      base::Unretained(this)));
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] Runtime.evaluate posted";
++#endif
+ }
+ 
+ void HeadlessCommandHandler::WebContentsDestroyed() {
+@@ -393,6 +420,13 @@ void HeadlessCommandHandler::OnTargetCrashed(const base::Value::Dict&) {
+ }
+ 
+ void HeadlessCommandHandler::OnCommandsResult(base::Value::Dict result) {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] Runtime.evaluate completed error="
++            << (result.Find("error") != nullptr) << " exception="
++            << (result.FindByDottedPath("result.exceptionDetails") != nullptr)
++            << " value="
++            << (result.FindByDottedPath("result.result.value") != nullptr);
++#endif
+   if (result.FindBoolByDottedPath("result.result.value.pageLoadTimedOut")
+           .value_or(false)) {
+     result_ = Result::kPageLoadTimeout;
+@@ -435,6 +469,10 @@ void HeadlessCommandHandler::WriteFile(base::FilePath file_path,
+ }
+ 
+ void HeadlessCommandHandler::OnWriteFileDone(bool success) {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] output write completed success="
++            << success;
++#endif
+   DCHECK_GT(write_file_tasks_in_flight_, 0) << write_file_tasks_in_flight_;
+ 
+   if (!success) {
+@@ -453,6 +491,10 @@ void HeadlessCommandHandler::PostDone() {
+ }
+ 
+ void HeadlessCommandHandler::Done() {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless-command] done result="
++            << static_cast<int>(result_);
++#endif
+   devtools_client_.DetachClient();
+   browser_devtools_client_.DetachClient();
+ 

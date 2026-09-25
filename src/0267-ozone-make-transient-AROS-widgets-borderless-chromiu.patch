@@ -1,0 +1,110 @@
+From 9ea1f6ef6ee758bfb5e045a4b57d3b4e22a02ff2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 13:58:30 -0500
+Subject: [PATCH 267/638] ozone: make transient AROS widgets borderless
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_ROOT_CAUSE: Every ArosWindow was opened with the normal document frame because PlatformWindowInitProperties type and remove_standard_frame were discarded.
+AI_FIX_REASON: Preserve the initialization properties and use the standard Intuition frame only for ordinary kWindow widgets that did not request frame removal.
+AI_SCOPE: AROS Ozone window construction only; no popup ownership, modality, or lifetime changes.
+AI_VALIDATION: clang-format and git diff --check pass; dependency-expanded focused Ninja object build completed all 5054 steps and rebuilt both affected objects successfully. Runtime replay still required with a relinked binary.
+AI_RISK: Medium; settings auxiliary-window framing depends on Chromium supplying a transient type or remove_standard_frame.
+AI_CHAIN:
+---
+ ui/ozone/platform/aros/aros_window.cc         | 24 ++++++++++++-------
+ ui/ozone/platform/aros/aros_window.h          |  3 ++-
+ ui/ozone/platform/aros/ozone_platform_aros.cc |  3 ++-
+ 3 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 7d697f087b..60c6b69f8a 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -344,21 +344,27 @@ bool IsMouseWheelRawKey(uint16_t code) {
+ 
+ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+                        ArosWindowManager* manager,
+-                       const gfx::Rect& requested_bounds)
+-    : delegate_(delegate), manager_(manager), bounds_(requested_bounds) {
++                       PlatformWindowInitProperties properties)
++    : delegate_(delegate), manager_(manager), bounds_(properties.bounds) {
+   bounds_.set_width(PositiveOrDefault(bounds_.width(), kDefaultWindowWidth));
+   bounds_.set_height(PositiveOrDefault(bounds_.height(), kDefaultWindowHeight));
+   const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+   bounds_ = ConstrainClientBoundsToWorkArea(bounds_, work_area, 0, 0, 0, 0);
+ 
++  const bool use_standard_frame =
++      properties.type == PlatformWindowType::kWindow &&
++      !properties.remove_standard_frame;
+   widget_ = manager_->AddWindow(this);
+   window_ = OpenWindowTags(
+-      nullptr, WA_Title, reinterpret_cast<IPTR>("Chromium"), WA_Left,
+-      bounds_.x(), WA_Top, bounds_.y(), WA_InnerWidth, bounds_.width(),
+-      WA_InnerHeight, bounds_.height(), WA_CloseGadget, TRUE, WA_DepthGadget,
+-      TRUE, WA_DragBar, TRUE, WA_SizeGadget, TRUE, WA_SizeBBottom, TRUE,
+-      WA_Activate, FALSE, WA_Hidden, TRUE, WA_AutoAdjust, TRUE, WA_SmartRefresh,
+-      TRUE, WA_ReportMouse, TRUE, WA_RMBTrap, TRUE, TAG_DONE);
++      nullptr, WA_Title,
++      reinterpret_cast<IPTR>(use_standard_frame ? "Chromium" : nullptr),
++      WA_Left, bounds_.x(), WA_Top, bounds_.y(), WA_InnerWidth, bounds_.width(),
++      WA_InnerHeight, bounds_.height(), WA_CloseGadget, use_standard_frame,
++      WA_DepthGadget, use_standard_frame, WA_DragBar, use_standard_frame,
++      WA_SizeGadget, use_standard_frame, WA_SizeBBottom, use_standard_frame,
++      WA_Borderless, !use_standard_frame, WA_Activate, FALSE, WA_Hidden, TRUE,
++      WA_AutoAdjust, TRUE, WA_SmartRefresh, TRUE, WA_ReportMouse, TRUE,
++      WA_RMBTrap, TRUE, TAG_DONE);
+ 
+   if (!window_) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS] OpenWindowTags failed widget="
+@@ -392,6 +398,8 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+     LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
+               << widget_ << " native=" << window_
+               << " client=" << bounds_.ToString()
++              << " type=" << static_cast<int>(properties.type)
++              << " standard_frame=" << use_standard_frame
+               << " work_area=" << work_area.ToString();
+   }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index f16505b2d2..3c5fcba385 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -21,6 +21,7 @@
+ #include "ui/gfx/native_widget_types.h"
+ #include "ui/platform_window/platform_window.h"
+ #include "ui/platform_window/platform_window_delegate.h"
++#include "ui/platform_window/platform_window_init_properties.h"
+ 
+ struct Window;
+ 
+@@ -32,7 +33,7 @@ class ArosWindow : public PlatformWindow {
+  public:
+   ArosWindow(PlatformWindowDelegate* delegate,
+              ArosWindowManager* manager,
+-             const gfx::Rect& bounds);
++             PlatformWindowInitProperties properties);
+ 
+   ArosWindow(const ArosWindow&) = delete;
+   ArosWindow& operator=(const ArosWindow&) = delete;
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 47cc5ee0c2..8b46564589 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -5,6 +5,7 @@
+ #include "ui/ozone/platform/aros/ozone_platform_aros.h"
+ 
+ #include <memory>
++#include <utility>
+ 
+ #include "base/check.h"
+ #include "base/functional/bind.h"
+@@ -92,7 +93,7 @@ class OzonePlatformAros : public OzonePlatform {
+       PlatformWindowInitProperties properties) override {
+     CHECK(window_manager_);
+     return std::make_unique<ArosWindow>(delegate, window_manager_.get(),
+-                                        properties.bounds);
++                                        std::move(properties));
+   }
+ 
+   bool IsWindowCompositingSupported() const override { return false; }

@@ -1,0 +1,223 @@
+From 09db2764976808bccbdadc7bcd7ba046f295c311 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 09:02:50 -0500
+Subject: [PATCH 428/638] [AROS] Quiet AROS startup and canvas checkpoints
+
+Retire startup-boundary and bounded canvas-present probes now that the browser and cross-process software canvas paths are established. Keep the first cross-process lifecycle confirmations and all genuine failure reporting.
+
+---
+ content/app/content_main_runner_impl.cc       | 46 +------------------
+ .../platform/aros/aros_surface_factory.cc     |  8 ----
+ ui/ozone/platform/aros/aros_window_manager.cc | 18 ++------
+ ui/ozone/platform/aros/aros_window_manager.h  |  2 -
+ 4 files changed, 5 insertions(+), 69 deletions(-)
+
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+index e1f68c36e5..7de0c987df 100644
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -1005,10 +1005,6 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+ 
+   delegate_->PreSandboxStartup();
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] ContentMain PreSandbox returned";
+-#endif
+-
+ #if BUILDFLAG(ENABLE_THREAD_ISOLATION)
+   // instantiate the ThreadIsolatedAllocator before we spawn threads
+   if (process_type == switches::kRendererProcess ||
+@@ -1044,10 +1040,6 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+ 
+   delegate_->SandboxInitialized(process_type);
+ 
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] ContentMain SandboxInitialized returned";
+-#endif
+-
+ #if BUILDFLAG(USE_ZYGOTE)
+   if (process_type.empty()) {
+     // The sandbox host needs to be initialized before forking a thread to
+@@ -1149,12 +1141,8 @@ int NO_STACK_PROTECTOR ContentMainRunnerImpl::Run() {
+ 
+   RegisterMainThreadFactories();
+ 
+-  if (process_type.empty()) {
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] dispatching browser main";
+-#endif
++  if (process_type.empty())
+     return RunBrowser(std::move(main_params), start_minimal_browser);
+-  }
+ 
+   return RunOtherNamedProcessTypeMain(process_type, std::move(main_params),
+                                       delegate_);
+@@ -1184,36 +1172,19 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+       std::ignore = leaked_field_trial_list;
+     }
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] browser feature list ready";
+-#endif
+-
+     if (delegate_->ShouldInitializeMojo(invoked_in_browser)) {
+       InitializeMojoCore();
+     }
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] browser Mojo core ready";
+-#endif
+-
+     // Create and start the ThreadPool early to allow the rest of the startup
+     // code to use the thread_pool.h API.
+     const bool has_thread_pool =
+         GetContentClient()->browser()->CreateThreadPool("Browser");
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] browser thread pool created="
+-                 << has_thread_pool;
+-#endif
+-
+     std::optional<int> pre_browser_main_exit_code = delegate_->PreBrowserMain();
+     if (pre_browser_main_exit_code.has_value())
+       return pre_browser_main_exit_code.value();
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] PreBrowserMain returned";
+-#endif
+-
+ #if BUILDFLAG(IS_WIN)
+     if (l10n_util::GetLocaleOverrides().empty()) {
+       // Override the configured locale with the user's preferred UI language.
+@@ -1240,10 +1211,6 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+     if (post_early_initialization_exit_code.has_value())
+       return post_early_initialization_exit_code.value();
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] PostEarlyInitialization returned";
+-#endif
+-
+     // The hang watcher needs to be started once the feature list is available
+     // but before the IO thread is started.
+     if (base::HangWatcher::IsEnabled()) {
+@@ -1265,10 +1232,6 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+       StartBrowserThreadPool();
+     }
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] browser thread pool started";
+-#endif
+-
+     BrowserTaskExecutor::PostFeatureListSetup();
+ 
+     tracing::PerfettoTracedProcess::Get()
+@@ -1306,10 +1269,6 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+     mojo_ipc_support_ =
+         std::make_unique<MojoIpcSupport>(BrowserTaskExecutor::CreateIOThread());
+ 
+-#if BUILDFLAG(IS_AROS)
+-    LOG(WARNING) << "[Chromium:AROS:Startup] browser IO thread ready";
+-#endif
+-
+     GetContentClient()->browser()->BindBrowserControlInterface(
+         MaybeAcceptMojoInvitation());
+ 
+@@ -1338,9 +1297,6 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
+ 
+   is_browser_main_loop_started_ = true;
+   main_params.startup_data = mojo_ipc_support_->CreateBrowserStartupData();
+-#if BUILDFLAG(IS_AROS)
+-  LOG(WARNING) << "[Chromium:AROS:Startup] entering BrowserMain";
+-#endif
+   return RunBrowserProcessMain(std::move(main_params), delegate_);
+ }
+ 
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+index de1d9c2631..bb3289005b 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.cc
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -61,11 +61,6 @@ class ArosCanvasSurface : public SurfaceOzoneCanvas {
+                                         pixels.rowBytes(), size_, damage)) {
+       LOG(ERROR) << "[Chromium:Ozone:AROS] present failed widget=" << widget_
+                  << " damage=" << damage.ToString();
+-    } else if (!presented_once_) {
+-      presented_once_ = true;
+-      LOG(INFO) << "[Chromium:Ozone:AROS] first software canvas present widget="
+-                << widget_ << " size=" << size_.ToString()
+-                << " damage=" << damage.ToString();
+     }
+   }
+ 
+@@ -78,7 +73,6 @@ class ArosCanvasSurface : public SurfaceOzoneCanvas {
+   const gfx::AcceleratedWidget widget_;
+   gfx::Size size_;
+   sk_sp<SkSurface> surface_;
+-  bool presented_once_ = false;
+ };
+ 
+ }  // namespace
+@@ -110,8 +104,6 @@ GLOzone* ArosSurfaceFactory::GetGLOzone(
+ 
+ std::unique_ptr<SurfaceOzoneCanvas> ArosSurfaceFactory::CreateCanvasForWidget(
+     gfx::AcceleratedWidget widget) {
+-  LOG(INFO) << "[Chromium:Ozone:AROS] creating software canvas widget="
+-            << widget;
+   return std::make_unique<ArosCanvasSurface>(window_manager_, widget);
+ }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
+index 40e5b61b44..5d83c93eca 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.cc
++++ b/ui/ozone/platform/aros/aros_window_manager.cc
+@@ -188,7 +188,6 @@ void ArosWindowManager::ProcessNativeEvents() {
+       const gfx::AcceleratedWidget widget = request->widget;
+       {
+         base::AutoLock lock(lock_);
+-        const uint32_t sequence = ++received_present_count_;
+         first_request = !logged_received_present_;
+         if (first_request) {
+           logged_received_present_ = true;
+@@ -205,12 +204,10 @@ void ArosWindowManager::ProcessNativeEvents() {
+                 gfx::Size(request->width, request->height),
+                 gfx::Rect(request->damage_x, request->damage_y,
+                           request->damage_width, request->damage_height));
+-        if (sequence <= 8) {
+-          LOG(INFO) << "[Chromium:Ozone:AROS] browser canvas paint sequence="
+-                    << sequence << " widget=" << request->widget
+-                    << " damage=" << request->damage_x << ","
+-                    << request->damage_y << " " << request->damage_width << "x"
+-                    << request->damage_height << " result=" << request->result;
++        if (first_request) {
++          LOG(INFO) << "[Chromium:Ozone:AROS] completed first cross-Process "
++                       "canvas paint widget="
++                    << request->widget << " result=" << request->result;
+         }
+       }
+       ReplyMsg(&request->message);
+@@ -277,13 +274,6 @@ bool ArosWindowManager::PresentCanvas(gfx::AcceleratedWidget widget,
+   }
+   WaitPort(presentation_reply_port_);
+   CHECK_EQ(GetMsg(presentation_reply_port_), &request.message);
+-  const uint32_t sequence = ++forwarded_present_count_;
+-  if (sequence <= 8) {
+-    LOG(INFO) << "[Chromium:Ozone:AROS] Viz canvas present sequence="
+-              << sequence << " widget=" << widget
+-              << " damage=" << damage.ToString()
+-              << " result=" << request.result;
+-  }
+   if (!logged_forwarded_present_) {
+     logged_forwarded_present_ = true;
+     LOG(INFO) << "[Chromium:Ozone:AROS] first cross-Process canvas present "
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index 83a4345a65..c6d41b5bac 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -66,8 +66,6 @@ class ArosWindowManager {
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
+   RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
+   bool owns_presentation_port_ = false;
+-  uint32_t received_present_count_ GUARDED_BY(lock_) = 0;
+-  uint32_t forwarded_present_count_ GUARDED_BY(lock_) = 0;
+   bool logged_received_present_ GUARDED_BY(lock_) = false;
+   bool logged_waiting_present_reply_ GUARDED_BY(lock_) = false;
+   bool logged_forwarded_present_ GUARDED_BY(lock_) = false;

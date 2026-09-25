@@ -1,0 +1,110 @@
+From d4b26ee0d8abbc682696a4b58c1ce943bee1eedb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 17:19:12 -0500
+Subject: [PATCH 114/638] [AROS] Trace large PartitionAlloc page requests
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: Hosted run 0114 still failed the first 512 MiB regular-pool allocation, but HandlePoolAllocFailure only preserved ENOMEM and could not distinguish exact-hint rejection, contiguous-memory exhaustion, or alignment fallback failure.
+FIX_REASON: Emit debug.resource records for AROS page requests of at least 64 MiB, including hint, length, protection, total and largest public memory, result, and error.
+SCOPE: base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+VALIDATION: AROS PartitionAlloc page_allocator.o cross-compiled; symbolized 0114 stack offset resolves to the first regular-pool allocation failure.
+RISK: Diagnostic-only records add a handful of lines during large pool setup and should be reduced after the backend contract is corrected.
+AI_DECISION_CHAIN: bounded pools still fail -> first regular pool identified by exact symbol offset -> instrument KrnAllocPages boundary
+Continues: c1a43d15b0
+---
+ .../page_allocator_internals_aros.h           | 45 ++++++++++++++++++-
+ 1 file changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 3dce5d33c3..4b242b8c0b 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -8,6 +8,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cerrno>
++#include <cstdio>
+ #include <cstdint>
+ #include <cstring>
+ #include <limits>
+@@ -17,6 +18,7 @@
+ #include <aros/kernel.h>
+ #pragma pop_macro("SCHED_RR")
+ #include <exec/memory.h>
++#include <proto/debug.h>
+ #include <proto/exec.h>
+ #include <proto/kernel.h>
+ 
+@@ -24,6 +26,8 @@
+ #include "partition_alloc/page_allocator_constants.h"
+ #include "partition_alloc/partition_alloc_check.h"
+ 
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
+ namespace partition_alloc::internal {
+ 
+ // KrnAllocPages treats a non-null address as an exact physical-page request.
+@@ -73,6 +77,31 @@ void SetProtection(APTR KernelBase,
+   }
+ }
+ 
++void LogLargePageAllocation(uintptr_t hint,
++                            size_t length,
++                            KRN_MapAttr protection,
++                            IPTR available,
++                            IPTR largest,
++                            void* result,
++                            int error) {
++  char line[256];
++  struct Library* DebugBase = OpenLibrary("debug.library", 0);
++  if (!DebugBase) {
++    return;
++  }
++
++  std::snprintf(
++      line, sizeof(line),
++      "[Chromium:PA] KrnAllocPages hint=%p len=%llu protection=0x%lx "
++      "available=%llu largest=%llu result=%p error=%d\n",
++      reinterpret_cast<void*>(hint), static_cast<unsigned long long>(length),
++      static_cast<unsigned long>(protection),
++      static_cast<unsigned long long>(available),
++      static_cast<unsigned long long>(largest), result, error);
++  ArosKPutStr(line);
++  CloseLibrary(DebugBase);
++}
++
+ }  // namespace
+ 
+ uintptr_t SystemAllocPagesInternal(
+@@ -99,15 +128,29 @@ uintptr_t SystemAllocPagesInternal(
+     flags |= MEMF_EXECUTABLE;
+   }
+ 
++  constexpr size_t kLargePageRequest = 64 * 1024 * 1024;
++  const bool log_request = length >= kLargePageRequest;
++  const IPTR available = log_request ? AvailMem(MEMF_PUBLIC) : 0;
++  const IPTR largest =
++      log_request ? AvailMem(MEMF_PUBLIC | MEMF_LARGEST) : 0;
++  const KRN_MapAttr protection = GetAccessFlags(accessibility);
+   void* result = KrnAllocPages(reinterpret_cast<void*>(hint), length, flags);
+   if (!result) {
+     s_allocPageErrorCode = ENOMEM;
++    if (log_request) {
++      LogLargePageAllocation(hint, length, protection, available, largest,
++                             result, ENOMEM);
++    }
+     return 0;
+   }
+ 
+   SetProtection(KernelBase, reinterpret_cast<uintptr_t>(result), length,
+-                GetAccessFlags(accessibility));
++                protection);
+   s_allocPageErrorCode = 0;
++  if (log_request) {
++    LogLargePageAllocation(hint, length, protection, available, largest,
++                           result, 0);
++  }
+   return reinterpret_cast<uintptr_t>(result);
+ }
+ 

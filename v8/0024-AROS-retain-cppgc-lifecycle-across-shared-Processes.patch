@@ -1,0 +1,94 @@
+From bda916da1a0bc98ba7c812e6e0398caebc585285 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 28 Jul 2026 16:30:38 -0500
+Subject: [PATCH 24/28] AROS: retain cppgc lifecycle across shared Processes
+
+AROS Processes share one resident v8.library data image even though Chromium launches distinct browser and renderer Processes. Make cppgc initialization serialized and idempotent when all openers resolve the same page allocator, and prevent one renderer shutdown from clearing allocator state still used by peers.
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: cppgc-shared-process-lifecycle-checkpoint
+
+AI_FAILURE_PRESERVED: runtime-10 static-page renderer trapped in cppgc::InitializeProcess with !g_page_allocator after a peer renderer initialized the shared engine image
+
+AI_VALIDATION: source diff check passes; v8_monolith rebuild and hosted renderer replay pending
+
+AI_LIMITATIONS: this proves and fixes the cppgc allocator singleton only; later V8 process-global collisions may remain
+
+AI_EVIDENCE:-chromium-browser-renderer-20260728/runtime-10-static-control.log; runtime-10-static-control.png; runtime-10-static-control-verdict.md
+
+AI_DECISION_CHAIN:; V8 d1f9493; Chromium 8e2c325311
+---
+ src/heap/cppgc/platform.cc | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/src/heap/cppgc/platform.cc b/src/heap/cppgc/platform.cc
+index c735464..319e7a8 100644
+--- a/src/heap/cppgc/platform.cc
++++ b/src/heap/cppgc/platform.cc
+@@ -8,6 +8,7 @@
+ #include "src/base/logging.h"
+ #include "src/base/macros.h"
+ #include "src/base/page-allocator.h"
++#include "src/base/platform/mutex.h"
+ #include "src/base/platform/platform.h"
+ #include "src/base/sanitizer/asan.h"
+ #include "src/base/sanitizer/lsan-page-allocator.h"
+@@ -26,6 +27,14 @@ namespace {
+ 
+ PageAllocator* g_page_allocator = nullptr;
+ 
++#if V8_OS_AROS
++// AROS Processes share one address space and therefore one v8.library data
++// image. Chromium still initializes cppgc once in every renderer Process, so
++// serialize that lifecycle and retain the single compatible allocator owned by
++// the resident engine image.
++v8::base::LazyMutex g_process_lifecycle_mutex = LAZY_MUTEX_INITIALIZER;
++#endif
++
+ PageAllocator& CreateAllocatorIfNeeded(PageAllocator* page_allocator) {
+   if (!page_allocator) {
+     static v8::base::LeakyObject<v8::base::PageAllocator>
+@@ -89,6 +98,11 @@ TracingController* Platform::GetTracingController() {
+ 
+ void InitializeProcess(PageAllocator* page_allocator,
+                        size_t desired_heap_size) {
++#if V8_OS_AROS
++  v8::base::MutexGuard lifecycle_guard(
++      internal::g_process_lifecycle_mutex.Pointer());
++#endif
++
+ #if defined(V8_USE_ADDRESS_SANITIZER) && defined(V8_HOST_ARCH_64_BIT)
+   // Retrieve asan's internal shadow memory granularity and check that Oilpan's
+   // object alignment/sizes are multiple of this granularity. This is needed to
+@@ -102,6 +116,13 @@ void InitializeProcess(PageAllocator* page_allocator,
+ 
+   auto& allocator = internal::CreateAllocatorIfNeeded(page_allocator);
+ 
++#if V8_OS_AROS
++  if (internal::g_page_allocator) {
++    CHECK_EQ(&allocator, internal::g_page_allocator);
++    return;
++  }
++#endif
++
+   CHECK(!internal::g_page_allocator);
+   internal::GlobalGCInfoTable::Initialize(allocator);
+ #if defined(CPPGC_CAGED_HEAP)
+@@ -110,6 +131,15 @@ void InitializeProcess(PageAllocator* page_allocator,
+   internal::g_page_allocator = &allocator;
+ }
+ 
+-void ShutdownProcess() { internal::g_page_allocator = nullptr; }
++void ShutdownProcess() {
++#if V8_OS_AROS
++  // v8.library is resident and its cppgc globals are shared by every AROS
++  // Process using the engine. One renderer must not invalidate the allocator
++  // while another renderer (or the browser) still owns cppgc heaps.
++  return;
++#else
++  internal::g_page_allocator = nullptr;
++#endif
++}
+ 
+ }  // namespace cppgc

@@ -1,0 +1,34 @@
+From 4ecc94db9c4a29cb9743b64a5d852d232dd0cc18 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 01:40:33 -0500
+Subject: [PATCH 525/638] Clamp AROS socket buffers to AROSTCP window size
+
+AROSTCP defaults x86_64 TCP send/receive windows to 128 KiB and backs sockets with a 4 MiB mbuf pool. The previous 1 MiB Chromium clamp could exhaust that pool when YouTube opens several sockets, surfacing as repeated ERR_SOCKET_SET_*_BUFFER_SIZE failures. Clamp Chromium's AROS SO_RCVBUF/SO_SNDBUF requests to 128 KiB to match the stack's normal high-water behavior.
+
+Evidence:
+
+- build116 linked cleanly with ninja -C out/aros-chrome chrome -j32.
+
+- installed chrome hash beca3657877675eead9e14445632b4b03b393cd1602e98b39f284f5308e4abaa.
+
+- hosted run30 scripted YouTube replay returned chrome status 0 and emitted 0 "Could not set socket .* buffer size" lines.
+---
+ net/socket/socket_options.cc | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/net/socket/socket_options.cc b/net/socket/socket_options.cc
+index 610d7f6cda..45d87531b0 100644
+--- a/net/socket/socket_options.cc
++++ b/net/socket/socket_options.cc
+@@ -26,7 +26,10 @@ namespace net {
+ namespace {
+ 
+ #if BUILDFLAG(IS_AROS)
+-constexpr int32_t kMaxAROSSocketBufferSize = 1024 * 1024;
++// AROSTCP's default x86_64 TCP send/receive windows are 128 KiB, backed by a
++// relatively small global mbuf pool. Larger per-socket requests can succeed in
++// isolation but exhaust the pool once Chromium opens several YouTube sockets.
++constexpr int32_t kMaxAROSSocketBufferSize = 128 * 1024;
+ 
+ int32_t ClampAROSSocketBufferSize(int32_t size) {
+   if (size <= 0 || size <= kMaxAROSSocketBufferSize) {

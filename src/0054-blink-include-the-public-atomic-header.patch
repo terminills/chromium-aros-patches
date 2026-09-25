@@ -1,0 +1,44 @@
+From 0a94c11ff538158ebdf36226952381a4242626e1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 14:08:21 -0500
+Subject: [PATCH 054/638] blink: include the public atomic header
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Script streaming now obtains std::atomic from the selected C++ standard library rather than Chromium's bundled libc++ internals.
+
+ROOT_CAUSE: script_streamer.cc directly included third_party/libc++'s private __atomic/atomic.h; a GCC/libstdc++ target has no libc++ private include root for that header's transitive files.
+
+FIX_REASON: Include the standard <atomic> interface owned by the source's std::atomic member, matching the rest of Blink and remaining independent of the chosen C++ library implementation.
+
+SCOPE: Blink V8 script streamer atomic declaration
+
+VALIDATION: The original script_streamer.o target compiled with the AROS GCC/libstdc++ cross-toolchain; staged diff check passed.
+
+RISK: None; std::atomic semantics are unchanged and the patch removes a private implementation dependency.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ third_party/blink/renderer/bindings/core/v8/script_streamer.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/blink/renderer/bindings/core/v8/script_streamer.cc b/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
+index a2b9721b70..169bc48d27 100644
+--- a/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
++++ b/third_party/blink/renderer/bindings/core/v8/script_streamer.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/bindings/core/v8/script_streamer.h"
+ 
++#include <atomic>
+ #include <memory>
+ #include <utility>
+ 
+@@ -60,7 +61,6 @@
+ #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+ #include "third_party/blink/renderer/platform/wtf/text/text_encoding_registry.h"
+-#include "third_party/libc++/src/include/__atomic/atomic.h"
+ 
+ namespace blink {
+ namespace {

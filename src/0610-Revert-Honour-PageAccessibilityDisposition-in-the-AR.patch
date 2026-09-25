@@ -1,0 +1,87 @@
+From 3f94bd42ce859e9071782478fc4a416595eaa789 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 12 Sep 2026 19:06:31 -0500
+Subject: [PATCH 610/638] Revert "Honour PageAccessibilityDisposition in the
+ AROS decommit path"
+
+This reverts 38906124a6. The change is right on paper and wrong in practice:
+it kills the browser on a real page.
+
+Measured, same site (https://aros.sourceforge.io/), same runner, same 8192 MB:
+
+  chrome 2026-09-08 (control)      renders fully              0 traps
+  chrome + 38906124a6             "Loading..." forever        1 trap
+  chrome - 38906124a6 (this)       renders fully              0 traps
+
+The failing build and the passing one differ by ELEVEN ninja edges - this
+header and the link - so the attribution is clean.
+
+  Task : CrBrowserMain
+  Function Exec_119_FreePooled +0x3a
+  TRAPNO=0x0d (#GP)  CR2=0  ERR=0
+  RAX = RDI = 0x458948d02948ca89
+
+0x458948d02948ca89 is x86 instruction bytes (89 ca / 48 29 d0 / 48 89 45...),
+i.e. code used as a pointer and handed to FreePooled. #GP with CR2=0 and code
+in a register is a non-canonical address, not a page fault.
+
+Why the "correct" change makes things worse: decommit previously stripped every
+range to inaccessible, so a stale access faulted immediately, at the site of
+the mistake. Honouring kAllowKeepForPerf leaves 122 ranges per page load
+readable and zeroed - which is what POSIX MADV_DONTNEED gives you, and what
+Linux Chromium relies on - so a stale read now silently returns zeroes and the
+corruption propagates until something dereferences a garbage pointer far from
+the cause. The commit did not introduce the bug; it removed the guard rail that
+was containing it.
+
+So this revert is a deliberate band-aid, and the underlying use-after-free is
+the real defect. Re-land this only after that is fixed - and note the revert
+restores a strictness AROS does not need, at the cost of 122 unnecessary
+protection strips per page load.
+
+Evidence: build-logs/evidence/chrome-{control-sep08,pafix-verify,revert-confirm}-20260912
+---
+ .../page_allocator_internals_aros.h           | 25 +++----------------
+ 1 file changed, 3 insertions(+), 22 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index c43aea1aa4..50eb6ceafb 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -553,33 +553,14 @@ uintptr_t TrimMappingInternal(uintptr_t base_address,
+ void DecommitSystemPagesInternal(
+     uintptr_t address,
+     size_t length,
+-    PageAccessibilityDisposition accessibility_disposition) {
++    PageAccessibilityDisposition) {
+   APTR KernelBase = OpenKernelResource();
+   PA_CHECK(KernelBase);
+-  // Honour the disposition, as POSIX does. page_allocator_internals_posix.h
+-  // computes the same flag and then makes pages inaccessible "unless the
+-  // caller requested to keep permissions", and the enum itself documents
+-  // kAllowKeepForPerf as "will not update permissions, if the platform
+-  // supports that (POSIX & Fuchsia only)".
+-  //
+-  // This function previously ignored the parameter and always stripped access
+-  // to zero, which is STRICTER than the platform it emulates: a caller that
+-  // decommits kAllowKeepForPerf and then reads the range is fine on Linux,
+-  // where the pages stay mapped, and takes a page fault here.
+-  const bool change_permissions =
+-      accessibility_disposition == PageAccessibilityDisposition::kRequireUpdate;
+-  TracePageEvent(change_permissions ? "decommit" : "decommit-keep", address,
+-                 length, 0);
++  TracePageEvent("decommit", address, length, 0);
+   SetProtection(KernelBase, address, length,
+                 static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
+-  // DiscardSystemPagesInternal() is a no-op on AROS, so this zeroing is what
+-  // emulates the discard. Keeping it on both paths means a reader of a
+-  // kAllowKeepForPerf range sees zeroes, which is what a POSIX caller gets
+-  // back from MADV_DONTNEED.
+   std::memset(reinterpret_cast<void*>(address), 0, length);
+-  if (change_permissions) {
+-    SetProtection(KernelBase, address, length, static_cast<KRN_MapAttr>(0));
+-  }
++  SetProtection(KernelBase, address, length, static_cast<KRN_MapAttr>(0));
+ }
+ 
+ bool DecommitAndZeroSystemPagesInternal(uintptr_t address,

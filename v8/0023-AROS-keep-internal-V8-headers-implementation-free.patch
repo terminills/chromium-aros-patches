@@ -1,0 +1,87 @@
+From d1f9493f698fbda3b65f5701dcd40e49b4871d81 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 20:38:53 -0500
+Subject: [PATCH 23/28] AROS: keep internal V8 headers implementation-free
+
+When Chromium consumes v8.library, stop V8's internal, shared-internal, flags, and heap-base header targets from pulling v8_libbase implementation objects into dependent archives. Generated-header and ordinary header dependencies remain intact; non-AROS graphs are unchanged.
+
+AI_PHASE: chromium-blink-core-library
+
+AI_STATUS: internal-header-support-leak-checkpoint
+
+AI_FAILURE_PRESERVED: first focused Blink Core archive contained 39 v8_libbase objects through inspector generated headers
+
+AI_VALIDATION: focused Core GN path identified four exact routes through v8_internal_headers, v8_flags, v8_shared_internal_headers, and v8_heap_base_headers; source diff check passes
+
+AI_EVIDENCE: Chromium out/aros-blink-core/test-artifacts/-blink-core-library-20260725/04-focused-core-archive-audit.log; 05-focused-core-v8-support-paths.log
+
+AI_LIMITATIONS: focused Core graph must be regenerated and archive rebuilt to prove the implementation-member count reaches zero
+
+AI_DECISION_CHAIN:; d7941d3; Chromium f7925185c1
+---
+ BUILD.gn | 30 +++++++++++++++++++-----------
+ 1 file changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index e6bb8d7..d07704e 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -3155,10 +3155,10 @@ v8_header_set("v8_shared_internal_headers") {
+     "src/wasm/wasm-limits.h",
+   ]
+ 
+-  deps = [
+-    ":v8_headers",
+-    ":v8_libbase",
+-  ]
++  deps = [ ":v8_headers" ]
++  if (!is_aros || !v8_use_aros_library) {
++    deps += [ ":v8_libbase" ]
++  }
+ }
+ 
+ v8_header_set("v8_flags") {
+@@ -3175,10 +3175,10 @@ v8_header_set("v8_flags") {
+     "src/flags/flags.h",
+   ]
+ 
+-  deps = [
+-    ":v8_libbase",
+-    ":v8_shared_internal_headers",
+-  ]
++  deps = [ ":v8_shared_internal_headers" ]
++  if (!is_aros || !v8_use_aros_library) {
++    deps += [ ":v8_libbase" ]
++  }
+ }
+ 
+ v8_header_set("v8_internal_headers") {
+@@ -4766,9 +4766,13 @@ v8_header_set("v8_internal_headers") {
+     ":generate_bytecode_builtins_list",
+     ":run_torque",
+     ":v8_abseil",
+-    ":v8_heap_base_headers",
+-    ":v8_libbase",
+   ]
++  if (!is_aros || !v8_use_aros_library) {
++    deps += [
++      ":v8_heap_base_headers",
++      ":v8_libbase",
++    ]
++  }
+ }
+ 
+ v8_compiler_sources = [
+@@ -6738,7 +6742,11 @@ v8_header_set("v8_heap_base_headers") {
+ 
+   configs = [ ":internal_config" ]
+ 
+-  public_deps = [ ":v8_libbase" ]
++  if (is_aros && v8_use_aros_library) {
++    public_deps = []
++  } else {
++    public_deps = [ ":v8_libbase" ]
++  }
+ }
+ 
+ v8_source_set("v8_heap_base") {

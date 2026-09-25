@@ -1,0 +1,464 @@
+From a2337cc3b2cdc00485a51fac2848dd67bb188e1d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 14 Sep 2026 05:11:05 -0500
+Subject: [PATCH 613/638] aros: ARexx-style CHROMIUM command port on the
+ process singleton
+
+A second `C:OpenURL`/`claude login` while Chromium was running started
+a second chrome, which CHECK-failed on its 1 GiB PA executable
+reservation (error=12) on the 8 GB hosted guest - openurl.library had
+no port to talk to, so it fell through to launching ubn_Path.
+
+ProcessSingleton::StartWatching() now runs a small native thread that
+AddPort()s "CHROMIUM" (CHROMIUM.1..15 when taken, the openurl
+findRexxPort suffix rule) and services RexxMsg commands the way OWB
+does: OPENURL "<url>" / OPEN, NEWWINDOW "<url>" (adds --new-window),
+SHOW / TOFRONT / SCREENTOFRONT / ACTIVATE.  URL commands are turned
+into a CommandLine and handed to the existing notification callback
+on the UI thread (the same path a second instance's command line
+takes), so the URL lands as a tab in the running browser; the reply
+carries ARexx rc 0/5/10/20 and every dequeued message is replied even
+if its task never runs.  Exec's Wait()/Signal() macros clash with
+WaitableEvent, hence the ExecWait/ExecSignal wrappers.
+
+Cleanup() joins the thread; the atexit path only signals it (no join
+under exit).  Verified on hosted clean ADT with the browser registered
+via `OpenURLSetBrowser Chromium <path> PORT CHROMIUM`: a second
+C:OpenURL and Claude Code's execFile($BROWSER, [OAuth URL]) each land
+as a tab (chromium-aros-build/out/openurl-reuse-050658/reuse-95.png).
+
+
+---
+ chrome/browser/process_singleton.h       |   6 +
+ chrome/browser/process_singleton_aros.cc | 354 ++++++++++++++++++++++-
+ 2 files changed, 358 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/process_singleton.h b/chrome/browser/process_singleton.h
+index c25f0f8190..c9b9765e66 100644
+--- a/chrome/browser/process_singleton.h
++++ b/chrome/browser/process_singleton.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_PROCESS_SINGLETON_H_
+ #define CHROME_BROWSER_PROCESS_SINGLETON_H_
+ 
++#include <memory>
+ #include <string>
+ 
+ #include "base/sequence_checker.h"
+@@ -195,9 +196,14 @@ class ProcessSingleton {
+ #elif BUILDFLAG(IS_AROS)
+   void ReleaseArosNativeResources();
+ 
++  // ARexx-style command port ("CHROMIUM") through which openurl.library and
++  // scripts hand URLs to the running browser instead of starting a second one.
++  class ArosCommandPort;
++
+   std::string port_name_;
+   MsgPort* singleton_port_ = nullptr;
+   bool aros_native_resources_released_ = false;
++  std::unique_ptr<ArosCommandPort> command_port_;
+ #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+   // Return true if the given pid is one of our child processes.
+   // Assumes that the current pid is the root of all pids of the current
+diff --git a/chrome/browser/process_singleton_aros.cc b/chrome/browser/process_singleton_aros.cc
+index 2a81485d16..192e07917f 100644
+--- a/chrome/browser/process_singleton_aros.cc
++++ b/chrome/browser/process_singleton_aros.cc
+@@ -7,16 +7,52 @@
+ #include <algorithm>
+ #include <cstdint>
+ #include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <string>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/no_destructor.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/synchronization/lock.h"
++#include "base/synchronization/waitable_event.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/threading/platform_thread.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/browser_window.h"
++#include "chrome/common/chrome_switches.h"
+ 
++#include <dos/dos.h>
+ #include <exec/ports.h>
+ #include <proto/exec.h>
++#include <proto/rexxsyslib.h>
++#include <rexx/rxslib.h>
++#include <rexx/storage.h>
++
++namespace {
++
++// proto/exec.h defines Wait() and Signal() as function-like macros, which
++// would also rewrite base::WaitableEvent::Wait()/Signal() below. Wrap the
++// exec calls, then drop the macros.
++inline ULONG ExecWait(ULONG mask) {
++  return Wait(mask);
++}
++inline void ExecSignal(Task* task, ULONG mask) {
++  Signal(task, mask);
++}
++
++}  // namespace
++
++#undef Wait
++#undef Signal
+ 
+ namespace {
+ 
+@@ -61,8 +97,307 @@ uint64_t HashProfilePath(const base::FilePath& path) {
+   return hash;
+ }
+ 
++// Command port. Amiga browsers (IBrowse, AWeb, OWB, ...) each publish an ARexx
++// port; openurl.library looks that port up before it considers starting a
++// browser and sends "OPENURL <url>" / "SHOW" / "SCREENTOFRONT" style commands
++// to it. Chromium publishes the same kind of port under a fixed name so a
++// second `OpenURL`, `claude login` or Workbench URL launch reuses the running
++// browser. Starting a second chrome is not an option: its allocator reserves a
++// second 1 GiB exec region before main() and dies on an 8 GiB machine.
++constexpr char kCommandPortName[] = "CHROMIUM";
++constexpr int kMaxCommandPortSuffix = 15;
++
++// ARexx return codes reported in rm_Result1.
++constexpr LONG kRcOk = 0;
++constexpr LONG kRcWarn = 5;
++constexpr LONG kRcError = 10;
++constexpr LONG kRcFail = 20;
++
++// Owns a received RexxMsg until it is replied. Replies with kRcError if the
++// UI task holding it is destroyed unrun (browser shutting down), so the
++// openurl.library handler process never waits forever.
++class PendingReply {
++ public:
++  explicit PendingReply(RexxMsg* message) : message_(message) {}
++  PendingReply(const PendingReply&) = delete;
++  PendingReply& operator=(const PendingReply&) = delete;
++  ~PendingReply() { Finish(kRcError); }
++
++  void Finish(LONG rc) {
++    if (!message_) {
++      return;
++    }
++    message_->rm_Result1 = rc;
++    message_->rm_Result2 = 0;
++    ReplyMsg(&message_->rm_Node);
++    message_ = nullptr;
++  }
++
++ private:
++  RexxMsg* message_;
++};
++
++// Splits "VERB rest" into an upper-cased verb and its argument, dropping one
++// pair of surrounding double quotes from the argument (prefs use `OPENURL
++// "%u"`).
++void ParseCommand(const std::string& command,
++                  std::string* verb,
++                  std::string* argument) {
++  std::string trimmed(base::TrimWhitespaceASCII(command, base::TRIM_ALL));
++  size_t split = trimmed.find_first_of(" \t");
++  if (split == std::string::npos) {
++    *verb = base::ToUpperASCII(trimmed);
++    argument->clear();
++    return;
++  }
++  *verb = base::ToUpperASCII(trimmed.substr(0, split));
++  *argument = std::string(
++      base::TrimWhitespaceASCII(trimmed.substr(split + 1), base::TRIM_ALL));
++  if (argument->size() >= 2 && argument->front() == '"' &&
++      argument->back() == '"') {
++    *argument = argument->substr(1, argument->size() - 2);
++  }
++}
++
++// Runs on the UI thread. Deliberately takes no pointer to the port object:
++// the port is torn down on the UI thread too and may be gone by the time a
++// queued command runs.
++void RunCommandOnUIThread(ProcessSingleton::NotificationCallback callback,
++                          std::string verb,
++                          std::string argument,
++                          std::unique_ptr<PendingReply> reply) {
++  if (verb == "OPENURL" || verb == "NEWWINDOW" || verb == "OPEN") {
++    if (argument.empty()) {
++      LOG(WARNING) << "[Chromium:AROS:CommandPort] " << verb
++                   << " without a URL";
++      reply->Finish(kRcError);
++      return;
++    }
++    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++    command_line.SetProgram(
++        base::CommandLine::ForCurrentProcess()->GetProgram());
++    if (verb == "NEWWINDOW") {
++      command_line.AppendSwitch(switches::kOpenInNewWindow);
++    }
++    command_line.AppendArg(argument);
++    // URLs from openurl.library are absolute; there is no client working
++    // directory to resolve relative file names against.
++    const bool handled = callback.Run(std::move(command_line), base::FilePath());
++    LOG(INFO) << "[Chromium:AROS:CommandPort] " << verb << " "
++              << argument.substr(0, 96) << (handled ? " accepted" : " refused");
++    reply->Finish(handled ? kRcOk : kRcError);
++    return;
++  }
++
++  if (verb == "SHOW" || verb == "TOFRONT" || verb == "SCREENTOFRONT" ||
++      verb == "ACTIVATE") {
++    Browser* browser = chrome::FindLastActive();
++    if (!browser || !browser->window()) {
++      reply->Finish(kRcWarn);
++      return;
++    }
++    browser->window()->Show();
++    browser->window()->Activate();
++    reply->Finish(kRcOk);
++    return;
++  }
++
++  LOG(WARNING) << "[Chromium:AROS:CommandPort] unknown command '" << verb
++               << "'";
++  reply->Finish(kRcFail);
++}
++
+ }  // namespace
+ 
++// Watcher task. The exec port must be created, waited on and deleted by the
++// same task (its signal bit belongs to that task), so this is a dedicated
++// thread rather than something hung off the UI message pump.
++class ProcessSingleton::ArosCommandPort
++    : public base::PlatformThread::Delegate {
++ public:
++  ArosCommandPort(scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
++                  NotificationCallback notification_callback)
++      : ui_task_runner_(std::move(ui_task_runner)),
++        notification_callback_(std::move(notification_callback)),
++        started_(base::WaitableEvent::ResetPolicy::MANUAL,
++                 base::WaitableEvent::InitialState::NOT_SIGNALED) {}
++
++  ArosCommandPort(const ArosCommandPort&) = delete;
++  ArosCommandPort& operator=(const ArosCommandPort&) = delete;
++
++  ~ArosCommandPort() override { Stop(/*join=*/true); }
++
++  // Starts the watcher and waits until its port is public (or creation
++  // failed). Returns the public port name, empty on failure.
++  std::string Start() {
++    if (!base::PlatformThread::Create(0, this, &thread_handle_)) {
++      LOG(ERROR) << "[Chromium:AROS:CommandPort] could not start watcher";
++      started_.Signal();
++      return std::string();
++    }
++    started_.Wait();
++    return port_name_;
++  }
++
++  // Asks the watcher to remove its port and exit. Safe to call repeatedly and
++  // from the atexit path (join=false), where the thread may not get to run.
++  void Stop(bool join) {
++    started_.Wait();
++    {
++      base::AutoLock auto_lock(lock_);
++      if (task_ && !stop_requested_) {
++        stop_requested_ = true;
++        ExecSignal(task_, SIGBREAKF_CTRL_C);
++      }
++    }
++    if (join && !thread_handle_.is_null() && !joined_) {
++      joined_ = true;
++      base::PlatformThread::Join(thread_handle_);
++    }
++  }
++
++ private:
++  // base::PlatformThread::Delegate:
++  void ThreadMain() override {
++    base::PlatformThread::SetName("ArosCommandPort");
++
++    MsgPort* port = CreateMsgPort();
++    if (port) {
++      Forbid();
++      for (int suffix = 0; suffix <= kMaxCommandPortSuffix; ++suffix) {
++        std::string name = suffix == 0 ? std::string(kCommandPortName)
++                                       : base::StringPrintf("%s.%d",
++                                                            kCommandPortName,
++                                                            suffix);
++        if (!FindPort(name.c_str())) {
++          port_name_ = std::move(name);
++          port->mp_Node.ln_Name = const_cast<char*>(port_name_.c_str());
++          AddPort(port);
++          break;
++        }
++      }
++      Permit();
++      if (port_name_.empty()) {
++        DeleteMsgPort(port);
++        port = nullptr;
++        LOG(ERROR) << "[Chromium:AROS:CommandPort] all " << kCommandPortName
++                   << " port names are taken";
++      }
++    } else {
++      LOG(ERROR) << "[Chromium:AROS:CommandPort] could not allocate port";
++    }
++
++    {
++      base::AutoLock auto_lock(lock_);
++      task_ = port ? FindTask(nullptr) : nullptr;
++    }
++    started_.Signal();
++    if (!port) {
++      return;
++    }
++
++    // IsRexxMsg() compares the node name against rexxsyslib's own id string;
++    // without the library fall back to comparing the text.
++    Library* rexx_sys_base = OpenLibrary("rexxsyslib.library", 0);
++    LOG(INFO) << "[Chromium:AROS:CommandPort] listening on " << port_name_;
++
++    const ULONG port_mask = 1UL << port->mp_SigBit;
++    for (;;) {
++      const ULONG signals = ExecWait(port_mask | SIGBREAKF_CTRL_C);
++      while (Message* message = GetMsg(port)) {
++        HandleMessage(message, rexx_sys_base);
++      }
++      if (signals & SIGBREAKF_CTRL_C) {
++        break;
++      }
++    }
++
++    Forbid();
++    RemPort(port);
++    Permit();
++    {
++      base::AutoLock auto_lock(lock_);
++      task_ = nullptr;
++    }
++    while (Message* message = GetMsg(port)) {
++      Reject(message, rexx_sys_base);
++    }
++    port->mp_Node.ln_Name = nullptr;
++    DeleteMsgPort(port);
++    if (rexx_sys_base) {
++      CloseLibrary(rexx_sys_base);
++    }
++    LOG(INFO) << "[Chromium:AROS:CommandPort] closed " << port_name_;
++  }
++
++  static RexxMsg* AsRexxMsg(Message* message, Library* rexx_sys_base) {
++    if (message->mn_Length < sizeof(RexxMsg)) {
++      return nullptr;
++    }
++    if (rexx_sys_base) {
++      // The IsRexxMsg() inline reads its library base from this name.
++      struct RxsLib* RexxSysBase =
++          reinterpret_cast<struct RxsLib*>(rexx_sys_base);
++      RexxMsg* candidate = reinterpret_cast<RexxMsg*>(message);
++      return IsRexxMsg(candidate) ? candidate : nullptr;
++    }
++    const char* name = message->mn_Node.ln_Name;
++    if (name && (std::strcmp(name, "RexxMsgId") == 0 ||
++                 std::strcmp(name, RXSDIR) == 0)) {
++      return reinterpret_cast<RexxMsg*>(message);
++    }
++    return nullptr;
++  }
++
++  void HandleMessage(Message* message, Library* rexx_sys_base) {
++    RexxMsg* rexx_message = AsRexxMsg(message, rexx_sys_base);
++    if (!rexx_message) {
++      LOG(WARNING) << "[Chromium:AROS:CommandPort] ignoring non-ARexx message";
++      if (message->mn_ReplyPort) {
++        ReplyMsg(message);
++      }
++      return;
++    }
++
++    auto reply = std::make_unique<PendingReply>(rexx_message);
++    const char* text = reinterpret_cast<const char*>(rexx_message->rm_Args[0]);
++    if (!(rexx_message->rm_Action & RXCOMM) || !text) {
++      reply->Finish(kRcFail);
++      return;
++    }
++
++    std::string verb;
++    std::string argument;
++    ParseCommand(text, &verb, &argument);
++    ui_task_runner_->PostTask(
++        FROM_HERE,
++        base::BindOnce(&RunCommandOnUIThread, notification_callback_,
++                       std::move(verb), std::move(argument), std::move(reply)));
++  }
++
++  static void Reject(Message* message, Library* rexx_sys_base) {
++    if (RexxMsg* rexx_message = AsRexxMsg(message, rexx_sys_base)) {
++      PendingReply(rexx_message).Finish(kRcError);
++    } else if (message->mn_ReplyPort) {
++      ReplyMsg(message);
++    }
++  }
++
++  const scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
++  const NotificationCallback notification_callback_;
++
++  base::WaitableEvent started_;
++  base::PlatformThreadHandle thread_handle_;
++  bool joined_ = false;
++
++  // Written by the watcher before |started_| is signalled, read after.
++  std::string port_name_;
++
++  base::Lock lock_;
++  Task* task_ = nullptr;  // guarded by lock_; nullptr once the port is gone
++  bool stop_requested_ = false;
++};
++
+ ProcessSingleton::ProcessSingleton(
+     const base::FilePath& user_data_dir,
+     const NotificationCallback& notification_callback)
+@@ -118,12 +453,22 @@ bool ProcessSingleton::Create() {
+ 
+ void ProcessSingleton::StartWatching() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  // The named port establishes ownership. A later protocol will forward a
+-  // second invocation's command line through this same native boundary.
++  if (command_port_ || !singleton_port_) {
++    return;
++  }
++  // The named singleton port establishes ownership; the command port is the
++  // public face other programs talk to (see kCommandPortName).
++  command_port_ = std::make_unique<ArosCommandPort>(
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      notification_callback_);
++  if (command_port_->Start().empty()) {
++    command_port_.reset();
++  }
+ }
+ 
+ void ProcessSingleton::Cleanup() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  command_port_.reset();
+   ReleaseArosNativeResources();
+ }
+ 
+@@ -155,6 +500,11 @@ void ProcessSingleton::CleanupLiveArosSingletonsAtExit() {
+     if (singleton) {
+       LOG(ERROR) << "[Chromium:AROS:ProcessSingleton] releasing singleton "
+                     "port at process exit";
++      // No join here: the watcher is asked to leave, but exit() must not wait
++      // on a task that may never be scheduled again.
++      if (singleton->command_port_) {
++        singleton->command_port_->Stop(/*join=*/false);
++      }
+       singleton->ReleaseArosNativeResources();
+     }
+   }

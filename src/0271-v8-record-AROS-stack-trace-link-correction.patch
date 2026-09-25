@@ -1,0 +1,27 @@
+From bad2b41aaeeb914551e96a40287b1c47296ebaf9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 17:49:22 -0500
+Subject: [PATCH 271/638] v8: record AROS stack trace link correction
+
+Advance the pinned V8 checkout to the correction exposed by the first v8.library native link. The failed extraction remains observable in the preceding focused-extraction commit and AROS wiring checkpoint.
+
+AI_PHASE: v8-library-convergence
+
+AI_STATUS: nested-v8-correction-checkpoint
+
+AI_VALIDATION: extracted monolith rebuilt; native v8.library linked
+
+AI_LIMITATIONS: hosted runtime not yet validated
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 065bea9580..09a34e0c04 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 065bea9580071a39112bd8e9f990b291a5f34301
++Subproject commit 09a34e0c04bb0afd3c5f957c8e1d7e86833f7d26

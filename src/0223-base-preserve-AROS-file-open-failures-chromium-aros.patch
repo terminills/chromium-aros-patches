@@ -1,0 +1,98 @@
+From 6603783a052b381e71f7401f4227ca5164828ceb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:48:12 -0500
+Subject: [PATCH 223/638] base: preserve AROS file-open failures [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: done
+
+ROOT_CAUSE: AROS posixc can return -1 from open() without publishing a nonzero errno to the calling task. Chromium then passed zero to OSErrorToFileError(), whose diagnostic contract correctly rejected it and terminated a LevelDB worker immediately after the first native Intuition window opened.
+
+FIX_REASON: Serialize AROS base::File open calls with the existing native file lock, capture errno next to the operation, and translate a missing errno to a generic I/O failure while logging the exact path and flags through Chromium logging/debug.resource. This keeps the unsupported operation fail-visible without inventing a more specific cause or aborting the browser.
+
+SCOPE: base/files/file_posix.cc only.
+
+VALIDATION: out/aros-windowed obj/base/base/file_posix.o compiles; git diff --cached --check passes. Hosted validation follows after relink and payload staging.
+
+RISK: low; the fallback applies only when AROS reports failure with errno zero. Valid errno values and successful opens retain upstream behavior.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/files/file_posix.cc | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index 73894c2d05..6314a8a54f 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -23,6 +23,7 @@ static_assert(sizeof(base::stat_wrapper_t::st_size) >= 8);
+ #include "base/check_op.h"
+ #include "base/notimplemented.h"
+ #if BUILDFLAG(IS_AROS)
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/synchronization/lock.h"
+ #endif
+@@ -52,6 +53,18 @@ Lock& ArosFilePositionLock() {
+   return *lock;
+ }
+ 
++struct ArosOpenResult {
++  int descriptor;
++  int error;
++};
++
++ArosOpenResult CallOpen(const char* path, int flags, mode_t mode) {
++  AutoLock lock(ArosFilePositionLock());
++  errno = 0;
++  const int descriptor = HANDLE_EINTR(open(path, flags, mode));
++  return {descriptor, descriptor < 0 ? errno : 0};
++}
++
+ ssize_t CallPread(PlatformFile file,
+                   void* data,
+                   size_t size,
+@@ -634,19 +647,41 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
+   mode |= S_IRGRP | S_IROTH;
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++  ArosOpenResult open_result =
++      CallOpen(path.value().c_str(), open_flags, mode);
++  int descriptor = open_result.descriptor;
++  int open_error = open_result.error;
++#else
+   int descriptor = HANDLE_EINTR(open(path.value().c_str(), open_flags, mode));
++#endif
+ 
+   if (flags & FLAG_OPEN_ALWAYS) {
+     if (descriptor < 0) {
+       open_flags |= O_CREAT;
++#if BUILDFLAG(IS_AROS)
++      open_result = CallOpen(path.value().c_str(), open_flags, mode);
++      descriptor = open_result.descriptor;
++      open_error = open_result.error;
++#else
+       descriptor = HANDLE_EINTR(open(path.value().c_str(), open_flags, mode));
++#endif
+       if (descriptor >= 0)
+         created_ = true;
+     }
+   }
+ 
+   if (descriptor < 0) {
++#if BUILDFLAG(IS_AROS)
++    if (open_error == 0) {
++      LOG(ERROR) << "AROS open() failed without errno: path=" << path.value()
++                 << " flags=0x" << std::hex << open_flags;
++      open_error = EIO;
++    }
++    error_details_ = File::OSErrorToFileError(open_error);
++#else
+     error_details_ = File::GetLastFileError();
++#endif
+     return;
+   }
+ 

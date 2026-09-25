@@ -1,0 +1,35 @@
+From e12e6095eefd0134cb7016cdcb3db67e3050cbf5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 21 Jul 2026 12:07:28 -0500
+Subject: [PATCH 263/638] gpu: fail closed when GL is disabled [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-5-gpu-bridge
+AI_STATUS: linked; hosted runtime validation pending
+ROOT_CAUSE: GLES2CommandBufferStub initialized the Ozone GL path directly even when the process had selected kGLImplementationDisabled. That bypassed the higher-level disabled-GL handling and reached the AROS GLOzone NOTREACHED path for gl=disabled,angle=none.
+FIX_REASON: Return Chromium's existing ContextResult::kFatalFailure before any Ozone/EGL work. The client-side ContextProvider already recognizes this result as non-retryable, and GpuChannel propagates it to the caller.
+SCOPE: gpu/ipc/service/gles2_command_buffer_stub.cc only. Hosted disabled-GPU/single-process behavior only; no VHI, VirGL, QEMU, EGL selection, or camera change.
+VALIDATION: git diff --check; owned GPU service object build; full incremental chrome link; SHA-256 3bf34bb9533906bdf42af60253a3f3997b1bf6cf907dc6041e4c9b029318f60f; Relay evidence hosted-20260721-disabled-gl-command-buffer.
+RISK: Runtime behavior remains unvalidated. This deliberately reports a fatal context creation failure rather than offering an unsupported EGL display. It is not acceleration or YouTube proof.
+AI_DECISION_CHAIN:; 125b31748c; 88c1c24693; 78029c7891
+---
+ gpu/ipc/service/gles2_command_buffer_stub.cc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/gpu/ipc/service/gles2_command_buffer_stub.cc b/gpu/ipc/service/gles2_command_buffer_stub.cc
+index dd81fbec1d..90b3267556 100644
+--- a/gpu/ipc/service/gles2_command_buffer_stub.cc
++++ b/gpu/ipc/service/gles2_command_buffer_stub.cc
+@@ -84,6 +84,12 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
+   TRACE_EVENT0("gpu", "GLES2CommandBufferStub::Initialize");
+   UpdateActiveUrl();
+ 
++  if (gl::GetGLImplementation() == gl::kGLImplementationDisabled) {
++    LOG(ERROR) << "ContextResult::kFatalFailure: attempt to create a GLES2 "
++                  "context with GL disabled";
++    return gpu::ContextResult::kFatalFailure;
++  }
++
+   GpuChannelManager* manager = channel_->gpu_channel_manager();
+   DCHECK(manager);
+   memory_tracker_ = CreateMemoryTracker();

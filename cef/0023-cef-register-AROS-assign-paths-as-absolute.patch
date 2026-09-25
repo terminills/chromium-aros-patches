@@ -1,0 +1,61 @@
+From 5385beae93202a18808228110ef2cbcef88e044a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 25 Jul 2026 03:10:42 -0500
+Subject: [PATCH 23/43] cef: register AROS assign paths as absolute
+
+CEF user-data, crash-dump, and dictionary paths use DOS assigns. Register them with PathService as already absolute so generic POSIX canonicalization does not erase ENVARC:Chromium during initialization.
+
+AI_PHASE: CEF_NATIVE_LIFECYCLE
+
+AI_STATUS: aros-assign-pathservice-fix-under-validation
+
+AI_VALIDATION: initialization advanced to browser dispatch then CheckedGet(DIR_USER_DATA=1001) fatally failed after generic Override canonicalized the assign path
+
+AI_ASSUMPTION: DOS assign paths are absolute AROS paths and CreateDirectory handles their appended components
+
+AI_LIMITATIONS: archive rebuild, automatic resident dependency relink, and lifecycle retry remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-lifecycle-download-fix-runtime-20260725/02-runtime.log
+
+AI_DECISION_CHAIN:
+---
+ libcef/common/resource_util.cc | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/libcef/common/resource_util.cc b/libcef/common/resource_util.cc
+index 6062804f..21a764d3 100644
+--- a/libcef/common/resource_util.cc
++++ b/libcef/common/resource_util.cc
+@@ -223,6 +223,24 @@ void OverrideUserDataDir(CefSettings* settings,
+                          const base::CommandLine* command_line) {
+   const base::FilePath& user_data_path =
+       GetUserDataPath(settings, command_line);
++#if BUILDFLAG(IS_AROS)
++  // AROS assigns such as ENVARC: are already absolute in DOS semantics but
++  // are intentionally not POSIX-canonicalizable.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_USER_DATA, user_data_path, /*is_absolute=*/true,
++      /*create=*/true);
++
++  // Path used for crash dumps.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_CRASH_DUMPS, user_data_path, /*is_absolute=*/true,
++      /*create=*/true);
++
++  // Path used for spell checking dictionary files.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_APP_DICTIONARIES,
++      user_data_path.Append(FILE_PATH_LITERAL("Dictionaries")),
++      /*is_absolute=*/true, /*create=*/true);
++#else
+   base::PathService::Override(chrome::DIR_USER_DATA, user_data_path);
+ 
+   // Path used for crash dumps.
+@@ -234,6 +252,7 @@ void OverrideUserDataDir(CefSettings* settings,
+       user_data_path.Append(FILE_PATH_LITERAL("Dictionaries")),
+       false,  // May not be an absolute path.
+       true);  // Create if necessary.
++#endif
+ }
+ 
+ // Same as ui::ResourceBundle::IsScaleFactorSupported.

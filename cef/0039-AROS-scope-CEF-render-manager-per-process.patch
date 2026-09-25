@@ -1,0 +1,106 @@
+From d501c3e2aebfada2b61857a71855184fcb21dddd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 2 Aug 2026 14:18:56 -0500
+Subject: [PATCH 39/43] AROS: scope CEF render manager per process
+
+Shared-address-space child processes otherwise collide on CEF's process-global renderer manager singleton. Key the singleton by the current process CommandLine identity while preserving upstream behavior elsewhere.
+
+
+---
+ libcef/renderer/render_manager.cc | 48 +++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/libcef/renderer/render_manager.cc b/libcef/renderer/render_manager.cc
+index 929c2e5f..b41e15e6 100644
+--- a/libcef/renderer/render_manager.cc
++++ b/libcef/renderer/render_manager.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "libcef/renderer/render_manager.h"
+ 
++#include <map>
+ #include <tuple>
+ 
+ #include "build/build_config.h"
+@@ -30,7 +31,9 @@
+ #include "libcef/renderer/v8_impl.h"
+ 
+ #include "base/command_line.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/synchronization/lock.h"
+ #include "cef/libcef/common/mojom/cef.mojom.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/renderer/render_frame.h"
+@@ -48,7 +51,25 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct CefRenderManagerProcessRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, CefRenderManager*> managers;
++};
++
++CefRenderManagerProcessRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefRenderManagerProcessRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++#else
+ CefRenderManager* g_manager = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+@@ -73,18 +94,45 @@ class CefGuestView : public blink::WebViewObserver {
+ };
+ 
+ CefRenderManager::CefRenderManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] =
++      registry.managers.emplace(GetCurrentProcessIdentity(), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefRenderManager::~CefRenderManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessIdentity());
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }
+ 
+ // static
+ CefRenderManager* CefRenderManager::Get() {
+   CEF_REQUIRE_RT_RETURN(nullptr);
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessIdentity());
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ void CefRenderManager::RenderThreadConnected() {

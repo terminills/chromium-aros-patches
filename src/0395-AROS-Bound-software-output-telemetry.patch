@@ -1,0 +1,90 @@
+From acf05fdc58d4739598109dfbcef31c8a85ac4aa6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 02:48:24 -0500
+Subject: [PATCH 395/638] [AROS] Bound software output telemetry
+
+AI_PHASE: chromium-process-model
+
+AI_STATUS: correction
+
+OBSERVED: Runtime 35 completed the pre-navigation UI frame but froze near one CPU after the renderer commit while per-tile source/destination peek logging was active.
+
+FIX_REASON: Remove all timing-heavy logging and peekPixels work from SharedImage tile read-lock scope; retain only one bounded root-canvas sample per completed frame.
+
+SCOPE: components/viz/service/display/software_renderer.cc only; AROS-only diagnostic reduction.
+
+VALIDATION: Exact diff restores upstream DrawTileQuad flow and git diff --check passes; coherent -j32 rebuild follows.
+
+AI_DECISION_CHAIN: runtime 35 -> runtime 36
+---
+ .../viz/service/display/software_renderer.cc  | 48 +------------------
+ 1 file changed, 1 insertion(+), 47 deletions(-)
+
+diff --git a/components/viz/service/display/software_renderer.cc b/components/viz/service/display/software_renderer.cc
+index 56885878ef..3c77862e6f 100644
+--- a/components/viz/service/display/software_renderer.cc
++++ b/components/viz/service/display/software_renderer.cc
+@@ -534,26 +534,9 @@ void SoftwareRenderer::DrawTileQuad(const TileDrawQuad* quad) {
+   DisplayResourceProviderSoftware::ScopedReadLockSkImage lock(
+       resource_provider(), quad->resource_id(),
+       quad->is_premultiplied ? kPremul_SkAlphaType : kUnpremul_SkAlphaType);
+-#if BUILDFLAG(IS_AROS)
+-  static uint32_t aros_tile_sequence = 0;
+-  const uint32_t aros_tile_current = ++aros_tile_sequence;
+-  const bool aros_log_tile = aros_tile_current <= 128;
+-  if (aros_log_tile && !lock.valid()) {
+-    LOG(ERROR) << "[AROS software-tile] seq=" << aros_tile_current
+-               << " resource=" << quad->resource_id() << " valid=0"
+-               << " rect=" << quad->rect.ToString()
+-               << " visible=" << quad->visible_rect.ToString();
+-  }
+-#endif
+-  if (!lock.valid()) {
++  if (!lock.valid())
+     return;
+-  }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  SkPixmap aros_source_pixmap;
+-  const bool aros_source_peeked =
+-      aros_log_tile && lock.sk_image()->peekPixels(&aros_source_pixmap);
+-#endif
+   gfx::RectF visible_tex_coord_rect = cc::MathUtil::ScaleRectProportional(
+       quad->tex_coord_rect, gfx::RectF(quad->rect),
+       gfx::RectF(quad->visible_rect));
+@@ -567,35 +550,6 @@ void SoftwareRenderer::DrawTileQuad(const TileDrawQuad* quad) {
+       lock.sk_image(), uv_rect, gfx::RectFToSkRect(visible_quad_vertex_rect),
+       sampling, &current_paint_, SkCanvas::kStrict_SrcRectConstraint);
+ 
+-#if BUILDFLAG(IS_AROS)
+-  if (aros_log_tile) {
+-    SkPixmap destination_pixmap;
+-    const bool destination_peeked =
+-        current_canvas_->peekPixels(&destination_pixmap);
+-    LOG(ERROR)
+-        << "[AROS software-tile] seq=" << aros_tile_current
+-        << " resource=" << quad->resource_id() << " valid=1"
+-        << " image=" << lock.sk_image()->uniqueID()
+-        << " rect=" << quad->rect.ToString()
+-        << " visible=" << quad->visible_rect.ToString()
+-        << " tex=" << quad->tex_coord_rect.ToString()
+-        << " source_peeked=" << aros_source_peeked << " source_width="
+-        << (aros_source_peeked ? aros_source_pixmap.width() : 0)
+-        << " source_height="
+-        << (aros_source_peeked ? aros_source_pixmap.height() : 0)
+-        << " source_fingerprint="
+-        << (aros_source_peeked ? ArosPixmapFingerprint(aros_source_pixmap) : 0)
+-        << " source_center="
+-        << (aros_source_peeked
+-                ? aros_source_pixmap.getColor(aros_source_pixmap.width() / 2,
+-                                              aros_source_pixmap.height() / 2)
+-                : 0)
+-        << " destination_peeked=" << destination_peeked
+-        << " destination_fingerprint="
+-        << (destination_peeked ? ArosPixmapFingerprint(destination_pixmap) : 0);
+-  }
+-#endif
+-
+   if (software_toggle_capture()) {
+     SkPixmap pixmap;
+     if (lock.sk_image()->peekPixels(&pixmap)) {

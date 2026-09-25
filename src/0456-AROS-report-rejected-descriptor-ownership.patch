@@ -1,0 +1,42 @@
+From 39d1b70dfff727d7aec4031672d771493cf2c1dd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 01:38:06 -0500
+Subject: [PATCH 456/638] AROS: report rejected descriptor ownership
+
+Include fd.library owner and data state for every registered controller in the bounded WaitSelect rejection report. This distinguished Chromium's live watches from the phantom descriptor produced by the undersized fd_set.
+
+
+
+---
+ base/message_loop/message_pump_aros.cc | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
+index 7bf7315cc1..5933d3805b 100644
+--- a/base/message_loop/message_pump_aros.cc
++++ b/base/message_loop/message_pump_aros.cc
+@@ -51,6 +51,10 @@ fd_owner_t DescriptorOwner(Library* fd_library, int fd) {
+   return fd_library ? __FD_GetOwner_WB(fd_library, fd) : FD_OWNER_NONE;
+ }
+ 
++void* DescriptorData(Library* fd_library, int fd) {
++  return fd_library ? __FD_GetData_WB(fd_library, fd) : nullptr;
++}
++
+ bool GetDosHandle(int fd, BPTR* handle) {
+   long native_handle = 0;
+   if (!handle || __get_default_file(fd, &native_handle) != 0) {
+@@ -351,7 +355,12 @@ bool MessagePumpAROS::WaitForSocketEvents(TimeDelta timeout,
+       for (const auto& controller : controllers_) {
+         LOG(ERROR) << "[Chromium:IO] rejected watch fd=" << controller->fd_
+                    << " mode=" << controller->mode_
+-                   << " persistent=" << controller->persistent_;
++                   << " persistent=" << controller->persistent_
++                   << " owner="
++                   << static_cast<unsigned>(
++                          DescriptorOwner(fd_library_, controller->fd_))
++                   << " data="
++                   << DescriptorData(fd_library_, controller->fd_);
+       }
+       wait_select_error_reported_ = true;
+     }

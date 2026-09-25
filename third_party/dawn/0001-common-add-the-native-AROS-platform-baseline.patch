@@ -1,0 +1,144 @@
+From b19060158a383f03605a147c19c028469a18ebf6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 12:34:11 -0500
+Subject: [PATCH] common: add the native AROS platform baseline
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: Dawn common was enabled for the AROS graph but had no native OS identity, assumed POSIX dlfcn, and rejected executable/module path discovery.
+
+FIX_REASON: Define a distinct AROS POSIX baseline, expose the common target, fail dynamic loading closed with actionable errors, and treat optional path discovery as unavailable without borrowing Linux procfs semantics.
+
+SCOPE: src/dawn/common/BUILD.gn; Platform.h; DynamicLib.cpp; SystemUtils.cpp
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/third_party/dawn/src/dawn/common/libcommon.a
+
+RISK: medium; Dawn common and null infrastructure compile, while native Vulkan loader binding remains unavailable until an AROS-specific library/HIDD contract is implemented.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ src/dawn/common/BUILD.gn        |  2 +-
+ src/dawn/common/DynamicLib.cpp  | 12 ++++++++++++
+ src/dawn/common/Platform.h      |  9 +++++++++
+ src/dawn/common/SystemUtils.cpp |  8 ++++++++
+ 4 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/src/dawn/common/BUILD.gn b/src/dawn/common/BUILD.gn
+index aa6eecd1..d0e1d3ed 100644
+--- a/src/dawn/common/BUILD.gn
++++ b/src/dawn/common/BUILD.gn
+@@ -236,7 +236,7 @@ dawn_generator("dawn_gpu_info_gen") {
+ # all of Chromium's OSes so we explicitly make the target visible only on
+ # systems we know Dawn is able to compile on.
+ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
+-    is_ios) {
++    is_ios || is_aros) {
+   static_library("common") {
+     sources = [
+       "Alloc.h",
+diff --git a/src/dawn/common/DynamicLib.cpp b/src/dawn/common/DynamicLib.cpp
+index 9d474771..4c6a913a 100644
+--- a/src/dawn/common/DynamicLib.cpp
++++ b/src/dawn/common/DynamicLib.cpp
+@@ -36,6 +36,8 @@
+ #if DAWN_PLATFORM_IS(WINUWP)
+ #include "dawn/common/WindowsUtils.h"
+ #endif
++#elif DAWN_PLATFORM_IS(AROS)
++// AROS libraries are not POSIX shared objects and have no dlfcn interface.
+ #elif DAWN_PLATFORM_IS(POSIX)
+ #include <dlfcn.h>
+ #else
+@@ -71,6 +73,10 @@ bool DynamicLib::Open(const std::string& filename, std::string* error) {
+     if (mHandle == nullptr && error != nullptr) {
+         *error = "Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic library loading is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     mHandle = dlopen(filename.c_str(), RTLD_NOW);
+ 
+@@ -91,6 +97,8 @@ void DynamicLib::Close() {
+ 
+ #if DAWN_PLATFORM_IS(WINDOWS)
+     FreeLibrary(static_cast<HMODULE>(mHandle));
++#elif DAWN_PLATFORM_IS(AROS)
++    // Open() cannot produce a handle on AROS.
+ #elif DAWN_PLATFORM_IS(POSIX)
+     dlclose(mHandle);
+ #else
+@@ -109,6 +117,10 @@ void* DynamicLib::GetProc(const std::string& procName, std::string* error) const
+     if (proc == nullptr && error != nullptr) {
+         *error = "Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic symbol lookup is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     proc = reinterpret_cast<void*>(dlsym(mHandle, procName.c_str()));
+ 
+diff --git a/src/dawn/common/Platform.h b/src/dawn/common/Platform.h
+index 58f2e10f..05c39e81 100644
+--- a/src/dawn/common/Platform.h
++++ b/src/dawn/common/Platform.h
+@@ -40,6 +40,7 @@
+ //    - WIN32
+ //    - WINUWP
+ //  - POSIX
++//    - AROS
+ //    - LINUX
+ //      - ANDROID
+ //      - CHROMEOS
+@@ -59,6 +60,10 @@
+ #error "Unsupported Windows platform."
+ #endif
+ 
++#elif defined(__AROS__)
++#define DAWN_PLATFORM_IS_AROS 1
++#define DAWN_PLATFORM_IS_POSIX 1
++
+ #elif defined(__linux__)
+ #define DAWN_PLATFORM_IS_LINUX 1
+ #define DAWN_PLATFORM_IS_POSIX 1
+@@ -202,6 +207,10 @@ static_assert(sizeof(sizeof(char)) == 4, "Expect sizeof(size_t) == 4");
+ #define DAWN_PLATFORM_IS_POSIX 0
+ #endif
+ 
++#if !defined(DAWN_PLATFORM_IS_AROS)
++#define DAWN_PLATFORM_IS_AROS 0
++#endif
++
+ #if !defined(DAWN_PLATFORM_IS_LINUX)
+ #define DAWN_PLATFORM_IS_LINUX 0
+ #endif
+diff --git a/src/dawn/common/SystemUtils.cpp b/src/dawn/common/SystemUtils.cpp
+index 73eb4fca..e04505e0 100644
+--- a/src/dawn/common/SystemUtils.cpp
++++ b/src/dawn/common/SystemUtils.cpp
+@@ -144,6 +144,10 @@ std::optional<std::string> GetExecutablePath() {
+     // UNIMPLEMENTED
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetExecutablePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetExecutablePath() {
+     return {};
+@@ -198,6 +202,10 @@ std::optional<std::string> GetModulePath() {
+ std::optional<std::string> GetModulePath() {
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetModulePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetModulePath() {
+     return {};

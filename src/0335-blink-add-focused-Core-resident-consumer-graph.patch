@@ -1,0 +1,137 @@
+From f7925185c148e8a306f97b95c712c6aa22273165 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 19:59:52 -0500
+Subject: [PATCH 335/638] blink: add focused Core resident-consumer graph
+
+Add an AROS-only Core extraction mode and replace the top-level Platform component sources with the generated blink_platform.library callable bridge. The existing constituent dependency graph remains intentionally visible so the resulting complete archive records the next boundary instead of hiding it.
+
+AI_PHASE: chromium-blink-core-library
+
+AI_STATUS: focused-core-consumer-assumption-checkpoint
+
+AI_ASSUMPTION: removing the top-level Platform component is a safe first consumer step and the complete Core archive will expose remaining constituent overlap and data crossings
+
+AI_VALIDATION: GN formatting was inspected and formatter-only label rewrites were removed; source diff check passes
+
+AI_EVIDENCE: out/aros-blink-platform/test-artifacts/-blink-platform-library-20260725/18-core-main-platform-component-intersection.log
+
+AI_LIMITATIONS: graph generation and build are intentionally pending; Platform constituent targets and 342 main-component data references remain
+
+AI_DECISION_CHAIN:; 0ed2ce85d6; AROS 82be9578a8
+---
+ BUILD.gn                                          | 10 ++++++++++
+ build/config/aros/blink_library/blink_library.gni |  9 +++++++++
+ third_party/blink/renderer/core/BUILD.gn          | 15 +++++++++++++++
+ third_party/blink/renderer/platform/BUILD.gn      | 10 ++++++++++
+ 4 files changed, 44 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index c6bac2faeb..57b123c994 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -98,16 +98,26 @@ group("gn_all") {
+   if (is_aros && aros_cef_library_only) {
+     assert(enable_cef)
+     assert(!aros_blink_platform_library_only)
++    assert(!aros_blink_core_library_only)
+     assert(!aros_v8_library_only)
+     deps = [ "//cef:libcef_static" ]
+     deps += root_extra_deps
++  } else if (is_aros && aros_blink_core_library_only) {
++    assert(use_blink)
++    assert(aros_blink_platform_use_library)
++    assert(!aros_blink_platform_library_only)
++    assert(!aros_cef_library_only)
++    assert(!aros_v8_library_only)
++    deps = [ "//third_party/blink/renderer/core:aros_blink_core_archive" ]
+   } else if (is_aros && aros_blink_platform_library_only) {
+     assert(use_blink)
++    assert(!aros_blink_core_library_only)
+     assert(!aros_cef_library_only)
+     assert(!aros_v8_library_only)
+     deps =
+         [ "//third_party/blink/renderer/platform:aros_blink_platform_archive" ]
+   } else if (is_aros && aros_v8_library_only) {
++    assert(!aros_blink_core_library_only)
+     assert(!aros_cef_library_only)
+     assert(v8_monolithic)
+     deps = [ "//v8:v8_monolith" ]
+diff --git a/build/config/aros/blink_library/blink_library.gni b/build/config/aros/blink_library/blink_library.gni
+index c6ad43bd73..d3aaeba066 100644
+--- a/build/config/aros/blink_library/blink_library.gni
++++ b/build/config/aros/blink_library/blink_library.gni
+@@ -8,4 +8,13 @@ declare_args() {
+   # and test aggregates so the library surface can be measured before any
+   # consumer linkage changes.
+   aros_blink_platform_library_only = false
++
++  # Replace Blink's top-level Platform component implementation with generated
++  # calls into the proven native blink_platform.library. This is intentionally
++  # independent of extraction mode so a focused Core consumer can measure the
++  # remaining constituent and data-object boundary.
++  aros_blink_platform_use_library = false
++
++  # Generate a complete Blink Core archive from the focused AROS graph.
++  aros_blink_core_library_only = false
+ }
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+index 45f575dead..532ad361e0 100644
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/config/aros/blink_library/blink_library.gni")
+ import("//build/config/compiler/compiler.gni")
+ import("//build/config/dcheck_always_on.gni")
+ import("//build/config/python.gni")
+@@ -217,6 +218,9 @@ component("core") {
+ 
+   visibility = []  # Allow re-assignment of list.
+   visibility = [ "//third_party/blink/*" ]
++  if (is_aros && aros_blink_core_library_only) {
++    visibility += [ "//:gn_all" ]
++  }
+ 
+   sources = [
+     "core_initializer.cc",
+@@ -407,6 +411,17 @@ component("core") {
+   }
+ }
+ 
++if (is_aros && aros_blink_core_library_only) {
++  # Capture the current Core closure after replacing the top-level Platform
++  # component. The first build is an observability checkpoint: its remaining
++  # Platform members and unresolved data objects define the next safe seam.
++  static_library("aros_blink_core_archive") {
++    complete_static_lib = true
++    visibility += [ "//:gn_all" ]
++    deps = [ ":core" ]
++  }
++}
++
+ # Certain sources should be compiled with heavy optimization enabled.
+ # Define them in 'foo/build.gni' as blink_core_hot_sources_foo, and include it
+ # here.
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index cb24eb8e97..622994b38d 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1868,6 +1868,16 @@ component("platform") {
+ 
+   configs -= [ "//build/config/compiler:default_symbols" ]
+   configs += blink_symbols_config
++
++  if (is_aros && aros_blink_platform_use_library) {
++    # First consumer checkpoint: remove the top-level Platform component
++    # implementation and satisfy callable references through the resident
++    # library. Keep the dependency graph intact for generated headers and
++    # constituent-target measurement; the focused Core archive audit records
++    # what remains before those targets are migrated.
++    sources = []
++    public_deps += [ "//build/config/aros/blink_platform_library:blink_platform_library_imports" ]
++  }
+ }
+ 
+ if (is_aros && aros_blink_platform_library_only) {

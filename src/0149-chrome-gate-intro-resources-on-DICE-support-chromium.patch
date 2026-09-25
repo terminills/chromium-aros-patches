@@ -1,0 +1,89 @@
+From 38ff11b6825ea22d503d96858b33d0c61831a6e3 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 19:42:19 -0500
+Subject: [PATCH 149/638] chrome: gate intro resources on DICE support
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+AI_ROOT_CAUSE: Chrome's non-Android resource aggregates pulled chrome://intro on AROS even though the intro target requires DICE or Lacros.
+AI_FIX_REASON: Preserve generic profile-picker and welcome resources while gating only intro resources and tests on their declared sign-in capability.
+AI_SCOPE: chrome/browser/resources/BUILD.gn, chrome/chrome_paks.gni, chrome/test/data/webui/BUILD.gn
+AI_VALIDATION: //chrome:chrome GN generation advances past all intro assertions to the independent new_tab_page_instant desktop-platform assertion.
+AI_RISK: AROS intentionally omits chrome://intro until native DICE/account integration exists; supported desktop platforms retain identical dependencies.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap -> native Ozone window -> upstream Chrome resource capability closure
+---
+ chrome/browser/resources/BUILD.gn | 5 ++++-
+ chrome/chrome_paks.gni            | 7 +++++--
+ chrome/test/data/webui/BUILD.gn   | 7 +++++--
+ 3 files changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/browser/resources/BUILD.gn b/chrome/browser/resources/BUILD.gn
+index 6c0c0ac23d..f5f10119bc 100644
+--- a/chrome/browser/resources/BUILD.gn
++++ b/chrome/browser/resources/BUILD.gn
+@@ -117,10 +117,13 @@ group("resources") {
+   if (!is_android && !is_chromeos_ash) {
+     public_deps += [
+       "inline_login:resources",
+-      "intro:resources",
+       "signin/profile_picker:resources",
+       "welcome:resources",
+     ]
++
++    if (is_chromeos_lacros || enable_dice_support) {
++      public_deps += [ "intro:resources" ]
++    }
+   }
+ 
+   if (enable_webui_tab_strip) {
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index 74acbe3a64..117fe40b5d 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -382,15 +382,18 @@ template("chrome_extra_paks") {
+     }
+     if (!is_android && !is_chromeos_ash) {
+       sources += [
+-        "$root_gen_dir/chrome/intro_resources.pak",
+         "$root_gen_dir/chrome/profile_picker_resources.pak",
+         "$root_gen_dir/chrome/welcome_resources.pak",
+       ]
+       deps += [
+-        "//chrome/browser/resources/intro:resources",
+         "//chrome/browser/resources/signin/profile_picker:resources",
+         "//chrome/browser/resources/welcome:resources",
+       ]
++
++      if (is_chromeos_lacros || enable_dice_support) {
++        sources += [ "$root_gen_dir/chrome/intro_resources.pak" ]
++        deps += [ "//chrome/browser/resources/intro:resources" ]
++      }
+     }
+ 
+     if (is_win || is_mac || is_linux || is_fuchsia) {
+diff --git a/chrome/test/data/webui/BUILD.gn b/chrome/test/data/webui/BUILD.gn
+index 8d6629a14e..cf11f6e520 100644
+--- a/chrome/test/data/webui/BUILD.gn
++++ b/chrome/test/data/webui/BUILD.gn
+@@ -544,15 +544,18 @@ generate_grd("build_grd") {
+     ]
+   } else {
+     deps += [
+-      "intro:build_grdp",
+       "signin:build_grdp",
+       "welcome:build_grdp",
+     ]
+     grdp_files += [
+-      "$target_gen_dir/intro/resources.grdp",
+       "$target_gen_dir/welcome/resources.grdp",
+       "$target_gen_dir/signin/resources.grdp",
+     ]
++
++    if (is_chromeos_lacros || enable_dice_support) {
++      deps += [ "intro:build_grdp" ]
++      grdp_files += [ "$target_gen_dir/intro/resources.grdp" ]
++    }
+   }
+ 
+   if (is_win || is_mac) {

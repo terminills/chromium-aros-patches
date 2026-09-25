@@ -1,0 +1,105 @@
+From 4b10e24d53a43921451687c0d3996311b4dbfc7d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 13:21:08 -0500
+Subject: [PATCH 03/43] cef: expose POSIX window ABI on AROS
+
+Reuse CEF's non-X11 opaque window structures for the initial AROS Ozone/Aura port and select the matching generated platform API hash.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: focused-object-passed
+
+AI_ASSUMPTION: the Linux non-X11 CEF window structure remains ABI-compatible with AROS while window handles are opaque
+
+AI_VALIDATION: command_line_ctocpp compiled with CEF_API_HASH_PLATFORM and prior browser wrapper objects no longer report missing window handles or CefWindowInfo
+
+AI_LIMITATIONS: the ABI is intentionally shared with Linux until AROS needs platform-specific public fields; GetHead macro collision remains
+
+AI_DECISION_CHAIN:
+---
+ include/cef_api_hash.h             | 4 ++--
+ include/cef_base.h                 | 2 +-
+ include/internal/cef_types.h       | 2 +-
+ include/internal/cef_types_linux.h | 4 ++--
+ tools/make_api_hash_header.py      | 2 +-
+ 5 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/include/cef_api_hash.h b/include/cef_api_hash.h
+index 8cce853b..6ad8d81f 100644
+--- a/include/cef_api_hash.h
++++ b/include/cef_api_hash.h
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2024 Marshall A. Greenblatt. All rights reserved.
++// Copyright (c) 2026 Marshall A. Greenblatt. All rights reserved.
+ //
+ // Redistribution and use in source and binary forms, with or without
+ // modification, are permitted provided that the following conditions are
+@@ -47,7 +47,7 @@
+ #define CEF_API_HASH_PLATFORM "04f4a1140954f4b11e6fef271d39908ecff07b86"
+ #elif defined(OS_MAC)
+ #define CEF_API_HASH_PLATFORM "d0143d677ea9945ed5e0c3624afdb444796661ee"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #define CEF_API_HASH_PLATFORM "cac5605286f35bf76576098a0da810a9a34b418a"
+ #endif
+ 
+diff --git a/include/cef_base.h b/include/cef_base.h
+index bd8f11ed..877b5089 100644
+--- a/include/cef_base.h
++++ b/include/cef_base.h
+@@ -43,7 +43,7 @@
+ #include "include/internal/cef_win.h"
+ #elif defined(OS_MAC)
+ #include "include/internal/cef_mac.h"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #include "include/internal/cef_linux.h"
+ #endif
+ 
+diff --git a/include/internal/cef_types.h b/include/internal/cef_types.h
+index 44dfb5c6..38211e52 100644
+--- a/include/internal/cef_types.h
++++ b/include/internal/cef_types.h
+@@ -46,7 +46,7 @@
+ #include "include/internal/cef_types_win.h"
+ #elif defined(OS_MAC)
+ #include "include/internal/cef_types_mac.h"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #include "include/internal/cef_types_linux.h"
+ #endif
+ 
+diff --git a/include/internal/cef_types_linux.h b/include/internal/cef_types_linux.h
+index 171cda32..e0b1a801 100644
+--- a/include/internal/cef_types_linux.h
++++ b/include/internal/cef_types_linux.h
+@@ -34,7 +34,7 @@
+ #include "include/base/cef_build.h"
+ #include "include/cef_config.h"
+ 
+-#if defined(OS_LINUX)
++#if defined(OS_LINUX) || defined(OS_AROS)
+ 
+ #if defined(CEF_X11)
+ typedef union _XEvent XEvent;
+@@ -141,6 +141,6 @@ typedef struct _cef_window_info_t {
+ }
+ #endif
+ 
+-#endif  // OS_LINUX
++#endif  // defined(OS_LINUX) || defined(OS_AROS)
+ 
+ #endif  // CEF_INCLUDE_INTERNAL_CEF_TYPES_LINUX_H_
+diff --git a/tools/make_api_hash_header.py b/tools/make_api_hash_header.py
+index 6c79efcd..c1662784 100644
+--- a/tools/make_api_hash_header.py
++++ b/tools/make_api_hash_header.py
+@@ -37,7 +37,7 @@ def make_api_hash_header(cpp_header_dir):
+ #define CEF_API_HASH_PLATFORM "$WINDOWS$"
+ #elif defined(OS_MAC)
+ #define CEF_API_HASH_PLATFORM "$MAC$"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #define CEF_API_HASH_PLATFORM "$LINUX$"
+ #endif
+ 

@@ -1,0 +1,31 @@
+From 30fc11259c6b5c462de24e7ca179da80597737b4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 23:15:50 -0500
+Subject: [PATCH 352/638] pdfium: pin the AROS font-backend guard correction
+
+Advance only the PDFium gitlink to the source-level AROS platform guard paired with its prior GN selection.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: compile-failure-corrected-under-validation
+
+AI_VALIDATION: prior coherent CEF rebuild stopped at fx_linux_impl.cpp wrong-platform guard
+
+AI_ASSUMPTION: portable folder-font backend remains the correct initial AROS PDFium provider
+
+AI_LIMITATIONS: archive rebuild, native link, and PDF rendering remain pending
+
+AI_EVIDENCE: out/aros-cef-bootstrap/test-artifacts/-cef-exact-44-fix-20260725/04-archive-rebuild-after-protobuf-localize.log
+
+AI_DECISION_CHAIN:
+---
+ third_party/pdfium | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/pdfium b/third_party/pdfium
+index e3f21aed9b..e7d21236ff 160000
+--- a/third_party/pdfium
++++ b/third_party/pdfium
+@@ -1 +1 @@
+-Subproject commit e3f21aed9b8cf36986462d33063cb8f1dbcf18e7
++Subproject commit e7d21236ffb271ad29ecf3313a6642ce13b95cf5

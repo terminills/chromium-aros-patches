@@ -1,0 +1,81 @@
+From 247151476c92f719eb64f5f2a29f23b0f493414f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 12:24:00 -0500
+Subject: [PATCH 438/638] aros: identify child LoadSeg memory pressure
+
+Record the requested Chromium process type and free-memory values around each native LoadSeg. This keeps late child-launch failures attributable without dumping full command lines or adding loader-specific policy.
+
+
+
+---
+ base/process/launch_aros.cc | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
+index 5e64f642f2..9a96f21bce 100644
+--- a/base/process/launch_aros.cc
++++ b/base/process/launch_aros.cc
+@@ -19,6 +19,7 @@
+ #include <dos/dos.h>
+ #include <dos/dosextens.h>
+ #include <dos/dostags.h>
++#include <exec/memory.h>
+ #include <exec/tasks.h>
+ #include <proto/dos.h>
+ #include <proto/exec.h>
+@@ -121,6 +122,15 @@ bool BuildArguments(const std::vector<std::string>& argv,
+   return true;
+ }
+ 
++std::string ProcessTypeForArguments(const std::vector<std::string>& argv) {
++  constexpr char kTypePrefix[] = "--type=";
++  for (const std::string& argument : argv) {
++    if (argument.rfind(kTypePrefix, 0) == 0)
++      return argument.substr(sizeof(kTypePrefix) - 1);
++  }
++  return "browser";
++}
++
+ const char* UnsupportedOption(const LaunchOptions& options) {
+   if (!options.fds_to_remap.empty())
+     return "file descriptor remapping requires native MessagePort handles";
+@@ -158,6 +168,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+   std::string arguments;
+   if (!BuildArguments(argv, &arguments))
+     return UnsupportedLaunch("argument contains an embedded NUL", EINVAL);
++  const std::string process_type = ProcessTypeForArguments(argv);
+ 
+   BPTR current_directory = BNULL;
+   if (!options.current_directory.empty()) {
+@@ -172,14 +183,19 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+     }
+   }
+ 
++  const IPTR available_before = AvailMem(MEMF_ANY);
+   BPTR segment = LoadSeg(dos_executable.c_str());
++  const IPTR available_after = AvailMem(MEMF_ANY);
+   if (segment == BNULL) {
+     const LONG io_error = IoErr();
+     if (current_directory != BNULL)
+       UnLock(current_directory);
+     errno = IoErrToErrno(io_error);
+     LOG(ERROR) << "[Chromium:AROS:Launch] LoadSeg failed for '"
+-               << dos_executable << "': IoErr=" << io_error;
++               << dos_executable << "' type=" << process_type
++               << " IoErr=" << io_error
++               << " free-before=" << available_before
++               << " free-after=" << available_after;
+     return Process();
+   }
+ 
+@@ -231,7 +247,9 @@ Process LaunchProcess(const std::vector<std::string>& argv,
+ 
+   LOG(INFO) << "[Chromium:AROS:Launch] spawned pid=" << child_id
+             << " program='" << dos_executable << "' argc=" << argv.size()
+-            << " stack=" << kChromiumChildStackSize;
++            << " type=" << process_type << " stack=" << kChromiumChildStackSize
++            << " free-before=" << available_before
++            << " free-after=" << available_after;
+ 
+   Process process(child_id);
+   if (options.wait) {

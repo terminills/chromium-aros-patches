@@ -1,0 +1,96 @@
+From 17d93760cb6b1545f7bbb44d6085bf88678c3188 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 31 Aug 2026 01:37:29 -0500
+Subject: [PATCH 553/638] AROS: store Chromium data in the logged-in profile
+
+---
+ chrome/common/chrome_paths_aros.cc | 35 +++++++++++++++++++++++-------
+ 1 file changed, 27 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
+index 3b892c0149..9d10b55af4 100644
+--- a/chrome/common/chrome_paths_aros.cc
++++ b/chrome/common/chrome_paths_aros.cc
+@@ -5,19 +5,36 @@
+ #include "chrome/common/chrome_paths_internal.h"
+ 
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/path_service.h"
+ #include "chrome/common/chrome_paths.h"
+ 
+ namespace chrome {
+ namespace {
+ 
+-constexpr char kUserDataDirectory[] = "PROGDIR:Profiles";
++constexpr char kProfileAssign[] = "PROFILE:";
++constexpr char kProfileUserDataDirectory[] =
++    "PROFILE:Applications/Chromium";
++constexpr char kProfileCacheDirectory[] = "PROFILE:Cache/Chromium";
++constexpr char kLegacyUserDataDirectory[] = "PROGDIR:Profiles";
+ constexpr char kVolatileUserDirectory[] = "RAM:";
+ 
++bool HasUserProfile() {
++  return base::DirectoryExists(base::FilePath(kProfileAssign));
++}
++
++base::FilePath GetUserDirectory(const char* name) {
++  if (HasUserProfile()) {
++    return base::FilePath(kProfileAssign).Append(name);
++  }
++  return base::FilePath(kVolatileUserDirectory).Append(name);
++}
++
+ }  // namespace
+ 
+ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kUserDataDirectory);
++  *result = base::FilePath(HasUserProfile() ? kProfileUserDataDirectory
++                                           : kLegacyUserDataDirectory);
+   return true;
+ }
+ 
+@@ -31,7 +48,9 @@ void GetUserCacheDirectory(const base::FilePath& profile_dir,
+   }
+ 
+   base::FilePath cache_dir;
+-  if (!base::PathService::Get(base::DIR_CACHE, &cache_dir)) {
++  if (HasUserProfile()) {
++    cache_dir = base::FilePath(kProfileCacheDirectory);
++  } else if (!base::PathService::Get(base::DIR_CACHE, &cache_dir)) {
+     return;
+   }
+ 
+@@ -43,27 +62,27 @@ void GetUserCacheDirectory(const base::FilePath& profile_dir,
+ }
+ 
+ bool GetUserDocumentsDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kVolatileUserDirectory).Append("Documents");
++  *result = GetUserDirectory("Documents");
+   return true;
+ }
+ 
+ bool GetUserDownloadsDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kVolatileUserDirectory);
++  *result = GetUserDirectory("Downloads");
+   return true;
+ }
+ 
+ bool GetUserMusicDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kVolatileUserDirectory);
++  *result = GetUserDirectory("Music");
+   return true;
+ }
+ 
+ bool GetUserPicturesDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kVolatileUserDirectory);
++  *result = GetUserDirectory("Pictures");
+   return true;
+ }
+ 
+ bool GetUserVideosDirectory(base::FilePath* result) {
+-  *result = base::FilePath(kVolatileUserDirectory);
++  *result = GetUserDirectory("Videos");
+   return true;
+ }
+ 

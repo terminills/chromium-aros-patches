@@ -1,0 +1,39 @@
+From de8b330e49f49a58fa351c20144c7b32451304c2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 6 Aug 2026 23:11:05 -0500
+Subject: [PATCH 513/638] aros: retry lifecycle recovery after renderer
+ retirement
+
+---
+ .../browser/ui/startup/startup_browser_creator_impl.cc | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index 045142ae27..8b5e63f418 100644
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -131,8 +131,12 @@ void RequestArosLifecycleTestRecovery(int original_process_id) {
+     return;
+   }
+ 
++  content::RenderProcessHost* process =
++      contents->GetPrimaryMainFrame()->GetProcess();
+   LOG(ERROR) << "[Chromium:AROS:LifecycleTest] recovery requested"
+-             << " original_renderer_host=" << original_process_id;
++             << " original_renderer_host=" << original_process_id
++             << " current_renderer_host=" << process->GetID()
++             << " current_live=" << process->IsInitializedAndNotDead();
+   contents->GetController().Reload(content::ReloadType::NORMAL, false);
+ }
+ 
+@@ -158,6 +162,10 @@ void CloseFirstTabForArosLifecycleTest() {
+       FROM_HERE,
+       base::BindOnce(&RequestArosLifecycleTestRecovery, original_process_id),
+       base::Seconds(1));
++  task_runner->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&RequestArosLifecycleTestRecovery, original_process_id),
++      base::Seconds(22));
+   for (int checkpoint_seconds : {5, 20, 40}) {
+     task_runner->PostDelayedTask(
+         FROM_HERE,

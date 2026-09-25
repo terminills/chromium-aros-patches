@@ -1,0 +1,64 @@
+From 0259ad91d20d40c501e6f35ea4af4e90e2cee997 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:56:17 -0500
+Subject: [PATCH 052/638] blink: bind async iterable init arguments explicitly
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: Blink async iterable binding methods now use their class-declared initialization argument types on every compiler.
+
+ROOT_CAUSE: The public methods used an abbreviated function-template parameter pack before a fixed trailing ExceptionState reference. GCC correctly treated that pack as non-deducible, so a generated one-argument ReadableStream iterator call could not match.
+
+FIX_REASON: Use the enclosing PairAsyncIterable or ValueAsyncIterable InitArgs pack directly; implicit conversion and forwarding remain intact, while the compiler no longer has to infer a pack in a non-terminal position.
+
+SCOPE: Blink pair and value asynchronous iterable binding helpers
+
+VALIDATION: Generated ReadableStream, FileSystemDirectoryHandle, and SharedStorage V8 binding objects compiled with the AROS GCC cross-toolchain; staged diff check passed.
+
+RISK: Callers now convert directly to the class-declared InitArgs parameter types before dispatch, matching the virtual CreateIterationSource contract; current instantiations are pointers or empty packs.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../blink/renderer/bindings/core/v8/async_iterable.h      | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/blink/renderer/bindings/core/v8/async_iterable.h b/third_party/blink/renderer/bindings/core/v8/async_iterable.h
+index 115ee53034..48930c00c0 100644
+--- a/third_party/blink/renderer/bindings/core/v8/async_iterable.h
++++ b/third_party/blink/renderer/bindings/core/v8/async_iterable.h
+@@ -202,7 +202,7 @@ class PairAsyncIterable {
+ 
+   AsyncIteratorType* keysForBinding(
+       ScriptState* script_state,
+-      std::convertible_to<InitArgs> auto&&... args,
++      InitArgs... args,
+       ExceptionState& exception_state) {
+     const auto kind = IterationSource::Kind::kKey;
+     IterationSource* source = CreateIterationSource(
+@@ -216,7 +216,7 @@ class PairAsyncIterable {
+ 
+   AsyncIteratorType* valuesForBinding(
+       ScriptState* script_state,
+-      std::convertible_to<InitArgs> auto&&... args,
++      InitArgs... args,
+       ExceptionState& exception_state) {
+     const auto kind = IterationSource::Kind::kValue;
+     IterationSource* source = CreateIterationSource(
+@@ -230,7 +230,7 @@ class PairAsyncIterable {
+ 
+   AsyncIteratorType* entriesForBinding(
+       ScriptState* script_state,
+-      std::convertible_to<InitArgs> auto&&... args,
++      InitArgs... args,
+       ExceptionState& exception_state) {
+     const auto kind = IterationSource::Kind::kKeyValue;
+     IterationSource* source = CreateIterationSource(
+@@ -276,7 +276,7 @@ class ValueAsyncIterable {
+ 
+   AsyncIteratorType* valuesForBinding(
+       ScriptState* script_state,
+-      std::convertible_to<InitArgs> auto&&... args,
++      InitArgs... args,
+       ExceptionState& exception_state) {
+     const auto kind = IterationSource::Kind::kValue;
+     IterationSource* source = CreateIterationSource(

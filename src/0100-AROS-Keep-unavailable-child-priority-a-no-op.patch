@@ -1,0 +1,37 @@
+From f3d2a2f1223fad0c2f717d875ab4079464fa4382 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 21:05:25 -0500
+Subject: [PATCH 100/638] [AROS] Keep unavailable child priority a no-op
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: The fail-closed AROS child launcher no longer probes a process-priority capability that the platform layer does not implement.
+ROOT_CAUSE: The initial launcher helper copied Linux priority caching logic even though no AROS child can be created yet and base::Process::CanSetPriority has no AROS definition.
+FIX_REASON: Make the platform priority callback an explicit no-op, matching the current launch capability instead of introducing a link-only process API requirement.
+SCOPE: AROS child-process launcher priority callback.
+VALIDATION: child_process_launcher_helper_aros.o builds; x86_64-aros-nm shows no undefined base::Process::CanSetPriority reference.
+RISK: Child priority remains unchanged when native multiprocess launch is later enabled until a real AROS process-priority contract is added.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-opal-fork-emulation
+---
+ content/browser/child_process_launcher_helper_aros.cc | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
+index 7818b370be..34bb3109e5 100644
+--- a/content/browser/child_process_launcher_helper_aros.cc
++++ b/content/browser/child_process_launcher_helper_aros.cc
+@@ -106,12 +106,9 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
+ }
+ 
+ void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
+-    base::Process process,
+-    base::Process::Priority priority) {
++    base::Process,
++    base::Process::Priority) {
+   DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+-  if (process.CanSetPriority()) {
+-    process.SetPriority(priority);
+-  }
+ }
+ 
+ base::File OpenFileToShare(const base::FilePath& path,

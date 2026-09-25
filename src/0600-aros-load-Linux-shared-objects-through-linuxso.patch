@@ -1,0 +1,126 @@
+From 13865c9be35fcc78a11d69ec84fa12b7920c9df8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 8 Sep 2026 16:09:29 -0500
+Subject: [PATCH 600/638] aros: load Linux shared objects through linuxso
+
+Route ET_DYN native-library loads through liblinuxso when hostlib.resource
+is absent (native AROS) or AROS_LINUXSO is set in the environment (hosted
+A/B).  The hostlib path is unchanged otherwise.  Unload and symbol lookup
+follow the new kind.
+---
+ base/BUILD.gn               |  7 +++++-
+ base/native_library_aros.cc | 47 +++++++++++++++++++++++++++++++++----
+ 2 files changed, 48 insertions(+), 6 deletions(-)
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 8c44012402..7a3f228e2e 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1159,7 +1159,12 @@ component("base") {
+   }
+ 
+   if (is_aros) {
+-    libs += [ "debug" ]
++    # debug.library for LoadSeg symbol lookup; liblinuxso (static, from the
++    # AROS SDK) for Linux ET_DYN objects such as the Widevine CDM.
++    libs += [
++      "debug",
++      "linuxso",
++    ]
+   }
+ 
+   if (use_allocator_shim) {
+diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
+index 73e0746c32..92db29e61c 100644
+--- a/base/native_library_aros.cc
++++ b/base/native_library_aros.cc
+@@ -10,6 +10,7 @@
+ #include "base/threading/scoped_blocking_call.h"
+ 
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include <dos/dos.h>
+@@ -27,6 +28,12 @@
+ #define __HOSTLIB_LIBBASE HostLibBase
+ #include <proto/hostlib.h>
+ 
++// The in-process Linux ET_DYN loader (compiler/linuxso in the AROS tree):
++// maps the object into exec memory and resolves it against a glibc-ABI
++// shim, so a Linux shared object such as the Widevine CDM runs on native
++// AROS where there is no host dynamic linker.
++#include <linuxso.h>
++
+ namespace base {
+ 
+ namespace {
+@@ -37,6 +44,11 @@ enum class ArosNativeLibraryKind {
+   // A host (Linux) shared object opened through hostlib.resource.  Only
+   // hosted AROS can load these; they run on the host's libc, not AROS's.
+   kHostSharedObject,
++  // A Linux shared object mapped by linuxso and run against its glibc shim
++  // on AROS's own libc.  The path taken on native AROS; hosted AROS takes it
++  // too when AROS_LINUXSO is set, which makes the native loader debuggable
++  // where a debugger can be attached.
++  kLinuxSharedObject,
+ };
+ 
+ struct ArosNativeLibrary {
+@@ -343,12 +355,27 @@ NativeLibrary LoadNativeLibraryWithOptions(const FilePath& library_path,
+   if (IsArosLoadableModulePath(library_path) &&
+       ClassifyElfObject(library_path) == ElfObjectType::kDynamic) {
+     APTR HostLibBase = OpenResource("hostlib.resource");
+-    if (!HostLibBase) {
+-      if (error) {
+-        error->message = StrCat(
+-            {"host shared object needs hosted AROS: ", library_path.value()});
++    if (!HostLibBase || getenv("AROS_LINUXSO")) {
++      char reason[512] = {};
++      struct LinuxSO* so =
++          linuxso_open(library_path.value().c_str(), reason, sizeof(reason));
++      if (!so) {
++        if (error) {
++          error->message =
++              StrCat({"linuxso_open failed: ", library_path.value(), ": ",
++                      reason});
++        }
++        LOG(ERROR) << "[Chromium:AROS:NativeLibrary] linux shared object "
++                      "failed path="
++                   << library_path.value() << " error=" << reason;
++        return nullptr;
+       }
+-      return nullptr;
++
++      LOG(INFO) << "[Chromium:AROS:NativeLibrary] linux shared object loaded "
++                   "path="
++                << library_path.value() << " loader=linuxso";
++      return WrapArosLibrary(ArosNativeLibraryKind::kLinuxSharedObject,
++                             library_path.BaseName().value(), so);
+     }
+ 
+     std::string host_path;
+@@ -426,6 +453,8 @@ void UnloadNativeLibrary(NativeLibrary library) {
+     APTR HostLibBase = OpenResource("hostlib.resource");
+     if (HostLibBase)
+       HostLib_Close(aros_library->handle, nullptr);
++  } else if (aros_library->kind == ArosNativeLibraryKind::kLinuxSharedObject) {
++    linuxso_close(static_cast<struct LinuxSO*>(aros_library->handle));
+   } else if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
+     RunLoadSegModuleShutdown(aros_library);
+     UnLoadSeg(reinterpret_cast<BPTR>(aros_library->handle));
+@@ -455,6 +484,14 @@ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
+     return result;
+   }
+ 
++  if (aros_library->kind == ArosNativeLibraryKind::kLinuxSharedObject) {
++    void* result =
++        linuxso_sym(static_cast<struct LinuxSO*>(aros_library->handle), name);
++    LOG(INFO) << "[Chromium:AROS:NativeLibrary] linuxso symbol lookup module="
++              << aros_library->name << " name=" << name << " result=" << result;
++    return result;
++  }
++
+   if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
+     void* result = LookupLoadSegSymbol(aros_library, name);
+     LOG(INFO) << "[Chromium:AROS:NativeLibrary] symbol lookup module="

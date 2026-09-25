@@ -1,0 +1,101 @@
+From ff40bdbe553947607350038594e87016c76b6267 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 11:49:16 -0500
+Subject: [PATCH 409/638] [AROS] Scale AROS Chromium workers by visible
+ CPUs
+
+Use two ordinary browser and renderer pool workers per CPU reported by AROS instead of Chromium's desktop floors of sixteen and three. Dedicated main, I/O, compositor, and service threads remain outside this budget.
+
+
+---
+ content/browser/startup_helper.cc       | 10 ++++++++++
+ content/common/thread_pool_util.cc      | 11 +++++++++++
+ content/renderer/render_process_impl.cc |  4 ++++
+ 3 files changed, 25 insertions(+)
+
+diff --git a/content/browser/startup_helper.cc b/content/browser/startup_helper.cc
+index 332d889d1f..2e988943b7 100644
+--- a/content/browser/startup_helper.cc
++++ b/content/browser/startup_helper.cc
+@@ -50,6 +50,7 @@ std::unique_ptr<base::FieldTrialList> SetUpFieldTrialsAndFeatureList() {
+ 
+ namespace {
+ 
++#if !BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kBrowserThreadPoolAdjustment,
+              "BrowserThreadPoolAdjustment",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -84,12 +85,20 @@ MIRACLE_PARAMETER_FOR_INT(GetBrowserThreadPoolOffset,
+                           kBrowserThreadPoolAdjustment,
+                           "BrowserThreadPoolOffset",
+                           0)
++#endif
+ 
+ }  // namespace
+ 
+ // TODO(scheduler-dev): Standardize thread pool logic and remove the need for
+ // specifying thread count manually.
+ void StartBrowserThreadPool() {
++#if BUILDFLAG(IS_AROS)
++  // Size ordinary workers from the CPUs that AROS can actually schedule.
++  // Dedicated browser, renderer, I/O, and compositor threads are separate
++  // from this pool and remain unaffected.
++  base::ThreadPoolInstance::InitParams thread_pool_init_params = {
++      GetMinForegroundThreadsInRendererThreadPool()};
++#else
+   // Ensure we always support at least one thread regardless of the field trial
+   // param setting.
+   auto min = static_cast<size_t>(std::max(GetBrowserThreadPoolMin(), 1));
+@@ -97,6 +106,7 @@ void StartBrowserThreadPool() {
+       base::RecommendedMaxNumberOfThreadsInThreadGroup(
+           min, GetBrowserThreadPoolMax(), GetBrowserThreadPoolCoresMultiplier(),
+           GetBrowserThreadPoolOffset())};
++#endif
+ 
+ #if BUILDFLAG(IS_WIN)
+   thread_pool_init_params.common_thread_pool_environment = base::
+diff --git a/content/common/thread_pool_util.cc b/content/common/thread_pool_util.cc
+index 73913e6775..33cfe4b475 100644
+--- a/content/common/thread_pool_util.cc
++++ b/content/common/thread_pool_util.cc
+@@ -7,13 +7,24 @@
+ #include <algorithm>
+ 
+ #include "base/system/sys_info.h"
++#include "build/build_config.h"
+ 
+ namespace content {
+ 
+ size_t GetMinForegroundThreadsInRendererThreadPool() {
++#if BUILDFLAG(IS_AROS)
++  // Exec schedules the CPUs exposed by kernel.resource. Keep Chromium's
++  // ordinary worker pools proportional to that schedulable capacity instead
++  // of inheriting desktop minimums intended for much larger systems.
++  constexpr int kWorkersPerProcessor = 2;
++  return static_cast<size_t>(
++      std::max(1, base::SysInfo::NumberOfProcessors()) *
++      kWorkersPerProcessor);
++#else
+   // Assume a busy main thread.
+   return static_cast<size_t>(
+       std::max(1, base::SysInfo::NumberOfProcessors() - 1));
++#endif
+ }
+ 
+ }  // namespace content
+diff --git a/content/renderer/render_process_impl.cc b/content/renderer/render_process_impl.cc
+index 59438368ed..b31e5dbca1 100644
+--- a/content/renderer/render_process_impl.cc
++++ b/content/renderer/render_process_impl.cc
+@@ -86,7 +86,11 @@ void SetV8FlagIfHasSwitch(const char* switch_name, const char* v8_flag) {
+ 
+ std::unique_ptr<base::ThreadPoolInstance::InitParams>
+ GetThreadPoolInitParams() {
++#if BUILDFLAG(IS_AROS)
++  constexpr size_t kMaxNumThreadsInForegroundPoolLowerBound = 1;
++#else
+   constexpr size_t kMaxNumThreadsInForegroundPoolLowerBound = 3;
++#endif
+   size_t desired_num_threads =
+       std::max(kMaxNumThreadsInForegroundPoolLowerBound,
+                content::GetMinForegroundThreadsInRendererThreadPool());

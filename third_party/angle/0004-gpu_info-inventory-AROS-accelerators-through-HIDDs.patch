@@ -1,0 +1,307 @@
+From 86892d7aefcf747e4502e5aa1e740bc527e03ac0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:00:05 -0500
+Subject: [PATCH 4/4] gpu_info: inventory AROS accelerators through HIDDs
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: ANGLE had no AROS GetSystemInfo implementation, while a PCI-only fallback would conflate physical display adapters with the graphics stack actually available to Chromium.
+
+FIX_REASON: Query the Vulkan HIDD GPU registry first for accelerator identity, priority, and BDF; supplement it with claimed display-class PCI devices; leave Gallium selection at Hidd_Display surface creation where its contract belongs.
+
+SCOPE: BUILD.gn; src/libGLESv2.gni; src/gpu_info_util/SystemInfo_aros.cpp
+
+VALIDATION: filtered GN regeneration; ninja obj/third_party/angle/angle_gpu_info_util/SystemInfo_aros.o obj/third_party/angle/libangle_gpu_info_util.a; x86_64-aros-nm confirms angle::GetSystemInfo is defined.
+
+RISK: medium; an unloaded Vulkan registry falls back to PCI inventory, while runtime provider ordering still needs native boot validation.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ BUILD.gn                              |   5 +
+ src/gpu_info_util/SystemInfo_aros.cpp | 244 ++++++++++++++++++++++++++
+ src/libGLESv2.gni                     |   3 +
+ 3 files changed, 252 insertions(+)
+ create mode 100644 src/gpu_info_util/SystemInfo_aros.cpp
+
+diff --git a/BUILD.gn b/BUILD.gn
+index b98f76e..db1dcfc 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -672,6 +672,11 @@ angle_static_library("angle_gpu_info_util") {
+     }
+   }
+ 
++  if (is_aros) {
++    sources += libangle_gpu_info_util_aros_sources
++    libs += [ "oop" ]
++  }
++
+   if (use_libpci) {
+     sources += libangle_gpu_info_util_libpci_sources
+     defines += [ "GPU_INFO_USE_LIBPCI" ]
+diff --git a/src/gpu_info_util/SystemInfo_aros.cpp b/src/gpu_info_util/SystemInfo_aros.cpp
+new file mode 100644
+index 0000000..a10b109
+--- /dev/null
++++ b/src/gpu_info_util/SystemInfo_aros.cpp
+@@ -0,0 +1,244 @@
++//
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++
++// SystemInfo_aros.cpp: native GPU inventory through AROS HIDD registries.
++
++#include "gpu_info_util/SystemInfo_internal.h"
++
++#include <aros/asmcall.h>
++#include <hidd/pci.h>
++#include <hidd/vulkan_hidd.h>
++#include <proto/oop.h>
++
++OOP_AttrBase HiddPCIDeviceAttrBase = 0;
++
++namespace angle
++{
++namespace
++{
++
++struct EnumerationContext
++{
++    SystemInfo *info;
++    int firstClaimedIndex;
++};
++
++uint64_t MakeSystemDeviceId(uint32_t bus, uint32_t device, uint32_t function)
++{
++    const uint32_t busDeviceFunction = (bus << 8) | (device << 3) | function;
++    return GetSystemDeviceIdFromParts(0, busDeviceFunction);
++}
++
++int EnumerateVulkanGPUs(SystemInfo *info)
++{
++    OOP_Object *vulkan =
++        static_cast<OOP_Object *>(OOP_NewObject(nullptr, CLID_Hidd_Vulkan, nullptr));
++    if (!vulkan)
++    {
++        return -1;
++    }
++
++    struct VulkanGPUInfo entries[VULKAN_MAX_GPUS] = {};
++    struct pHidd_Vulkan_EnumerateGPUs message = {};
++    message.mID = OOP_GetMethodID(IID_Hidd_Vulkan, moHidd_Vulkan_EnumerateGPUs);
++    message.gpu_info = entries;
++    message.max_count = VULKAN_MAX_GPUS;
++
++    const ULONG count =
++        static_cast<ULONG>(OOP_DoMethod(vulkan, reinterpret_cast<OOP_Msg>(&message)));
++
++    int activeIndex = -1;
++    int32_t activePriority = 0;
++    for (ULONG i = 0; i < count && i < VULKAN_MAX_GPUS; ++i)
++    {
++        GPUDeviceInfo gpu;
++        gpu.vendorId = entries[i].vendor_id;
++        gpu.deviceId = entries[i].device_id;
++        gpu.systemDeviceId = MakeSystemDeviceId(entries[i].pci_bus, entries[i].pci_dev,
++                                                 entries[i].pci_func);
++        if (entries[i].name[0])
++        {
++            gpu.driverVendor = entries[i].name;
++        }
++        else if (entries[i].class_id[0])
++        {
++            gpu.driverVendor = entries[i].class_id;
++        }
++
++        info->gpus.push_back(std::move(gpu));
++
++        const bool software = (entries[i].flags & VULKAN_GPU_SOFTWARE) != 0;
++        if (!software &&
++            (activeIndex < 0 || entries[i].priority > activePriority))
++        {
++            activeIndex = static_cast<int>(info->gpus.size() - 1);
++            activePriority = entries[i].priority;
++        }
++    }
++
++    OOP_DisposeObject(vulkan);
++    return activeIndex;
++}
++
++AROS_UFH3(void, EnumerateGPU,
++          AROS_UFHA(struct Hook *, hook, A0),
++          AROS_UFHA(OOP_Object *, pciDevice, A2),
++          AROS_UFHA(APTR, message, A1))
++{
++    AROS_USERFUNC_INIT
++
++    (void)message;
++
++    auto *context = static_cast<EnumerationContext *>(hook->h_Data);
++    IPTR vendorId = 0;
++    IPTR deviceId = 0;
++    IPTR revisionId = 0;
++    IPTR bus = 0;
++    IPTR device = 0;
++    IPTR function = 0;
++    IPTR ownerValue = 0;
++
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_VendorID, &vendorId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_ProductID, &deviceId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_RevisionID, &revisionId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Bus, &bus);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Dev, &device);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Sub, &function);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Owner, &ownerValue);
++
++    const uint64_t systemDeviceId =
++        MakeSystemDeviceId(static_cast<uint32_t>(bus), static_cast<uint32_t>(device),
++                           static_cast<uint32_t>(function));
++    const char *owner = reinterpret_cast<const char *>(ownerValue);
++
++    size_t index = 0;
++    for (; index < context->info->gpus.size(); ++index)
++    {
++        GPUDeviceInfo &gpu = context->info->gpus[index];
++        if (gpu.vendorId == static_cast<VendorID>(vendorId) &&
++            gpu.deviceId == static_cast<DeviceID>(deviceId) &&
++            gpu.systemDeviceId == systemDeviceId)
++        {
++            gpu.revisionId = static_cast<RevisionID>(revisionId);
++            if (gpu.driverVendor.empty() && owner && owner[0])
++            {
++                gpu.driverVendor = owner;
++            }
++            break;
++        }
++    }
++
++    if (index == context->info->gpus.size())
++    {
++        GPUDeviceInfo gpu;
++        gpu.vendorId = static_cast<VendorID>(vendorId);
++        gpu.deviceId = static_cast<DeviceID>(deviceId);
++        gpu.revisionId = static_cast<RevisionID>(revisionId);
++        gpu.systemDeviceId = systemDeviceId;
++        if (owner && owner[0])
++        {
++            gpu.driverVendor = owner;
++        }
++        context->info->gpus.push_back(std::move(gpu));
++    }
++
++    if (context->firstClaimedIndex < 0 && owner && owner[0])
++    {
++        context->firstClaimedIndex = static_cast<int>(index);
++    }
++
++    AROS_USERFUNC_EXIT
++}
++
++int EnumeratePCIGPUs(SystemInfo *info)
++{
++    HiddPCIDeviceAttrBase = OOP_ObtainAttrBase(IID_Hidd_PCIDevice);
++    if (!HiddPCIDeviceAttrBase)
++    {
++        return -1;
++    }
++
++    OOP_Object *pci =
++        static_cast<OOP_Object *>(OOP_NewObject(nullptr, CLID_Hidd_PCI, nullptr));
++    if (!pci)
++    {
++        OOP_ReleaseAttrBase(IID_Hidd_PCIDevice);
++        HiddPCIDeviceAttrBase = 0;
++        return -1;
++    }
++
++    EnumerationContext context = {info, -1};
++    struct Hook hook = {};
++    hook.h_Entry = reinterpret_cast<APTR>(EnumerateGPU);
++    hook.h_Data = &context;
++
++    struct TagItem requirements[] = {
++        {tHidd_PCI_Class, 0x03},
++        {TAG_DONE, 0},
++    };
++    struct pHidd_PCI_EnumDevices message = {
++        OOP_GetMethodID(IID_Hidd_PCI, moHidd_PCI_EnumDevices),
++        &hook,
++        requirements,
++    };
++
++    OOP_DoMethod(pci, reinterpret_cast<OOP_Msg>(&message));
++
++    OOP_DisposeObject(pci);
++    OOP_ReleaseAttrBase(IID_Hidd_PCIDevice);
++    HiddPCIDeviceAttrBase = 0;
++    return context.firstClaimedIndex;
++}
++
++void SetActiveGPU(SystemInfo *info, int activeIndex)
++{
++    GetDualGPUInfo(info);
++    if (activeIndex < 0 || static_cast<size_t>(activeIndex) >= info->gpus.size())
++    {
++        return;
++    }
++
++    bool hasIntel = false;
++    for (const GPUDeviceInfo &gpu : info->gpus)
++    {
++        hasIntel |= IsIntel(gpu.vendorId);
++    }
++
++    info->activeGPUIndex = activeIndex;
++    info->isOptimus = hasIntel && IsNVIDIA(info->gpus[activeIndex].vendorId);
++    info->isAMDSwitchable = hasIntel && IsAMD(info->gpus[activeIndex].vendorId);
++}
++
++}  // anonymous namespace
++
++bool GetSystemInfo(SystemInfo *info)
++{
++    if (!info || !OOPBase)
++    {
++        return false;
++    }
++
++    info->gpus.clear();
++
++    // Vulkan HIDD is the accelerator registry; PCI adds display-only devices.
++    // Gallium is selected through Hidd_Display once a rendering surface exists.
++    int activeIndex = EnumerateVulkanGPUs(info);
++    const int claimedDisplayIndex = EnumeratePCIGPUs(info);
++
++    if (info->gpus.empty())
++    {
++        return false;
++    }
++
++    if (activeIndex < 0)
++    {
++        activeIndex = claimedDisplayIndex;
++    }
++    SetActiveGPU(info, activeIndex);
++    return true;
++}
++
++}  // namespace angle
+diff --git a/src/libGLESv2.gni b/src/libGLESv2.gni
+index 2d05144..03ec92f 100644
+--- a/src/libGLESv2.gni
++++ b/src/libGLESv2.gni
+@@ -189,6 +189,9 @@ libangle_gpu_info_util_android_sources =
+ libangle_gpu_info_util_linux_sources =
+     [ "src/gpu_info_util/SystemInfo_linux.cpp" ]
+ 
++libangle_gpu_info_util_aros_sources =
++    [ "src/gpu_info_util/SystemInfo_aros.cpp" ]
++
+ libangle_gpu_info_util_fuchsia_sources =
+     [ "src/gpu_info_util/SystemInfo_fuchsia.cpp" ]
+ 

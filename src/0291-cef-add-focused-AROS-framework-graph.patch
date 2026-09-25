@@ -1,0 +1,60 @@
+From 265d3101e7e034313d0d9248c5a4f7240c938928 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:47:42 -0500
+Subject: [PATCH 291/638] cef: add focused AROS framework graph
+
+Generate CEF's internal static framework without traversing Chromium's generic gn_all test aggregates, whose Cast and ANGLE targets are intentionally absent on AROS. The mode is opt-in and mutually exclusive with the focused V8 and Blink extraction modes.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: gn-bootstrap-passed
+
+AI_ASSUMPTION: libcef_static is the correct first compile boundary before designing the native cef.library wrapper
+
+AI_VALIDATION: gn gen out/aros-cef-bootstrap completed with 18583 targets from 3101 files
+
+AI_LIMITATIONS: no CEF object compilation or native shared-library link has run yet
+
+AI_DECISION_CHAIN:
+---
+ BUILD.gn | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index f537abbbac..550582bf67 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -69,6 +69,11 @@ declare_args() {
+   # v8.library. This keeps the native library build independent of unrelated
+   # browser test aggregates while using Chromium's exact V8 source and args.
+   aros_v8_library_only = false
++
++  # Generate only CEF's internal static framework graph for the first AROS
++  # embedding bring-up. The generic gn_all target includes platform test
++  # executables that AROS intentionally does not define.
++  aros_cef_library_only = false
+ }
+ 
+ if (is_official_build) {
+@@ -90,12 +95,20 @@ if (is_official_build) {
+ group("gn_all") {
+   testonly = true
+ 
+-  if (is_aros && aros_blink_platform_library_only) {
++  if (is_aros && aros_cef_library_only) {
++    assert(enable_cef)
++    assert(!aros_blink_platform_library_only)
++    assert(!aros_v8_library_only)
++    deps = [ "//cef:libcef_static" ]
++    deps += root_extra_deps
++  } else if (is_aros && aros_blink_platform_library_only) {
+     assert(use_blink)
++    assert(!aros_cef_library_only)
+     assert(!aros_v8_library_only)
+     deps = [ "//third_party/blink/renderer/platform" ]
+     deps += root_extra_deps
+   } else if (is_aros && aros_v8_library_only) {
++    assert(!aros_cef_library_only)
+     assert(v8_monolithic)
+     deps = [ "//v8:v8_monolith" ]
+     deps += root_extra_deps

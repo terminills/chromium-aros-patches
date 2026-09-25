@@ -1,0 +1,63 @@
+From 37a894a577cf65a134e41e51d1d429da19231d4b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 18:11:05 -0500
+Subject: [PATCH 478/638] AROS: scope field trial lists per native process
+
+Keep FieldTrialList singleton state keyed by the inherited native-process CommandLine identity. Shared-address-space GPU, renderer, and utility processes can now construct their own field-trial lists without colliding with the browser instance.
+
+
+
+---
+ base/metrics/field_trial.cc | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/base/metrics/field_trial.cc b/base/metrics/field_trial.cc
+index 9412830b40..7b7ca9d25d 100644
+--- a/base/metrics/field_trial.cc
++++ b/base/metrics/field_trial.cc
+@@ -5,6 +5,7 @@
+ #include "base/metrics/field_trial.h"
+ 
+ #include <algorithm>
++#include <map>
+ #include <string_view>
+ #include <utility>
+ 
+@@ -474,6 +475,37 @@ void FieldTrial::GetStateWhileLocked(PickleState* field_trial_state) {
+ // static
+ FieldTrialList* FieldTrialList::global_ = nullptr;
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++
++struct FieldTrialListProcessRegistry {
++  Lock lock;
++  std::map<const CommandLine*, FieldTrialList*> lists;
++};
++
++FieldTrialList*& GetFieldTrialListForCurrentProcess() {
++  const CommandLine* const process_identity =
++      CommandLine::InitializedForCurrentProcess()
++          ? CommandLine::ForCurrentProcess()
++          : nullptr;
++  thread_local const CommandLine* cached_identity = nullptr;
++  thread_local FieldTrialList** cached_list = nullptr;
++  if (cached_list && cached_identity == process_identity) {
++    return *cached_list;
++  }
++
++  static NoDestructor<FieldTrialListProcessRegistry> registry;
++  AutoLock lock(registry->lock);
++  cached_identity = process_identity;
++  cached_list = &registry->lists[process_identity];
++  return *cached_list;
++}
++
++}  // namespace
++
++#define global_ GetFieldTrialListForCurrentProcess()
++#endif
++
+ FieldTrialList::Observer::~Observer() = default;
+ 
+ FieldTrialList::FieldTrialList() {

@@ -1,0 +1,56 @@
+From 6227faec916116c9f93dc2d8abb10a80d00ad521 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:26:53 -0500
+Subject: [PATCH 066/638] [AROS] Bound content font enumeration explicitly
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: content/common no longer imports the Linux Fontconfig implementation on AROS.
+ROOT_CAUSE: font_list_fontconfig.cc was the default for every platform not explicitly excluded, although the AROS sysroot has no Fontconfig API or headers.
+FIX_REASON: Add an explicit AROS backend that reports no enumerated system families, matching established bounded platform implementations until diskfont.library receives a task-safe Chromium bridge.
+SCOPE: content/common/BUILD.gn and content/common/font_list_aros.cc.
+VALIDATION: ninja -C out/aros-headless -j32 obj/content/common/common/font_list_aros.o
+RISK: Font settings cannot enumerate installed AROS families yet; text rendering remains independent through Skia.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ content/common/BUILD.gn          |  5 +++++
+ content/common/font_list_aros.cc | 15 +++++++++++++++
+ 2 files changed, 20 insertions(+)
+ create mode 100644 content/common/font_list_aros.cc
+
+diff --git a/content/common/BUILD.gn b/content/common/BUILD.gn
+index 7e67fb0c10..7942c4d1f7 100644
+--- a/content/common/BUILD.gn
++++ b/content/common/BUILD.gn
+@@ -473,6 +473,11 @@ source_set("common") {
+     sources -= [ "font_list_fontconfig.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources -= [ "font_list_fontconfig.cc" ]
++    sources += [ "font_list_aros.cc" ]
++  }
++
+   if (enable_ppapi) {
+     sources += [
+       "pepper_file_util.cc",
+diff --git a/content/common/font_list_aros.cc b/content/common/font_list_aros.cc
+new file mode 100644
+index 0000000000..6697479f10
+--- /dev/null
++++ b/content/common/font_list_aros.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/common/font_list.h"
++
++namespace content {
++
++base::Value::List GetFontList_SlowBlocking() {
++  // AROS exposes fonts through diskfont.library rather than Fontconfig. Until
++  // that API has a task-safe Chromium bridge, report no enumerated families.
++  return base::Value::List();
++}
++
++}  // namespace content

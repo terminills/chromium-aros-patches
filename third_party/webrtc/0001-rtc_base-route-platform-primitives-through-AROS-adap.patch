@@ -1,0 +1,149 @@
+From 729a34c352822770707e96d60ef9796e81774e26 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 14:10:38 -0500
+Subject: [PATCH 1/7] rtc_base: route platform primitives through AROS adapters
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: WebRTC assumed pointer-like pthread_t values, libc inet_ntop/inet_pton, Unix endian helpers, and public netdb declarations; AROS uses an integral thread ID and bsdsocket.library vectors, while its headers leak Exec names into C++ namespaces.
+
+FIX_REASON: Cast the native integral thread type directly, route address conversion through Chromium's AROSTCP adapter, provide endian conversions from compiler byte swaps, and keep addrinfo opaque in the public header.
+
+SCOPE: rtc_base platform thread types, byte order, IP address declarations, net helpers, and target dependency selection.
+
+VALIDATION: focused WebRTC net-helper and platform-thread objects compile in the AROS headless graph.
+
+RISK: low; changes are AROS-gated and retain WebRTC's existing address and byte-order semantics.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ rtc_base/BUILD.gn                 |  3 +++
+ rtc_base/byte_order.h             | 32 +++++++++++++++++++++++++++++++
+ rtc_base/ip_address.h             |  4 ++++
+ rtc_base/net_helpers.cc           |  9 +++++++++
+ rtc_base/platform_thread_types.cc |  2 +-
+ 5 files changed, 49 insertions(+), 1 deletion(-)
+
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index 2ba00e0..4e408f2 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -877,6 +877,9 @@ rtc_library("net_helpers") {
+       "win:windows_version",
+     ]
+   }
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+   absl_deps = [ "//third_party/abseil-cpp/absl/strings" ]
+ }
+ 
+diff --git a/rtc_base/byte_order.h b/rtc_base/byte_order.h
+index b8f8ae9..b890bed 100644
+--- a/rtc_base/byte_order.h
++++ b/rtc_base/byte_order.h
+@@ -38,6 +38,38 @@
+ #define le32toh(v) OSSwapLittleToHostInt32(v)
+ #define le64toh(v) OSSwapLittleToHostInt64(v)
+ 
++#elif defined(__AROS__)
++
++#if defined(WEBRTC_ARCH_LITTLE_ENDIAN)
++#define htobe16(v) __builtin_bswap16(v)
++#define htobe32(v) __builtin_bswap32(v)
++#define htobe64(v) __builtin_bswap64(v)
++#define be16toh(v) __builtin_bswap16(v)
++#define be32toh(v) __builtin_bswap32(v)
++#define be64toh(v) __builtin_bswap64(v)
++#define htole16(v) (v)
++#define htole32(v) (v)
++#define htole64(v) (v)
++#define le16toh(v) (v)
++#define le32toh(v) (v)
++#define le64toh(v) (v)
++#elif defined(WEBRTC_ARCH_BIG_ENDIAN)
++#define htobe16(v) (v)
++#define htobe32(v) (v)
++#define htobe64(v) (v)
++#define be16toh(v) (v)
++#define be32toh(v) (v)
++#define be64toh(v) (v)
++#define htole16(v) __builtin_bswap16(v)
++#define htole32(v) __builtin_bswap32(v)
++#define htole64(v) __builtin_bswap64(v)
++#define le16toh(v) __builtin_bswap16(v)
++#define le32toh(v) __builtin_bswap32(v)
++#define le64toh(v) __builtin_bswap64(v)
++#else
++#error WEBRTC_ARCH_BIG_ENDIAN or WEBRTC_ARCH_LITTLE_ENDIAN must be defined.
++#endif
++
+ #elif defined(WEBRTC_WIN) || defined(__native_client__)
+ 
+ #if defined(WEBRTC_WIN)
+diff --git a/rtc_base/ip_address.h b/rtc_base/ip_address.h
+index c015206..e9974f9 100644
+--- a/rtc_base/ip_address.h
++++ b/rtc_base/ip_address.h
+@@ -13,7 +13,11 @@
+ 
+ #if defined(WEBRTC_POSIX)
+ #include <arpa/inet.h>
++#if defined(__AROS__)
++struct addrinfo;
++#else
+ #include <netdb.h>
++#endif
+ #include <netinet/in.h>
+ #include <sys/socket.h>
+ 
+diff --git a/rtc_base/net_helpers.cc b/rtc_base/net_helpers.cc
+index 00cd434..6d6d32a 100644
+--- a/rtc_base/net_helpers.cc
++++ b/rtc_base/net_helpers.cc
+@@ -14,6 +14,11 @@
+ #include <string>
+ 
+ #include "absl/strings/string_view.h"
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
+ 
+ #if defined(WEBRTC_WIN)
+ #include <ws2spi.h>
+@@ -29,6 +34,8 @@ namespace rtc {
+ const char* inet_ntop(int af, const void* src, char* dst, socklen_t size) {
+ #if defined(WEBRTC_WIN)
+   return win32_inet_ntop(af, src, dst, size);
++#elif BUILDFLAG(IS_AROS)
++  return base::aros::SocketInetNtop(af, src, dst, size);
+ #else
+   return ::inet_ntop(af, src, dst, size);
+ #endif
+@@ -38,6 +45,8 @@ int inet_pton(int af, absl::string_view src, void* dst) {
+   std::string src_str(src);
+ #if defined(WEBRTC_WIN)
+   return win32_inet_pton(af, src_str.c_str(), dst);
++#elif BUILDFLAG(IS_AROS)
++  return base::aros::SocketInetPton(af, src_str.c_str(), dst);
+ #else
+   return ::inet_pton(af, src_str.c_str(), dst);
+ #endif
+diff --git a/rtc_base/platform_thread_types.cc b/rtc_base/platform_thread_types.cc
+index d64ea68..1311d3d 100644
+--- a/rtc_base/platform_thread_types.cc
++++ b/rtc_base/platform_thread_types.cc
+@@ -46,7 +46,7 @@ PlatformThreadId CurrentThreadId() {
+   return zx_thread_self();
+ #elif defined(WEBRTC_LINUX)
+   return syscall(__NR_gettid);
+-#elif defined(__EMSCRIPTEN__)
++#elif defined(__EMSCRIPTEN__) || defined(__AROS__)
+   return static_cast<PlatformThreadId>(pthread_self());
+ #else
+   // Default implementation for nacl and solaris.

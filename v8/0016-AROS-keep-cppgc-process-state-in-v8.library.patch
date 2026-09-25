@@ -1,0 +1,223 @@
+From d2b88e8f6613e4865a63fef96bb972ee3709528c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 21:57:48 -0500
+Subject: [PATCH 16/28] AROS: keep cppgc process state in v8.library
+
+Route AROS inline cppgc statistics and write-barrier access through exported functions so Chromium imports code boundaries while the mutable process-wide storage remains owned by v8.library.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: shared-state-boundary-proven
+
+AI_ASSUMPTION: AROS v8.library is the sole owner of process-wide cppgc state
+
+AI_VALIDATION: 2516-step AROS v8_monolith rebuild completed; archive defines three accessor functions and no longer exposes the replaced mutable data symbols
+
+AI_LIMITATIONS: full Chromium shared-v8 link and runtime remain pending
+
+AI_DECISION_CHAIN:
+---
+ include/cppgc/internal/write-barrier.h    | 14 +++++++++++++-
+ include/cppgc/process-heap-statistics.h   | 16 ++++++++++++++++
+ src/heap/cppgc/process-heap-statistics.cc | 17 +++++++++++++++++
+ src/heap/cppgc/process-heap-statistics.h  | 20 ++++++++++++++++++++
+ src/heap/cppgc/write-barrier.cc           | 13 +++++++++++++
+ src/heap/cppgc/write-barrier.h            | 16 ++++++++++++++--
+ 6 files changed, 93 insertions(+), 3 deletions(-)
+
+diff --git a/include/cppgc/internal/write-barrier.h b/include/cppgc/internal/write-barrier.h
+index 566724d..d92d7d5 100644
+--- a/include/cppgc/internal/write-barrier.h
++++ b/include/cppgc/internal/write-barrier.h
+@@ -115,7 +115,13 @@ class V8_EXPORT WriteBarrier final {
+   // The FlagUpdater class allows cppgc internal to update
+   // |write_barrier_enabled_|.
+   class FlagUpdater;
+-  static bool IsEnabled() { return write_barrier_enabled_.MightBeEntered(); }
++  static bool IsEnabled() {
++#if V8_OS_AROS
++    return WriteBarrierEnabledStorage().MightBeEntered();
++#else
++    return write_barrier_enabled_.MightBeEntered();
++#endif
++  }
+ 
+  private:
+   WriteBarrier() = delete;
+@@ -150,7 +156,13 @@ class V8_EXPORT WriteBarrier final {
+       HeapHandle* heap_handle);
+ #endif  // CPPGC_YOUNG_GENERATION
+ 
++#if V8_OS_AROS
++  // Keep the process-wide barrier flag in v8.library and make inline Blink
++  // callers import an accessor function, not a duplicate data symbol.
++  static AtomicEntryFlag& WriteBarrierEnabledStorage();
++#else
+   static AtomicEntryFlag write_barrier_enabled_;
++#endif
+ };
+ 
+ template <WriteBarrier::Type type>
+diff --git a/include/cppgc/process-heap-statistics.h b/include/cppgc/process-heap-statistics.h
+index 774cc92..c1a2f15 100644
+--- a/include/cppgc/process-heap-statistics.h
++++ b/include/cppgc/process-heap-statistics.h
+@@ -18,15 +18,31 @@ class ProcessHeapStatisticsUpdater;
+ class V8_EXPORT ProcessHeapStatistics final {
+  public:
+   static size_t TotalAllocatedObjectSize() {
++#if V8_OS_AROS
++    return TotalAllocatedObjectSizeStorage().load(std::memory_order_relaxed);
++#else
+     return total_allocated_object_size_.load(std::memory_order_relaxed);
++#endif
+   }
+   static size_t TotalAllocatedSpace() {
++#if V8_OS_AROS
++    return TotalAllocatedSpaceStorage().load(std::memory_order_relaxed);
++#else
+     return total_allocated_space_.load(std::memory_order_relaxed);
++#endif
+   }
+ 
+  private:
++#if V8_OS_AROS
++  // AROS keeps the V8 engine in v8.library. Inline cppgc users in Chromium
++  // must reach the library-owned counters through function imports instead of
++  // creating executable-side data relocations for these process globals.
++  static std::atomic_size_t& TotalAllocatedSpaceStorage();
++  static std::atomic_size_t& TotalAllocatedObjectSizeStorage();
++#else
+   static std::atomic_size_t total_allocated_space_;
+   static std::atomic_size_t total_allocated_object_size_;
++#endif
+ 
+   friend class internal::ProcessHeapStatisticsUpdater;
+ };
+diff --git a/src/heap/cppgc/process-heap-statistics.cc b/src/heap/cppgc/process-heap-statistics.cc
+index 9d38d69..bb48e37 100644
+--- a/src/heap/cppgc/process-heap-statistics.cc
++++ b/src/heap/cppgc/process-heap-statistics.cc
+@@ -6,7 +6,24 @@
+ 
+ namespace cppgc {
+ 
++#if V8_OS_AROS
++namespace {
++
++std::atomic_size_t g_total_allocated_space{0};
++std::atomic_size_t g_total_allocated_object_size{0};
++
++}  // namespace
++
++std::atomic_size_t& ProcessHeapStatistics::TotalAllocatedSpaceStorage() {
++  return g_total_allocated_space;
++}
++
++std::atomic_size_t& ProcessHeapStatistics::TotalAllocatedObjectSizeStorage() {
++  return g_total_allocated_object_size;
++}
++#else
+ std::atomic_size_t ProcessHeapStatistics::total_allocated_space_{0};
+ std::atomic_size_t ProcessHeapStatistics::total_allocated_object_size_{0};
++#endif
+ 
+ }  // namespace cppgc
+diff --git a/src/heap/cppgc/process-heap-statistics.h b/src/heap/cppgc/process-heap-statistics.h
+index da7683b..bc5700f 100644
+--- a/src/heap/cppgc/process-heap-statistics.h
++++ b/src/heap/cppgc/process-heap-statistics.h
+@@ -50,20 +50,40 @@ class ProcessHeapStatisticsUpdater {
+ 
+   // For cppgc::ProcessHeapStatistics
+   static void IncreaseTotalAllocatedObjectSize(size_t delta) {
++#if V8_OS_AROS
++    ::cppgc::ProcessHeapStatistics::TotalAllocatedObjectSizeStorage().fetch_add(
++        delta, std::memory_order_relaxed);
++#else
+     ::cppgc::ProcessHeapStatistics::total_allocated_object_size_.fetch_add(
+         delta, std::memory_order_relaxed);
++#endif
+   }
+   static void DecreaseTotalAllocatedObjectSize(size_t delta) {
++#if V8_OS_AROS
++    ::cppgc::ProcessHeapStatistics::TotalAllocatedObjectSizeStorage().fetch_sub(
++        delta, std::memory_order_relaxed);
++#else
+     ::cppgc::ProcessHeapStatistics::total_allocated_object_size_.fetch_sub(
+         delta, std::memory_order_relaxed);
++#endif
+   }
+   static void IncreaseTotalAllocatedSpace(size_t delta) {
++#if V8_OS_AROS
++    ::cppgc::ProcessHeapStatistics::TotalAllocatedSpaceStorage().fetch_add(
++        delta, std::memory_order_relaxed);
++#else
+     ::cppgc::ProcessHeapStatistics::total_allocated_space_.fetch_add(
+         delta, std::memory_order_relaxed);
++#endif
+   }
+   static void DecreaseTotalAllocatedSpace(size_t delta) {
++#if V8_OS_AROS
++    ::cppgc::ProcessHeapStatistics::TotalAllocatedSpaceStorage().fetch_sub(
++        delta, std::memory_order_relaxed);
++#else
+     ::cppgc::ProcessHeapStatistics::total_allocated_space_.fetch_sub(
+         delta, std::memory_order_relaxed);
++#endif
+   }
+ };
+ 
+diff --git a/src/heap/cppgc/write-barrier.cc b/src/heap/cppgc/write-barrier.cc
+index c0b0b51..d5db154 100644
+--- a/src/heap/cppgc/write-barrier.cc
++++ b/src/heap/cppgc/write-barrier.cc
+@@ -21,8 +21,21 @@
+ namespace cppgc {
+ namespace internal {
+ 
++#if V8_OS_AROS
++namespace {
++
++AtomicEntryFlag g_write_barrier_enabled;
++
++}  // namespace
++
++// static
++AtomicEntryFlag& WriteBarrier::WriteBarrierEnabledStorage() {
++  return g_write_barrier_enabled;
++}
++#else
+ // static
+ AtomicEntryFlag WriteBarrier::write_barrier_enabled_;
++#endif
+ 
+ namespace {
+ 
+diff --git a/src/heap/cppgc/write-barrier.h b/src/heap/cppgc/write-barrier.h
+index 3bfbcb2..84514f9 100644
+--- a/src/heap/cppgc/write-barrier.h
++++ b/src/heap/cppgc/write-barrier.h
+@@ -14,8 +14,20 @@ namespace internal {
+ 
+ class WriteBarrier::FlagUpdater final {
+  public:
+-  static void Enter() { write_barrier_enabled_.Enter(); }
+-  static void Exit() { write_barrier_enabled_.Exit(); }
++  static void Enter() {
++#if V8_OS_AROS
++    WriteBarrierEnabledStorage().Enter();
++#else
++    write_barrier_enabled_.Enter();
++#endif
++  }
++  static void Exit() {
++#if V8_OS_AROS
++    WriteBarrierEnabledStorage().Exit();
++#else
++    write_barrier_enabled_.Exit();
++#endif
++  }
+ 
+  private:
+   FlagUpdater() = delete;

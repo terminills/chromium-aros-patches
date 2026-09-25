@@ -1,0 +1,208 @@
+From 5eed3f5c0cf8f45a3a04ea391d2901dada191400 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 14:03:00 -0500
+Subject: [PATCH 268/638] ozone: install Chromium cursors on AROS [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_ROOT_CAUSE: ArosWindow::SetCursor was a no-op, while the generic bitmap cursor factory returned type-only server-side cursors that AROS could not resolve.
+AI_FIX_REASON: Request Aura bitmap cursor assets and convert them to per-window AROS pointerclass objects, preserving hotspots and cleaning native resources on replacement and shutdown.
+AI_SCOPE: AROS Ozone cursor factory and ArosWindow cursor lifecycle; animated cursors currently use their first frame.
+AI_VALIDATION: buildtools clang-format and git diff --check pass; focused Ninja build rebuilt aros_window.o and ozone_platform_aros.o successfully.
+AI_RISK: Medium; pointer bitmap color and alpha behavior requires hosted and native runtime validation.
+AI_CHAIN:
+---
+ ui/ozone/platform/aros/aros_window.cc         | 74 ++++++++++++++++++-
+ ui/ozone/platform/aros/aros_window.h          |  5 ++
+ ui/ozone/platform/aros/ozone_platform_aros.cc | 21 +++++-
+ 3 files changed, 98 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 60c6b69f8a..c40abe70bd 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -17,13 +17,16 @@
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_key.h"
+ #include "ui/events/keycodes/keyboard_code_conversion.h"
++#include "ui/ozone/common/bitmap_cursor.h"
+ #include "ui/ozone/platform/aros/aros_screen.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
+ #include <cybergraphx/cybergraphics.h>
+ #include <devices/inputevent.h>
+ #include <devices/rawkeycodes.h>
++#include <intuition/classusr.h>
+ #include <intuition/intuition.h>
++#include <intuition/pointerclass.h>
+ #include <proto/cybergraphics.h>
+ #include <proto/exec.h>
+ #include <proto/graphics.h>
+@@ -410,6 +413,7 @@ ArosWindow::~ArosWindow() {
+   shutting_down_ = true;
+   if (window_) {
+     DisableNativeEvents();
++    ResetNativeCursor();
+     manager_->DetachNativeWindow(widget_, this, window_);
+     CloseWindow(window_);
+     window_ = nullptr;
+@@ -572,7 +576,60 @@ bool ArosWindow::ShouldUseNativeFrame() const {
+   return true;
+ }
+ 
+-void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {}
++void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
++  if (!window_ || cursor_ == cursor) {
++    return;
++  }
++
++  ResetNativeCursor();
++  cursor_ = std::move(cursor);
++  if (!cursor_) {
++    return;
++  }
++
++  scoped_refptr<BitmapCursor> bitmap_cursor =
++      BitmapCursor::FromPlatformCursor(cursor_);
++  if (bitmap_cursor->type() == mojom::CursorType::kNone) {
++    cursor_object_ = NewObject(
++        nullptr,
++        const_cast<UBYTE*>(reinterpret_cast<const UBYTE*>("pointerclass")),
++        TAG_DONE);
++  } else if (!bitmap_cursor->bitmaps().empty()) {
++    const SkBitmap& bitmap = bitmap_cursor->bitmap();
++    if (!bitmap.isNull() && bitmap.width() > 0 && bitmap.height() > 0 &&
++        bitmap.width() <= 64 && bitmap.height() <= 64 && bitmap.getPixels()) {
++      cursor_bitmap_ = AllocBitMap(bitmap.width(), bitmap.height(), 32,
++                                   BMF_CLEAR | BMF_DISPLAYABLE,
++                                   window_->WScreen->RastPort.BitMap);
++      if (cursor_bitmap_) {
++        struct RastPort cursor_rast_port;
++        InitRastPort(&cursor_rast_port);
++        cursor_rast_port.BitMap = cursor_bitmap_;
++        const LONG written =
++            WritePixelArray(const_cast<void*>(bitmap.getPixels()), 0, 0,
++                            bitmap.rowBytes(), &cursor_rast_port, 0, 0,
++                            bitmap.width(), bitmap.height(), RECTFMT_BGRA32);
++        if (written > 0) {
++          const gfx::Point& hotspot = bitmap_cursor->hotspot();
++          cursor_object_ = NewObject(
++              nullptr,
++              const_cast<UBYTE*>(
++                  reinterpret_cast<const UBYTE*>("pointerclass")),
++              POINTERA_BitMap, reinterpret_cast<IPTR>(cursor_bitmap_),
++              POINTERA_WordWidth, (bitmap.width() + 15) / 16, POINTERA_XOffset,
++              -hotspot.x(), POINTERA_YOffset, -hotspot.y(), TAG_DONE);
++        }
++      }
++    }
++  }
++
++  if (cursor_object_) {
++    SetWindowPointer(window_, WA_Pointer, cursor_object_, TAG_DONE);
++  } else if (bitmap_cursor->type() == mojom::CursorType::kWait ||
++             bitmap_cursor->type() == mojom::CursorType::kProgress) {
++    SetWindowPointer(window_, WA_BusyPointer, TRUE, TAG_DONE);
++  }
++}
+ 
+ void ArosWindow::MoveCursorTo(const gfx::Point& location) {}
+ 
+@@ -591,6 +648,21 @@ void ArosWindow::SetWindowIcons(const gfx::ImageSkia& window_icon,
+ 
+ void ArosWindow::SizeConstraintsChanged() {}
+ 
++void ArosWindow::ResetNativeCursor() {
++  if (window_) {
++    SetWindowPointer(window_, TAG_DONE);
++  }
++  if (cursor_object_) {
++    DisposeObject(static_cast<Object*>(cursor_object_));
++    cursor_object_ = nullptr;
++  }
++  if (cursor_bitmap_) {
++    FreeBitMap(cursor_bitmap_);
++    cursor_bitmap_ = nullptr;
++  }
++  cursor_.reset();
++}
++
+ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+                                    uint16_t code,
+                                    uint16_t qualifier,
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 3c5fcba385..cbf93b58ed 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -24,6 +24,7 @@
+ #include "ui/platform_window/platform_window_init_properties.h"
+ 
+ struct Window;
++struct BitMap;
+ 
+ namespace ui {
+ 
+@@ -84,6 +85,7 @@ class ArosWindow : public PlatformWindow {
+ 
+   void UpdateBoundsFromNative(bool notify_delegate);
+   void UpdateWindowState(PlatformWindowState state);
++  void ResetNativeCursor();
+   void DisableNativeEvents();
+   void DispatchMouseMove(uint16_t qualifier, int16_t mouse_x, int16_t mouse_y);
+   void DispatchMouseButton(uint16_t code,
+@@ -100,6 +102,9 @@ class ArosWindow : public PlatformWindow {
+   raw_ptr<ArosWindowManager> manager_ = nullptr;
+   gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
+   RAW_PTR_EXCLUSION struct Window* window_ = nullptr;
++  RAW_PTR_EXCLUSION struct BitMap* cursor_bitmap_ = nullptr;
++  RAW_PTR_EXCLUSION void* cursor_object_ = nullptr;
++  scoped_refptr<PlatformCursor> cursor_;
+   gfx::Rect bounds_;
+   std::optional<gfx::Rect> restored_bounds_;
+   std::string title_;
+diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
+index 8b46564589..56ee4de20e 100644
+--- a/ui/ozone/platform/aros/ozone_platform_aros.cc
++++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
+@@ -14,6 +14,7 @@
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "ui/base/cursor/cursor_factory.h"
++#include "ui/base/cursor/platform_cursor.h"
+ #include "ui/base/ime/input_method_minimal.h"
+ #include "ui/display/types/native_display_delegate.h"
+ #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
+@@ -35,6 +36,24 @@ namespace ui {
+ 
+ namespace {
+ 
++class ArosCursorFactory : public BitmapCursorFactory {
++ public:
++  ArosCursorFactory() = default;
++  ~ArosCursorFactory() override = default;
++
++  scoped_refptr<PlatformCursor> GetDefaultCursor(
++      mojom::CursorType type) override {
++    if (type == mojom::CursorType::kNone) {
++      return BitmapCursorFactory::GetDefaultCursor(type);
++    }
++
++    // AROS installs custom pointerclass objects rather than looking up
++    // server-side cursor names. Returning null asks CursorLoader to provide
++    // Chromium's Aura bitmap for every standard cursor shape.
++    return nullptr;
++  }
++};
++
+ // The first-window slice keeps IDCMP consumption local to Ozone. A subsequent
+ // commit will register the port signal directly with MessagePumpAROS.
+ class ArosPlatformEventSource : public PlatformEventSource {
+@@ -130,7 +149,7 @@ class OzonePlatformAros : public OzonePlatform {
+         keyboard_layout_engine_.get());
+     overlay_manager_ = std::make_unique<StubOverlayManager>();
+     input_controller_ = CreateStubInputController();
+-    cursor_factory_ = std::make_unique<BitmapCursorFactory>();
++    cursor_factory_ = std::make_unique<ArosCursorFactory>();
+     gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
+     return true;
+   }

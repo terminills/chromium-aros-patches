@@ -1,0 +1,112 @@
+From 3a60c87aea4aab0ade262d632bac20edc59bacd5 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 20 Sep 2026 20:08:58 -0500
+Subject: [PATCH 625/638] aros: --aros-cpu-limit caps
+ SysInfo::NumberOfProcessors()
+
+NumberOfProcessors() is the one chokepoint every pool size derives from
+(thread_pool_instance.cc, V8, WebRTC, gemmlowp, perfetto all reach
+KrnGetCPUCount() through it), so capping it here caps all of them
+consistently. Clamped downward only: a value at or above the real count,
+zero, negative or unparseable leaves the count alone.
+
+The cap is applied OUTSIDE the cached lambda. The count is latched on
+the first call, and that call happens before CommandLine::Init() in some
+processes; an earlier version applied the cap inside the lambda and the
+switch silently did nothing in those processes. The kernel's count stays
+cached; only the cap is re-evaluated until the command line exists.
+
+Also casts KrnGetCPUCount() (unsigned) before std::max so the overload
+resolves.
+
+
+---
+ base/system/sys_info_posix.cc | 53 +++++++++++++++++++++++++++++++++--
+ 1 file changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/base/system/sys_info_posix.cc b/base/system/sys_info_posix.cc
+index 87003e4628..6cf6ca8a6f 100644
+--- a/base/system/sys_info_posix.cc
++++ b/base/system/sys_info_posix.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "base/system/sys_info.h"
+ 
++#include <atomic>
+ #include <errno.h>
+ #include <sched.h>
+ #include <stddef.h>
+@@ -16,7 +17,9 @@
+ 
+ #include <algorithm>
+ 
++#include "base/base_switches.h"
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/files/file_util.h"
+ #include "base/lazy_instance.h"
+ #include "base/notimplemented.h"
+@@ -177,8 +180,17 @@ int SysInfo::NumberOfProcessors() {
+     APTR KernelBase = OpenResource("kernel.resource");
+     if (!KernelBase)
+       return 1;
+-    const int num_cpus = KrnGetCPUCount();
+-    return std::max(num_cpus, 1);
++    /* KrnGetCPUCount() is unsigned; cast before std::max so the
++     * overload resolves (no matching max(unsigned int, int)). */
++    int num_cpus = std::max(static_cast<int>(KrnGetCPUCount()), 1);
++
++    // This one function is the chokepoint for "--aros-cpu-limit=N" (applied
++    // below, outside the cache): the thread pool sizes itself from it
++    // (max(3, NumberOfProcessors() - 1) in thread_pool_instance.cc), and V8,
++    // WebRTC, gemmlowp and perfetto each reach KrnGetCPUCount() the same way,
++    // so capping here is equivalent to capping all of them and cannot drift
++    // out of sync with them.
++    return num_cpus;
+ #else
+     long res = sysconf(_SC_NPROCESSORS_CONF);
+     if (res == -1) {
+@@ -206,6 +218,43 @@ int SysInfo::NumberOfProcessors() {
+ #endif
+   }();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Apply --aros-cpu-limit OUTSIDE the cache above, not inside it.
++  //
++  // cached_num_cpus latches on the FIRST call. NumberOfProcessors() is reached
++  // before CommandLine::Init() in at least some processes, and when it is, the
++  // InitializedForCurrentProcess() guard skipped the cap and the UNCAPPED count
++  // was cached for the life of the process - so the switch silently did
++  // nothing, with no symptom other than the browser behaving as if it had never
++  // been passed. That cost a test run whose negative result I then reported as
++  // evidence.
++  //
++  // The kernel's count is genuinely constant and stays cached; only the cap is
++  // re-evaluated, and only until the command line exists, after which it too is
++  // latched. Clamped downward only: a limit at or above the real count, zero,
++  // negative or unparseable leaves the value alone, so it can never invent
++  // cores.
++  static std::atomic<int> cached_limit{0};  // 0 unknown, -1 none, >0 the cap
++  int limit = cached_limit.load(std::memory_order_relaxed);
++  if (limit == 0) {
++    if (!CommandLine::InitializedForCurrentProcess())
++      return cached_num_cpus;  // too early to tell; ask again next call
++    limit = -1;
++    const CommandLine* cmdline = CommandLine::ForCurrentProcess();
++    if (cmdline->HasSwitch(switches::kArosCpuLimit)) {
++      int parsed = 0;
++      if (StringToInt(cmdline->GetSwitchValueASCII(switches::kArosCpuLimit),
++                      &parsed) &&
++          parsed > 0) {
++        limit = parsed;
++      }
++    }
++    cached_limit.store(limit, std::memory_order_relaxed);
++  }
++  if (limit > 0 && limit < cached_num_cpus)
++    return limit;
++#endif
++
+   return cached_num_cpus;
+ }
+ #endif  // !BUILDFLAG(IS_OPENBSD)

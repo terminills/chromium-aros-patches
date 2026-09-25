@@ -1,0 +1,44 @@
+From bc141273844ff3155e5cdfe15aa37b96e75d966a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 08:15:57 -0500
+Subject: [PATCH 462/638] AROS: trace file URL MIME classification
+
+Record the native file path, extracted extension, and resulting MIME type at the FileURLLoader response boundary. This distinguishes path-extension loss from later renderer handling when local Electron pages appear as source text.
+
+
+
+---
+ content/browser/loader/file_url_loader_factory.cc | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/content/browser/loader/file_url_loader_factory.cc b/content/browser/loader/file_url_loader_factory.cc
+index 7441501b67..0372d70a91 100644
+--- a/content/browser/loader/file_url_loader_factory.cc
++++ b/content/browser/loader/file_url_loader_factory.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/loader/file_url_loader_factory.h"
+ 
++#include <cstdio>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -686,7 +687,17 @@ class FileURLLoader : public network::mojom::URLLoader {
+       total_bytes_to_send -= write_size;
+     }
+ 
+-    if (!net::GetMimeTypeFromFile(full_path, &head->mime_type)) {
++    const bool found_mime_type =
++        net::GetMimeTypeFromFile(full_path, &head->mime_type);
++#if BUILDFLAG(IS_AROS)
++    fprintf(stderr,
++            "[Chromium:AROS:FileURL] response path='%s' extension='%s' "
++            "mime_found=%d mime='%s'\n",
++            full_path.AsUTF8Unsafe().c_str(),
++            full_path.Extension().c_str(), found_mime_type,
++            head->mime_type.c_str());
++#endif
++    if (!found_mime_type) {
+       std::string new_type;
+       net::SniffMimeType(
+           base::StringPiece(initial_read_buffer.data(), read_result.bytes_read),

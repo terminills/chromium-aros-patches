@@ -1,0 +1,33 @@
+From fdec75e553f4d498dd0118159a4eba6fbb6877ef Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 22:20:44 -0500
+Subject: [PATCH 174/638] chrome: leave AROS client certificates unavailable
+ [chromium] [aros]
+
+Statement: Browser network-context creation requires a platform client-certificate store decision, but AROS has no native certificate selector or store integration.
+
+Decision: Return no ClientCertStore on AROS. This is an explicit fail-closed capability boundary rather than borrowing another OS backend.
+
+Evidence: The generic desktop browser graph had no AROS return path in CreateClientCertStore().
+
+Validation: profile_network_context_service.o compiles in out/aros-chrome.
+
+Chain:; ACD-chromium-aros-native-window-system
+---
+ chrome/browser/net/profile_network_context_service.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/chrome/browser/net/profile_network_context_service.cc b/chrome/browser/net/profile_network_context_service.cc
+index e50641649a..681f0667f9 100644
+--- a/chrome/browser/net/profile_network_context_service.cc
++++ b/chrome/browser/net/profile_network_context_service.cc
+@@ -894,6 +894,9 @@ ProfileNetworkContextService::CreateClientCertStore() {
+   // cert matching is done by the OS as part of the call to show the cert
+   // selection dialog.
+   return nullptr;
++#elif BUILDFLAG(IS_AROS)
++  // AROS has no native client-certificate selector or certificate store yet.
++  return nullptr;
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // TODO(crbug.com/1380609): Implement ClientCertStore support.
+   NOTIMPLEMENTED_LOG_ONCE();

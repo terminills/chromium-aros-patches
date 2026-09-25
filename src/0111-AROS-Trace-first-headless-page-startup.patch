@@ -1,0 +1,118 @@
+From 2d3ba2dc7a610cc50e21d55588f75426ac280195 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 12:23:33 -0500
+Subject: [PATCH 111/638] [AROS] Trace first headless page startup
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: diagnostic
+ROOT_CAUSE: After the AROS shutdown PIPE: fix removed all invalid WaitSelect watches, hosted headless_shell became scheduler-idle before writing the first page screenshot, with no trap or error identifying the synchronous startup call.
+FIX_REASON: Emit AROS-only debug.resource stage markers around browser context creation, target URL conversion, WebContents construction, and command dispatch so the next unattended run names the exact blocking boundary.
+SCOPE: headless/app/headless_shell.cc
+VALIDATION: headless_shell.o cross-compiled for AROS; hosted 0110 proved the prior fd 3/WaitSelect failure is absent and captured the new quiescent state.
+RISK: Diagnostic-only INFO records add startup log volume on AROS and should be reduced once the boundary is fixed.
+AI_DECISION_CHAIN: PIPE: watch fixed -> hosted process scheduler-idle -> synchronous OnBrowserStart boundary instrumentation
+Continues: 29d3153291
+---
+ headless/app/headless_shell.cc | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/headless/app/headless_shell.cc b/headless/app/headless_shell.cc
+index 02a11f078a..f57813fdad 100644
+--- a/headless/app/headless_shell.cc
++++ b/headless/app/headless_shell.cc
+@@ -55,6 +55,14 @@ const wchar_t kAboutBlank[] = L"about:blank";
+ const char kAboutBlank[] = "about:blank";
+ #endif
+ 
++void LogAROSStartupStage(const char* stage) {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:headless] startup stage: " << stage;
++#else
++  (void)stage;
++#endif
++}
++
+ GURL ConvertArgumentToURL(const base::CommandLine::StringType& arg) {
+ #if BUILDFLAG(IS_WIN)
+   GURL url(base::WideToUTF8(arg));
+@@ -92,6 +100,7 @@ class HeadlessShell {
+ 
+ void HeadlessShell::OnBrowserStart(HeadlessBrowser* browser) {
+   browser_ = browser;
++  LogAROSStartupStage("browser-start");
+ 
+ #if defined(HEADLESS_USE_POLICY)
+   if (HeadlessModePolicy::IsHeadlessModeDisabled(
+@@ -102,14 +111,19 @@ void HeadlessShell::OnBrowserStart(HeadlessBrowser* browser) {
+   }
+ #endif
+ 
++  LogAROSStartupStage("context-builder-begin");
+   HeadlessBrowserContext::Builder context_builder =
+       browser_->CreateBrowserContextBuilder();
++  LogAROSStartupStage("context-builder-done");
+ 
+   // Create browser  context and set it as the default. The default browser
+   // context is used by the Target.createTarget() DevTools command when no other
+   // context is given.
++  LogAROSStartupStage("context-build-begin");
+   HeadlessBrowserContext* browser_context = context_builder.Build();
++  LogAROSStartupStage("context-build-done");
+   browser_->SetDefaultBrowserContext(browser_context);
++  LogAROSStartupStage("default-context-set");
+ 
+   const bool devtools_enabled = static_cast<HeadlessBrowserImpl*>(browser)
+                                     ->options()
+@@ -119,6 +133,7 @@ void HeadlessShell::OnBrowserStart(HeadlessBrowser* browser) {
+   // driven by a debugger.
+   base::CommandLine::StringVector args =
+       base::CommandLine::ForCurrentProcess()->GetArgs();
++  LogAROSStartupStage("command-line-read");
+   args.erase(
+       std::remove(args.begin(), args.end(), base::CommandLine::StringType()),
+       args.end());
+@@ -128,12 +143,17 @@ void HeadlessShell::OnBrowserStart(HeadlessBrowser* browser) {
+   }
+ 
+   if (args.empty()) {
++    LogAROSStartupStage("no-target-url");
+     return;
+   }
+ 
++  LogAROSStartupStage("target-url-begin");
+   GURL target_url = ConvertArgumentToURL(args.front());
++  LogAROSStartupStage("target-url-done");
++  LogAROSStartupStage("web-contents-builder-begin");
+   HeadlessWebContents::Builder builder(
+       browser_context->CreateWebContentsBuilder());
++  LogAROSStartupStage("web-contents-builder-done");
+ 
+   // If driven by a debugger just open the target page and
+   // leave expecting the debugger will do what they need.
+@@ -150,20 +170,26 @@ void HeadlessShell::OnBrowserStart(HeadlessBrowser* browser) {
+   // Otherwise instantiate headless shell command handler that will
+   // execute the commands against the target page.
+ #if defined(HEADLESS_ENABLE_COMMANDS)
++  LogAROSStartupStage("command-handler-url-begin");
+   GURL handler_url = HeadlessCommandHandler::GetHandlerUrl();
++  LogAROSStartupStage("command-handler-url-done");
++  LogAROSStartupStage("web-contents-build-begin");
+   HeadlessWebContents* web_contents =
+       builder.SetInitialURL(handler_url).Build();
++  LogAROSStartupStage("web-contents-build-done");
+   if (!web_contents) {
+     LOG(ERROR) << "Navigation to " << handler_url << " failed.";
+     ShutdownSoon();
+     return;
+   }
+ 
++  LogAROSStartupStage("process-commands-begin");
+   HeadlessCommandHandler::ProcessCommands(
+       HeadlessWebContentsImpl::From(web_contents)->web_contents(),
+       std::move(target_url),
+       base::BindOnce(&HeadlessShell::OnProcessCommandsDone,
+                      base::Unretained(this)));
++  LogAROSStartupStage("process-commands-posted");
+ #endif
+ }
+ 

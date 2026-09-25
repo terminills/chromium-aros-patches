@@ -1,0 +1,29 @@
+From 7834876c0af549a89fd722f22980a13c5716c6e2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:56:26 -0500
+Subject: [PATCH 348/638] pdfium: pin AROS graphics-platform implementation
+
+Advance PDFium to e3f21ae so CEF's embedded PDF engine has a concrete PlatformIface on AROS while retaining the zero-V8 dependency boundary from b316eb6.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: nested-revision-pinned-under-validation
+
+AI_VALIDATION: exact gitlink advances b316eb6 to e3f21ae; native link identified the missing PDFium platform factory
+
+AI_LIMITATIONS: regenerated archive and native library link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725
+
+AI_DECISION_CHAIN:; e3f21ae
+---
+ third_party/pdfium | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/pdfium b/third_party/pdfium
+index b316eb6463..e3f21aed9b 160000
+--- a/third_party/pdfium
++++ b/third_party/pdfium
+@@ -1 +1 @@
+-Subproject commit b316eb64639d9ea4bb2e7a214c8fede9f40475b6
++Subproject commit e3f21aed9b8cf36986462d33063cb8f1dbcf18e7

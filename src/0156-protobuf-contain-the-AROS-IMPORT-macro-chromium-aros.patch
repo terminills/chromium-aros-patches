@@ -1,0 +1,34 @@
+From 06428afc23ea62212841ebeafc4626b46588306f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:12:23 -0500
+Subject: [PATCH 156/638] protobuf: contain the AROS IMPORT macro [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: AROS exec/types.h defines IMPORT as extern, corrupting Protobuf\047s ErrorCollector::IMPORT enum and every full-runtime translation unit.
+FIX_REASON: Undefine the unused legacy macro at Protobuf\047s descriptor boundary after platform headers have been parsed.
+VALIDATION: protobuf_full any.o and descriptor.o compile past ErrorCollector::IMPORT.
+RISK: None in the installed AROS SDK; IMPORT is defined but not consumed by any other installed header.
+---
+ third_party/protobuf/src/google/protobuf/descriptor.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/third_party/protobuf/src/google/protobuf/descriptor.h b/third_party/protobuf/src/google/protobuf/descriptor.h
+index 854c31bf0a..aedd20e378 100644
+--- a/third_party/protobuf/src/google/protobuf/descriptor.h
++++ b/third_party/protobuf/src/google/protobuf/descriptor.h
+@@ -76,6 +76,13 @@
+ #undef TYPE_BOOL
+ #endif  // TYPE_BOOL
+ 
++// AROS exec/types.h defines IMPORT as a legacy alias for extern. It collides
++// with ErrorCollector::IMPORT below and is not used by any installed AROS
++// header after its definition.
++#if defined(__AROS__) && defined(IMPORT)
++#undef IMPORT
++#endif
++
+ #ifdef SWIG
+ #define PROTOBUF_EXPORT
+ #endif

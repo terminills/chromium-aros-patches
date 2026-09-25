@@ -1,0 +1,37 @@
+From 0418d333c76dc0ea7be2e1df019642010c4bc752 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:06:34 -0500
+Subject: [PATCH 047/638] gpu: omit the unused AROS pixmap service
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: The AROS GPU IPC service now builds only the generic factory whose native type selection already returns unsupported.
+
+ROOT_CAUSE: gpu/ipc/service compiled GpuMemoryBufferFactoryNativePixmap for every Ozone target even though AROS has no NativePixmap handle and CreateNativeType already returns nullptr there.
+
+FIX_REASON: Exclude the unused pixmap implementation from the AROS GN graph instead of restoring or fabricating a native handle field.
+
+SCOPE: gpu/ipc/service BUILD source selection
+
+VALIDATION: ninja -C out/aros-headless -j16 obj/gpu/ipc/service/libgpu_ipc_service.a passed; regenerated service.ninja contains no gpu_memory_buffer_factory_native_pixmap object; git diff --check passed.
+
+RISK: Native GPU memory-buffer allocation remains unsupported until AROS defines a real image-handle and synchronization contract; shared-memory image paths remain available.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ gpu/ipc/service/BUILD.gn | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gpu/ipc/service/BUILD.gn b/gpu/ipc/service/BUILD.gn
+index 6716bd24f4..4d2e83de5e 100644
+--- a/gpu/ipc/service/BUILD.gn
++++ b/gpu/ipc/service/BUILD.gn
+@@ -152,7 +152,7 @@ component("service") {
+   if (is_linux || is_chromeos) {
+     sources += [ "image_transport_surface_linux.cc" ]
+   }
+-  if (use_ozone) {
++  if (use_ozone && !is_aros) {
+     sources += [
+       "gpu_memory_buffer_factory_native_pixmap.cc",
+       "gpu_memory_buffer_factory_native_pixmap.h",

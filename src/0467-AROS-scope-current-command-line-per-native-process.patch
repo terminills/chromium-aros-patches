@@ -1,0 +1,179 @@
+From 688d57d15c11687455cfd28ca9349de53318f1d9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 14:13:51 -0500
+Subject: [PATCH 467/638] AROS: scope current command line per native process
+
+AROS processes share an address space, so Chromium's current-process CommandLine pointer otherwise aliases browser and helper processes. Key the command line by the nearest NT_PROCESS ancestor so GPU, utility, and renderer children retain their own --type while worker tasks inherit their owning process command line.
+
+Validation: the bounded -j32 CEF dependency build completed 773/773. Run 62 mapped the predecessor failure exactly to a GPU child entering Alloy's browser-only settings branch after receiving the browser command line.
+
+
+
+---
+ base/command_line.cc | 86 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 85 insertions(+), 1 deletion(-)
+
+diff --git a/base/command_line.cc b/base/command_line.cc
+index 15d57c1c78..2b20572ee0 100644
+--- a/base/command_line.cc
++++ b/base/command_line.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "base/command_line.h"
+ 
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#endif
+ #include <ostream>
+ 
+ #include "base/check_op.h"
+@@ -12,6 +17,9 @@
+ #include "base/debug/debugging_buildflags.h"
+ #include "base/files/file_path.h"
+ #include "base/logging.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/no_destructor.h"
++#endif
+ #include "base/notreached.h"
+ #include "base/numerics/checked_math.h"
+ #include "base/ranges/algorithm.h"
+@@ -21,7 +29,14 @@
+ #include "base/strings/string_tokenizer.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+-#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/synchronization/lock.h"
++#endif
++
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+@@ -33,10 +48,42 @@
+ 
+ namespace base {
+ 
++#if !BUILDFLAG(IS_AROS)
+ CommandLine* CommandLine::current_process_commandline_ = nullptr;
++#endif
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++struct CommandLineProcessRegistry {
++  Lock lock;
++  std::map<struct Task*, CommandLine*> command_lines;
++};
++
++CommandLineProcessRegistry& GetCommandLineProcessRegistry() {
++  static NoDestructor<CommandLineProcessRegistry> registry;
++  return *registry;
++}
++
++struct Task* GetCurrentProcessTask() {
++  struct Task* task = FindTask(nullptr);
++  struct Task* const current = task;
++
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (task->tc_Node.ln_Type == NT_PROCESS) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return current;
++}
++
++#endif
++
+ DuplicateSwitchHandler* g_duplicate_switch_handler = nullptr;
+ 
+ constexpr CommandLine::CharType kSwitchTerminator[] = FILE_PATH_LITERAL("--");
+@@ -244,13 +291,25 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+ 
+ // static
+ bool CommandLine::Init(int argc, const char* const* argv) {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  CommandLine*& command_line =
++      registry.command_lines[GetCurrentProcessTask()];
++  if (command_line) {
++#else
+   if (current_process_commandline_) {
++#endif
+     // If this is intentional, Reset() must be called first. If we are using
+     // the shared build mode, we have to share a single object across multiple
+     // shared libraries.
+     return false;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  command_line = new CommandLine(NO_PROGRAM);
++  command_line->InitFromArgv(argc, argv);
++#else
+   current_process_commandline_ = new CommandLine(NO_PROGRAM);
+ #if BUILDFLAG(IS_WIN)
+   current_process_commandline_->ParseFromString(::GetCommandLineW());
+@@ -258,6 +317,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+   current_process_commandline_->InitFromArgv(argc, argv);
+ #else
+ #error Unsupported platform
++#endif
+ #endif
+ 
+   return true;
+@@ -265,20 +325,44 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+ 
+ // static
+ void CommandLine::Reset() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  const auto it = registry.command_lines.find(GetCurrentProcessTask());
++  DCHECK(it != registry.command_lines.end() && it->second);
++  delete it->second;
++  registry.command_lines.erase(it);
++#else
+   DCHECK(current_process_commandline_);
+   delete current_process_commandline_;
+   current_process_commandline_ = nullptr;
++#endif
+ }
+ 
+ // static
+ CommandLine* CommandLine::ForCurrentProcess() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  const auto it = registry.command_lines.find(GetCurrentProcessTask());
++  DCHECK(it != registry.command_lines.end() && it->second);
++  return it != registry.command_lines.end() ? it->second : nullptr;
++#else
+   DCHECK(current_process_commandline_);
+   return current_process_commandline_;
++#endif
+ }
+ 
+ // static
+ bool CommandLine::InitializedForCurrentProcess() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  const auto it = registry.command_lines.find(GetCurrentProcessTask());
++  return it != registry.command_lines.end() && it->second;
++#else
+   return !!current_process_commandline_;
++#endif
+ }
+ 
+ // static

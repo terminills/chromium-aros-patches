@@ -1,0 +1,73 @@
+From 70b795a8970f718ed2c9538184d644494ab8783b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 22:50:52 -0500
+Subject: [PATCH 342/638] blink: compile the CEF glue at its controller seam
+
+Apply the focused upstream CEF integration hunk that owns blink_glue beside Blink controller internals. This supplies the exact 22 unresolved blink_glue symbols without creating a second copy in cef.library.
+
+AI_PHASE: chromium-shared-cef
+
+AI_STATUS: exact-link-gap-fixed-under-validation
+
+AI_VALIDATION: registered zero-V8 native link reported 22/44 unresolved symbols in blink_glue; upstream CEF component_build patch identifies this controller ownership
+
+AI_LIMITATIONS: incremental CEF archive build and native resident link remain pending
+
+AI_EVIDENCE: aros-opal-hosted-clean/test-artifacts/-cef-zero-v8-native-link-20260725/04-undefined-symbols.txt
+
+AI_DECISION_CHAIN:
+---
+ third_party/blink/renderer/controller/BUILD.gn | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/blink/renderer/controller/BUILD.gn b/third_party/blink/renderer/controller/BUILD.gn
+index fcd7f310c8..48362cecfc 100644
+--- a/third_party/blink/renderer/controller/BUILD.gn
++++ b/third_party/blink/renderer/controller/BUILD.gn
+@@ -38,6 +38,7 @@ component("controller") {
+   }
+ 
+   configs += [
++    "//cef/libcef/features:config",
+     "//third_party/blink/renderer:config",
+     "//third_party/blink/renderer:inside_blink",
+     "//third_party/blink/renderer:non_test_config",
+@@ -47,6 +48,8 @@ component("controller") {
+   defines = [ "BLINK_CONTROLLER_IMPLEMENTATION=1" ]
+ 
+   sources = [
++    "//cef/libcef/renderer/blink_glue.cc",
++    "//cef/libcef/renderer/blink_glue.h",
+     "blink_initializer.cc",
+     "blink_initializer.h",
+     "blink_leak_detector.cc",
+@@ -210,7 +213,7 @@ source_set("blink_perf_tests_sources") {
+     "//base",
+     "//base/test:test_support",
+     "//content/test:test_support",
+-    "//third_party/blink/renderer/core:core",
++    "//third_party/blink/renderer/core",
+     "//third_party/blink/renderer/core:perf_tests",
+   ]
+ 
+@@ -231,9 +234,9 @@ source_set("blink_bindings_test_sources") {
+     "//third_party/blink/public:test_headers",
+     "//third_party/blink/renderer/core:testing",
+     "//third_party/blink/renderer/core:unit_test_support",
+-    "//third_party/blink/renderer/modules:modules",
++    "//third_party/blink/renderer/modules",
+     "//third_party/blink/renderer/modules/mediastream:test_support",
+-    "//third_party/blink/renderer/platform:platform",
++    "//third_party/blink/renderer/platform",
+     "//third_party/blink/renderer/platform:test_support",
+   ]
+   configs += [
+@@ -290,7 +293,7 @@ source_set("blink_unittests_sources") {
+     "//third_party/blink/renderer/core:testing",
+     "//third_party/blink/renderer/core:unit_test_support",
+     "//third_party/blink/renderer/core:unit_tests",
+-    "//third_party/blink/renderer/modules:modules",
++    "//third_party/blink/renderer/modules",
+     "//third_party/blink/renderer/modules:unit_tests",
+     "//third_party/blink/renderer/modules/exported:test_support",
+     "//third_party/blink/renderer/platform",

@@ -1,0 +1,24 @@
+From 66983f3b2b387538685c5a011d9bd1989d7ad663 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 21:13:35 -0500
+Subject: [PATCH 162/638] net: record AROS QUIC resolver integration [chromium]
+ [aros]
+
+Statement: The Chromium superproject must pin the QUICHE revision that routes hostname lookup through the task-local AROSTCP boundary.
+
+Evidence: QUICHE commit f902632 compiles quic_name_lookup.o against the AROS SDK after the upstream POSIX resolver calls failed.
+
+Validation: ninja -C out/aros-windowed -j48 obj/net/third_party/quiche/quiche_tool_support/quic_name_lookup.o
+
+Chain:; ACD-chromium-aros-network-substrate
+---
+ net/third_party/quiche/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/net/third_party/quiche/src b/net/third_party/quiche/src
+index 9f8738892e..f9026320eb 160000
+--- a/net/third_party/quiche/src
++++ b/net/third_party/quiche/src
+@@ -1 +1 @@
+-Subproject commit 9f8738892edd83219d2f83fdd73c7c14d5dbb80d
++Subproject commit f9026320ebcc11d705e302c3ea10caece1f8ee63

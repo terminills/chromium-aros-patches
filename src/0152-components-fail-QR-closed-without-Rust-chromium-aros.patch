@@ -1,0 +1,102 @@
+From 41b0e0724a8939765319a4d0ff87aa3ebef442eb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:00:17 -0500
+Subject: [PATCH 152/638] components: fail QR closed without Rust [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-chrome
+AI_STATUS: checkpoint
+AI_ROOT_CAUSE: Upstream Chrome's QR component unconditionally instantiated a Rust/CXX target, while the AROS cross toolchain has no Rust standard library yet.
+AI_FIX_REASON: Select the existing Rust implementation when enable_rust is true and otherwise retain the public C++ API with an explicit kUnknownError result.
+AI_SCOPE: components/qr_code_generator/BUILD.gn, components/qr_code_generator/qr_code_generator_no_rust.cc
+AI_VALIDATION: Full-extension //chrome:chrome GN generation resolves the QR Rust graph and completes with 18079 targets; narrow compile follows after the active -j48 build.
+AI_RISK: QR UI displays its existing unknown-error state on no-Rust builds; no false QR data is produced.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap -> preserve full Chrome extensions -> isolate optional Rust QR capability
+---
+ components/qr_code_generator/BUILD.gn         | 40 ++++++++++---------
+ .../qr_code_generator_no_rust.cc              | 19 +++++++++
+ 2 files changed, 41 insertions(+), 18 deletions(-)
+ create mode 100644 components/qr_code_generator/qr_code_generator_no_rust.cc
+
+diff --git a/components/qr_code_generator/BUILD.gn b/components/qr_code_generator/BUILD.gn
+index 15984e6054..daa55e99a9 100644
+--- a/components/qr_code_generator/BUILD.gn
++++ b/components/qr_code_generator/BUILD.gn
+@@ -33,30 +33,34 @@ source_set("bitmap_generator") {
+ }
+ 
+ source_set("qr_code_generator") {
+-  sources = [
+-    "qr_code_generator.cc",
+-    "qr_code_generator.h",
+-  ]
+-  deps = [
+-    ":qr_code_generator_ffi_glue",
+-    "//base",
+-  ]
++  sources = [ "qr_code_generator.h" ]
++  deps = [ "//base" ]
++
++  if (enable_rust) {
++    sources += [ "qr_code_generator.cc" ]
++    deps += [ ":qr_code_generator_ffi_glue" ]
++  } else {
++    sources += [ "qr_code_generator_no_rust.cc" ]
++  }
++
+   public_deps = [
+     ":error",
+     "//base",
+   ]
+ }
+ 
+-rust_static_library("qr_code_generator_ffi_glue") {
+-  allow_unsafe = true  # Needed for FFI that underpins the `cxx` crate.
+-  crate_root = "qr_code_generator_ffi_glue.rs"
+-  sources = [ "qr_code_generator_ffi_glue.rs" ]
+-  cxx_bindings = [ "qr_code_generator_ffi_glue.rs" ]
+-  visibility = [ ":qr_code_generator" ]
+-  deps = [
+-    ":error",
+-    "//third_party/rust/qr_code/v2:lib",
+-  ]
++if (enable_rust) {
++  rust_static_library("qr_code_generator_ffi_glue") {
++    allow_unsafe = true  # Needed for FFI that underpins the `cxx` crate.
++    crate_root = "qr_code_generator_ffi_glue.rs"
++    sources = [ "qr_code_generator_ffi_glue.rs" ]
++    cxx_bindings = [ "qr_code_generator_ffi_glue.rs" ]
++    visibility = [ ":qr_code_generator" ]
++    deps = [
++      ":error",
++      "//third_party/rust/qr_code/v2:lib",
++    ]
++  }
+ }
+ 
+ source_set("unit_tests") {
+diff --git a/components/qr_code_generator/qr_code_generator_no_rust.cc b/components/qr_code_generator/qr_code_generator_no_rust.cc
+new file mode 100644
+index 0000000000..73833eb7b9
+--- /dev/null
++++ b/components/qr_code_generator/qr_code_generator_no_rust.cc
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/qr_code_generator/qr_code_generator.h"
++
++namespace qr_code_generator {
++
++GeneratedCode::GeneratedCode() = default;
++GeneratedCode::~GeneratedCode() = default;
++GeneratedCode::GeneratedCode(GeneratedCode&&) = default;
++GeneratedCode& GeneratedCode::operator=(GeneratedCode&&) = default;
++
++base::expected<GeneratedCode, Error> GenerateCode(base::span<const uint8_t>,
++                                                  std::optional<int>) {
++  return base::unexpected(Error::kUnknownError);
++}
++
++}  // namespace qr_code_generator

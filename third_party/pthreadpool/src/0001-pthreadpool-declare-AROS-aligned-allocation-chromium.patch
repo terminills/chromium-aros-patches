@@ -1,0 +1,36 @@
+From 75a0f3c4d16e5caaa03032e94faf4082f4533bfc Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:35:36 -0500
+Subject: [PATCH] pthreadpool: declare AROS aligned allocation [chromium]
+ [aros]
+
+Statement:
+The strict GNU11 pthreadpool allocation unit calls AROS posix_memalign, but the target C library does not expose its prototype through the generic stdlib header in this feature-test configuration.
+
+Decision:
+Declare the existing POSIX ABI only for AROS at the vendor boundary. Keep pthreadpool allocation and matching free semantics unchanged.
+
+Evidence:
+The original memory.o failed with an implicit declaration error. obj/third_party/pthreadpool/pthreadpool/memory.o compiles after the declaration.
+
+Chain:
+
+---
+ src/memory.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/memory.c b/src/memory.c
+index fc0d83e..2d031a7 100644
+--- a/src/memory.c
++++ b/src/memory.c
+@@ -4,6 +4,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#ifdef __AROS__
++extern int posix_memalign(void** memptr, size_t alignment, size_t size);
++#endif
++
+ /* POSIX headers */
+ #ifdef __ANDROID__
+ 	#include <malloc.h>

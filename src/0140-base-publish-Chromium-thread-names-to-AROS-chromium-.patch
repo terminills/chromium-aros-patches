@@ -1,0 +1,47 @@
+From 1145e200374894f88342156e8de28858c5f9a306 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 04:53:56 -0500
+Subject: [PATCH 140/638] base: publish Chromium thread names to AROS
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Chromium kept role names only in ThreadIdNameManager while AROS pthread tasks retained generic pthread thread numbers, so OPAL and SAD snapshots could not identify which native worker remained live during shutdown.
+
+FIX_REASON: Preserve Chromium full names in ThreadIdNameManager and publish a 31-byte bounded copy through pthread_setname_np, matching pthread.library ownership of the Exec task name buffer without borrowing caller storage.
+
+SCOPE: AROS PlatformThread SetName only; thread creation and naming behavior on other platforms are unchanged.
+
+VALIDATION: platform_thread_aros.o compiled in out/aros-headless; hosted checkpoint 0145 rendered the scripted page and artifact 50 OPAL snapshot identified Compositor, MemoryInfra, NetworkService, GpuMemoryThread, and ThreadPoolForegroundWorker tasks by role.
+
+RISK: low; native names are truncated to the existing 32-byte pthread task buffer while Chromium retains the complete diagnostic name internally.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ base/threading/platform_thread_aros.cc | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 74a8056547..8f40ebd8ad 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -51,9 +51,15 @@ GetCurrentThreadPriorityForPlatformForTest() {
+ }  // namespace internal
+ 
+ void PlatformThreadBase::SetName(const std::string& name) {
+-  // ThreadIdNameManager owns the string. Pointing tc_Node.ln_Name at caller
+-  // storage would leave Exec with a dangling task name.
+   SetNameCommon(name);
++
++  // AROS pthread tasks own a 32-byte Exec task-name buffer. Keep Chromium's
++  // full name in ThreadIdNameManager and publish the bounded form to Exec so
++  // SAD and OPAL snapshots identify the native task without borrowing caller
++  // storage.
++  constexpr size_t kArosTaskNameMax = 31;
++  const std::string task_name = name.substr(0, kArosTaskNameMax);
++  pthread_setname_np(pthread_self(), task_name.c_str());
+ }
+ 
+ size_t GetDefaultThreadStackSize(const pthread_attr_t&) {

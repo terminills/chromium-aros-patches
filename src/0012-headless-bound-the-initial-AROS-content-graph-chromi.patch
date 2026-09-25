@@ -1,0 +1,192 @@
+From 6fd6a1b5ae0b5ce5dfe4b361c125607fb3a737e6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 13:56:47 -0500
+Subject: [PATCH 012/638] headless: bound the initial AROS content graph
+ [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: wip
+
+ROOT_CAUSE: The default headless and content-shell graph pulled browser-test telemetry, Breakpad symbol tools, Views-only eye-dropper UI, and crash-key implementations before AROS had the corresponding process, UI, and crash backends.
+
+FIX_REASON: Keep the production headless/content dependencies while excluding test-only and toolkit-specific branches on AROS; use crash-key stubs until OPAL-backed crash metadata is wired into Chromium.
+
+SCOPE: headless, content shell/test, crash common, and eye-dropper GN dependency selection.
+
+VALIDATION: GN generates //headless:headless_shell and the build has progressed through more than a thousand generated and compiled actions; final executable link remains in progress.
+
+RISK: medium; this deliberately omits test-support and desktop-only features from the first headless milestone, but does not claim those capabilities are complete.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ components/crash/core/common/BUILD.gn |  2 +-
+ components/eye_dropper/BUILD.gn       | 42 ++++++++++++++-------------
+ content/shell/BUILD.gn                |  8 ++---
+ content/test/BUILD.gn                 | 21 ++++++++------
+ headless/BUILD.gn                     |  5 +++-
+ 5 files changed, 43 insertions(+), 35 deletions(-)
+
+diff --git a/components/crash/core/common/BUILD.gn b/components/crash/core/common/BUILD.gn
+index 184a950f01..15c8ce5e77 100644
+--- a/components/crash/core/common/BUILD.gn
++++ b/components/crash/core/common/BUILD.gn
+@@ -9,7 +9,7 @@ import("//components/gwp_asan/buildflags/buildflags.gni")
+ 
+ declare_args() {
+   # If set to true, this will stub out and disable the entire crash key system.
+-  use_crash_key_stubs = is_fuchsia
++  use_crash_key_stubs = is_fuchsia || is_aros
+ }
+ 
+ group("common") {
+diff --git a/components/eye_dropper/BUILD.gn b/components/eye_dropper/BUILD.gn
+index 36f92df94d..82c932ad96 100644
+--- a/components/eye_dropper/BUILD.gn
++++ b/components/eye_dropper/BUILD.gn
+@@ -4,27 +4,29 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-static_library("eye_dropper") {
+-  sources = [
+-    "eye_dropper_view.cc",
+-    "eye_dropper_view.h",
+-    "eye_dropper_view_aura.cc",
+-    "features.cc",
+-    "features.h",
+-  ]
++if (toolkit_views) {
++  static_library("eye_dropper") {
++    sources = [
++      "eye_dropper_view.cc",
++      "eye_dropper_view.h",
++      "eye_dropper_view_aura.cc",
++      "features.cc",
++      "features.h",
++    ]
+ 
+-  deps = [
+-    "//base",
+-    "//build:chromeos_buildflags",
+-    "//components/color:color_headers",
+-    "//content/public/browser",
+-    "//third_party/abseil-cpp:absl",
+-    "//third_party/webrtc_overrides:webrtc_component",
+-    "//ui/base",
+-    "//ui/color",
+-    "//ui/gfx/geometry",
+-    "//ui/views",
+-  ]
++    deps = [
++      "//base",
++      "//build:chromeos_buildflags",
++      "//components/color:color_headers",
++      "//content/public/browser",
++      "//third_party/abseil-cpp:absl",
++      "//third_party/webrtc_overrides:webrtc_component",
++      "//ui/base",
++      "//ui/color",
++      "//ui/gfx/geometry",
++      "//ui/views",
++    ]
++  }
+ }
+ 
+ source_set("color_mixer") {
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index d04abf8d84..b983da3bda 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -72,8 +72,8 @@ config("content_shell_lib_warnings") {
+   }
+ }
+ 
+-# Web test support not built on android, but is everywhere else.
+-support_web_tests = !is_android
++# Web test support is not part of the initial Android or AROS shell bring-up.
++support_web_tests = !is_android && !is_aros
+ 
+ source_set("android_shell_descriptors") {
+   testonly = true
+@@ -1055,7 +1055,7 @@ group("content_shell_crash_test") {
+       mac_bin_path + "otool-classic",
+     ]
+   }
+-  if (is_posix) {
++  if (is_posix && !is_aros) {
+     data += [
+       "//components/crash/content/tools/generate_breakpad_symbols.py",
+       "//components/crash/content/tools/dmp2minidump.py",
+@@ -1064,7 +1064,7 @@ group("content_shell_crash_test") {
+   if (is_win) {
+     data_deps += [ "//build/win:copy_cdb_to_output" ]
+   }
+-  if (is_posix) {
++  if (is_posix && !is_aros) {
+     data_deps += [
+       "//third_party/breakpad:dump_syms",
+       "//third_party/breakpad:minidump_stackwalk",
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+index 4d747913c7..898e95ae3d 100644
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -866,15 +866,17 @@ if (is_fuchsia) {
+ 
+ group("telemetry_gpu_integration_test_scripts_only") {
+   testonly = true
+-  deps = [
+-    "//tools/perf/chrome_telemetry_build:telemetry_chrome_test_without_chrome",
+-  ]
++  if (!is_aros) {
++    deps = [
++      "//tools/perf/chrome_telemetry_build:telemetry_chrome_test_without_chrome",
++    ]
+ 
+-  data = [ "//testing/scripts/run_isolated_script_test.py" ]
+-  data_deps = [
+-    ":telemetry_gpu_integration_test_data",
+-    "//testing:test_scripts_shared",
+-  ]
++    data = [ "//testing/scripts/run_isolated_script_test.py" ]
++    data_deps = [
++      ":telemetry_gpu_integration_test_data",
++      "//testing:test_scripts_shared",
++    ]
++  }
+ }
+ 
+ group("telemetry_gpu_integration_test_support") {
+@@ -2909,7 +2911,8 @@ test("content_unittests") {
+     ]
+   }
+ 
+-  if (is_android || is_linux || is_chromeos || is_mac || is_win || is_fuchsia) {
++  if (is_android || is_aros || is_linux || is_chromeos || is_mac || is_win ||
++      is_fuchsia) {
+     data = [
+       "$root_out_dir/content_shell.pak",
+       "data/",
+diff --git a/headless/BUILD.gn b/headless/BUILD.gn
+index c0701b7c65..96cbe2fa57 100644
+--- a/headless/BUILD.gn
++++ b/headless/BUILD.gn
+@@ -758,7 +758,6 @@ test("headless_browsertests") {
+     "//components/policy/core/browser",
+     "//components/security_state/content",
+     "//components/version_info",
+-    "//content/test:test_support",
+     "//gin",
+     "//net:test_support",
+     "//pdf:buildflags",
+@@ -772,6 +771,10 @@ test("headless_browsertests") {
+     "//ui/shell_dialogs",
+   ]
+ 
++  if (!is_aros) {
++    deps += [ "//content/test:test_support" ]
++  }
++
+   if (is_mac) {
+     deps += [ "//services/device/public/cpp:test_support" ]
+   }

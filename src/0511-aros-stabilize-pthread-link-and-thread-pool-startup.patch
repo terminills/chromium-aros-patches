@@ -1,0 +1,54 @@
+From 512a4c9d2d7ba12f2ae67115ead47a3919ca9775 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 6 Aug 2026 22:35:09 -0500
+Subject: [PATCH 511/638] aros: stabilize pthread link and thread pool startup
+
+---
+ base/task/thread_pool/thread_pool_impl.cc | 9 ++++++++-
+ build/toolchain/aros/BUILD.gn             | 4 ++++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/base/task/thread_pool/thread_pool_impl.cc b/base/task/thread_pool/thread_pool_impl.cc
+index 84ef86e573..ce35c5bda7 100644
+--- a/base/task/thread_pool/thread_pool_impl.cc
++++ b/base/task/thread_pool/thread_pool_impl.cc
+@@ -142,7 +142,14 @@ void ThreadPoolImpl::Start(const ThreadPoolInstance::InitParams& init_params,
+   if (g_synchronous_thread_start_for_testing)
+     service_thread_.WaitUntilThreadStarted();
+ 
+-  if (FeatureList::IsEnabled(kThreadGroupSemaphore)) {
++#if BUILDFLAG(IS_AROS)
++  const bool use_thread_group_semaphore = false;
++#else
++  const bool use_thread_group_semaphore =
++      FeatureList::IsEnabled(kThreadGroupSemaphore);
++#endif
++
++  if (use_thread_group_semaphore) {
+     auto old_foreground_group = std::move(foreground_thread_group_);
+ 
+     foreground_thread_group_ = std::make_unique<ThreadGroupSemaphore>(
+diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
+index b880855d1a..a9961f1930 100644
+--- a/build/toolchain/aros/BUILD.gn
++++ b/build/toolchain/aros/BUILD.gn
+@@ -14,8 +14,11 @@ assert(aros_toolchain_root != "",
+ 
+ _toolprefix = "$aros_toolchain_root/x86_64-aros-"
+ _sysroot_flag = ""
++_pthread_archive = ""
+ if (aros_sysroot != "") {
+   _sysroot_flag = " --sysroot=$aros_sysroot"
++  _pthread_archive =
++      " -Wl,-u,pthread_mutex_unlock ${aros_sysroot}/lib/libpthread.a"
+ }
+ _relocatable_script =
+     rebase_path("aros-relocatable.lds", root_build_dir)
+@@ -40,6 +43,7 @@ gcc_toolchain("x64") {
+   extra_ldflags =
+       "-m64 -mcmodel=large -nix" + _sysroot_flag +
+       " -Wl,-u,__cxa_pure_virtual -lstdc++" +
++      _pthread_archive +
+       " -Wl,--force-group-allocation -Wl,-T${_relocatable_script}"
+ 
+   toolchain_args = {

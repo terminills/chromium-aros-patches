@@ -1,0 +1,66 @@
+From cb94bcf9836eb1bd83fbffd12bec15c786ca8e21 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 12 Jul 2026 18:40:52 -0500
+Subject: [PATCH 118/638] [AROS] Keep page size independent of posixc ABI
+
+AI_PHASE: chromium-phase-3
+AI_STATUS: implementation
+ROOT_CAUSE: Hosted run 0118 showed sysconf(_SC_PAGESIZE) returning 891934720 across the AROS per-opener posixc.library boundary; MemoryMappedFile consequently requested 1783869439 bytes of backing for a 4.3 MiB resource pack.
+FIX_REASON: Consume the fixed 4096-byte AROS PAGESIZE ABI directly in Chromium Base, SysInfo, and PartitionAlloc instead of dynamically dispatching this invariant through posixc.library.
+SCOPE: base/system/sys_info_posix.cc; base/memory/page_size_posix.cc; base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
+VALIDATION: All three affected AROS objects cross-compiled; hosted 0118 logged the exact impossible allocation size and the AROS source contract defines PAGESIZE=4096 while x86-64 kernel PAGE_SIZE is 0x1000.
+RISK: Low for the current AROS ABI, whose public POSIX limit and supported native kernels use 4096-byte pages; a future AROS ABI with variable pages must expose a stable non-posixc kernel query before changing this constant.
+AI_DECISION_CHAIN: tracked file-map fallback -> 1.78 GiB request for 4.3 MiB pack -> sysconf ABI return corruption -> fixed AROS page contract
+Continues: 61371a21b1
+---
+ .../partition_alloc_base/memory/page_size_posix.cc           | 4 +++-
+ base/memory/page_size_posix.cc                               | 4 +++-
+ base/system/sys_info_posix.cc                                | 5 +++--
+ 3 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
+index 05e3a5e510..2b3ab574db 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/memory/page_size_posix.cc
+@@ -12,7 +12,9 @@ size_t GetPageSize() {
+   static const size_t pagesize = []() -> size_t {
+   // For more information see getpagesize(2). Portable applications should use
+   // sysconf(_SC_PAGESIZE) rather than getpagesize() if it's available.
+-#if defined(__AROS__) || defined(_SC_PAGESIZE)
++#if defined(__AROS__)
++    return 4096u;
++#elif defined(_SC_PAGESIZE)
+     return static_cast<size_t>(sysconf(_SC_PAGESIZE));
+ #else
+     return getpagesize();
+diff --git a/base/memory/page_size_posix.cc b/base/memory/page_size_posix.cc
+index a27c5d4945..7f644c3783 100644
+--- a/base/memory/page_size_posix.cc
++++ b/base/memory/page_size_posix.cc
+@@ -12,7 +12,9 @@ size_t GetPageSize() {
+   static const size_t pagesize = []() -> size_t {
+   // For more information see getpagesize(2). Portable applications should use
+   // sysconf(_SC_PAGESIZE) rather than getpagesize() if it's available.
+-#if defined(__AROS__) || defined(_SC_PAGESIZE)
++#if defined(__AROS__)
++    return 4096u;
++#elif defined(_SC_PAGESIZE)
+     return static_cast<size_t>(sysconf(_SC_PAGESIZE));
+ #else
+     return getpagesize();
+diff --git a/base/system/sys_info_posix.cc b/base/system/sys_info_posix.cc
+index c66118510b..4e47e4ac2e 100644
+--- a/base/system/sys_info_posix.cc
++++ b/base/system/sys_info_posix.cc
+@@ -297,8 +297,9 @@ std::string SysInfo::OperatingSystemArchitecture() {
+ // static
+ size_t SysInfo::VMAllocationGranularity() {
+ #if BUILDFLAG(IS_AROS)
+-  const long page_size = sysconf(_SC_PAGESIZE);
+-  return page_size > 0 ? checked_cast<size_t>(page_size) : 4096u;
++  // AROS exposes a fixed 4096-byte PAGESIZE ABI. Avoid routing this invariant
++  // through the per-opener posixc.library sysconf() interface.
++  return 4096u;
+ #else
+   return checked_cast<size_t>(getpagesize());
+ #endif

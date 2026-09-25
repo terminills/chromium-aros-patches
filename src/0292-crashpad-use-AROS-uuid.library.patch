@@ -1,0 +1,76 @@
+From 51182d3d7857459ebcbda0deccc3e87377112253 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 10:30:40 -0500
+Subject: [PATCH 292/638] crashpad: use AROS uuid.library
+
+Route Crashpad UUID creation through the native RFC 4122 provider and preserve a visible failure when the required library cannot open.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: focused-object-passed
+
+AI_ASSUMPTION: uuid.library version 1 is part of the CEF runtime image
+
+AI_VALIDATION: ninja rebuilt obj/third_party/crashpad/crashpad/util/util/uuid.o successfully
+
+AI_LIMITATIONS: full libcef_static link and UUID runtime call remain pending
+
+AI_DECISION_CHAIN:
+---
+ .../crashpad/crashpad/util/misc/uuid.cc       | 29 +++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/third_party/crashpad/crashpad/util/misc/uuid.cc b/third_party/crashpad/crashpad/util/misc/uuid.cc
+index 15870709e3..0fb3a7203b 100644
+--- a/third_party/crashpad/crashpad/util/misc/uuid.cc
++++ b/third_party/crashpad/crashpad/util/misc/uuid.cc
+@@ -26,6 +26,7 @@
+ #include <string_view>
+ #include <type_traits>
+ 
++#include "base/logging.h"
+ #include "base/rand_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -36,6 +37,13 @@
+ #include <uuid/uuid.h>
+ #endif  // BUILDFLAG(IS_APPLE)
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/libraries.h>
++#include <libraries/uuid.h>
++#include <proto/exec.h>
++#include <proto/uuid.h>
++#endif  // BUILDFLAG(IS_AROS)
++
+ namespace crashpad {
+ 
+ static_assert(sizeof(UUID) == 16, "UUID must be 16 bytes");
+@@ -101,6 +109,27 @@ bool UUID::InitializeWithNew() {
+   uuid_generate(uuid);
+   InitializeFromBytes(uuid);
+   return true;
++#elif BUILDFLAG(IS_AROS)
++  // Use the native UUID provider rather than carrying another generator in
++  // Crashpad. UUID_Generate() returns RFC 4122 field values in the same
++  // logical layout as crashpad::UUID.
++  struct Library* UUIDBase = OpenLibrary("uuid.library", 1);
++  if (!UUIDBase) {
++    LOG(ERROR) << "OpenLibrary(uuid.library) failed";
++    return false;
++  }
++
++  uuid_t uuid;
++  UUID_Generate(UUID_TYPE_DCE_RANDOM, &uuid);
++  CloseLibrary(UUIDBase);
++
++  data_1 = uuid.time_low;
++  data_2 = uuid.time_mid;
++  data_3 = uuid.time_hi_and_version;
++  data_4[0] = uuid.clock_seq_hi_and_reserved;
++  data_4[1] = uuid.clock_seq_low;
++  memcpy(data_5, uuid.node, sizeof(data_5));
++  return true;
+ #elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+     BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
+   // Linux, Android, and Fuchsia do not provide a UUID generator in a

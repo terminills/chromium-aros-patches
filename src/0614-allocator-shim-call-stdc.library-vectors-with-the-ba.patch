@@ -1,0 +1,155 @@
+From 6e93c634fc584db74bbc171dfbd461928453ee40 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 00:01:23 -0500
+Subject: [PATCH 614/638] allocator shim: call stdc.library vectors with the
+ base in %r11
+
+stdc.library is a genmodule peropenerbase library, so every jump-table entry
+is the AROS_GM_STACKCALL thunk rather than a plain C function: it takes the
+library base from %r11, __aros_setoffsettable()s it, and only then jumps to
+the real malloc()/free().  Calling base[-LVO] through a C function pointer
+left %r11 holding whatever the compiler last used it for - usually the
+thunk's own address from the indirect call - so stdc read its base out of
+code bytes.  That is the `movabs`-opcode "pool pointer" and the
+FreePooled(pool=0) / NULL-StdCBase-inside-malloc traps seen when a foreign
+(non-PA) pointer reached the cross-heap free path, and it is why
+use_partition_alloc_as_malloc=false, which routes every allocation this way,
+died on every page.
+
+Reach the vectors the way the generated linklib stub does: a two-instruction
+asm tail jump with %r11 = base (mov aros_stdc_shim_base(%rip),%r11; jmp
+*-(LVO*8)(%r11)), entered only after the C wrapper has checked the latched
+base is non-null so a missing stdc still fails as a null return.
+
+Evidence: chromium-aros-build/test-artifacts/
+-vscode-desktop-electron-adt-20260914/gate3-r11stub-232511 (the VS
+Code desktop workbench renders on clean ADT, 0 traps).
+
+---
+ .../shim/allocator_shim_aros_libc.cc          | 85 +++++++++++++++----
+ 1 file changed, 67 insertions(+), 18 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+index 183c3844ea..94c76486f4 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_aros_libc.cc
+@@ -83,43 +83,92 @@ void** StdCBaseCached() {
+   return cached;
+ }
+ 
+-// stdc.library function vectors sit below the library base, one pointer per
+-// LVO, in the same way <inline/stdc.h> reaches them.
+-template <typename Fn>
+-Fn StdCVector(int lvo) {
++}  // namespace
++
++}  // namespace allocator_shim::internal
++
++// stdc.library is a genmodule `peropenerbase` library. Its jump-table entries
++// are NOT plain C functions: each one is the AROS_GM_STACKCALL thunk from
++// arch/x86_64-all/include/aros/genmodule.h, which expects the LIBRARY BASE IN
++// %r11 (the linklib stub AROS_GM_LIBFUNCSTUB loads it there before jumping),
++// calls __aros_setoffsettable(%r11) to make that base the task's current one,
++// and only then jumps to the real free()/malloc(). Calling base[-LVO] through
++// a C function pointer therefore feeds whatever %r11 happens to hold - which
++// on x86_64 is usually the scratch register the compiler just used for the
++// indirect call itself, i.e. the thunk's own address - into the offset table,
++// and the library then reads `StdCBase->mempool` out of code bytes (the
++// `movabs`-opcode "pool pointer" and the NULL-StdCBase-inside-malloc traps).
++//
++// So reach the vectors exactly the way the generated linklib does: a tail
++// jump with %r11 = base, arguments untouched, from a stub that reads the base
++// out of `aros_stdc_shim_base`. The stubs are entered only after the C wrapper
++// has checked that the latched base is non-null.
++extern "C" {
++extern std::atomic<void**> aros_stdc_shim_base;
++}
++std::atomic<void**> aros_stdc_shim_base{nullptr};
++
++#define AROS_STDC_STRINGIZE_(x) #x
++#define AROS_STDC_STRINGIZE(x) AROS_STDC_STRINGIZE_(x)
++#define AROS_STDC_LVO_STUB(name, lvo)                              \
++  asm(".text\n"                                                    \
++      "\t.type " #name ", @function\n"                             \
++      #name ":\n"                                                  \
++      "\tmovq aros_stdc_shim_base(%rip), %r11\n"                   \
++      "\tjmp *-(" AROS_STDC_STRINGIZE(lvo) "*8)(%r11)\n"           \
++      "\t.size " #name ", .-" #name "\n");
++
++extern "C" {
++void aros_stdc_shim_free(void* ptr);
++void* aros_stdc_shim_realloc(void* ptr, size_t size);
++void* aros_stdc_shim_malloc(size_t size);
++void* aros_stdc_shim_calloc(size_t n, size_t size);
++void* aros_stdc_shim_aligned_alloc(size_t alignment, size_t size);
++}
++
++AROS_STDC_LVO_STUB(aros_stdc_shim_free, LVOfree)
++AROS_STDC_LVO_STUB(aros_stdc_shim_realloc, LVOrealloc)
++AROS_STDC_LVO_STUB(aros_stdc_shim_malloc, LVOmalloc)
++AROS_STDC_LVO_STUB(aros_stdc_shim_calloc, LVOcalloc)
++AROS_STDC_LVO_STUB(aros_stdc_shim_aligned_alloc, LVOaligned_alloc)
++
++namespace allocator_shim::internal {
++
++namespace {
++
++// Resolves (and latches) the base the stubs will jump through. A null return
++// means stdc is unreachable and the caller must fail the request itself.
++bool StdCReady() {
+   void** base = StdCBaseCached();
+   if (base == nullptr) {
+-    return nullptr;
++    return false;
+   }
+-  return reinterpret_cast<Fn>(base[-lvo]);
++  aros_stdc_shim_base.store(base, std::memory_order_release);
++  return true;
+ }
+ 
+ }  // namespace
+ 
+-// Every entry point checks the vector rather than calling through a null. If
++// Every entry point checks the base rather than jumping through a null. If
+ // stdc is genuinely unreachable the allocation has to fail, but it must fail
+ // as a null return the caller can handle - not as a jump to address zero from
+ // inside malloc, which is unreadable in a crash log.
+ void ArosLibcFree(void* ptr) {
+-  auto fn = StdCVector<void (*)(void*)>(LVOfree);
+-  if (fn != nullptr) {
+-    fn(ptr);
++  if (StdCReady()) {
++    aros_stdc_shim_free(ptr);
+   }
+ }
+ 
+ void* ArosLibcRealloc(void* ptr, size_t size) {
+-  auto fn = StdCVector<void* (*)(void*, size_t)>(LVOrealloc);
+-  return fn != nullptr ? fn(ptr, size) : nullptr;
++  return StdCReady() ? aros_stdc_shim_realloc(ptr, size) : nullptr;
+ }
+ 
+ void* ArosLibcMalloc(size_t size) {
+-  auto fn = StdCVector<void* (*)(size_t)>(LVOmalloc);
+-  return fn != nullptr ? fn(size) : nullptr;
++  return StdCReady() ? aros_stdc_shim_malloc(size) : nullptr;
+ }
+ 
+ void* ArosLibcCalloc(size_t n, size_t size) {
+-  auto fn = StdCVector<void* (*)(size_t, size_t)>(LVOcalloc);
+-  return fn != nullptr ? fn(n, size) : nullptr;
++  return StdCReady() ? aros_stdc_shim_calloc(n, size) : nullptr;
+ }
+ 
+ void* ArosLibcAlignedAlloc(size_t alignment, size_t size) {
+@@ -131,8 +180,8 @@ void* ArosLibcAlignedAlloc(size_t alignment, size_t size) {
+   if (rounded < size) {
+     return nullptr;  // Overflowed.
+   }
+-  auto fn = StdCVector<void* (*)(size_t, size_t)>(LVOaligned_alloc);
+-  return fn != nullptr ? fn(alignment, rounded) : nullptr;
++  return StdCReady() ? aros_stdc_shim_aligned_alloc(alignment, rounded)
++                     : nullptr;
+ }
+ 
+ }  // namespace allocator_shim::internal

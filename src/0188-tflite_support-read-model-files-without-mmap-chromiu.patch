@@ -1,0 +1,139 @@
+From 79217fdc51949d7855521fa34682e1241b83a447 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 00:06:07 -0500
+Subject: [PATCH 188/638] tflite_support: read model files without mmap
+ [chromium] [aros]
+
+Statement:
+TFLite Support compiled mmap calls whenever the target was not Windows even when Abseil explicitly reported that mmap was unavailable.
+
+Decision:
+Use the mmap path only with ABSL_HAVE_MMAP. Otherwise duplicate caller-owned descriptors, read the requested range into handler-owned storage, and retain the existing status/error contract.
+
+Evidence:
+obj/third_party/tflite_support/tflite_support/external_file_handler.o builds in out/aros-chrome; git diff --check passes.
+
+Chain:
+Complements the AROS TFLite mmap capability commits and advances.
+---
+ .../cc/task/core/external_file_handler.cc     | 56 ++++++++++++++++++-
+ .../cc/task/core/external_file_handler.h      |  4 ++
+ 2 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
+index f969f4dcc0..67452a8551 100644
+--- a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
++++ b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
+@@ -54,8 +54,8 @@ using ::tflite::support::TfLiteSupportStatus;
+ // file descriptor correctly, as according to mmap(2), the offset used in mmap
+ // must be a multiple of sysconf(_SC_PAGE_SIZE).
+ int64 GetPageSizeAlignedOffset(int64 offset) {
+-#ifdef _WIN32
+-  // mmap is not used on Windows
++#if defined(_WIN32) || !defined(ABSL_HAVE_MMAP)
++  // mmap is unavailable on this target.
+   return -1;
+ #else
+   int64 aligned_offset = offset;
+@@ -145,6 +145,21 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+     buffer_offset_ = external_file_.file_descriptor_meta().offset();
+     buffer_size_ = external_file_.file_descriptor_meta().length();
+   }
++#ifndef ABSL_HAVE_MMAP
++  // Keep the caller's descriptor position unchanged while using read() as the
++  // backing implementation.
++  if (owned_fd_ < 0) {
++    owned_fd_ = dup(fd);
++    if (owned_fd_ < 0) {
++      return CreateStatusWithPayload(
++          StatusCode::kUnknown,
++          absl::StrFormat("Unable to duplicate file descriptor, errno=%d",
++                          errno),
++          TfLiteSupportStatus::kFileReadError);
++    }
++    fd = owned_fd_;
++  }
++#endif
+   // Get actual file size. Always use 0 as offset to lseek(2) to get the actual
+   // file size, as SEEK_END returns the size of the file *plus* offset.
+   size_t file_size = lseek(fd, /*offset=*/0, SEEK_END);
+@@ -175,6 +190,7 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+                         buffer_size_ + buffer_offset_, file_size),
+         TfLiteSupportStatus::kInvalidArgumentError);
+   }
++#ifdef ABSL_HAVE_MMAP
+   // If buffer_offset_ is not multiple of sysconf(_SC_PAGE_SIZE), align with
+   // extra leading bytes and adjust buffer_size_ to account for the extra
+   // leading bytes.
+@@ -189,6 +205,40 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+         absl::StrFormat("Unable to map file to memory buffer, errno=%d", errno),
+         TfLiteSupportStatus::kFileMmapError);
+   }
++#else
++  if (lseek(fd, buffer_offset_, SEEK_SET) < 0) {
++    return CreateStatusWithPayload(
++        StatusCode::kUnknown,
++        absl::StrFormat("Unable to seek to file offset, errno=%d", errno),
++        TfLiteSupportStatus::kFileReadError);
++  }
++
++  file_buffer_.resize(static_cast<size_t>(buffer_size_));
++  size_t bytes_read = 0;
++  while (bytes_read < file_buffer_.size()) {
++    const ssize_t result =
++        read(fd, file_buffer_.data() + bytes_read,
++             file_buffer_.size() - bytes_read);
++    if (result < 0) {
++      if (errno == EINTR) {
++        continue;
++      }
++      return CreateStatusWithPayload(
++          StatusCode::kUnknown,
++          absl::StrFormat("Unable to read file contents, errno=%d", errno),
++          TfLiteSupportStatus::kFileReadError);
++    }
++    if (result == 0) {
++      return CreateStatusWithPayload(
++          StatusCode::kUnknown, "Unexpected end of file while reading",
++          TfLiteSupportStatus::kFileReadError);
++    }
++    bytes_read += static_cast<size_t>(result);
++  }
++  buffer_ = file_buffer_.data();
++  buffer_aligned_offset_ = buffer_offset_;
++  buffer_aligned_size_ = buffer_size_;
++#endif
+   return absl::OkStatus();
+ #endif
+ }
+@@ -204,7 +254,7 @@ absl::string_view ExternalFileHandler::GetFileContent() {
+ }
+ 
+ ExternalFileHandler::~ExternalFileHandler() {
+-#ifndef _WIN32
++#if !defined(_WIN32) && defined(ABSL_HAVE_MMAP)
+   if (buffer_ != MAP_FAILED) {
+     munmap(buffer_, buffer_aligned_size_);
+   }
+diff --git a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.h b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.h
+index 99b89dbc41..a4b3048b04 100644
+--- a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.h
++++ b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.h
+@@ -17,6 +17,7 @@ limitations under the License.
+ #define TENSORFLOW_LITE_SUPPORT_CC_TASK_CORE_EXTERNAL_FILE_HANDLER_H_
+ 
+ #include <memory>
++#include <string>
+ 
+ #include "absl/status/status.h"  // from @com_google_absl
+ #include "absl/strings/string_view.h"  // from @com_google_absl
+@@ -73,6 +74,9 @@ class ExternalFileHandler {
+   // ExternalFile, if provided by path or file descriptor.
+   void* buffer_{};
+ 
++  // Owns file contents on platforms without mmap support.
++  std::string file_buffer_;
++
+   // The mapped memory buffer offset, if any.
+   int64 buffer_offset_{};
+   // The size in bytes of the mapped memory buffer, if any.

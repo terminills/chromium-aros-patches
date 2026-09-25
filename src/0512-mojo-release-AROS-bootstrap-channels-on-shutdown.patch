@@ -1,0 +1,36 @@
+From c0e16ccfede4ff3ce362f64c809c3eff6fca1059 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 6 Aug 2026 23:04:42 -0500
+Subject: [PATCH 512/638] mojo: release AROS bootstrap channels on shutdown
+
+---
+ mojo/core/channel_aros.cc | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/mojo/core/channel_aros.cc b/mojo/core/channel_aros.cc
+index d5b74c0dbd..0b6cd494b3 100644
+--- a/mojo/core/channel_aros.cc
++++ b/mojo/core/channel_aros.cc
+@@ -286,7 +286,7 @@ void ChannelAros::FinishShutdown() {
+     observing_io_loop_ = false;
+   }
+   if (!reader_thread_.is_null()) {
+-    base::PlatformThread::Join(reader_thread_);
++    CHECK_EQ(0, pthread_join(reader_thread_.platform_handle(), nullptr));
+     reader_thread_ = base::PlatformThreadHandle();
+     MarkArosChannelReaderJoined(channel_);
+   }
+@@ -299,7 +299,12 @@ void ChannelAros::FinishShutdown() {
+ 
+ void ChannelAros::LeakHandle() {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+-  leak_handle_ = true;
++  // Mojo's legacy Chrome IPC bootstrap leaks invitee endpoints on POSIX so the
++  // inviter observes OS pipe closure only when the child process dies. AROS
++  // hosted channels are explicit shared state, not kernel file descriptors, so
++  // honoring that leak keeps the peer side referenced after the child task has
++  // returned and blocks renderer retirement forever.
++  leak_handle_ = false;
+ }
+ 
+ bool ChannelAros::GetReadPlatformHandles(

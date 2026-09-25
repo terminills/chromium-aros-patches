@@ -1,0 +1,178 @@
+From ab595073312630a52126b9e8832529ba654af03d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 17:48:02 -0500
+Subject: [PATCH 081/638] [AROS] Define Base fallback contracts explicitly
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: Chromium Base now supplies its required AROS path, allocation, watcher, process-iteration, and task-priority symbols.
+ROOT_CAUSE: The first full link exposed platform implementations selected only for Linux, Fuchsia, or other kernels even where AROS needs a truthful native or unsupported contract.
+FIX_REASON: Use DOS program identity and T: cache storage, libc unchecked allocation, fail-closed watcher/process enumeration, and current-task Exec priority mapping without procfs or inotify assumptions.
+SCOPE: Base AROS source selection plus path and process adapters.
+VALIDATION: All five affected objects and libbase.a build; symbol inspection confirms every previously unresolved Base entry in this group is defined.
+RISK: File watching and process enumeration remain explicitly unavailable; priority changes apply only to the current Exec task.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ base/BUILD.gn                         |  4 ++
+ base/base_paths_aros.cc               | 61 +++++++++++++++++++++++++++
+ base/process/process_aros.cc          | 23 ++++++++++
+ base/process/process_iterator_aros.cc | 25 +++++++++++
+ 4 files changed, 113 insertions(+)
+ create mode 100644 base/base_paths_aros.cc
+ create mode 100644 base/process/process_iterator_aros.cc
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 0303251260..69f1a63117 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1013,9 +1013,13 @@ component("base") {
+     if (is_aros) {
+       sources -= [ "files/memory_mapped_file_posix.cc" ]
+       sources += [
++        "base_paths_aros.cc",
++        "files/file_path_watcher_stub.cc",
+         "files/memory_mapped_file_aros.cc",
++        "process/memory_stubs.cc",
+         "process/process_aros.cc",
+         "process/process_handle_aros.cc",
++        "process/process_iterator_aros.cc",
+         "process/process_metrics_aros.cc",
+         "system/sys_info_aros.cc",
+         "threading/platform_thread_aros.cc",
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+new file mode 100644
+index 0000000000..cf86eed0c7
+--- /dev/null
++++ b/base/base_paths_aros.cc
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/base_paths.h"
++
++#include <limits.h>
++
++#include <string>
++
++#include <dos/dos.h>
++#include <proto/dos.h>
++
++#include "base/files/file_path.h"
++#include "base/path_service.h"
++
++namespace base {
++namespace {
++
++bool GetExecutablePath(FilePath* result) {
++  char directory[PATH_MAX];
++  char program[PATH_MAX];
++  const BPTR program_dir = GetProgramDir();
++  if (!program_dir ||
++      !NameFromLock(program_dir, directory, sizeof(directory)) ||
++      !GetProgramName(program, sizeof(program))) {
++    return false;
++  }
++
++  std::string path(directory);
++  if (!path.empty() && path.back() != ':' && path.back() != '/')
++    path.push_back('/');
++  path.append(program);
++  *result = FilePath(path);
++  return true;
++}
++
++}  // namespace
++
++bool PathProviderPosix(int key, FilePath* result) {
++  switch (key) {
++    case FILE_EXE:
++    case FILE_MODULE:
++      return GetExecutablePath(result);
++    case DIR_SRC_TEST_DATA_ROOT: {
++      FilePath path;
++      if (!PathService::Get(DIR_EXE, &path))
++        return false;
++      *result = path.DirName().DirName();
++      return true;
++    }
++    case DIR_CACHE:
++      *result = FilePath("T:Chromium");
++      return true;
++    case DIR_USER_DESKTOP:
++      return false;
++  }
++  return false;
++}
++
++}  // namespace base
+diff --git a/base/process/process_aros.cc b/base/process/process_aros.cc
+index 1e2d8ff4ad..9bb6f479a6 100644
+--- a/base/process/process_aros.cc
++++ b/base/process/process_aros.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "base/process/process.h"
+ 
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
+ #include "base/time/time.h"
+ 
+ namespace base {
+@@ -19,4 +22,24 @@ Time Process::CreationTime() const {
+   return first_observed_creation_time;
+ }
+ 
++Process::Priority Process::GetPriority() const {
++  DCHECK(IsValid());
++  return GetOSPriority() > 0 ? Priority::kBestEffort
++                             : Priority::kUserBlocking;
++}
++
++bool Process::SetPriority(Priority priority) {
++  if (!IsValid() || !is_current())
++    return false;
++
++  struct Task* task = FindTask(nullptr);
++  if (!task)
++    return false;
++
++  // Keep foreground tasks at the normal Exec priority. Background Chromium
++  // work receives a modest reduction without inventing Linux nice levels.
++  SetTaskPri(task, priority == Priority::kBestEffort ? -5 : 0);
++  return true;
++}
++
+ }  // namespace base
+diff --git a/base/process/process_iterator_aros.cc b/base/process/process_iterator_aros.cc
+new file mode 100644
+index 0000000000..59513e1dfc
+--- /dev/null
++++ b/base/process/process_iterator_aros.cc
+@@ -0,0 +1,25 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/process/process_iterator.h"
++
++namespace base {
++
++ProcessIterator::ProcessIterator(const ProcessFilter* filter)
++    : filter_(filter) {}
++
++ProcessIterator::~ProcessIterator() = default;
++
++bool ProcessIterator::CheckForNextProcess() {
++  // Exec tasks are not POSIX processes, and AROS does not expose a stable
++  // process snapshot service yet. Do not reinterpret task-list internals as
++  // the process metadata this API promises.
++  return false;
++}
++
++bool NamedProcessIterator::IncludeEntry() {
++  return false;
++}
++
++}  // namespace base

@@ -1,0 +1,107 @@
+From 65b2253ae0fc4bd324a528a51e40fda5d054103a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 1 Aug 2026 13:43:37 -0500
+Subject: [PATCH 465/638] AROS: scope ContentMain initialization per native
+ process
+
+AROS processes share an address space, so Chromium's function-static ContentMain initialization flag aliases browser and child processes. Track initialization by the nearest NT_PROCESS ancestor while worker tasks inherit their owning process state.
+
+Validation: run 59 removed the content_main.cc is_initialized fatal; the GPU child advanced into ContentMainRunnerImpl and exposed the next process-global collision in base/at_exit.cc.
+
+
+
+---
+ content/app/content_main.cc | 58 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
+
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 3c24cb27d3..919f72f4ef 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -47,6 +47,16 @@
+ #include "ui/base/ui_base_paths.h"
+ #include "ui/base/ui_base_switches.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <set>
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+ 
+@@ -83,6 +93,48 @@ namespace content {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// AROS processes share one address space, so function-static state is shared
++// by the browser and every native child process. Track ContentMain
++// initialization against the nearest native Process ancestor while allowing
++// worker tasks to inherit their owning process state.
++struct ContentMainInitializationRegistry {
++  base::Lock lock;
++  std::set<struct Task*> initialized_processes;
++};
++
++ContentMainInitializationRegistry& GetContentMainInitializationRegistry() {
++  static base::NoDestructor<ContentMainInitializationRegistry> registry;
++  return *registry;
++}
++
++struct Task* GetCurrentProcessTask() {
++  struct Task* task = FindTask(nullptr);
++  struct Task* const current = task;
++
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (task->tc_Node.ln_Type == NT_PROCESS) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return current;
++}
++
++bool WasContentMainInitializedForCurrentProcess() {
++  auto& registry = GetContentMainInitializationRegistry();
++  base::AutoLock lock(registry.lock);
++  const bool inserted =
++      registry.initialized_processes.insert(GetCurrentProcessTask()).second;
++  return !inserted;
++}
++
++#endif
++
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+ 
+ // Setup signal-handling state: resanitize most signals, ignore SIGPIPE.
+@@ -188,14 +240,20 @@ int ContentMainInitialize(ContentMainParams params,
+   // A flag to indicate whether Main() has been called before. On Android, we
+   // may re-run Main() without restarting the browser process. This flag
+   // prevents initializing things more than once.
++#if BUILDFLAG(IS_AROS)
++  const bool is_initialized = WasContentMainInitializedForCurrentProcess();
++#else
+   static bool is_initialized = false;
++#endif
+ #if !BUILDFLAG(IS_ANDROID)
+   DCHECK(!is_initialized);
+ #endif
+   if (is_initialized) {
+     content_main_runner->ReInitializeParams(std::move(params));
+   } else {
++#if !BUILDFLAG(IS_AROS)
+     is_initialized = true;
++#endif
+ #if BUILDFLAG(IS_APPLE) && BUILDFLAG(USE_ALLOCATOR_SHIM)
+     allocator_shim::InitializeAllocatorShim();
+ #endif

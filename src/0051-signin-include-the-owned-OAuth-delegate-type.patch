@@ -1,0 +1,36 @@
+From bf2fc2d7a951936dad426f9489716f598034ed02 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 13:47:43 -0500
+Subject: [PATCH 051/638] signin: include the owned OAuth delegate type
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: The OAuth token-service builder now has a complete delegate type in every platform branch.
+
+ROOT_CAUSE: The generic unsupported-platform fallback returned unique_ptr<ProfileOAuth2TokenServiceDelegate> while the translation unit saw only the forward declaration supplied by ProfileOAuth2TokenService; platform-specific branches masked the missing ownership include.
+
+FIX_REASON: Include the base delegate definition at the translation unit that creates and returns its owning unique_ptr, preserving the existing NOTREACHED fallback without adding an AROS sign-in backend.
+
+SCOPE: ProfileOAuth2TokenService builder include ownership
+
+VALIDATION: The original profile_oauth2_token_service_builder.o target compiled with the AROS GCC cross-toolchain; staged diff check passed.
+
+RISK: None beyond a small compile-time dependency increase; runtime behavior and platform selection are unchanged.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../identity_manager/profile_oauth2_token_service_builder.cc     | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/components/signin/internal/identity_manager/profile_oauth2_token_service_builder.cc b/components/signin/internal/identity_manager/profile_oauth2_token_service_builder.cc
+index 5482ffc429..5cb1b907b3 100644
+--- a/components/signin/internal/identity_manager/profile_oauth2_token_service_builder.cc
++++ b/components/signin/internal/identity_manager/profile_oauth2_token_service_builder.cc
+@@ -11,6 +11,7 @@
+ #include "build/chromeos_buildflags.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
++#include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
+ #include "components/signin/public/base/account_consistency_method.h"
+ #include "components/signin/public/base/device_id_helper.h"
+ #include "components/signin/public/base/signin_client.h"

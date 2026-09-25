@@ -1,0 +1,27 @@
+From c578fe176bb4dc5d6cf8137758c5e2e6aa0a682b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 21:58:02 -0500
+Subject: [PATCH 273/638] v8: import AROS cppgc shared-state boundary
+
+Advance the Chromium V8 source to the proven AROS accessor boundary that keeps mutable cppgc process state inside v8.library.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: nested-v8-checkpoint
+
+AI_VALIDATION: focused AROS v8_monolith rebuild completed all 2516 steps
+
+AI_LIMITATIONS: full Chromium shared-v8 link and runtime remain pending
+
+AI_DECISION_CHAIN:
+---
+ v8 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v8 b/v8
+index 09a34e0c04..d2b88e8f66 160000
+--- a/v8
++++ b/v8
+@@ -1 +1 @@
+-Subproject commit 09a34e0c04bb0afd3c5f957c8e1d7e86833f7d26
++Subproject commit d2b88e8f6613e4865a63fef96bb972ee3709528c

@@ -1,0 +1,77 @@
+From 62ed9d25a5ac9d06e459e5df1412fab1a5fefd0a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 22 Jul 2026 07:17:50 -0500
+Subject: [PATCH 265/638] ozone: report AROS EGL presentation feedback
+
+---
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc | 42 ++++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index 9addca7414..72346f73f6 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -6,14 +6,53 @@
+ 
+ #include <stdint.h>
+ 
++#include <utility>
++
++#include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
++#include "ui/gfx/presentation_feedback.h"
++#include "ui/gl/gl_bindings.h"
+ #include "ui/gl/gl_surface.h"
+ #include "ui/gl/gl_surface_egl.h"
+ #include "ui/ozone/platform/aros/aros_egl_library.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
+ namespace ui {
++namespace {
++
++class ArosViewGLSurfaceEGL final : public gl::NativeViewGLSurfaceEGL {
++ public:
++  ArosViewGLSurfaceEGL(gl::GLDisplayEGL* display, EGLNativeWindowType window)
++      : NativeViewGLSurfaceEGL(display, window, nullptr) {}
++
++  gfx::SwapResult SwapBuffers(PresentationCallback callback,
++                              gfx::FrameData /*data*/) override {
++    const bool presented = eglSwapBuffers(GetEGLDisplay(), GetHandle());
++    const gfx::SwapResult result =
++        presented ? gfx::SwapResult::SWAP_ACK : gfx::SwapResult::SWAP_FAILED;
++
++    // AROS' EGL window swap synchronously blits the rendered resource into the
++    // Intuition window.  It does not expose frame timestamps, and the generic
++    // EGL GPU-query path never completes under VirGL.  Acknowledge the visible
++    // blit without claiming hardware-vsync timing so compositor callbacks do
++    // not accumulate indefinitely while scrolling.
++    gfx::PresentationFeedback feedback =
++        presented ? gfx::PresentationFeedback(base::TimeTicks::Now(),
++                                              base::TimeDelta(), 0)
++                  : gfx::PresentationFeedback::Failure();
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(std::move(callback), std::move(feedback)));
++    return result;
++  }
++
++ protected:
++  ~ArosViewGLSurfaceEGL() override = default;
++};
++
++}  // namespace
+ 
+ GLOzoneEGLAros::GLOzoneEGLAros(ArosWindowManager* window_manager)
+     : window_manager_(window_manager) {}
+@@ -36,8 +75,7 @@ scoped_refptr<gl::GLSurface> GLOzoneEGLAros::CreateViewGLSurface(
+   LOG(INFO) << "[Chromium:Ozone:AROS:EGL] creating window surface widget="
+             << window << " native=" << native_window;
+   return gl::InitializeGLSurface(
+-      base::MakeRefCounted<gl::NativeViewGLSurfaceEGL>(egl_display, egl_window,
+-                                                       nullptr));
++      base::MakeRefCounted<ArosViewGLSurfaceEGL>(egl_display, egl_window));
+ }
+ 
+ scoped_refptr<gl::GLSurface> GLOzoneEGLAros::CreateOffscreenGLSurface(

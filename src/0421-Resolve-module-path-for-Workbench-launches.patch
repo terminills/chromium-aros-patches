@@ -1,0 +1,59 @@
+From 12d0ea69433f14077571e7c15f86017705f1fd7b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 21:25:50 -0500
+Subject: [PATCH 421/638] [AROS] Resolve module path for Workbench launches
+
+---
+ base/base_paths_aros.cc | 27 ++++++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/base/base_paths_aros.cc b/base/base_paths_aros.cc
+index f0a911a9cb..03ce026c93 100644
+--- a/base/base_paths_aros.cc
++++ b/base/base_paths_aros.cc
+@@ -9,7 +9,9 @@
+ #include <string>
+ 
+ #include <dos/dos.h>
++#include <exec/tasks.h>
+ #include <proto/dos.h>
++#include <proto/exec.h>
+ 
+ #include "base/files/file_path.h"
+ #include "base/path_service.h"
+@@ -21,15 +23,30 @@ bool GetExecutablePath(FilePath* result) {
+   char directory[PATH_MAX];
+   char program[PATH_MAX];
+   const BPTR program_dir = GetProgramDir();
+-  if (!program_dir ||
+-      !NameFromLock(program_dir, directory, sizeof(directory)) ||
+-      !GetProgramName(program, sizeof(program))) {
++
++  // Shell sets both ProgramDir and the DOS program name. Workbench startup
++  // instead installs the icon's lock as CurrentDir and names the process task.
++  // Support both launch contracts so FILE_MODULE (and therefore DIR_ASSETS)
++  // resolves to the executable's directory in either case.
++  const bool have_directory =
++      program_dir
++          ? NameFromLock(program_dir, directory, sizeof(directory))
++          : GetCurrentDirName(directory, sizeof(directory));
++  if (!have_directory) {
+     return false;
+   }
+ 
+-  const char* program_name = FilePart(program);
++  const char* program_name = nullptr;
++  if (GetProgramName(program, sizeof(program))) {
++    program_name = FilePart(program);
++  } else {
++    const Task* task = FindTask(nullptr);
++    if (task)
++      program_name = task->tc_Node.ln_Name;
++  }
++
+   if (!program_name || !*program_name)
+-    program_name = program;
++    return false;
+ 
+   std::string path(directory);
+   if (!path.empty() && path.back() != ':' && path.back() != '/')

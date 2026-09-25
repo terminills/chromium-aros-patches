@@ -1,0 +1,48 @@
+From 9302ecc4038cdcb8f61f39c38173fadf7c34254b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:06:52 -0500
+Subject: [PATCH 200/638] hats: enable Autofill surveys on AROS [chromium]
+ [aros]
+
+Statement:
+The desktop HaTS registry includes Autofill survey entries on AROS, but the corresponding feature declarations and definitions were excluded by a platform guard.
+
+Decision:
+Include AROS in the existing desktop Autofill survey feature set and retain the upstream survey registry unchanged.
+
+Evidence:
+The AROS cross build compiles chrome_features.o and survey_config.o together after the guard is aligned.
+
+Chain:
+; first native Chromium window; desktop Autofill integration.
+---
+ chrome/common/chrome_features.cc | 2 +-
+ chrome/common/chrome_features.h  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
+index eb8cd1c891..02056dd80c 100644
+--- a/chrome/common/chrome_features.cc
++++ b/chrome/common/chrome_features.cc
+@@ -81,7 +81,7 @@ BASE_FEATURE(kUseAdHocSigningForWebAppShims,
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ // Enables or disables the Autofill survey triggered by opening a prompt to
+ // save address info.
+ BASE_FEATURE(kAutofillAddressSurvey,
+diff --git a/chrome/common/chrome_features.h b/chrome/common/chrome_features.h
+index 83e17a24cf..75ff240d94 100644
+--- a/chrome/common/chrome_features.h
++++ b/chrome/common/chrome_features.h
+@@ -60,7 +60,7 @@ BASE_DECLARE_FEATURE(kUseAdHocSigningForWebAppShims);
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillAddressSurvey);
+ COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillCardSurvey);
+ COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillPasswordSurvey);

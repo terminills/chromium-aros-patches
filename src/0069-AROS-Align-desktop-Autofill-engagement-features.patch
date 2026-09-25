@@ -1,0 +1,204 @@
+From 5a8f027cc4bf5900132c5bf9e1d2057a8d92aa51 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 15:41:34 -0500
+Subject: [PATCH 069/638] [AROS] Align desktop Autofill engagement features
+
+AI_PHASE: Phase 3 - single-process headless shell
+AI_STATUS: AROS now has a complete declaration, definition, configuration, event, and variation-registration path for the desktop Autofill IPH cohort.
+ROOT_CAUSE: Desktop Autofill code references feature-engagement constants unconditionally, but AROS was omitted from every guard owning those constants and their dependent cookie-controls event.
+FIX_REASON: Place AROS in the existing cross-desktop/mobile Autofill engagement cohort consistently instead of guarding individual call sites or leaving unresolved metadata.
+SCOPE: Seven feature_engagement public constant/list/configuration files.
+VALIDATION: Autofill suggestion generator and feature/event constant, list, and configuration objects compile; expected feature and event symbols are defined.
+RISK: Low; enables existing engagement metadata on AROS, while actual presentation still depends on browser UI clients.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ .../feature_engagement/public/event_constants.cc       |  5 +++--
+ components/feature_engagement/public/event_constants.h |  5 +++--
+ .../public/feature_configurations.cc                   |  5 +++--
+ .../feature_engagement/public/feature_constants.cc     |  6 ++++--
+ .../feature_engagement/public/feature_constants.h      |  5 +++--
+ components/feature_engagement/public/feature_list.cc   |  5 +++--
+ components/feature_engagement/public/feature_list.h    | 10 ++++++----
+ 7 files changed, 25 insertions(+), 16 deletions(-)
+
+diff --git a/components/feature_engagement/public/event_constants.cc b/components/feature_engagement/public/event_constants.cc
+index ac1d37cf67..9671cc718a 100644
+--- a/components/feature_engagement/public/event_constants.cc
++++ b/components/feature_engagement/public/event_constants.cc
+@@ -11,7 +11,7 @@ namespace feature_engagement {
+ namespace events {
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ const char kNewTabOpened[] = "new_tab_opened";
+ const char kSixthTabOpened[] = "sixth_tab_opened";
+ const char kTabGroupCreated[] = "tab_group_created";
+@@ -62,7 +62,8 @@ const char kExtensionsRequestAccessButtonClicked[] =
+ const char kCookieControlsBubbleShown[] = "cookie_controls_bubble_shown";
+ 
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_IOS)
+ const char kChromeOpened[] = "chrome_opened";
+diff --git a/components/feature_engagement/public/event_constants.h b/components/feature_engagement/public/event_constants.h
+index efc36b8d22..7d38948736 100644
+--- a/components/feature_engagement/public/event_constants.h
++++ b/components/feature_engagement/public/event_constants.h
+@@ -14,7 +14,7 @@ namespace events {
+ 
+ // Desktop
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ // The user has explicitly opened a new tab via an entry point from inside of
+ // Chrome.
+ extern const char kNewTabOpened[];
+@@ -88,7 +88,8 @@ extern const char kExtensionsRequestAccessButtonClicked[];
+ extern const char kCookieControlsBubbleShown[];
+ 
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_IOS)
+ // The user has opened Chrome (cold start or from background).
+diff --git a/components/feature_engagement/public/feature_configurations.cc b/components/feature_engagement/public/feature_configurations.cc
+index c98cdbce7c..f4b8db01f9 100644
+--- a/components/feature_engagement/public/feature_configurations.cc
++++ b/components/feature_engagement/public/feature_configurations.cc
+@@ -1393,7 +1393,8 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+   if (kIPHAutofillExternalAccountProfileSuggestionFeature.name ==
+       feature->name) {
+@@ -1532,7 +1533,7 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
+   }
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_IOS)
+   if (kIPHDefaultSiteViewFeature.name == feature->name) {
+diff --git a/components/feature_engagement/public/feature_constants.cc b/components/feature_engagement/public/feature_constants.cc
+index 3d5a034f4c..0413588e92 100644
+--- a/components/feature_engagement/public/feature_constants.cc
++++ b/components/feature_engagement/public/feature_constants.cc
+@@ -584,7 +584,8 @@ BASE_FEATURE(kDefaultBrowserTriggerCriteriaExperiment,
+ #endif  // BUILDFLAG(IS_IOS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kIPHAutofillExternalAccountProfileSuggestionFeature,
+              "IPH_AutofillExternalAccountProfileSuggestion",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -605,7 +606,8 @@ BASE_FEATURE(kIPH3pcdUserBypassFeature,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) ||
+         // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+-        // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA) ||
++        // BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ BASE_FEATURE(kIPHGoogleOneOfferNotificationFeature,
+diff --git a/components/feature_engagement/public/feature_constants.h b/components/feature_engagement/public/feature_constants.h
+index f54bcb9a62..6181512701 100644
+--- a/components/feature_engagement/public/feature_constants.h
++++ b/components/feature_engagement/public/feature_constants.h
+@@ -245,7 +245,8 @@ BASE_DECLARE_FEATURE(kDefaultBrowserTriggerCriteriaExperiment);
+ #endif  // BUILDFLAG(IS_IOS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ BASE_DECLARE_FEATURE(kIPHAutofillExternalAccountProfileSuggestionFeature);
+ BASE_DECLARE_FEATURE(kIPHAutofillManualFallbackFeature);
+ BASE_DECLARE_FEATURE(kIPHAutofillVirtualCardCVCSuggestionFeature);
+@@ -254,7 +255,7 @@ BASE_DECLARE_FEATURE(kIPHCookieControlsFeature);
+ BASE_DECLARE_FEATURE(kIPH3pcdUserBypassFeature);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ BASE_DECLARE_FEATURE(kIPHGoogleOneOfferNotificationFeature);
+diff --git a/components/feature_engagement/public/feature_list.cc b/components/feature_engagement/public/feature_list.cc
+index 4626d9822f..86102b68cc 100644
+--- a/components/feature_engagement/public/feature_list.cc
++++ b/components/feature_engagement/public/feature_list.cc
+@@ -204,7 +204,8 @@ const base::Feature* const kAllFeatures[] = {
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+     &kIPHAutofillExternalAccountProfileSuggestionFeature,
+     &kIPHAutofillManualFallbackFeature,
+     &kIPHAutofillVirtualCardCVCSuggestionFeature,
+@@ -213,7 +214,7 @@ const base::Feature* const kAllFeatures[] = {
+     &kIPH3pcdUserBypassFeature,
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+     &kIPHGoogleOneOfferNotificationFeature,
+diff --git a/components/feature_engagement/public/feature_list.h b/components/feature_engagement/public/feature_list.h
+index 7969eacaa4..6181675f2d 100644
+--- a/components/feature_engagement/public/feature_list.h
++++ b/components/feature_engagement/public/feature_list.h
+@@ -363,7 +363,8 @@ DEFINE_VARIATION_PARAM(kIPHBackNavigationMenuFeature, "IPH_BackNavigationMenu");
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ DEFINE_VARIATION_PARAM(kIPHAutofillExternalAccountProfileSuggestionFeature,
+                        "IPH_AutofillExternalAccountProfileSuggestion");
+ DEFINE_VARIATION_PARAM(kIPHAutofillManualFallbackFeature,
+@@ -376,7 +377,7 @@ DEFINE_VARIATION_PARAM(kIPHCookieControlsFeature, "IPH_CookieControls");
+ DEFINE_VARIATION_PARAM(kIPH3pcdUserBypassFeature, "IPH_3pcdUserBypass");
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ DEFINE_VARIATION_PARAM(kIPHGoogleOneOfferNotificationFeature,
+@@ -655,7 +656,8 @@ constexpr flags_ui::FeatureEntry::FeatureVariation
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+         VARIATION_ENTRY(kIPHAutofillExternalAccountProfileSuggestionFeature),
+         VARIATION_ENTRY(kIPHAutofillManualFallbackFeature),
+         VARIATION_ENTRY(kIPHAutofillVirtualCardCVCSuggestionFeature),
+@@ -664,7 +666,7 @@ constexpr flags_ui::FeatureEntry::FeatureVariation
+         VARIATION_ENTRY(kIPH3pcdUserBypassFeature),
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
+-        // BUILDFLAG(IS_FUCHSIA)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+         VARIATION_ENTRY(kIPHGoogleOneOfferNotificationFeature),

@@ -1,0 +1,29 @@
+From 708468d37e34ef16912a7f36023ffd3926808e93 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 29 Jul 2026 21:36:31 -0500
+Subject: [PATCH 422/638] [AROS] Trace AROS SQLite open failures
+
+---
+ sql/database.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/sql/database.cc b/sql/database.cc
+index 05192a3927..49c8c4ee77 100644
+--- a/sql/database.cc
++++ b/sql/database.cc
+@@ -1845,6 +1845,15 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+   if (sqlite_result_code == SqliteResultCode::kOk) {
+     db_ = db;
+   } else {
++#if BUILDFLAG(IS_AROS)
++    LOG(ERROR) << "[Chromium:AROS:SQLite] open failed path='" << db_file_path
++               << "' uri='" << uri_file_path
++               << "' result=" << static_cast<int>(sqlite_result_code)
++               << " extended=" << (db ? sqlite3_extended_errcode(db) : -1)
++               << " system_errno=" << (db ? sqlite3_system_errno(db) : -1)
++               << " message='" << (db ? sqlite3_errmsg(db) : "no handle")
++               << "'";
++#endif
+     // sqlite3_open_v2() will usually create a database connection handle, even
+     // if an error occurs (see https://www.sqlite.org/c3ref/open.html).
+     if (db) {

@@ -1,0 +1,28 @@
+From 4d77e3b57cdfaa88a320c26b4856998e5e7f4466 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 23:58:43 -0500
+Subject: [PATCH 186/638] third_party: record AROS TFLite delegate boundary
+ [chromium] [aros]
+
+Statement:
+The full upstream Chrome graph reaches TFLite core, whose optional dynamic delegate helper assumes dlfcn on every non-Windows target.
+
+Decision:
+Advance the pinned TFLite source to aee9ca36, where AROS retains static inference but reports runtime delegate loading as unsupported.
+
+Evidence:
+interpreter_builder.o builds against the updated nested source in out/aros-chrome.
+
+Chain:
+Depends on nested TFLite commit aee9ca36 and advances.
+---
+ third_party/tflite/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/tflite/src b/third_party/tflite/src
+index 55bc062601..aee9ca3632 160000
+--- a/third_party/tflite/src
++++ b/third_party/tflite/src
+@@ -1 +1 @@
+-Subproject commit 55bc062601e4ee5a4efa834a84ae5c5ec6b28306
++Subproject commit aee9ca3632a0b4dfba36c4a354e56ad52218b024

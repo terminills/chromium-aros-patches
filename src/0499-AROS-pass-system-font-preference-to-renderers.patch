@@ -1,0 +1,106 @@
+From 6134c2497debc27932229e72e9ab8dd752de60d9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 3 Aug 2026 00:17:36 -0500
+Subject: [PATCH 499/638] AROS: pass system font preference to renderers
+
+Populate the browser-side system font family, carry it through renderer preferences IPC, and apply it in Blink. Fresh multiprocess renderers otherwise reach first layout with an empty system-ui family and abort in FontCache.
+
+
+
+---
+ content/browser/renderer_host/render_view_host_impl.cc     | 2 ++
+ .../renderer_preferences_mojom_traits.cc                   | 2 +-
+ .../common/renderer_preferences/renderer_preferences.h     | 2 +-
+ .../renderer_preferences_mojom_traits.h                    | 2 +-
+ third_party/blink/public/mojom/BUILD.gn                    | 2 +-
+ third_party/blink/renderer/core/exported/web_view_impl.cc  | 7 ++++---
+ 6 files changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_view_host_impl.cc b/content/browser/renderer_host/render_view_host_impl.cc
+index 57926e0d55..4a68d20300 100644
+--- a/content/browser/renderer_host/render_view_host_impl.cc
++++ b/content/browser/renderer_host/render_view_host_impl.cc
+@@ -280,6 +280,8 @@ void RenderViewHostImpl::GetPlatformSpecificPrefs(
+   } else {
+     prefs->system_font_family_name = gfx::Font().GetFontName();
+   }
++#elif BUILDFLAG(IS_AROS)
++  prefs->system_font_family_name = gfx::Font().GetFontName();
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // Make Blink's "focus ring" invisible. The focus ring is a hairline border
+   // that's rendered around clickable targets.
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+index 39531da4b4..fe706a2018 100644
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -68,7 +68,7 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
+ 
+   out->send_subresource_notification = data.send_subresource_notification();
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   if (!data.ReadSystemFontFamilyName(&out->system_font_family_name))
+     return false;
+ #endif
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+index 93a9f6d14c..709ce0c2a8 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -65,7 +65,7 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
+   UserAgentOverride user_agent_override;
+   std::string accept_languages;
+   bool send_subresource_notification{false};
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   std::string system_font_family_name;
+ #endif
+ #if BUILDFLAG(IS_WIN)
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+index 7b36297f15..6afe45351b 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -166,7 +166,7 @@ struct BLINK_COMMON_EXPORT
+     return data.send_subresource_notification;
+   }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   static const std::string& system_font_family_name(
+       const ::blink::RendererPreferences& data) {
+     return data.system_font_family_name;
+diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
+index 0f390bf845..a45d7cdc79 100644
+--- a/third_party/blink/public/mojom/BUILD.gn
++++ b/third_party/blink/public/mojom/BUILD.gn
+@@ -364,7 +364,7 @@ mojom("mojom_platform") {
+   }
+ 
+   enabled_features = []
+-  if (is_linux || is_chromeos) {
++  if (is_linux || is_chromeos || is_aros) {
+     enabled_features += [ "renderer_pref_system_font_family_name" ]
+   }
+   if (use_ozone) {
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+index fb042e637c..94f597f1f8 100644
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -3385,14 +3385,15 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
+       renderer_preferences_.use_subpixel_positioning);
+ // TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
+ // complete.
+-#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)) && \
++#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS) || \
++     BUILDFLAG(IS_AROS)) && \
+     !BUILDFLAG(IS_ANDROID)
+   if (!renderer_preferences_.system_font_family_name.empty()) {
+     WebFontRenderStyle::SetSystemFontFamily(blink::WebString::FromUTF8(
+         renderer_preferences_.system_font_family_name));
+   }
+-#endif  // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)) &&
+-        // !BUILDFLAG(IS_ANDROID)
++#endif  // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS) ||
++        //  BUILDFLAG(IS_AROS)) && !BUILDFLAG(IS_ANDROID)
+ #endif  // BUILDFLAG(IS_WIN)
+ #endif  // !BUILDFLAG(IS_MAC)
+ }

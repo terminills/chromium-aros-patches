@@ -1,0 +1,127 @@
+From 8df7662723508853e877b75a66467f703acdd318 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 22:05:39 -0500
+Subject: [PATCH 103/638] [AROS] Use Exec tasks for thread identity
+
+AI_PHASE: chromium-phase-2-3
+AI_STATUS: first hosted headless_shell crash fixed at the platform boundary
+ROOT_CAUSE: AROS pthread_self() returns zero for raw Exec tasks, including the process main task, so Chromium constructed a null PlatformThreadRef and aborted in SequenceCheckerImpl during CommandLine::Init.
+FIX_REASON: Exec Task pointers are stable, pointer-sized, in-process thread identities for both raw tasks and pthread-backed tasks; keep pthread_t only for thread-handle operations.
+SCOPE: base and PartitionAlloc PlatformThreadRef/CurrentId/CurrentRef AROS paths.
+VALIDATION: focused Ninja rebuild of both platform_thread_posix objects; native hosted crash stack resolves directly to the corrected SequenceChecker boundary.
+RISK: task addresses may be reused after task destruction, matching PlatformThreadRef's documented reuse allowance; all dependents require a full rebuild because the AROS ref type is now pointer-sized.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: AROS native Chromium headless bring-up
+---
+ .../threading/platform_thread_posix.cc               | 12 +++++++++++-
+ .../threading/platform_thread_ref.h                  |  3 +++
+ base/threading/platform_thread_posix.cc              |  7 ++++++-
+ base/threading/platform_thread_ref.h                 |  3 +++
+ 4 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
+index d0a1d4eef3..2041b1aee4 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_posix.cc
+@@ -18,6 +18,11 @@
+ #include "partition_alloc/partition_alloc_base/logging.h"
+ #include "partition_alloc/partition_alloc_base/threading/platform_thread_internal_posix.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <sys/syscall.h>
+ #include <atomic>
+@@ -116,7 +121,7 @@ PlatformThreadId PlatformThread::CurrentId() {
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return zx_thread_self();
+ #elif BUILDFLAG(IS_AROS)
+-  return pthread_self();
++  return reinterpret_cast<PlatformThreadId>(FindTask(nullptr));
+ #elif BUILDFLAG(IS_SOLARIS) || BUILDFLAG(IS_QNX)
+   return pthread_self();
+ #elif BUILDFLAG(IS_POSIX) && BUILDFLAG(IS_AIX)
+@@ -128,7 +133,12 @@ PlatformThreadId PlatformThread::CurrentId() {
+ 
+ // static
+ PlatformThreadRef PlatformThread::CurrentRef() {
++#if BUILDFLAG(IS_AROS)
++  return PlatformThreadRef(
++      reinterpret_cast<PlatformThreadRef::RefType>(FindTask(nullptr)));
++#else
+   return PlatformThreadRef(pthread_self());
++#endif
+ }
+ 
+ // static
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h
+index 41dc7056b2..e610b6502d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h
+@@ -10,6 +10,7 @@
+ #ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_BASE_THREADING_PLATFORM_THREAD_REF_H_
+ #define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_BASE_THREADING_PLATFORM_THREAD_REF_H_
+ 
++#include <cstdint>
+ #include <iosfwd>
+ 
+ #include "build/build_config.h"
+@@ -35,6 +36,8 @@ class PlatformThreadRef {
+  public:
+ #if BUILDFLAG(IS_WIN)
+   using RefType = DWORD;
++#elif BUILDFLAG(IS_AROS)
++  using RefType = std::uintptr_t;
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   using RefType = pthread_t;
+ #endif
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index 654cc51c39..ff8f0a7dcc 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -274,7 +274,7 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
+ #elif BUILDFLAG(IS_POSIX) && BUILDFLAG(IS_AIX)
+   return pthread_self();
+ #elif BUILDFLAG(IS_AROS)
+-  return static_cast<PlatformThreadId>(pthread_self());
++  return reinterpret_cast<PlatformThreadId>(FindTask(nullptr));
+ #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AIX)
+   return reinterpret_cast<int64_t>(pthread_self());
+ #endif
+@@ -282,7 +282,12 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
+ 
+ // static
+ PlatformThreadRef PlatformThreadBase::CurrentRef() {
++#if BUILDFLAG(IS_AROS)
++  return PlatformThreadRef(
++      reinterpret_cast<PlatformThreadRef::RefType>(FindTask(nullptr)));
++#else
+   return PlatformThreadRef(pthread_self());
++#endif
+ }
+ 
+ // static
+diff --git a/base/threading/platform_thread_ref.h b/base/threading/platform_thread_ref.h
+index 2b0e12e130..ec7e7fdb2c 100644
+--- a/base/threading/platform_thread_ref.h
++++ b/base/threading/platform_thread_ref.h
+@@ -10,6 +10,7 @@
+ #ifndef BASE_THREADING_PLATFORM_THREAD_REF_H_
+ #define BASE_THREADING_PLATFORM_THREAD_REF_H_
+ 
++#include <cstdint>
+ #include <iosfwd>
+ 
+ #include "base/base_export.h"
+@@ -35,6 +36,8 @@ class PlatformThreadRef {
+  public:
+ #if BUILDFLAG(IS_WIN)
+   using RefType = DWORD;
++#elif BUILDFLAG(IS_AROS)
++  using RefType = std::uintptr_t;
+ #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+   using RefType = pthread_t;
+ #endif

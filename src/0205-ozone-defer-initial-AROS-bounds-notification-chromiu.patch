@@ -1,0 +1,78 @@
+From b97474ee92e753b9e9abe18de01c621188fcd7da Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 01:54:45 -0500
+Subject: [PATCH 205/638] ozone: defer initial AROS bounds notification
+ [chromium] [aros]
+
+Statement:
+Intuition may clamp a requested desktop window to the current screen during OpenWindowTags, but Aura has not created DesktopWindowTreeHostPlatform's compositor while the PlatformWindow constructor runs.
+
+Decision:
+Record native construction-time bounds without notifying the delegate; retain normal delegate notifications for every later IDCMP size or position change.
+
+Evidence:
+Hosted GDB resolved the null dereference to WindowTreeHostPlatform::OnBoundsChanged at ui/aura/window_tree_host_platform.cc:242. The adjusted 320x240 bounds came from ArosWindow::UpdateBoundsFromNative during construction. The corrected AROS Ozone object compiles in out/aros-windowed.
+
+Chain:
+
+ACD-chromium-native-port-roadmap
+---
+ ui/ozone/platform/aros/aros_window.cc | 10 ++++++----
+ ui/ozone/platform/aros/aros_window.h  |  2 +-
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 122fed651f..7671d903f6 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -69,7 +69,7 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+ 
+   if (window_) {
+     manager_->AttachNativeWindow(widget_, this, window_);
+-    UpdateBoundsFromNative();
++    UpdateBoundsFromNative(/*notify_delegate=*/false);
+     LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
+               << widget_ << " native=" << window_
+               << " client=" << bounds_.ToString();
+@@ -266,7 +266,7 @@ void ArosWindow::HandleNativeEvent(uint32_t message_class,
+       break;
+     case IDCMP_NEWSIZE:
+     case IDCMP_CHANGEWINDOW:
+-      UpdateBoundsFromNative();
++      UpdateBoundsFromNative(/*notify_delegate=*/true);
+       break;
+     case IDCMP_REFRESHWINDOW:
+       if (window_) {
+@@ -327,7 +327,7 @@ bool ArosWindow::PresentPixels(const void* pixels,
+   return true;
+ }
+ 
+-void ArosWindow::UpdateBoundsFromNative() {
++void ArosWindow::UpdateBoundsFromNative(bool notify_delegate) {
+   if (!window_) {
+     return;
+   }
+@@ -340,7 +340,9 @@ void ArosWindow::UpdateBoundsFromNative() {
+   const bool origin_changed = new_bounds.origin() != bounds_.origin();
+   if (new_bounds != bounds_) {
+     bounds_ = new_bounds;
+-    delegate_->OnBoundsChanged({origin_changed});
++    if (notify_delegate) {
++      delegate_->OnBoundsChanged({origin_changed});
++    }
+   }
+ }
+ 
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 913b9cc432..3cae4db56a 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -81,7 +81,7 @@ class ArosWindow : public PlatformWindow {
+                       const gfx::ImageSkia& app_icon) override;
+   void SizeConstraintsChanged() override;
+ 
+-  void UpdateBoundsFromNative();
++  void UpdateBoundsFromNative(bool notify_delegate);
+   void UpdateWindowState(PlatformWindowState state);
+   void DisableNativeEvents();
+   gfx::Rect PrimaryScreenBounds() const;

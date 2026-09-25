@@ -1,0 +1,39 @@
+From 4debaf191ad7bf2d735a76c62fd9d46ff6151cfa Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 31 Jul 2026 03:55:43 -0500
+Subject: [PATCH 451/638] aros: preserve volume separator in SQLite paths
+
+Keep slash-prefixed SQLite paths recognizable to POSIXC when CEF is called from a native AROS process without nixmain Unix-path mode.
+
+
+
+---
+ sql/database.cc | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/sql/database.cc b/sql/database.cc
+index 4d05d4f70f..60d33e1fe3 100644
+--- a/sql/database.cc
++++ b/sql/database.cc
+@@ -70,8 +70,10 @@ static constexpr char kSqliteOpenInMemoryPath[] = ":memory:";
+ 
+ #if BUILDFLAG(IS_AROS)
+ // SQLite's Unix VFS recognizes only slash-prefixed paths as absolute. Convert
+-// native AROS volume and assign paths before SQLite canonicalizes them, then
+-// let POSIXC translate the slash form back at the syscall boundary.
++// native AROS volume and assign paths before SQLite canonicalizes them. Keep
++// the volume separator in the slash-prefixed form so POSIXC recognizes and
++// translates it even when the caller is a native AROS process rather than a
++// POSIX nixmain executable.
+ std::string ArosPathForSqlite(const std::string& path) {
+   const size_t volume_separator = path.find(':');
+   if (volume_separator == std::string::npos || volume_separator == 0) {
+@@ -79,7 +81,7 @@ std::string ArosPathForSqlite(const std::string& path) {
+   }
+ 
+   std::string result("/");
+-  result.append(path, 0, volume_separator);
++  result.append(path, 0, volume_separator + 1);
+   result.push_back('/');
+   size_t relative_path = volume_separator + 1;
+   while (relative_path < path.size() && path[relative_path] == '/') {

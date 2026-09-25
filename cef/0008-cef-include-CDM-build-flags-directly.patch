@@ -1,0 +1,34 @@
+From 7da5f595cb49edaf4f447f0924f03b9bb7767b34 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 15:48:37 -0500
+Subject: [PATCH 08/43] cef: include CDM build flags directly
+
+Include media/media_buildflags.h before evaluating ENABLE_CDM_HOST_VERIFICATION. CEF cannot depend on Chromium's incidental include order for this generated build flag.
+
+AI_PHASE: chromium-cef-bootstrap
+
+AI_STATUS: cdm-buildflag-include-fixed
+
+AI_ASSUMPTION: direct generated-buildflag includes are the stable API boundary
+
+AI_VALIDATION: libcef_static build 17 failed both CDM conditionals with an undefined BUILDFLAG_INTERNAL_ENABLE_CDM_HOST_VERIFICATION
+
+AI_EVIDENCE: ../test-artifacts/-cef-bootstrap-20260724/17-libcef-static-after-third-cef-patch-batch.log
+
+AI_DECISION_CHAIN:; 13c98338; chrome/common/chrome_content_client.cc
+---
+ libcef/common/chrome/chrome_content_client_cef.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libcef/common/chrome/chrome_content_client_cef.cc b/libcef/common/chrome/chrome_content_client_cef.cc
+index e64a6c3e..0dc601b8 100644
+--- a/libcef/common/chrome/chrome_content_client_cef.cc
++++ b/libcef/common/chrome/chrome_content_client_cef.cc
+@@ -8,6 +8,7 @@
+ #include "libcef/common/app_manager.h"
+ 
+ #include "chrome/common/media/cdm_registration.h"
++#include "media/media_buildflags.h"
+ 
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+ #include "libcef/common/cdm_host_file_path.h"

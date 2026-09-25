@@ -1,0 +1,87 @@
+From 978540ba8238428a5ffd779da138958cf494e1bb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 15:31:32 -0500
+Subject: [PATCH 018/638] ipc: carry AROS shared regions through Mojo
+ attachments [chromium] [aros]
+
+AI_PHASE: chromium-headless-bringup
+
+AI_STATUS: done
+
+ROOT_CAUSE: Legacy IPC shared-memory ParamTraits selected the generic POSIX branch because AROS is POSIX-like, but the AROS region backend owns a refcounted same-address-space region handle rather than a pair of file descriptors.
+
+FIX_REASON: Move the scoped AROS region into its existing typed mojo::PlatformHandle, carry it as a MojoHandleAttachment, and unwrap it with the serialized mode, size, and GUID on receipt. This gives queued or discarded messages correct ownership without serializing a naked pointer or inventing FD semantics.
+
+SCOPE: IPC PlatformSharedMemoryRegion write, read, and diagnostic logging.
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ipc/ipc/ipc_message_utils.o
+
+RISK: medium; transport is intentionally valid only inside the current same-address-space AROS process model, while future cross-process OPAL regions must replace the underlying platform handle without changing this ownership flow.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ipc/ipc_message_utils.cc | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/ipc/ipc_message_utils.cc b/ipc/ipc_message_utils.cc
+index 191d73d5ce..533e46f940 100644
+--- a/ipc/ipc_message_utils.cc
++++ b/ipc/ipc_message_utils.cc
+@@ -25,6 +25,10 @@
+ #include "ipc/ipc_message.h"
+ #include "ipc/ipc_message_attachment.h"
+ #include "ipc/ipc_message_attachment_set.h"
++#if BUILDFLAG(IS_AROS)
++#include "ipc/ipc_mojo_handle_attachment.h"
++#include "mojo/public/cpp/system/platform_handle.h"
++#endif
+ #include "ipc/ipc_mojo_param_traits.h"
+ #include "third_party/abseil-cpp/absl/strings/ascii.h"
+ 
+@@ -964,6 +968,11 @@ void ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Write(
+ #elif BUILDFLAG(IS_ANDROID)
+   m->WriteAttachment(new internal::PlatformFileAttachment(
+       base::ScopedFD(const_cast<param_type&>(p).PassPlatformHandle())));
++#elif BUILDFLAG(IS_AROS)
++  mojo::PlatformHandle platform_handle(
++      const_cast<param_type&>(p).PassPlatformHandle());
++  m->WriteAttachment(new internal::MojoHandleAttachment(
++      mojo::WrapPlatformHandle(std::move(platform_handle))));
+ #elif BUILDFLAG(IS_POSIX)
+   base::subtle::ScopedFDPair h =
+       const_cast<param_type&>(p).PassPlatformHandle();
+@@ -1017,6 +1026,20 @@ bool ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Read(
+   *r = base::subtle::PlatformSharedMemoryRegion::Take(
+       base::apple::ScopedMachSendRight(mach_port_mac.get_mach_port()), mode,
+       size, guid);
++#elif BUILDFLAG(IS_AROS)
++  scoped_refptr<base::Pickle::Attachment> attachment;
++  if (!m->ReadAttachment(iter, &attachment) ||
++      static_cast<MessageAttachment*>(attachment.get())->GetType() !=
++          MessageAttachment::Type::MOJO_HANDLE) {
++    return false;
++  }
++  mojo::PlatformHandle platform_handle = mojo::UnwrapPlatformHandle(
++      static_cast<internal::MojoHandleAttachment*>(attachment.get())
++          ->TakeHandle());
++  if (!platform_handle.is_aros_shared_memory())
++    return false;
++  *r = base::subtle::PlatformSharedMemoryRegion::Take(
++      platform_handle.TakeArosSharedMemory(), mode, size, guid);
+ #elif BUILDFLAG(IS_POSIX)
+   scoped_refptr<base::Pickle::Attachment> attachment;
+   if (!m->ReadAttachment(iter, &attachment))
+@@ -1076,6 +1099,13 @@ void ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Log(
+ #elif BUILDFLAG(IS_ANDROID)
+   l->append("FD: ");
+   LogParam(p.GetPlatformHandle(), l);
++#elif BUILDFLAG(IS_AROS)
++  const base::subtle::ArosSharedMemoryHandle h = p.GetPlatformHandle();
++  l->append("AROS region: ");
++  LogParam(reinterpret_cast<uint64_t>(h.region), l);
++  l->append(" read-only: ");
++  LogParam(h.read_only, l);
++  l->append(" ");
+ #elif BUILDFLAG(IS_POSIX)
+   base::subtle::FDPair h = p.GetPlatformHandle();
+   l->append("FD: ");

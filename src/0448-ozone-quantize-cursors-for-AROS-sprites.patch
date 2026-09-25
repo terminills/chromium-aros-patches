@@ -1,0 +1,89 @@
+From e5a21a4cbe2542ff0f89f419d5badc195bb744fb Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 30 Jul 2026 17:03:19 -0500
+Subject: [PATCH 448/638] ozone: quantize cursors for AROS sprites
+
+Convert Chromium's text, hand, move, resize, and crosshair assets to the universally supported two-plane Intuition pointer format. Hosted accepted 32-bit pointerclass objects but did not present their shapes; the planar path preserves transparency and uses configured pointer colors.
+
+
+
+---
+ ui/ozone/platform/aros/aros_window.cc | 45 +++++++++++++++++++++++----
+ 1 file changed, 39 insertions(+), 6 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index dd13014063..315559594d 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -21,6 +21,8 @@
+ #include "ui/ozone/platform/aros/aros_screen.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
++#include "third_party/skia/include/core/SkColor.h"
++
+ #include <cybergraphx/cybergraphics.h>
+ #include <devices/inputevent.h>
+ #include <devices/rawkeycodes.h>
+@@ -70,6 +72,21 @@ int PositiveOrDefault(int value, int fallback) {
+   return value > 0 ? value : fallback;
+ }
+ 
++ULONG ArosPointerPen(SkColor color) {
++  if (SkColorGetA(color) < 64) {
++    return 0;
++  }
++
++  const unsigned luminance =
++      (299U * SkColorGetR(color) + 587U * SkColorGetG(color) +
++       114U * SkColorGetB(color)) /
++      1000U;
++  if (luminance < 96) {
++    return 1;
++  }
++  return luminance > 192 ? 2 : 3;
++}
++
+ gfx::Rect ConstrainClientBoundsToWorkArea(const gfx::Rect& requested,
+                                           const gfx::Rect& work_area,
+                                           int border_left,
+@@ -650,18 +667,34 @@ void ArosWindow::SetCursor(scoped_refptr<PlatformCursor> cursor) {
+     const SkBitmap& bitmap = bitmap_cursor->bitmap();
+     if (!bitmap.isNull() && bitmap.width() > 0 && bitmap.height() > 0 &&
+         bitmap.width() <= 64 && bitmap.height() <= 64 && bitmap.getPixels()) {
+-      cursor_bitmap_ = AllocBitMap(bitmap.width(), bitmap.height(), 32,
++      // Hosted and older native displays can accept a 32-bit sprite object
++      // without ever presenting it. Quantize Chromium's cursor asset into the
++      // classic two-plane AROS pointer format, which every Intuition display
++      // path supports. Pen zero stays transparent; the other three pens use
++      // the user's configured pointer colors.
++      cursor_bitmap_ = AllocBitMap(bitmap.width(), bitmap.height(), 2,
+                                    BMF_CLEAR | BMF_DISPLAYABLE,
+                                    window_->WScreen->RastPort.BitMap);
+       if (cursor_bitmap_) {
+         struct RastPort cursor_rast_port;
+         InitRastPort(&cursor_rast_port);
+         cursor_rast_port.BitMap = cursor_bitmap_;
+-        const LONG written =
+-            WritePixelArray(const_cast<void*>(bitmap.getPixels()), 0, 0,
+-                            bitmap.rowBytes(), &cursor_rast_port, 0, 0,
+-                            bitmap.width(), bitmap.height(), RECTFMT_BGRA32);
+-        if (written > 0) {
++        bool written = true;
++        ULONG active_pen = std::numeric_limits<ULONG>::max();
++        for (int y = 0; y < bitmap.height() && written; ++y) {
++          for (int x = 0; x < bitmap.width(); ++x) {
++            const ULONG pen = ArosPointerPen(bitmap.getColor(x, y));
++            if (pen != active_pen) {
++              SetAPen(&cursor_rast_port, pen);
++              active_pen = pen;
++            }
++            if (WritePixel(&cursor_rast_port, x, y) < 0) {
++              written = false;
++              break;
++            }
++          }
++        }
++        if (written) {
+           const gfx::Point& hotspot = bitmap_cursor->hotspot();
+           cursor_object_ = NewObject(
+               nullptr,

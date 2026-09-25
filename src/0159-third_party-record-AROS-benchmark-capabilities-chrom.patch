@@ -1,0 +1,23 @@
+From 59c36b34b0855a61633f28d37dd4048b09538f2a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 13 Jul 2026 20:55:41 -0500
+Subject: [PATCH 159/638] third_party: record AROS benchmark capabilities
+ [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: checkpoint
+ROOT_CAUSE: The windowed content_shell graph reached Google Benchmark and failed because its unknown-platform fallback requires rusage and libc gethostname contracts AROS does not provide.
+FIX_REASON: Pin nested Google Benchmark commit 91f0065418, which models AROS explicitly and keeps unavailable metrics conservative rather than inventing POSIX support.
+VALIDATION: Both failed Google Benchmark objects compile cleanly in out/aros-windowed.
+RISK: Runtime benchmark CPU timing remains a wall-time approximation until AROS gains process and thread CPU accounting.
+---
+ third_party/google_benchmark/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/google_benchmark/src b/third_party/google_benchmark/src
+index 344117638c..91f0065418 160000
+--- a/third_party/google_benchmark/src
++++ b/third_party/google_benchmark/src
+@@ -1 +1 @@
+-Subproject commit 344117638c8ff7e239044fd0fa7085839fc03021
++Subproject commit 91f00654189b650378daa82ee981c5a9e2b52912

@@ -1,0 +1,186 @@
+From 854f5828659d57145fdd7c250b92203224f71d09 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 03:28:07 -0500
+Subject: [PATCH 220/638] enterprise: fail closed for AROS machine tokens
+ [chromium] [aros]
+
+Statement:
+Desktop Chrome requires a BrowserDMTokenStorage delegate before cloud-management startup, but AROS has no secure machine enrollment-token store and must not inherit Linux machine-id or policy-file semantics.
+
+Decision:
+Provide an explicit AROS delegate that reports no existing identity or tokens and rejects persistence tasks. Keep the asynchronous storage contract intact so unmanaged Chrome can start without pretending enrollment succeeded.
+
+Evidence:
+browser_dm_token_storage_aros.o and chrome_browser_cloud_management_controller_desktop.o compile in out/aros-chrome after GN regeneration.
+
+Chain:
+Advances full browser startup linkage in; secure AROS machine-token persistence remains a future platform service.
+---
+ chrome/browser/BUILD.gn                       |  6 +-
+ .../policy/browser_dm_token_storage_aros.cc   | 61 +++++++++++++++++++
+ .../policy/browser_dm_token_storage_aros.h    | 46 ++++++++++++++
+ ...ser_cloud_management_controller_desktop.cc |  6 ++
+ 4 files changed, 118 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/policy/browser_dm_token_storage_aros.cc
+ create mode 100644 chrome/browser/policy/browser_dm_token_storage_aros.h
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 12548128ea..a1edbeffb6 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -4813,7 +4813,11 @@ static_library("browser") {
+       ]
+ 
+       if (is_aros) {
+-        sources += [ "process_singleton_aros.cc" ]
++        sources += [
++          "policy/browser_dm_token_storage_aros.cc",
++          "policy/browser_dm_token_storage_aros.h",
++          "process_singleton_aros.cc",
++        ]
+       } else {
+         sources += [ "process_singleton_posix.cc" ]
+       }
+diff --git a/chrome/browser/policy/browser_dm_token_storage_aros.cc b/chrome/browser/policy/browser_dm_token_storage_aros.cc
+new file mode 100644
+index 0000000000..f8ff580a56
+--- /dev/null
++++ b/chrome/browser/policy/browser_dm_token_storage_aros.cc
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/policy/browser_dm_token_storage_aros.h"
++
++#include "base/functional/bind.h"
++#include "base/task/thread_pool.h"
++
++namespace policy {
++
++namespace {
++
++bool TokenStorageUnavailable() {
++  return false;
++}
++
++}  // namespace
++
++BrowserDMTokenStorageAros::BrowserDMTokenStorageAros()
++    : task_runner_(base::ThreadPool::CreateSequencedTaskRunner({})) {}
++
++BrowserDMTokenStorageAros::~BrowserDMTokenStorageAros() = default;
++
++std::string BrowserDMTokenStorageAros::InitClientId() {
++  return std::string();
++}
++
++std::string BrowserDMTokenStorageAros::InitEnrollmentToken() {
++  return std::string();
++}
++
++std::string BrowserDMTokenStorageAros::InitDMToken() {
++  return std::string();
++}
++
++bool BrowserDMTokenStorageAros::InitEnrollmentErrorOption() {
++  return false;
++}
++
++bool BrowserDMTokenStorageAros::CanInitEnrollmentToken() const {
++  return true;
++}
++
++BrowserDMTokenStorage::StoreTask BrowserDMTokenStorageAros::SaveDMTokenTask(
++    const std::string& token,
++    const std::string& client_id) {
++  return base::BindOnce(&TokenStorageUnavailable);
++}
++
++BrowserDMTokenStorage::StoreTask BrowserDMTokenStorageAros::DeleteDMTokenTask(
++    const std::string& client_id) {
++  return base::BindOnce(&TokenStorageUnavailable);
++}
++
++scoped_refptr<base::TaskRunner>
++BrowserDMTokenStorageAros::SaveDMTokenTaskRunner() {
++  return task_runner_;
++}
++
++}  // namespace policy
+diff --git a/chrome/browser/policy/browser_dm_token_storage_aros.h b/chrome/browser/policy/browser_dm_token_storage_aros.h
+new file mode 100644
+index 0000000000..e877fca459
+--- /dev/null
++++ b/chrome/browser/policy/browser_dm_token_storage_aros.h
+@@ -0,0 +1,46 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_POLICY_BROWSER_DM_TOKEN_STORAGE_AROS_H_
++#define CHROME_BROWSER_POLICY_BROWSER_DM_TOKEN_STORAGE_AROS_H_
++
++#include <string>
++
++#include "base/memory/scoped_refptr.h"
++#include "components/enterprise/browser/controller/browser_dm_token_storage.h"
++
++namespace base {
++class TaskRunner;
++}
++
++namespace policy {
++
++// Fail-closed token storage until AROS has a secure machine enrollment store.
++class BrowserDMTokenStorageAros : public BrowserDMTokenStorage::Delegate {
++ public:
++  BrowserDMTokenStorageAros();
++  BrowserDMTokenStorageAros(const BrowserDMTokenStorageAros&) = delete;
++  BrowserDMTokenStorageAros& operator=(const BrowserDMTokenStorageAros&) =
++      delete;
++  ~BrowserDMTokenStorageAros() override;
++
++ private:
++  std::string InitClientId() override;
++  std::string InitEnrollmentToken() override;
++  std::string InitDMToken() override;
++  bool InitEnrollmentErrorOption() override;
++  bool CanInitEnrollmentToken() const override;
++  BrowserDMTokenStorage::StoreTask SaveDMTokenTask(
++      const std::string& token,
++      const std::string& client_id) override;
++  BrowserDMTokenStorage::StoreTask DeleteDMTokenTask(
++      const std::string& client_id) override;
++  scoped_refptr<base::TaskRunner> SaveDMTokenTaskRunner() override;
++
++  scoped_refptr<base::TaskRunner> task_runner_;
++};
++
++}  // namespace policy
++
++#endif  // CHROME_BROWSER_POLICY_BROWSER_DM_TOKEN_STORAGE_AROS_H_
+diff --git a/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc b/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
+index 2a165c3276..bfca46e2f4 100644
+--- a/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
++++ b/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
+@@ -59,6 +59,10 @@
+ #include "chrome/install_static/install_util.h"
+ #endif  // BUILDFLAG(IS_WIN)
+ 
++#if BUILDFLAG(IS_AROS)
++#include "chrome/browser/policy/browser_dm_token_storage_aros.h"
++#endif  // BUILDFLAG(IS_AROS)
++
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+ #include "chrome/browser/enterprise/connectors/device_trust/key_management/browser/device_trust_key_manager_impl.h"
+ #include "chrome/browser/enterprise/connectors/device_trust/key_management/browser/key_rotation_launcher.h"
+@@ -97,6 +101,8 @@ void ChromeBrowserCloudManagementControllerDesktop::
+   storage_delegate = std::make_unique<BrowserDMTokenStorageWin>();
+ #elif BUILDFLAG(IS_FUCHSIA)
+   storage_delegate = std::make_unique<BrowserDMTokenStorageFuchsia>();
++#elif BUILDFLAG(IS_AROS)
++  storage_delegate = std::make_unique<BrowserDMTokenStorageAros>();
+ #else
+   NOTREACHED();
+ #endif

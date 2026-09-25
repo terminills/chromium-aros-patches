@@ -1,0 +1,61 @@
+From ad00632706866f707beda039a9f27913cd4978f0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 14 Jul 2026 15:52:44 -0500
+Subject: [PATCH 241/638] chrome: register saved tab groups before profile
+ creation [chromium] [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+
+AI_STATUS: done
+
+ROOT_CAUSE: SavedTabGroupServiceFactory participates in the desktop browser UI on AROS, but SyncServiceFactory only registered it as an early keyed-service dependency on ChromeOS, Linux, macOS, and Windows. The first bookmark-bar query therefore constructed the factory after Chromium had sealed the profile dependency graph and triggered dependency_manager.cc(53).
+
+FIX_REASON: Treat AROS as the desktop platform it is in both the guarded factory include and SyncServiceFactory dependency registration. This instantiates the saved-tab-group factory during EnsureBrowserContextKeyedServiceFactoriesBuilt() rather than during first-tab UI work.
+
+SCOPE: chrome/browser/sync/sync_service_factory.cc
+
+VALIDATION: ninja -C out/aros-chrome -j48 chrome completed; the output was merged to a 23-section AROS ELF and run under hosted AROS. Chrome crossed the prior SavedTabGroupKeyedService late-registration fatal, launched 46 worker tasks, created GPU shared images, initialized session/cache/network services, and continued new-tab rendering.
+
+RISK: The change only restores the existing upstream desktop dependency edge for AROS; it does not enable sync or saved-tab-group features that were otherwise compiled out.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap; ACD-chromium-aros-native-window-system;
+---
+ chrome/browser/sync/sync_service_factory.cc | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/sync/sync_service_factory.cc b/chrome/browser/sync/sync_service_factory.cc
+index 99c819f61c..17a6efcec1 100644
+--- a/chrome/browser/sync/sync_service_factory.cc
++++ b/chrome/browser/sync/sync_service_factory.cc
+@@ -83,11 +83,11 @@
+ #include "chrome/browser/sync/wifi_configuration_sync_service_factory.h"
+ #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+ 
+-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_service_factory.h"
+-#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+-        // BUILDFLAG(IS_WIN)
++#endif  // BUILDFLAG(IS_AROS) || BUILDFLAG(IS_CHROMEOS) ||
++        // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+ #include "chrome/browser/webauthn/passkey_model_factory.h"
+@@ -263,11 +263,11 @@ SyncServiceFactory::SyncServiceFactory()
+   DependsOn(PasswordSenderServiceFactory::GetInstance());
+   DependsOn(ProfilePasswordStoreFactory::GetInstance());
+   DependsOn(PowerBookmarkServiceFactory::GetInstance());
+-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+   DependsOn(tab_groups::SavedTabGroupServiceFactory::GetInstance());
+-#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+-        // BUILDFLAG(IS_WIN)
++#endif  // BUILDFLAG(IS_AROS) || BUILDFLAG(IS_CHROMEOS) ||
++        // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+   DependsOn(SecurityEventRecorderFactory::GetInstance());
+   DependsOn(SendTabToSelfSyncServiceFactory::GetInstance());
+   DependsOn(SharingMessageBridgeFactory::GetInstance());

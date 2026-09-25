@@ -1,0 +1,55 @@
+From 27c1f171990d135efec8bee5efa4e0a750750f34 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 13:54:18 -0500
+Subject: [PATCH 266/638] ozone: preserve AROS raw-key observability [chromium]
+ [aros]
+
+AI_PHASE: chromium-phase-4-ozone
+AI_STATUS: implemented
+ROOT_CAUSE: The hosted input bring-up had no durable boundary markers between Intuition raw-key delivery, Chromium DomCode mapping, and ui::KeyEvent dispatch.
+FIX_REASON: Log received raw keys, unmapped values, and mapped event fields so future text-input failures can be attributed without guessing.
+SCOPE: AROS Ozone raw-key diagnostics only; key mapping and event semantics are unchanged.
+VALIDATION: git diff --check; live Chromium YouTube search and popup replay remained active beyond 20 minutes before this source-only checkpoint.
+RISK: Low functional risk; INFO-level key logging is intentionally verbose and should be gated or reduced after input bring-up stabilizes.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap;
+---
+ ui/ozone/platform/aros/aros_window.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 014a26c537..7d697f087b 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -706,6 +706,11 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   const bool released = (code & IECODE_UP_PREFIX) != 0;
+   const uint16_t raw_code = code & ~IECODE_UP_PREFIX;
+ 
++  // This marks the boundary between Intuition's IDCMP stream and Chromium's
++  // text input pipeline while the hosted keyboard regression is investigated.
++  LOG(INFO) << "[Chromium:Ozone:AROS] raw-key received raw=" << raw_code
++            << " released=" << released << " qualifier=" << qualifier;
++
+   if (IsMouseWheelRawKey(raw_code)) {
+     if (released || !window_) {
+       return;
+@@ -742,7 +747,7 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+ 
+   const DomCode dom_code = DomCodeFromRawKey(raw_code);
+   if (dom_code == DomCode::NONE) {
+-    VLOG(1) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
++    LOG(INFO) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
+     return;
+   }
+ 
+@@ -760,6 +765,11 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+   KeyEvent event(released ? ET_KEY_RELEASED : ET_KEY_PRESSED, key_code,
+                  dom_code, flags, dom_key, EventTimeForNow());
+   event.InitializeNative();
++  LOG(INFO) << "[Chromium:Ozone:AROS] raw-key dispatch raw=" << raw_code
++            << " dom_code=" << static_cast<int>(dom_code)
++            << " key_code=" << static_cast<int>(key_code)
++            << " character=" << static_cast<uint32_t>(event.GetCharacter())
++            << " released=" << released;
+   delegate_->DispatchEvent(&event);
+ }
+ 

@@ -1,0 +1,50 @@
+From 3dc1b6eafa42f2fb6f9bed6e36262aca5eb8b5bd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 10:30:41 -0500
+Subject: [PATCH 293/638] crashpad: model AROS without mmap
+
+Do not include the unavailable POSIX mmap interface in generic Crashpad file I/O, and make its DOS64-compatible 64-bit offset requirement a compile-time contract.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: focused-object-passed
+
+AI_ASSUMPTION: Chromium keeps _FILE_OFFSET_BITS=64 for every AROS Crashpad consumer
+
+AI_VALIDATION: ninja rebuilt obj/third_party/crashpad/crashpad/util/util/file_io_posix.o successfully with sizeof(FileOffset)==8
+
+AI_LIMITATIONS: the refreshed dos64.library and PosixC runtime have not yet been staged or exercised
+
+AI_DECISION_CHAIN:
+---
+ third_party/crashpad/crashpad/util/file/file_io_posix.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/third_party/crashpad/crashpad/util/file/file_io_posix.cc b/third_party/crashpad/crashpad/util/file/file_io_posix.cc
+index 6d02462bd5..02ac14c8d5 100644
+--- a/third_party/crashpad/crashpad/util/file/file_io_posix.cc
++++ b/third_party/crashpad/crashpad/util/file/file_io_posix.cc
+@@ -17,7 +17,9 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <sys/file.h>
++#if !defined(__AROS__)
+ #include <sys/mman.h>
++#endif
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
+@@ -35,6 +37,13 @@
+ 
+ namespace crashpad {
+ 
++#if BUILDFLAG(IS_AROS)
++// Chromium builds AROS with _FILE_OFFSET_BITS=64. Keep Crashpad's file API
++// tied to that DOS64-capable ABI so offsets cannot silently truncate.
++static_assert(sizeof(FileOffset) == 8,
++              "Crashpad on AROS requires 64-bit file offsets");
++#endif
++
+ namespace {
+ 
+ struct ReadTraits {

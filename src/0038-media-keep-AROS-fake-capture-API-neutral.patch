@@ -1,0 +1,37 @@
+From 70e8527f3385c23fc4758a256dcceca19dbbe158 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 19:08:19 -0500
+Subject: [PATCH 038/638] media: keep AROS fake capture API neutral
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: The synthetic video-device factory required a native capture API enum even though AROS has no camera backend in the headless phase.
+
+FIX_REASON: Use VideoCaptureApi::UNKNOWN for AROS fake devices so tests remain constructible without claiming V4L2 or another platform backend.
+
+SCOPE: media/capture/video/fake_video_capture_device_factory.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/media/capture/capture_device_specific/fake_video_capture_device_factory.o
+
+RISK: low; only descriptors for explicitly fake devices change.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ media/capture/video/fake_video_capture_device_factory.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/media/capture/video/fake_video_capture_device_factory.cc b/media/capture/video/fake_video_capture_device_factory.cc
+index 9c9b383cc3..612a7d9da3 100644
+--- a/media/capture/video/fake_video_capture_device_factory.cc
++++ b/media/capture/video/fake_video_capture_device_factory.cc
+@@ -232,7 +232,7 @@ void FakeVideoCaptureDeviceFactory::GetDevicesInfo(
+     VideoCaptureApi api =
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+         VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE;
+-#elif BUILDFLAG(IS_IOS)
++#elif BUILDFLAG(IS_IOS) || BUILDFLAG(IS_AROS)
+         VideoCaptureApi::UNKNOWN;
+ #elif BUILDFLAG(IS_MAC)
+         VideoCaptureApi::MACOSX_AVFOUNDATION;

@@ -1,0 +1,37 @@
+From 9429c1f8d58727046402e7cd9cc450b29dcb95e9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 4 Aug 2026 14:17:13 -0500
+Subject: [PATCH 502/638] base: demote successful AROS file-open tracing
+
+Successful native volume opens currently emit two error-level messages per call, flooding long Chromium page loads and obscuring renderer failures. Keep the focused diagnostic available through VLOG(1) while preserving real open failures.
+
+
+
+---
+ base/files/file_posix.cc | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/base/files/file_posix.cc b/base/files/file_posix.cc
+index 815e8ee967..d6bd23e9de 100644
+--- a/base/files/file_posix.cc
++++ b/base/files/file_posix.cc
+@@ -107,15 +107,15 @@ ArosOpenResult CallOpen(const char* path, int flags, mode_t mode) {
+   AutoLock lock(ArosFilePositionLock());
+   const bool has_volume_name = path && std::strchr(path, ':');
+   if (has_volume_name) {
+-    LOG(ERROR) << "[Chromium:AROS:FileOpen] begin path='" << path
+-               << "' flags=" << flags << " mode=" << mode;
++    VLOG(1) << "[Chromium:AROS:FileOpen] begin path='" << path
++            << "' flags=" << flags << " mode=" << mode;
+   }
+   errno = 0;
+   const int descriptor = HANDLE_EINTR(open(path, flags, mode));
+   const int error = descriptor < 0 ? errno : 0;
+   if (has_volume_name) {
+-    LOG(ERROR) << "[Chromium:AROS:FileOpen] end path='" << path
+-               << "' descriptor=" << descriptor << " errno=" << error;
++    VLOG(1) << "[Chromium:AROS:FileOpen] end path='" << path
++            << "' descriptor=" << descriptor << " errno=" << error;
+   }
+   return {descriptor, error};
+ }

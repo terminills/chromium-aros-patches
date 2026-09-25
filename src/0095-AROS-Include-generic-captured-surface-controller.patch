@@ -1,0 +1,40 @@
+From c6f1c3f269234081d5bc58c01f91e3b3527703e4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 11 Jul 2026 19:50:34 -0500
+Subject: [PATCH 095/638] [AROS] Include generic captured surface controller
+
+AI_PHASE: Phase 3 - first full headless link
+AI_STATUS: Content links the WebContents captured-surface control implementation without enabling desktop capture.
+ROOT_CAUSE: MediaStreamManager unconditionally constructs CapturedSurfaceController, but its implementation was selected only when enable_screen_capture was true.
+FIX_REASON: Compile only the generic controller and permission manager on AROS; leave unsupported frame, window, and desktop capture backends disabled.
+SCOPE: Content browser source selection for captured-surface control.
+VALIDATION: Filtered GN generation succeeded; both captured-surface objects and browser.stamp build; nm confirms controller and permission-manager constructors.
+RISK: Captured-surface control remains unreachable without a capture producer, but the generic browser contract is now link-complete.
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+Continues: ACD-chromium-native-port-roadmap
+---
+ content/browser/BUILD.gn | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 82d7672010..1865cb0586 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2763,6 +2763,17 @@ source_set("browser") {
+     }
+   }
+ 
++  # MediaStreamManager owns the WebContents control controller independently
++  # of whether the platform provides desktop or window frame capture.
++  if (is_aros && !enable_screen_capture) {
++    sources += [
++      "media/captured_surface_control_permission_manager.cc",
++      "media/captured_surface_control_permission_manager.h",
++      "media/captured_surface_controller.cc",
++      "media/captured_surface_controller.h",
++    ]
++  }
++
+   if (is_chromeos_lacros) {
+     sources += [
+       "accessibility/browser_accessibility_state_impl_lacros.cc",

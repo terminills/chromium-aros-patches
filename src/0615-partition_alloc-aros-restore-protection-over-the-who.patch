@@ -1,0 +1,66 @@
+From 001f83966da305b287a6f6963d9e4f424d85870c Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 15 Sep 2026 00:46:09 -0500
+Subject: [PATCH 615/638] partition_alloc/aros: restore protection over the
+ whole exec-backed block on free
+
+An exec-backed reservation (AllocMem fallback, used for large unhinted
+requests such as a worker isolate's 64 MiB region) sets its protection -
+usually inaccessible - over the full aligned result, and a later
+TrimMapping narrows protected_base/protected_length to the window
+PartitionAlloc keeps without touching the alignment slack it cut off.
+FreePagesInternal restored RWX only over that window, so the slack pages
+went back to exec's free pool still PROT_NONE.  The next AllocMem to land
+there faulted inside the kernel: a 4 MiB pthread stack at
+allocation_base+0x30, MEMF_CLEAR, memset from tlsf_malloc <- nommu_AllocMem
+<- v8 OS::Allocate, CR2 == the reservation's aligned base (VS Code desktop
+on the ADT hosted tree, run gate4-utility-deps-003155, pthread thread #6).
+
+Restore RWX over the page-rounded span of the whole allocation before
+FreeMem.  Kernel-owned pages keep their full protected span through a
+trim and are unchanged.
+
+---
+ .../page_allocator_internals_aros.h           | 29 +++++++++++++++++--
+ 1 file changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+index 50eb6ceafb..c0e196959c 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
+@@ -527,9 +527,32 @@ void FreePagesInternal(uintptr_t address, size_t length) {
+   // hosted RAM block is mapped RWX, the ELF loader puts code anywhere); leave
+   // them as they were found, or the next program loaded into them faults on
+   // its first instruction.
+-  SetProtection(KernelBase, record->protected_base, record->protected_length,
+-                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
+-                                         MAP_Executable));
++  //
++  // For an Exec-backed reservation that must cover the WHOLE block, not just
++  // the window PartitionAlloc kept: the reservation set its (usually
++  // inaccessible) protection over the full aligned result, and a later trim
++  // narrows protected_base/protected_length to the kept window without
++  // touching the slack it cut off. Restoring only the window handed exec
++  // free memory with PROT_NONE pages inside it; the next AllocMem(MEMF_CLEAR)
++  // to land there faulted in the kernel's memset (tlsf_malloc <- AllocMem
++  // <- v8 OS::Allocate on a worker isolate, CR2 = the first slack page).
++  if (record->exec_owned) {
++    const uintptr_t page_mask = PageAllocationGranularity() - 1;
++    const uintptr_t span_base =
++        reinterpret_cast<uintptr_t>(record->allocation_base) & ~page_mask;
++    const uintptr_t span_end =
++        (reinterpret_cast<uintptr_t>(record->allocation_base) +
++         record->allocation_length + page_mask) &
++        ~page_mask;
++    SetProtection(KernelBase, span_base, span_end - span_base,
++                  static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
++                                           MAP_Executable));
++  } else {
++    SetProtection(KernelBase, record->protected_base,
++                  record->protected_length,
++                  static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
++                                           MAP_Executable));
++  }
+   if (record->exec_owned) {
+     FreeMem(record->allocation_base, record->allocation_length);
+   } else {

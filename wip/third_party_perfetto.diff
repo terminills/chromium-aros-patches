@@ -1,0 +1,13 @@
+diff --git a/gn/perfetto.gni b/gn/perfetto.gni
+index 19f738b..f8d2304 100644
+--- a/gn/perfetto.gni
++++ b/gn/perfetto.gni
+@@ -302,7 +302,7 @@ declare_args() {
+   enable_perfetto_trace_processor_httpd =
+       enable_perfetto_trace_processor &&
+       (perfetto_build_standalone || perfetto_build_with_android ||
+-       (build_with_chromium && !is_win))
++       (build_with_chromium && !is_win && !is_aros))
+ 
+   # Enables Zlib support. This is used to compress traces (by the tracing
+   # service and by the "perfetto" cmdline client) and to decompress traces (by

@@ -1,0 +1,199 @@
+From c2e8d165f58891a5aa59674ed77c709814ea4155 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 24 Jul 2026 08:42:08 -0500
+Subject: [PATCH 289/638] build: add the matching CEF GN integration hook
+
+Apply CEF 52dac9116775 gn_config.patch verbatim against Chromium 124.0.6367.0. This exposes //cef through enable_cef and wires its generated resources without yet applying the remaining CEF behavioral patches.
+
+AI_PHASE: chromium-aros-cef
+
+AI_STATUS: first-integration-checkpoint
+
+AI_ASSUMPTION: CEF 52dac9116775 is the only compatible starting point for Chromium 124.0.6367.0
+
+AI_VALIDATION: git apply -p0 --check and indexed application both succeeded; matching compatibility file names refs/tags/124.0.6367.0
+
+AI_LIMITATIONS: CEF GN generation, AROS platform sources, native library link, and runtime remain pending
+
+AI_DECISION_CHAIN:
+---
+ .gn                                        |  2 ++
+ BUILD.gn                                   |  5 +++++
+ build/config/win/visual_studio_version.gni | 14 ++++++--------
+ chrome/chrome_paks.gni                     |  5 +++++
+ chrome/chrome_repack_locales.gni           |  5 +++++
+ chrome/installer/mini_installer/BUILD.gn   |  5 ++++-
+ tools/grit/grit_args.gni                   |  3 +++
+ 7 files changed, 30 insertions(+), 9 deletions(-)
+
+diff --git a/.gn b/.gn
+index afe0b3e90f..daae3b0e0e 100644
+--- a/.gn
++++ b/.gn
+@@ -153,6 +153,8 @@ exec_script_whitelist =
+       "//chrome/android/webapk/shell_apk/prepare_upload_dir/BUILD.gn",
+       "//chrome/version.gni",
+ 
++      "//cef/BUILD.gn",
++
+       # TODO(dgn): Layer violation but breaks the build otherwise, see
+       # https://crbug.com/474506.
+       "//clank/java/BUILD.gn",
+diff --git a/BUILD.gn b/BUILD.gn
+index 2d78b9cfa6..f537abbbac 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -20,6 +20,7 @@ import("//build/config/sanitizers/sanitizers.gni")
+ import("//build/config/ui.gni")
+ import("//build/gn_logs.gni")
+ import("//build/util/generate_wrapper.gni")
++import("//cef/libcef/features/features.gni")
+ import("//components/enterprise/buildflags/buildflags.gni")
+ import("//components/nacl/features.gni")
+ import("//device/vr/buildflags/buildflags.gni")
+@@ -289,6 +290,10 @@ group("gn_all") {
+ 
+     deps += root_extra_deps
+ 
++    if (enable_cef) {
++      deps += [ "//cef" ]
++    }
++
+     if (enable_printing || enable_printing_tests) {
+       deps += [ "//printing:printing_unittests" ]
+     }
+diff --git a/build/config/win/visual_studio_version.gni b/build/config/win/visual_studio_version.gni
+index 1da479dd5e..ff9c7e4679 100644
+--- a/build/config/win/visual_studio_version.gni
++++ b/build/config/win/visual_studio_version.gni
+@@ -5,15 +5,14 @@
+ declare_args() {
+   # Path to Visual Studio. If empty, the default is used which is to use the
+   # automatic toolchain in depot_tools. If set, you must also set the
+-  # visual_studio_version, wdk_path and windows_sdk_version.
++  # visual_studio_version, visual_studio_runtime_dirs and windows_sdk_version.
+   visual_studio_path = ""
+ 
+   # Version of Visual Studio pointed to by the visual_studio_path.
+   visual_studio_version = ""
+ 
+-  # Directory of the Windows driver kit. If visual_studio_path is empty, this
+-  # will be auto-filled.
+-  wdk_path = ""
++  # Path to Visual Studio runtime libraries.
++  visual_studio_runtime_dirs = ""
+ 
+   # Full path to the Windows SDK, not including a backslash at the end.
+   # This value is the default location, override if you have a different
+@@ -31,14 +30,13 @@ if (visual_studio_path == "") {
+   windows_sdk_version = toolchain_data.sdk_version
+   windows_sdk_path = toolchain_data.sdk_path
+   visual_studio_version = toolchain_data.vs_version
+-  wdk_path = toolchain_data.wdk_dir
+   visual_studio_runtime_dirs = toolchain_data.runtime_dirs
+ } else {
+   assert(visual_studio_version != "",
+          "You must set the visual_studio_version if you set the path")
++  assert(visual_studio_runtime_dirs != "",
++         "You must set the visual_studio_runtime_dirs if you set the visual " +
++         "studio path")
+   assert(windows_sdk_version != "",
+          "You must set the windows_sdk_version if you set the path")
+-  assert(wdk_path != "",
+-         "You must set the wdk_path if you set the visual studio path")
+-  visual_studio_runtime_dirs = []
+ }
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index 600c82ffad..0190b07d67 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -5,6 +5,7 @@
+ import("//ash/ambient/resources/resources.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/locales.gni")
++import("//cef/libcef/features/features.gni")
+ import("//chrome/browser/buildflags.gni")
+ import("//chrome/common/features.gni")
+ import("//components/compose/features.gni")
+@@ -80,6 +81,10 @@ template("chrome_repack_percent") {
+         "//ui/chromeos/resources",
+       ]
+     }
++    if (enable_cef) {
++      sources += [ "$root_gen_dir/cef/cef_resources.pak" ]
++      deps += [ "//cef:cef_resources" ]
++    }
+     if (enable_extensions) {
+       sources += [ "$root_gen_dir/extensions/extensions_browser_resources_${percent}_percent.pak" ]
+       deps += [ "//extensions:extensions_browser_resources" ]
+diff --git a/chrome/chrome_repack_locales.gni b/chrome/chrome_repack_locales.gni
+index c43aa5873d..68978caa5b 100644
+--- a/chrome/chrome_repack_locales.gni
++++ b/chrome/chrome_repack_locales.gni
+@@ -6,6 +6,7 @@ import("//build/config/chrome_build.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/features.gni")
+ import("//build/config/ui.gni")
++import("//cef/libcef/features/features.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//tools/grit/repack.gni")
+ 
+@@ -97,6 +98,10 @@ template("chrome_repack_locales") {
+       source_patterns += [ "${root_gen_dir}/components/strings/search_engine_descriptions_strings_" ]
+       deps += [ "//components/strings:search_engine_descriptions_strings" ]
+     }
++    if (enable_cef) {
++      source_patterns += [ "${root_gen_dir}/cef/cef_strings_" ]
++      deps += [ "//cef:cef_strings" ]
++    }
+     if (enable_extensions) {
+       source_patterns +=
+           [ "${root_gen_dir}/extensions/strings/extensions_strings_" ]
+diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
+index b94944f6d5..eecf0673e0 100644
+--- a/chrome/installer/mini_installer/BUILD.gn
++++ b/chrome/installer/mini_installer/BUILD.gn
+@@ -7,6 +7,7 @@ import("//build/config/features.gni")
+ import("//build/config/python.gni")
+ import("//build/config/ui.gni")
+ import("//build/timestamp.gni")
++import("//cef/libcef/features/features.gni")
+ import("//chrome/process_version_rc_template.gni")
+ import("//third_party/dawn/scripts/dawn_features.gni")
+ import("//third_party/ffmpeg/ffmpeg_options.gni")
+@@ -145,11 +146,13 @@ action("mini_installer_archive") {
+   inputs = [
+     "$root_out_dir/chrome.dll",
+     "$root_out_dir/chrome.exe",
+-    "$root_out_dir/locales/en-US.pak",
+     "$root_out_dir/setup.exe",
+     "//chrome/tools/build/win/makecab.py",
+     release_file,
+   ]
++  if (!enable_cef) {
++    inputs += [ "$root_out_dir/locales/en-US.pak" ]
++  }
+ 
+   outputs = [
+     "$root_out_dir/chrome.7z",
+diff --git a/tools/grit/grit_args.gni b/tools/grit/grit_args.gni
+index 0f37bbb04c..11bc4938a8 100644
+--- a/tools/grit/grit_args.gni
++++ b/tools/grit/grit_args.gni
+@@ -5,6 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/devtools.gni")
++import("//build/config/locales.gni")
+ import("//build/config/ui.gni")
+ 
+ shared_intermediate_dir = rebase_path(root_gen_dir, root_build_dir)
+@@ -36,6 +37,8 @@ _grit_defines = [
+ 
+   # Mac and iOS want Title Case strings.
+   "use_titlecase=${is_apple}",
++
++  "enable_pseudolocales=${enable_pseudolocales}",
+ ]
+ 
+ # Must match `enable_hidpi` in ui/base/ui_features.gni.

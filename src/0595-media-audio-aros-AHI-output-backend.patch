@@ -1,0 +1,576 @@
+From 9e35bd9f244c8030bbfc1436d8b49f1e0e6f449b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 7 Sep 2026 23:20:08 -0500
+Subject: [PATCH 595/638] media/audio/aros: AHI output backend
+
+AudioManagerAros with AhiOutputStream over ahi.device (CMD_WRITE on
+AHI_DEFAULT_UNIT, double-buffered requests on a dedicated render thread).
+CreateAudioManager() probes the unit and keeps FakeAudioManager when it
+cannot be opened, so media pacing is unchanged on systems without an AHI
+driver configured.
+---
+ media/audio/BUILD.gn                   |   7 +-
+ media/audio/aros/ahi_output_stream.cc  | 241 +++++++++++++++++++++++++
+ media/audio/aros/ahi_output_stream.h   |  71 ++++++++
+ media/audio/aros/audio_manager_aros.cc | 125 ++++++++++++-
+ media/audio/aros/audio_manager_aros.h  |  60 ++++++
+ 5 files changed, 502 insertions(+), 2 deletions(-)
+ create mode 100644 media/audio/aros/ahi_output_stream.cc
+ create mode 100644 media/audio/aros/ahi_output_stream.h
+ create mode 100644 media/audio/aros/audio_manager_aros.h
+
+diff --git a/media/audio/BUILD.gn b/media/audio/BUILD.gn
+index 7a5f029a01..6b7566f6c4 100644
+--- a/media/audio/BUILD.gn
++++ b/media/audio/BUILD.gn
+@@ -275,7 +275,12 @@ source_set("audio") {
+   }
+ 
+   if (is_aros) {
+-    sources += [ "aros/audio_manager_aros.cc" ]
++    sources += [
++      "aros/ahi_output_stream.cc",
++      "aros/ahi_output_stream.h",
++      "aros/audio_manager_aros.cc",
++      "aros/audio_manager_aros.h",
++    ]
+   }
+ 
+   if (use_alsa) {
+diff --git a/media/audio/aros/ahi_output_stream.cc b/media/audio/aros/ahi_output_stream.cc
+new file mode 100644
+index 0000000000..3938905524
+--- /dev/null
++++ b/media/audio/aros/ahi_output_stream.cc
+@@ -0,0 +1,241 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "media/audio/aros/ahi_output_stream.h"
++
++#include <stdint.h>
++#include <string.h>
++
++#include <algorithm>
++
++#include "base/logging.h"
++#include "base/time/time.h"
++#include "media/audio/audio_manager_base.h"
++#include "media/base/audio_bus.h"
++#include "media/base/audio_glitch_info.h"
++#include "media/base/audio_sample_types.h"
++
++// AROS headers last: proto/exec.h turns Wait(), Signal(), AllocMem() and
++// friends into function-like macros that would rewrite Chromium's own
++// methods of those names in any header included after them.
++#include <devices/ahi.h>
++#include <exec/memory.h>
++#include <proto/exec.h>
++
++namespace media {
++
++namespace {
++
++// ahir_Volume / ahir_Position are 16.16 fixed point.
++constexpr Fixed kFixedOne = 0x10000;
++constexpr Fixed kCentered = 0x8000;
++
++struct AhiUnit {
++  struct MsgPort* port = nullptr;
++  struct AHIRequest* req = nullptr;
++  bool open = false;
++
++  // Opens AHI_DEFAULT_UNIT for the calling task.  Version 4 is the first with
++  // ahir_Type/ahir_Frequency/ahir_Link on the request.
++  bool Open() {
++    port = CreateMsgPort();
++    if (!port)
++      return false;
++    req = reinterpret_cast<struct AHIRequest*>(
++        CreateIORequest(port, sizeof(struct AHIRequest)));
++    if (!req)
++      return false;
++    req->ahir_Version = 4;
++    open = OpenDevice(reinterpret_cast<CONST_STRPTR>(AHINAME), AHI_DEFAULT_UNIT,
++                      reinterpret_cast<struct IORequest*>(req), 0) == 0;
++    return open;
++  }
++
++  void Close() {
++    if (open)
++      CloseDevice(reinterpret_cast<struct IORequest*>(req));
++    if (req)
++      DeleteIORequest(reinterpret_cast<struct IORequest*>(req));
++    if (port)
++      DeleteMsgPort(port);
++    open = false;
++    req = nullptr;
++    port = nullptr;
++  }
++};
++
++}  // namespace
++
++AhiOutputStream::AhiOutputStream(const AudioParameters& params,
++                                 AudioManagerBase* manager)
++    : params_(params), manager_(manager) {}
++
++AhiOutputStream::~AhiOutputStream() {
++  DCHECK(!thread_);
++}
++
++// static
++bool AhiOutputStream::ProbeDevice() {
++  AhiUnit unit;
++  bool ok = unit.Open();
++  unit.Close();
++  return ok;
++}
++
++bool AhiOutputStream::Open() {
++  if (!params_.IsValid() || params_.channels() < 1 || params_.channels() > 2) {
++    LOG(ERROR) << "[Chromium:AROS:AHI] unsupported params "
++               << params_.AsHumanReadableString();
++    return false;
++  }
++  // The render thread opens its own unit; probe here so a missing/misconfigured
++  // AHI fails Open() (the caller then falls back) instead of erroring later.
++  if (!ProbeDevice()) {
++    LOG(ERROR) << "[Chromium:AROS:AHI] cannot open " << AHINAME << " unit "
++               << AHI_DEFAULT_UNIT;
++    return false;
++  }
++  bus_ = AudioBus::Create(params_);
++  opened_ = true;
++  return true;
++}
++
++void AhiOutputStream::Start(AudioSourceCallback* callback) {
++  DCHECK(opened_);
++  DCHECK(callback);
++  if (thread_)
++    return;
++  callback_ = callback;
++  stop_requested_ = false;
++  thread_ = std::make_unique<base::DelegateSimpleThread>(
++      this, "AhiOutputStream",
++      base::SimpleThread::Options(base::ThreadType::kRealtimeAudio));
++  thread_->Start();
++}
++
++void AhiOutputStream::Stop() {
++  if (!thread_)
++    return;
++  stop_requested_ = true;
++  thread_->Join();
++  thread_.reset();
++  callback_ = nullptr;
++}
++
++void AhiOutputStream::SetVolume(double volume) {
++  volume_ = std::clamp(volume, 0.0, 1.0);
++}
++
++void AhiOutputStream::GetVolume(double* volume) {
++  *volume = volume_;
++}
++
++void AhiOutputStream::Close() {
++  Stop();
++  bus_.reset();
++  opened_ = false;
++  // Deletes |this|.
++  manager_->ReleaseOutputStream(this);
++}
++
++void AhiOutputStream::Flush() {}
++
++// Render thread.  Two requests, two buffers: send buffer A, send buffer B
++// linked to A, wait for A, refill A linked to B, send A, wait for B, ...
++void AhiOutputStream::Run() {
++  AhiUnit unit;
++  if (!unit.Open()) {
++    LOG(ERROR) << "[Chromium:AROS:AHI] render thread cannot open " << AHINAME;
++    unit.Close();
++    callback_->OnError(AudioSourceCallback::ErrorType::kUnknown);
++    return;
++  }
++
++  const int frames = params_.frames_per_buffer();
++  const int channels = params_.channels();
++  const ULONG bytes = static_cast<ULONG>(frames) * channels * sizeof(int16_t);
++  const base::TimeDelta buffer_duration = params_.GetBufferDuration();
++
++  struct AHIRequest* req[2] = {unit.req, nullptr};
++  int16_t* buf[2] = {nullptr, nullptr};
++  bool pending[2] = {false, false};
++
++  // Second request is a copy of the opened one (carries io_Device/io_Unit);
++  // sample memory must be MEMF_PUBLIC for the driver.
++  req[1] = static_cast<struct AHIRequest*>(
++      AllocMem(sizeof(struct AHIRequest), MEMF_PUBLIC));
++  buf[0] = static_cast<int16_t*>(AllocMem(bytes, MEMF_PUBLIC | MEMF_CLEAR));
++  buf[1] = static_cast<int16_t*>(AllocMem(bytes, MEMF_PUBLIC | MEMF_CLEAR));
++  if (!req[1] || !buf[0] || !buf[1]) {
++    LOG(ERROR) << "[Chromium:AROS:AHI] out of memory for " << bytes
++               << " byte buffers";
++    if (req[1])
++      FreeMem(req[1], sizeof(struct AHIRequest));
++    for (int i = 0; i < 2; i++)
++      if (buf[i])
++        FreeMem(buf[i], bytes);
++    unit.Close();
++    callback_->OnError(AudioSourceCallback::ErrorType::kUnknown);
++    return;
++  }
++  memcpy(req[1], req[0], sizeof(struct AHIRequest));
++
++  VLOG(1) << "[Chromium:AROS:AHI] stream start " << params_.sample_rate()
++          << " Hz " << channels << " ch " << frames << " frames/buffer";
++
++  int cur = 0;
++  struct AHIRequest* link = nullptr;
++  while (!stop_requested_) {
++    // While |link| plays, fill the other buffer.  Everything queued ahead of
++    // this buffer is |link| itself, so the delay is one buffer.
++    const int got = callback_->OnMoreData(buffer_duration, base::TimeTicks::Now(),
++                                          AudioGlitchInfo(), bus_.get());
++    if (got < frames)
++      bus_->ZeroFramesPartial(std::max(got, 0), frames - std::max(got, 0));
++    bus_->ToInterleaved<SignedInt16SampleTypeTraits>(frames, buf[cur]);
++
++    struct AHIRequest* r = req[cur];
++    r->ahir_Std.io_Message.mn_Node.ln_Pri = 0;
++    r->ahir_Std.io_Command = CMD_WRITE;
++    r->ahir_Std.io_Data = buf[cur];
++    r->ahir_Std.io_Length = bytes;
++    r->ahir_Std.io_Offset = 0;
++    r->ahir_Frequency = params_.sample_rate();
++    r->ahir_Type = channels == 1 ? AHIST_M16S : AHIST_S16S;
++    r->ahir_Volume = static_cast<Fixed>(volume_.load() * kFixedOne);
++    r->ahir_Position = kCentered;
++    r->ahir_Link = link;
++    SendIO(reinterpret_cast<struct IORequest*>(r));
++    pending[cur] = true;
++
++    if (link) {
++      // Returns when |link| has finished, i.e. |r| has started.
++      const int prev = cur ^ 1;
++      if (WaitIO(reinterpret_cast<struct IORequest*>(link)) != 0) {
++        pending[prev] = false;
++        LOG(ERROR) << "[Chromium:AROS:AHI] CMD_WRITE failed io_Error="
++                   << static_cast<int>(link->ahir_Std.io_Error);
++        callback_->OnError(AudioSourceCallback::ErrorType::kUnknown);
++        break;
++      }
++      pending[prev] = false;
++    }
++    link = r;
++    cur ^= 1;
++  }
++
++  for (int i = 0; i < 2; i++) {
++    if (pending[i]) {
++      AbortIO(reinterpret_cast<struct IORequest*>(req[i]));
++      WaitIO(reinterpret_cast<struct IORequest*>(req[i]));
++    }
++  }
++  FreeMem(req[1], sizeof(struct AHIRequest));
++  FreeMem(buf[0], bytes);
++  FreeMem(buf[1], bytes);
++  unit.Close();
++  VLOG(1) << "[Chromium:AROS:AHI] stream stop";
++}
++
++}  // namespace media
+diff --git a/media/audio/aros/ahi_output_stream.h b/media/audio/aros/ahi_output_stream.h
+new file mode 100644
+index 0000000000..17d6daf585
+--- /dev/null
++++ b/media/audio/aros/ahi_output_stream.h
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MEDIA_AUDIO_AROS_AHI_OUTPUT_STREAM_H_
++#define MEDIA_AUDIO_AROS_AHI_OUTPUT_STREAM_H_
++
++#include <atomic>
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/threading/simple_thread.h"
++#include "media/audio/audio_io.h"
++#include "media/base/audio_parameters.h"
++
++namespace media {
++
++class AudioBus;
++class AudioManagerBase;
++
++// AudioOutputStream over ahi.device's device interface (CMD_WRITE, unit
++// AHI_DEFAULT_UNIT): the unit the user picked in Prefs/AHI, mixed by AHI
++// itself, so it works with every AHI driver - hdaudio.audio on real hardware,
++// alsa.audio on hosted.
++//
++// A dedicated render thread owns the message port and the two AHIRequests
++// (exec IO belongs to the task that created the port), fills one buffer from
++// the source while the other plays, and links the requests as AHI's
++// double-buffering contract requires (PlayTest.c in the AHI examples).
++// Stop() joins the thread, so no callback runs after it returns.
++class AhiOutputStream : public AudioOutputStream,
++                        public base::DelegateSimpleThread::Delegate {
++ public:
++  AhiOutputStream(const AudioParameters& params, AudioManagerBase* manager);
++  AhiOutputStream(const AhiOutputStream&) = delete;
++  AhiOutputStream& operator=(const AhiOutputStream&) = delete;
++  ~AhiOutputStream() override;
++
++  // Opens and closes AHI_DEFAULT_UNIT on the calling task; true when the unit
++  // is usable.  Cheap enough for AudioManager::HasAudioOutputDevices().
++  static bool ProbeDevice();
++
++  // AudioOutputStream:
++  bool Open() override;
++  void Start(AudioSourceCallback* callback) override;
++  void Stop() override;
++  void SetVolume(double volume) override;
++  void GetVolume(double* volume) override;
++  void Close() override;
++  void Flush() override;
++
++  // base::DelegateSimpleThread::Delegate:
++  void Run() override;
++
++ private:
++  const AudioParameters params_;
++  const raw_ptr<AudioManagerBase> manager_;
++  std::unique_ptr<AudioBus> bus_;
++  std::unique_ptr<base::DelegateSimpleThread> thread_;
++
++  // Set by Start(), read by the render thread only while it runs; Stop()
++  // joins the thread before clearing it.
++  raw_ptr<AudioSourceCallback> callback_ = nullptr;
++  std::atomic<bool> stop_requested_{false};
++  std::atomic<double> volume_{1.0};
++  bool opened_ = false;
++};
++
++}  // namespace media
++
++#endif  // MEDIA_AUDIO_AROS_AHI_OUTPUT_STREAM_H_
+diff --git a/media/audio/aros/audio_manager_aros.cc b/media/audio/aros/audio_manager_aros.cc
+index bca115419d..65ce9712fd 100644
+--- a/media/audio/aros/audio_manager_aros.cc
++++ b/media/audio/aros/audio_manager_aros.cc
+@@ -2,18 +2,141 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-#include "media/audio/audio_manager.h"
++#include "media/audio/aros/audio_manager_aros.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <utility>
+ 
++#include "base/logging.h"
++#include "media/audio/aros/ahi_output_stream.h"
++#include "media/audio/audio_device_description.h"
++#include "media/audio/fake_audio_input_stream.h"
+ #include "media/audio/fake_audio_manager.h"
++#include "media/base/audio_parameters.h"
++#include "media/base/limits.h"
+ 
+ namespace media {
+ 
++namespace {
++
++// AHI mixes to whatever the unit's mode runs at; 48 kHz stereo is what every
++// staged driver (hdaudio, alsa) defaults to and what WebAudio/Netflix ask for.
++constexpr int kDefaultSampleRate = 48000;
++
++// One AHI request is a whole buffer, so the buffer is the output latency:
++// 1024 frames = 21 ms at 48 kHz.  Below ~10 ms the double-buffer loop starts
++// missing its link deadline under AROS's 20 Hz-tick scheduler.
++constexpr int kMinFramesPerBuffer = 480;
++constexpr int kDefaultFramesPerBuffer = 1024;
++constexpr int kMaxFramesPerBuffer = 4096;
++
++}  // namespace
++
++AudioManagerAros::AudioManagerAros(std::unique_ptr<AudioThread> audio_thread,
++                                   AudioLogFactory* audio_log_factory)
++    : AudioManagerBase(std::move(audio_thread), audio_log_factory) {}
++
++AudioManagerAros::~AudioManagerAros() = default;
++
++bool AudioManagerAros::HasAudioOutputDevices() {
++  return AhiOutputStream::ProbeDevice();
++}
++
++bool AudioManagerAros::HasAudioInputDevices() {
++  return false;
++}
++
++void AudioManagerAros::GetAudioOutputDeviceNames(
++    AudioDeviceNames* device_names) {
++  DCHECK(device_names->empty());
++  if (HasAudioOutputDevices())
++    device_names->push_front(AudioDeviceName::CreateDefault());
++}
++
++AudioParameters AudioManagerAros::GetInputStreamParameters(
++    const std::string& device_id) {
++  return AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
++                         ChannelLayoutConfig::Stereo(), kDefaultSampleRate,
++                         kDefaultFramesPerBuffer);
++}
++
++const char* AudioManagerAros::GetName() {
++  return "AHI";
++}
++
++AudioOutputStream* AudioManagerAros::MakeLinearOutputStream(
++    const AudioParameters& params,
++    const LogCallback& log_callback) {
++  DCHECK_EQ(AudioParameters::AUDIO_PCM_LINEAR, params.format());
++  return new AhiOutputStream(params, this);
++}
++
++AudioOutputStream* AudioManagerAros::MakeLowLatencyOutputStream(
++    const AudioParameters& params,
++    const std::string& device_id,
++    const LogCallback& log_callback) {
++  DCHECK_EQ(AudioParameters::AUDIO_PCM_LOW_LATENCY, params.format());
++  if (!device_id.empty() &&
++      device_id != AudioDeviceDescription::kDefaultDeviceId) {
++    // AHI's unit selection lives in Prefs/AHI; only the default unit is
++    // exposed here.
++    LOG(ERROR) << "[Chromium:AROS:AHI] output device " << device_id
++               << " not available";
++    return nullptr;
++  }
++  return new AhiOutputStream(params, this);
++}
++
++AudioInputStream* AudioManagerAros::MakeLinearInputStream(
++    const AudioParameters& params,
++    const std::string& device_id,
++    const LogCallback& log_callback) {
++  return FakeAudioInputStream::MakeFakeStream(this, params);
++}
++
++AudioInputStream* AudioManagerAros::MakeLowLatencyInputStream(
++    const AudioParameters& params,
++    const std::string& device_id,
++    const LogCallback& log_callback) {
++  return FakeAudioInputStream::MakeFakeStream(this, params);
++}
++
++AudioParameters AudioManagerAros::GetPreferredOutputStreamParameters(
++    const std::string& output_device_id,
++    const AudioParameters& input_params) {
++  ChannelLayoutConfig channel_layout_config = ChannelLayoutConfig::Stereo();
++  int sample_rate = kDefaultSampleRate;
++  int buffer_size = kDefaultFramesPerBuffer;
++  if (input_params.IsValid()) {
++    // AhiOutputStream converts to interleaved S16 in the stream's own
++    // sample rate; AHI resamples to the unit's mode, so follow the source.
++    sample_rate = input_params.sample_rate();
++    if (input_params.channels() <= 2)
++      channel_layout_config = input_params.channel_layout_config();
++    buffer_size = std::clamp(input_params.frames_per_buffer(),
++                             kMinFramesPerBuffer, kMaxFramesPerBuffer);
++  }
++  return AudioParameters(
++      AudioParameters::AUDIO_PCM_LOW_LATENCY, channel_layout_config,
++      sample_rate, buffer_size,
++      AudioParameters::HardwareCapabilities(kMinFramesPerBuffer,
++                                            kMaxFramesPerBuffer));
++}
++
+ std::unique_ptr<AudioManager> CreateAudioManager(
+     std::unique_ptr<AudioThread> audio_thread,
+     AudioLogFactory* audio_log_factory) {
++  // Probe on the caller's task: the AHI unit the user configured may not open
++  // (no driver, unit 0 unset).  Then keep the fake manager, which paces
++  // media clocks without a device, rather than a manager whose every stream
++  // fails Open().
++  if (AhiOutputStream::ProbeDevice()) {
++    return std::make_unique<AudioManagerAros>(std::move(audio_thread),
++                                              audio_log_factory);
++  }
++  LOG(WARNING) << "[Chromium:AROS:AHI] ahi.device unit 0 unavailable, "
++                  "audio output disabled";
+   return std::make_unique<FakeAudioManager>(std::move(audio_thread),
+                                             audio_log_factory);
+ }
+diff --git a/media/audio/aros/audio_manager_aros.h b/media/audio/aros/audio_manager_aros.h
+new file mode 100644
+index 0000000000..fbc2ca47e6
+--- /dev/null
++++ b/media/audio/aros/audio_manager_aros.h
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MEDIA_AUDIO_AROS_AUDIO_MANAGER_AROS_H_
++#define MEDIA_AUDIO_AROS_AUDIO_MANAGER_AROS_H_
++
++#include <memory>
++#include <string>
++
++#include "media/audio/audio_manager_base.h"
++
++namespace media {
++
++// Output through ahi.device (AhiOutputStream); no capture devices yet, input
++// streams are the fake ones so getUserMedia() fails cleanly instead of
++// crashing.  CreateAudioManager() only picks this manager when AHI's default
++// unit opens; otherwise it stays on FakeAudioManager.
++class MEDIA_EXPORT AudioManagerAros : public AudioManagerBase {
++ public:
++  AudioManagerAros(std::unique_ptr<AudioThread> audio_thread,
++                   AudioLogFactory* audio_log_factory);
++  AudioManagerAros(const AudioManagerAros&) = delete;
++  AudioManagerAros& operator=(const AudioManagerAros&) = delete;
++  ~AudioManagerAros() override;
++
++  // AudioManager:
++  bool HasAudioOutputDevices() override;
++  bool HasAudioInputDevices() override;
++  void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
++  AudioParameters GetInputStreamParameters(
++      const std::string& device_id) override;
++  const char* GetName() override;
++
++  // AudioManagerBase:
++  AudioOutputStream* MakeLinearOutputStream(
++      const AudioParameters& params,
++      const LogCallback& log_callback) override;
++  AudioOutputStream* MakeLowLatencyOutputStream(
++      const AudioParameters& params,
++      const std::string& device_id,
++      const LogCallback& log_callback) override;
++  AudioInputStream* MakeLinearInputStream(
++      const AudioParameters& params,
++      const std::string& device_id,
++      const LogCallback& log_callback) override;
++  AudioInputStream* MakeLowLatencyInputStream(
++      const AudioParameters& params,
++      const std::string& device_id,
++      const LogCallback& log_callback) override;
++
++ protected:
++  AudioParameters GetPreferredOutputStreamParameters(
++      const std::string& output_device_id,
++      const AudioParameters& input_params) override;
++};
++
++}  // namespace media
++
++#endif  // MEDIA_AUDIO_AROS_AUDIO_MANAGER_AROS_H_

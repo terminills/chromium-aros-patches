@@ -1,0 +1,62 @@
+From 921060e60fc47b92d896cbf289cce0fcac32654f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 23 Jul 2026 23:45:59 -0500
+Subject: [PATCH 19/28] AROS: bind V8 stack bounds to the current Exec task
+
+Hosted AROS can run distinct Exec tasks through a host TLS context, so compiler-emulated thread_local storage is not a reliable task identity. Query the current task's stack bounds on every AROS request instead of reusing a cached bound from another task.
+
+AI_PHASE: chromium-v8-library-consumer
+
+AI_STATUS: runtime-stack-tls-correction
+
+AI_ASSUMPTION: host emutls contexts and AROS Exec task identities are not one-to-one
+
+AI_VALIDATION: shared-v8 Chromium reached Blink preload-scanner startup; V8 DCHECK proved cached and current stack starts differed and trapped through v8.library Stack::GetStackStart
+
+AI_LIMITATIONS: correction committed before monolith, library, and Chromium runtime revalidation
+
+AI_DECISION_CHAIN:
+---
+ src/base/platform/platform.cc | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/base/platform/platform.cc b/src/base/platform/platform.cc
+index 328e9d8..7ac9917 100644
+--- a/src/base/platform/platform.cc
++++ b/src/base/platform/platform.cc
+@@ -10,22 +10,35 @@ namespace base {
+ namespace {
+ 
+ // A pointer to current thread's stack beginning.
++#if !V8_OS_AROS
+ thread_local void* thread_stack_start = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+ // static
+ Stack::StackSlot Stack::GetStackStartUnchecked() {
++#if V8_OS_AROS
++  // Hosted AROS Exec tasks are not in one-to-one correspondence with host
++  // pthread TLS contexts. Caching this value in compiler-emulated TLS can
++  // therefore return a different Exec task's stack bounds. The AROS
++  // pthread_getattr_np interposer reads the current task directly, so query it
++  // for every request.
++  return ObtainCurrentThreadStackStart();
++#else
+   if (!thread_stack_start) {
+     thread_stack_start = ObtainCurrentThreadStackStart();
+   }
+   return thread_stack_start;
++#endif
+ }
+ 
+ // static
+ Stack::StackSlot Stack::GetStackStart() {
++#if !V8_OS_AROS
+   DCHECK_IMPLIES(thread_stack_start,
+                  thread_stack_start == ObtainCurrentThreadStackStart());
++#endif
+   return GetStackStartUnchecked();
+ }
+ 

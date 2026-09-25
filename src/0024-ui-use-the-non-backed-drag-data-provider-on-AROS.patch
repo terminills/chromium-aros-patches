@@ -1,0 +1,69 @@
+From f7b298292e7bac0fc1c7ff87a9ca9888ecdbd91b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 16:33:48 -0500
+Subject: [PATCH 024/638] ui: use the non-backed drag data provider on AROS
+
+AI_PHASE: Phase 3 - single-process headless shell
+
+AI_STATUS: AROS ui/base now provides valid in-memory OSExchangeData semantics without claiming native drag-and-drop integration.
+
+ROOT_CAUSE: OSExchangeDataProviderFactory rejected every OS except Linux/ChromeOS, Fuchsia, Apple, and Windows, while ui/base omitted the portable non-backed provider from AROS sources.
+
+FIX_REASON: Reuse Chromium's maintained Aura fallback for intra-Chromium string, URL, file metadata, HTML, pickle, and drag-image exchange. Keep native Intuition drag-and-drop as a later Ozone feature.
+
+SCOPE: ui/base/BUILD.gn and ui/base/dragdrop/os_exchange_data_provider_factory.cc
+
+VALIDATION: ninja compiled os_exchange_data_provider_factory.o and os_exchange_data_provider_non_backed.o in out/aros-headless.
+
+RISK: Drag data cannot leave Chromium or interoperate with Workbench applications until the AROS Ozone platform supplies a native provider.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/base/BUILD.gn                                      |  4 ++--
+ ui/base/dragdrop/os_exchange_data_provider_factory.cc | 10 +++++++---
+ 2 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/ui/base/BUILD.gn b/ui/base/BUILD.gn
+index 3452178f0d..3eb522cfca 100644
+--- a/ui/base/BUILD.gn
++++ b/ui/base/BUILD.gn
+@@ -598,8 +598,8 @@ component("base") {
+     ]
+   }
+ 
+-  if (is_chromeos_ash || (use_aura && (is_linux || is_chromeos_lacros)) ||
+-      is_fuchsia) {
++  if (is_aros || is_chromeos_ash ||
++      (use_aura && (is_linux || is_chromeos_lacros)) || is_fuchsia) {
+     sources += [
+       "dragdrop/os_exchange_data_provider_non_backed.cc",
+       "dragdrop/os_exchange_data_provider_non_backed.h",
+diff --git a/ui/base/dragdrop/os_exchange_data_provider_factory.cc b/ui/base/dragdrop/os_exchange_data_provider_factory.cc
+index 5f6587bd85..a26bf0b2b5 100644
+--- a/ui/base/dragdrop/os_exchange_data_provider_factory.cc
++++ b/ui/base/dragdrop/os_exchange_data_provider_factory.cc
+@@ -7,8 +7,12 @@
+ #include "base/notreached.h"
+ #include "build/build_config.h"
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include "ui/base/dragdrop/os_exchange_data_provider_factory_ozone.h"
++#endif
++
++#if BUILDFLAG(IS_AROS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
++    BUILDFLAG(IS_FUCHSIA)
+ #include "ui/base/dragdrop/os_exchange_data_provider_non_backed.h"
+ #elif BUILDFLAG(IS_APPLE)
+ #include "ui/base/dragdrop/os_exchange_data_provider_builder_mac.h"
+@@ -35,8 +39,8 @@ OSExchangeDataProviderFactory::CreateProvider() {
+   return BuildOSExchangeDataProviderMac();
+ #elif BUILDFLAG(IS_WIN)
+   return std::make_unique<OSExchangeDataProviderWin>();
+-#elif BUILDFLAG(IS_FUCHSIA)
+-  // TODO(crbug.com/980371): Implement OSExchangeDataProvider for Fuchsia.
++#elif BUILDFLAG(IS_AROS) || BUILDFLAG(IS_FUCHSIA)
++  // These platforms do not have native drag-and-drop integration yet.
+   return std::make_unique<OSExchangeDataProviderNonBacked>();
+ #else
+ #error "Unknown operating system"

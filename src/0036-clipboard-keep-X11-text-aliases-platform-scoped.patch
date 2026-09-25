@@ -1,0 +1,85 @@
+From 0ab56a44923d515705911f18f2df6680855b4c02 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 10 Jul 2026 18:48:24 -0500
+Subject: [PATCH 036/638] clipboard: keep X11 text aliases platform-scoped
+
+AI_PHASE: chromium-headless-phase-3
+
+AI_STATUS: complete
+
+ROOT_CAUSE: ClipboardOzone referenced X11 TEXT, STRING, and UTF8_STRING aliases unconditionally even though their constants exist only on Linux, ChromeOS, and Fuchsia.
+
+FIX_REASON: Recognize and advertise the legacy aliases only on their owning platforms; other Ozone backends, including AROS, use standard text/plain MIME forms.
+
+SCOPE: ui/base/clipboard/clipboard_ozone.cc
+
+VALIDATION: ninja -C out/aros-headless -j4 obj/ui/base/clipboard/clipboard/clipboard_ozone.o
+
+RISK: low; existing alias-capable platforms retain the same MIME set and AROS gains the portable subset.
+
+AI_DECISION_CHAIN: ACD-chromium-native-port-roadmap
+---
+ ui/base/clipboard/clipboard_ozone.cc | 29 +++++++++++++++++++++-------
+ 1 file changed, 22 insertions(+), 7 deletions(-)
+
+diff --git a/ui/base/clipboard/clipboard_ozone.cc b/ui/base/clipboard/clipboard_ozone.cc
+index 55cc746ea2..87d0975625 100644
+--- a/ui/base/clipboard/clipboard_ozone.cc
++++ b/ui/base/clipboard/clipboard_ozone.cc
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <limits>
+ #include <optional>
++#include <set>
+ #include <utility>
+ #include <vector>
+ 
+@@ -66,6 +67,20 @@ bool IsReadAllowed(std::optional<DataTransferEndpoint> data_src,
+   return is_allowed;
+ }
+ 
++bool IsPlainTextMimeType(base::StringPiece mime_type) {
++  if (mime_type == ClipboardFormatType::PlainTextType().GetName() ||
++      mime_type == kMimeTypeTextUtf8) {
++    return true;
++  }
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++  return mime_type == kMimeTypeLinuxText ||
++         mime_type == kMimeTypeLinuxString ||
++         mime_type == kMimeTypeLinuxUtf8String;
++#else
++  return false;
++#endif
++}
++
+ // Depending on the backend, the platform clipboard may or may not be
+ // available.  Should it be absent, we provide a dummy one.  It always calls
+ // back immediately with empty data. It starts without ownership of any buffers
+@@ -430,10 +445,7 @@ std::vector<std::u16string> ClipboardOzone::GetStandardFormats(
+     }
+     // `WriteText` uses the following mime types for text, so if those types are
+     // available, we add kMimeTypeText to the list.
+-    if ((mime_type == ClipboardFormatType::PlainTextType().GetName() ||
+-         mime_type == kMimeTypeLinuxText || mime_type == kMimeTypeLinuxString ||
+-         mime_type == kMimeTypeTextUtf8 ||
+-         mime_type == kMimeTypeLinuxUtf8String) &&
++    if (IsPlainTextMimeType(mime_type) &&
+         !base::Contains(types, base::UTF8ToUTF16(kMimeTypeText))) {
+       types.push_back(base::UTF8ToUTF16(kMimeTypeText));
+       continue;
+@@ -695,9 +707,12 @@ void ClipboardOzone::WritePortableAndPlatformRepresentations(
+ 
+ void ClipboardOzone::WriteText(base::StringPiece text) {
+   std::vector<uint8_t> data(text.begin(), text.end());
+-  async_clipboard_ozone_->InsertData(
+-      std::move(data), {kMimeTypeText, kMimeTypeLinuxText, kMimeTypeLinuxString,
+-                        kMimeTypeTextUtf8, kMimeTypeLinuxUtf8String});
++  std::set<std::string> mime_types = {kMimeTypeText, kMimeTypeTextUtf8};
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
++  mime_types.insert(
++      {kMimeTypeLinuxText, kMimeTypeLinuxString, kMimeTypeLinuxUtf8String});
++#endif
++  async_clipboard_ozone_->InsertData(std::move(data), mime_types);
+ }
+ 
+ void ClipboardOzone::WriteHTML(

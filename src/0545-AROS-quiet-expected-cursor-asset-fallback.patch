@@ -1,0 +1,34 @@
+From 9d12c411cf6411c4b411eb1458884e00bba59653 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 8 Aug 2026 09:32:49 -0500
+Subject: [PATCH 545/638] AROS: quiet expected cursor asset fallback
+
+The AROS cursor factory intentionally returns null for standard shapes without direct Intuition equivalents so CursorLoader falls back to Chromium bitmap assets, which ArosWindow then installs with the native SetPointer path. Demote that expected AROS fallback from warning to VLOG while preserving the warning for other platforms.\n\nEvidence:\n- build163: autoninja -C out/aros-chrome chrome -j32\n- chrome sha256: ae7f189553efb392f6e66a003d79a1e361712c87d4c2aa9f3b26354c0c92a75b\n- run88: YouTube replay with media vmodule selected VP9/Opus, reached PIPELINE_OK/kPlaying, MarkEndOfStream(PIPELINE_OK), and clean suspend\n- run88 scan: no critical Chromium markers and no cursor fallback warning\n- remaining warning: AROS Exec NewAddTask unaligned stack pointer
+---
+ ui/wm/core/cursor_loader.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ui/wm/core/cursor_loader.cc b/ui/wm/core/cursor_loader.cc
+index e8bfbc90c7..61c0898028 100644
+--- a/ui/wm/core/cursor_loader.cc
++++ b/ui/wm/core/cursor_loader.cc
+@@ -11,6 +11,7 @@
+ #include "base/check.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "third_party/skia/include/core/SkBitmap.h"
+ #include "ui/base/cursor/cursor.h"
+ #include "ui/base/cursor/cursor_factory.h"
+@@ -130,7 +131,11 @@ scoped_refptr<ui::PlatformCursor> CursorLoader::CursorFromType(
+     // The cursor may fail to load if the cursor theme has just been reset.
+     // We will be notified when the theme is loaded, but at this time we have to
+     // fall back to the assets.
++#if BUILDFLAG(IS_AROS)
++    VLOG(1) << "Falling back to bitmap cursor asset for type " << type;
++#else
+     LOG(WARNING) << "Failed to load a platform cursor of type " << type;
++#endif
+   }
+ 
+   // Loads the default Aura cursor bitmap for the cursor type. Falls back on
