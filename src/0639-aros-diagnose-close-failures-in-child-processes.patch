@@ -1,0 +1,121 @@
+From 3da22ad2ec44439679b274be9f9937a223b929a6 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 05:58:05 -0500
+Subject: [PATCH 639/689] aros: diagnose close() failures in child processes
+
+Log the descriptor, errno and thread when close() fails, and treat a close
+error other than EBADF as success, as Linux, macOS and Fuchsia already do.
+With CHROMIUM_CLOSE_TRACE set, every close() in the chrome executable is
+traced (linked with --wrap=close) to find a descriptor closed twice.
+---
+ base/files/scoped_file.cc | 53 ++++++++++++++++++++++++++++++++++++++-
+ chrome/BUILD.gn           | 12 +++++++++
+ 2 files changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/base/files/scoped_file.cc b/base/files/scoped_file.cc
+index 7ff0c17b90..693401484b 100644
+--- a/base/files/scoped_file.cc
++++ b/base/files/scoped_file.cc
+@@ -4,9 +4,18 @@
+ 
+ #include "base/files/scoped_file.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
+ #include "base/check.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/threading/platform_thread.h"
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ #include <errno.h>
+ #include <unistd.h>
+@@ -30,8 +39,24 @@ void ScopedFDCloseTraits::Free(int fd) {
+   // a single open directory would bypass the entire security model.
+   int ret = IGNORE_EINTR(close(fd));
+ 
++#if BUILDFLAG(IS_AROS)
++  if (ret != 0) {
++    // Say which descriptor, which error and which thread before deciding: a
++    // close() failure in a child process is otherwise only visible as a bare
++    // PCHECK in a crash report, with the message lost on a NIL: stderr.
++    const int saved_errno = errno;
++    char line[160];
++    snprintf(line, sizeof(line),
++             "[Chromium:AROS:Close] close(%d) failed errno=%d (%s) thread=%s\n",
++             fd, saved_errno, strerror(saved_errno),
++             base::PlatformThread::GetName());
++    ArosKPutStr(line);
++    errno = saved_errno;
++  }
++#endif
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_APPLE) || \
+-    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+   // NB: Some file descriptors can return errors from close() e.g. network
+   // filesystems such as NFS and Linux input devices. On Linux, macOS, and
+   // Fuchsia's POSIX layer, errors from close other than EBADF do not indicate
+@@ -46,4 +71,30 @@ void ScopedFDCloseTraits::Free(int fd) {
+ #endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+ 
+ }  // namespace internal
++
++#if BUILDFLAG(IS_AROS)
++// Diagnostic: every close() the chrome executable makes goes through here
++// (linked with -Wl,--wrap=close). With CHROMIUM_CLOSE_TRACE set in the
++// environment, each close of a descriptor above stderr is written to serial
++// with its result, thread and caller, to find who closes a descriptor twice.
++extern "C" int __real_close(int fd);
++extern "C" int __wrap_close(int fd) {
++  static int trace = -1;
++  if (trace < 0)
++    trace = getenv("CHROMIUM_CLOSE_TRACE") != nullptr ? 1 : 0;
++  const int ret = __real_close(fd);
++  if (trace && fd > 2) {
++    const int saved_errno = errno;
++    char line[200];
++    snprintf(line, sizeof(line),
++             "[Chromium:AROS:CloseTrace] close(%d)=%d errno=%d thread=%s "
++             "caller=%p\n",
++             fd, ret, ret == 0 ? 0 : saved_errno,
++             base::PlatformThread::GetName(), __builtin_return_address(0));
++    ArosKPutStr(line);
++    errno = saved_errno;
++  }
++  return ret;
++}
++#endif
+ }  // namespace base
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 0924498f2e..6e6e1bee3b 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -266,6 +266,9 @@ if (!is_android && !is_mac) {
+       } else if (use_aura) {
+         # Non-Windows aura entrypoint.
+         sources += [ "app/chrome_exe_main_aura.cc" ]
++        if (is_aros) {
++          configs += [ ":aros_close_trace" ]
++        }
+       }
+ 
+       if (is_linux || is_chromeos || is_aros) {
+@@ -1915,3 +1918,12 @@ if (is_chromeos_lacros && is_official_build) {
+     }
+   }
+ }
++
++if (is_aros) {
++  # Diagnostic: route every close() in the chrome executable through
++  # __wrap_close (base/files/scoped_file.cc), which logs when
++  # CHROMIUM_CLOSE_TRACE is set.
++  config("aros_close_trace") {
++    ldflags = [ "-Wl,--wrap=close" ]
++  }
++}

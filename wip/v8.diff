@@ -57,7 +57,7 @@ index 3926748..a3ea20b 100644
  
  PersistentRegionLock::PersistentRegionLock() {
 diff --git a/src/init/v8.cc b/src/init/v8.cc
-index 0afca32..ca6e2d0 100644
+index 402ff83..6d3212c 100644
 --- a/src/init/v8.cc
 +++ b/src/init/v8.cc
 @@ -39,7 +39,7 @@
@@ -66,19 +66,19 @@ index 0afca32..ca6e2d0 100644
  
 -#if defined(__AROS__)
 +#if defined(V8_AROS_RESIDENT_PLATFORM)
- extern "C" void __aros_v8_set_current_platform(v8::Platform* platform);
+ extern "C" void __aros_v8_install_platform(v8::Platform* platform);
  extern "C" v8::Platform* __aros_v8_get_current_platform();
- #endif
-@@ -102,7 +102,7 @@ V8_DECLARE_ONCE(init_snapshot_once);
+ extern "C" v8::Platform* __aros_v8_forget_platform(v8::Platform* platform);
+@@ -103,7 +103,7 @@ V8_DECLARE_ONCE(init_snapshot_once);
  
  // static
  void V8::InitializePlatform(v8::Platform* platform) {
 -#if defined(__AROS__)
 +#if defined(V8_AROS_RESIDENT_PLATFORM)
    CHECK_NOT_NULL(platform);
-   __aros_v8_set_current_platform(platform);
+   __aros_v8_install_platform(platform);
  
-@@ -124,7 +124,7 @@ void V8::InitializePlatform(v8::Platform* platform) {
+@@ -132,7 +132,7 @@ void V8::InitializePlatform(v8::Platform* platform) {
    AdvanceStartupState(V8StartupState::kPlatformInitializing);
  #endif
    CHECK(!platform_);
@@ -87,7 +87,7 @@ index 0afca32..ca6e2d0 100644
    CHECK_NOT_NULL(platform);
  #endif
    platform_ = platform;
-@@ -163,7 +163,7 @@ void V8::InitializePlatformForTesting(v8::Platform* platform) {
+@@ -171,7 +171,7 @@ void V8::InitializePlatformForTesting(v8::Platform* platform) {
    }
  
  void V8::Initialize() {
@@ -96,8 +96,17 @@ index 0afca32..ca6e2d0 100644
    if (v8_startup_state_.load(std::memory_order_acquire) ==
        V8StartupState::kV8Initialized) {
      return;
-@@ -382,7 +382,7 @@ void V8::DisposePlatform() {
+@@ -389,7 +389,7 @@ void V8::DisposePlatform() {
+   AdvanceStartupState(V8StartupState::kPlatformDisposed);
  }
+ 
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+ void V8::UninstallPlatform(v8::Platform* platform) {
+   v8::Platform* next = __aros_v8_forget_platform(platform);
+   if (reinterpret_cast<v8::Platform*>(base::Relaxed_Load(
+@@ -401,7 +401,7 @@ void V8::UninstallPlatform(v8::Platform* platform) {
+ #endif
  
  v8::Platform* V8::GetCurrentPlatform() {
 -#if defined(__AROS__)
@@ -105,3 +114,12 @@ index 0afca32..ca6e2d0 100644
    if (v8::Platform* platform = __aros_v8_get_current_platform()) {
      return platform;
    }
+@@ -440,7 +440,7 @@ void ThreadIsolatedAllocator::SetDefaultPermissionsForSignalHandler() {
+ 
+ }  // namespace v8
+ 
+-#if defined(__AROS__)
++#if defined(V8_AROS_RESIDENT_PLATFORM)
+ extern "C" void __aros_v8_uninstall_platform(v8::Platform* platform) {
+   v8::internal::V8::UninstallPlatform(platform);
+ }

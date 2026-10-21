@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
-# apply.sh <chromium-src>
-#
-# Apply the AROS patch queue to a Chromium checkout. Each directory here is a
-# repository inside <chromium-src> ("src" is the checkout itself); PINS gives
-# the upstream commit each queue applies to. For every repository this checks
-# out that commit on a branch named aros, then applies the queue in `series`
-# order with `git am`, so the result carries the original authorship and
-# messages. Stops at the first patch that does not apply.
+# Apply committed queues in a dedicated, prepared Chromium checkout.
 set -euo pipefail
 SRC=$(cd "${1:?usage: apply.sh <chromium-src>}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Complete preflight before creating any branch. Never reset an existing aros.
 while IFS=$'\t' read -r path url base; do
   repo=$SRC; [ "$path" = src ] || repo=$SRC/$path
-  [ -d "$repo/.git" ] || [ -f "$repo/.git" ] || { echo "missing repository: $repo" >&2; exit 2; }
+  [ -e "$repo/.git" ] || { echo "missing repository: $repo" >&2; exit 2; }
+  git -C "$repo" diff --quiet --ignore-submodules=all &&
+    git -C "$repo" diff --cached --quiet --ignore-submodules=all || {
+      echo "$path: tracked edits; use a clean dedicated checkout" >&2; exit 2;
+    }
+  if git -C "$repo" show-ref --verify --quiet refs/heads/aros; then
+    echo "$path: branch aros already exists; refusing to reset it" >&2; exit 2
+  fi
+  for state in rebase-apply rebase-merge MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    state_path=$(git -C "$repo" rev-parse --git-path "$state")
+    [[ "$state_path" = /* ]] || state_path="$repo/$state_path"
+    [ ! -e "$state_path" ] || { echo "$path: unfinished Git operation" >&2; exit 2; }
+  done
+  while IFS= read -r patch; do
+    [ -f "$HERE/$path/$patch" ] || { echo "$path: missing $patch" >&2; exit 2; }
+  done < "$HERE/$path/series"
+done < "$HERE/PINS"
+while IFS=$'\t' read -r path url base; do
+  repo=$SRC; [ "$path" = src ] || repo=$SRC/$path
   git -C "$repo" cat-file -e "$base^{commit}" 2>/dev/null \
     || git -C "$repo" fetch -q "$url" "$base" \
     || { echo "$path: cannot fetch pinned base $base" >&2; exit 2; }
-  git -C "$repo" checkout -q -B aros "$base"
+  git -C "$repo" checkout -q -b aros "$base"
   n=0
-  while read -r p; do
-    git -C "$repo" am -q --keep-cr "$HERE/$path/$p"; n=$((n + 1))
+  while IFS= read -r patch; do
+    git -C "$repo" am -q --keep-cr "$HERE/$path/$patch"
+    n=$((n + 1))
   done < "$HERE/$path/series"
   echo "$path: $n patches on $base"
 done < "$HERE/PINS"

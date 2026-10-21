@@ -1,0 +1,140 @@
+From 1d3cb57de946a411b6c0cb2587aa4c68cb68c580 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 17:18:10 -0500
+Subject: [PATCH 656/689] aros: place video decode threads off the media core
+ by default
+
+Placing the decoder threads round-robin on CPUs 1..N-1 took 1080p
+high-bitrate VP9 from 23.8 fps / 151 dropped to 29.8-29.9 fps / 0-5
+dropped on 4 and 8 CPUs, single- and multi-process, with no startup cost
+(unlike pinning every thread). Make it the default;
+--aros-no-pin-codec-threads turns it off.
+
+Claude-Session: https://claude.ai/code/session_01QHhVavHvnUWcvCukPGJBkG
+---
+ base/base_switches.cc                           | 13 +++++++------
+ base/base_switches.h                            |  2 +-
+ base/threading/aros_codec_thread_placement.h    |  6 +++---
+ base/threading/platform_thread_aros.cc          |  8 ++++----
+ base/threading/platform_thread_internal_posix.h |  4 ++--
+ chrome/app/aros_codec_threads.cc                |  2 +-
+ media/filters/vpx_video_decoder.cc              |  4 ++--
+ 7 files changed, 20 insertions(+), 19 deletions(-)
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index 446851155f..705db28632 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -232,12 +232,13 @@ const char kArosCpuLimit[] = "aros-cpu-limit";
+ // switch pins over every CPU but 0, as before.
+ const char kArosPinWorkers[] = "aros-pin-workers";
+ 
+-// Place threads that Chromium does not create itself - the ones libvpx,
+-// dav1d and ffmpeg start for multi-threaded video decode - round-robin on
+-// CPUs 1..N-1. AROS gives a new task its creator's CPU and never migrates it,
+-// so without this every decoder thread shares the media thread's core.
+-// OFF BY DEFAULT, so one binary is both configurations.
+-const char kArosPinCodecThreads[] = "aros-pin-codec-threads";
++// Video decode threads - Chromium's own CodecWorker threads for libvpx and
++// libaom, and the ones dav1d and ffmpeg start themselves - are placed
++// round-robin on CPUs 1..N-1. AROS gives a new task its creator's CPU and
++// never migrates it, so otherwise every decoder thread shares the media
++// thread's core. ON BY DEFAULT (1080p VP9: 29.8 fps / 5 dropped placed,
++// 23.8 fps / 151 dropped unplaced, 4 and 8 CPUs); this switch turns it off.
++const char kArosNoPinCodecThreads[] = "aros-no-pin-codec-threads";
+ 
+ // Let the thread pool choose WHICH worker to wake by the load on that worker's
+ // core, instead of taking whichever idle worker is at the front of the set.
+diff --git a/base/base_switches.h b/base/base_switches.h
+index 0e5a4fa151..19c894c4a1 100644
+--- a/base/base_switches.h
++++ b/base/base_switches.h
+@@ -68,7 +68,7 @@ extern const char kSchedulerBoostUrgent[];
+ #if BUILDFLAG(IS_AROS)
+ extern const char kArosCpuLimit[];
+ extern const char kArosPinWorkers[];
+-extern const char kArosPinCodecThreads[];
++extern const char kArosNoPinCodecThreads[];
+ extern const char kArosNativeThreadPool[];
+ extern const char kArosMultiProcess[];
+ #endif
+diff --git a/base/threading/aros_codec_thread_placement.h b/base/threading/aros_codec_thread_placement.h
+index 6217e397ed..2d2f546b43 100644
+--- a/base/threading/aros_codec_thread_placement.h
++++ b/base/threading/aros_codec_thread_placement.h
+@@ -15,9 +15,9 @@ namespace base {
+ // AROS gives a new task its creator's CPU and never migrates it, so the
+ // worker threads a video decoder starts from the media thread all share that
+ // one core. While an instance is alive, every PlatformThread the calling
+-// thread starts is placed round-robin on CPUs 1..N-1 when
+-// --aros-pin-codec-threads is given (the same placement as the threads codec
+-// libraries create with pthread_create directly).
++// thread starts is placed round-robin on CPUs 1..N-1, unless
++// --aros-no-pin-codec-threads is given (the same placement as the threads
++// codec libraries create with pthread_create directly).
+ class BASE_EXPORT ScopedArosCodecThreadPlacement {
+  public:
+   ScopedArosCodecThreadPlacement();
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 0fbf4f2baa..de9bb98d20 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -119,11 +119,11 @@ int PinCodecThreadsEnabled() {
+   if (known != -2)
+     return known;
+   if (!base::CommandLine::InitializedForCurrentProcess())
+-    return -1;
++    return 1;  // On by default; ask again once the switches are known.
+   known = base::CommandLine::ForCurrentProcess()->HasSwitch(
+-              switches::kArosPinCodecThreads)
+-              ? 1
+-              : -1;
++              switches::kArosNoPinCodecThreads)
++              ? -1
++              : 1;
+   state.store(known, std::memory_order_relaxed);
+   return known;
+ }
+diff --git a/base/threading/platform_thread_internal_posix.h b/base/threading/platform_thread_internal_posix.h
+index acb27bc735..a5aec9034f 100644
+--- a/base/threading/platform_thread_internal_posix.h
++++ b/base/threading/platform_thread_internal_posix.h
+@@ -26,8 +26,8 @@ namespace internal {
+ void MaybePinThreadRoundRobin(pthread_attr_t* attributes);
+ 
+ // Threads created outside PlatformThread (codec libraries calling
+-// pthread_create directly): place on the next CPU when
+-// --aros-pin-codec-threads is given. The chrome executable routes every
++// pthread_create directly): place on the next CPU unless
++// --aros-no-pin-codec-threads is given. The chrome executable routes every
+ // pthread_create through a wrapper that calls this unless the thread is one
+ // of PlatformThread's own (see ArosCreatingPlatformThread()). PlatformThread
+ // calls it too for threads started under a ScopedArosCodecThreadPlacement.
+diff --git a/chrome/app/aros_codec_threads.cc b/chrome/app/aros_codec_threads.cc
+index a02be358a1..69c0211852 100644
+--- a/chrome/app/aros_codec_threads.cc
++++ b/chrome/app/aros_codec_threads.cc
+@@ -6,7 +6,7 @@
+ // with -Wl,--wrap=pthread_create). PlatformThread's own threads pass straight
+ // through - they are placed by MaybePinThreadRoundRobin. Any other thread is
+ // one a third-party library started itself (video decoders above all) and is
+-// placed by MaybePinForeignThread when --aros-pin-codec-threads is given.
++// placed by MaybePinForeignThread unless --aros-no-pin-codec-threads is given.
+ 
+ #include <pthread.h>
+ #include <stdio.h>
+diff --git a/media/filters/vpx_video_decoder.cc b/media/filters/vpx_video_decoder.cc
+index 4effd8b8db..19830a1b40 100644
+--- a/media/filters/vpx_video_decoder.cc
++++ b/media/filters/vpx_video_decoder.cc
+@@ -287,8 +287,8 @@ bool VpxVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config) {
+     }
+ #if BUILDFLAG(IS_AROS)
+     // Row-based multithreading: parallel decode within a tile, so a stream
+-    // with one tile column still uses the decoder threads. Experiment - off
+-    // upstream; measured with and without --aros-pin-codec-threads.
++    // with one tile column still uses the decoder threads. Off upstream; on
++    // AROS it runs with the decoder threads placed off the media core.
+     if (GetVpxVideoDecoderThreadCount(config) > 1 &&
+         vpx_codec_control(vpx_codec_.get(), VP9D_SET_ROW_MT, 1) ==
+             VPX_CODEC_OK) {

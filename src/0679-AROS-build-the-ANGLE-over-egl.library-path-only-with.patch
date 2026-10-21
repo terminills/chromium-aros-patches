@@ -1,0 +1,91 @@
+From f8087c29bb31d975207bd120c59d4122d06738f0 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 23:42:42 -0500
+Subject: [PATCH 679/689] AROS: build the ANGLE-over-egl.library path only with
+ ANGLE's GL backend
+
+gl_ozone_egl_aros.cc called ANGLEArosSetNativeEGLResolver unconditionally,
+so a configuration with angle_enable_gl=false (the CEF build) could not
+link. Key the ANGLE path off angle_enable_gl and report clearly when ANGLE
+is requested from a build without its GL backend.
+---
+ ui/ozone/platform/aros/BUILD.gn             |  5 +++++
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc | 10 ++++++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+index ea3f461aaf..5bc9130cc9 100644
+--- a/ui/ozone/platform/aros/BUILD.gn
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//third_party/angle/gni/angle.gni")
++
+ # //cef resolves CefWindowInfo::window through aros_native_window.h.
+ visibility = [
+   "//cef/*",
+@@ -30,6 +32,9 @@ source_set("aros") {
+   ]
+ 
+   defines = [ "OZONE_IMPLEMENTATION" ]
++  if (angle_enable_gl) {
++    defines += [ "AROS_OZONE_ANGLE_GL" ]
++  }
+ 
+   deps = [
+     "//base",
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index ec1077c507..33b339d49b 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -21,6 +21,7 @@
+ #include "ui/ozone/platform/aros/aros_egl_library.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
++#if defined(AROS_OZONE_ANGLE_GL)
+ // ANGLE (statically linked) takes the native egl.library entry points from
+ // the resolver installed here, and exposes its own through EGL_GetProcAddress.
+ // The ANGLE-prefixed name, because the plain egl* names also exist in the
+@@ -28,10 +29,12 @@
+ extern "C" void ANGLEArosSetNativeEGLResolver(void* (*resolver)(const char*));
+ extern "C" __eglMustCastToProperFunctionPointerType EGLAPIENTRY
+ EGL_GetProcAddress(const char* procname);
++#endif
+ 
+ namespace ui {
+ namespace {
+ 
++#if defined(AROS_OZONE_ANGLE_GL)
+ void* ArosNativeEGLResolverForANGLE(const char* name) {
+   return reinterpret_cast<void*>(GetArosEGLProcAddress(name));
+ }
+@@ -40,6 +43,7 @@ gl::GLFunctionPointerType GL_BINDING_CALL
+ ArosANGLEGetProcAddress(const char* name) {
+   return reinterpret_cast<gl::GLFunctionPointerType>(EGL_GetProcAddress(name));
+ }
++#endif
+ 
+ constexpr char kArosMissingWindowGLSurface[] = "aros-missing-window-gl-surface";
+ constexpr char kArosMissingWindowGLSurfacePbuffer[] = "pbuffer";
+@@ -132,6 +136,7 @@ gl::EGLDisplayPlatform GLOzoneEGLAros::GetNativeDisplay() {
+ bool GLOzoneEGLAros::LoadGLES2Bindings(
+     const gl::GLImplementationParts& implementation) {
+   if (implementation.gl == gl::kGLImplementationEGLANGLE) {
++#if defined(AROS_OZONE_ANGLE_GL)
+     if (!InitializeArosEGLLibrary() || !GetArosEGLProcAddress("eglGetDisplay")) {
+       LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable"
+                  << " for ANGLE";
+@@ -143,6 +148,11 @@ bool GLOzoneEGLAros::LoadGLES2Bindings(
+               << implementation.ToString()
+               << ") over egl.library/gl.library";
+     return true;
++#else
++    LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] ANGLE requested but this build"
++               << " has no ANGLE GL backend (angle_enable_gl=false)";
++    return false;
++#endif
+   }
+ 
+   if (implementation.gl != gl::kGLImplementationEGLGLES2 ||

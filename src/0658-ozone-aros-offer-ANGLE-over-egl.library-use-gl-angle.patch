@@ -1,0 +1,98 @@
+From a43f552a9d57f8fc5790d62f216ff323682dc517 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 26 Sep 2026 18:07:43 -0500
+Subject: [PATCH 658/689] ozone/aros: offer ANGLE over egl.library
+ (--use-gl=angle)
+
+With angle_enable_gl, ANGLE's GL backend reaches egl.library/gl.library
+through DisplayEGL. The AROS surface factory now allows ANGLE's OpenGLES
+and OpenGL implementations after the native EGL one (still the default),
+and GLOzoneEGLAros loads them by giving ANGLE the egl.library resolver
+and binding Chromium to ANGLE's own entry points through the prefixed
+EGL_GetProcAddress (the plain egl* names also exist in the egl.library
+link library).
+
+This is what makes WebGL available: with --use-gl=angle
+--use-angle=gles|gl the renderer is ANGLE (Mesa llvmpipe ... OpenGL 4.5)
+and WebGL 1.0 contexts work.
+---
+ .../platform/aros/aros_surface_factory.cc     |  9 ++++--
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc   | 31 +++++++++++++++++++
+ 2 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
+index bb3289005b..49c46cd372 100644
+--- a/ui/ozone/platform/aros/aros_surface_factory.cc
++++ b/ui/ozone/platform/aros/aros_surface_factory.cc
+@@ -85,12 +85,17 @@ ArosSurfaceFactory::~ArosSurfaceFactory() = default;
+ 
+ std::vector<gl::GLImplementationParts>
+ ArosSurfaceFactory::GetAllowedGLImplementations() {
+-  return {gl::GLImplementationParts(gl::kGLImplementationEGLGLES2)};
++  // egl.library/gl.library directly first (the default), then ANGLE over the
++  // same drivers, selected with --use-gl=angle --use-angle=gles|gl.
++  return {gl::GLImplementationParts(gl::kGLImplementationEGLGLES2),
++          gl::GLImplementationParts(gl::ANGLEImplementation::kOpenGLES),
++          gl::GLImplementationParts(gl::ANGLEImplementation::kOpenGL)};
+ }
+ 
+ GLOzone* ArosSurfaceFactory::GetGLOzone(
+     const gl::GLImplementationParts& implementation) {
+-  if (implementation.gl == gl::kGLImplementationEGLGLES2) {
++  if (implementation.gl == gl::kGLImplementationEGLGLES2 ||
++      implementation.gl == gl::kGLImplementationEGLANGLE) {
+     return egl_implementation_.get();
+   }
+ 
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index ff19740a59..ec1077c507 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -21,9 +21,26 @@
+ #include "ui/ozone/platform/aros/aros_egl_library.h"
+ #include "ui/ozone/platform/aros/aros_window_manager.h"
+ 
++// ANGLE (statically linked) takes the native egl.library entry points from
++// the resolver installed here, and exposes its own through EGL_GetProcAddress.
++// The ANGLE-prefixed name, because the plain egl* names also exist in the
++// egl.library link library.
++extern "C" void ANGLEArosSetNativeEGLResolver(void* (*resolver)(const char*));
++extern "C" __eglMustCastToProperFunctionPointerType EGLAPIENTRY
++EGL_GetProcAddress(const char* procname);
++
+ namespace ui {
+ namespace {
+ 
++void* ArosNativeEGLResolverForANGLE(const char* name) {
++  return reinterpret_cast<void*>(GetArosEGLProcAddress(name));
++}
++
++gl::GLFunctionPointerType GL_BINDING_CALL
++ArosANGLEGetProcAddress(const char* name) {
++  return reinterpret_cast<gl::GLFunctionPointerType>(EGL_GetProcAddress(name));
++}
++
+ constexpr char kArosMissingWindowGLSurface[] = "aros-missing-window-gl-surface";
+ constexpr char kArosMissingWindowGLSurfacePbuffer[] = "pbuffer";
+ constexpr char kArosMissingWindowGLSurfaceSurfaceless[] = "surfaceless";
+@@ -114,6 +131,20 @@ gl::EGLDisplayPlatform GLOzoneEGLAros::GetNativeDisplay() {
+ 
+ bool GLOzoneEGLAros::LoadGLES2Bindings(
+     const gl::GLImplementationParts& implementation) {
++  if (implementation.gl == gl::kGLImplementationEGLANGLE) {
++    if (!InitializeArosEGLLibrary() || !GetArosEGLProcAddress("eglGetDisplay")) {
++      LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable"
++                 << " for ANGLE";
++      return false;
++    }
++    ANGLEArosSetNativeEGLResolver(&ArosNativeEGLResolverForANGLE);
++    gl::SetGLGetProcAddressProc(&ArosANGLEGetProcAddress);
++    LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using ANGLE ("
++              << implementation.ToString()
++              << ") over egl.library/gl.library";
++    return true;
++  }
++
+   if (implementation.gl != gl::kGLImplementationEGLGLES2 ||
+       !InitializeArosEGLLibrary() || !GetArosEGLProcAddress("eglGetDisplay")) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable";

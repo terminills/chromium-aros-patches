@@ -1,0 +1,203 @@
+From 02d2b46f3bf29d40f488aa784d2ec16f0d9fcba2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 06:39:39 -0500
+Subject: [PATCH 666/689] aros: register PartitionAlloc's pool with v8.library
+
+The browser allocates with PartitionAlloc while v8.library frees with its
+own heap, so a block Blink allocates and V8 destroys, such as the
+CachedData handed to ScriptCompiler::StartConsumingCodeCache(), was freed
+to stdc's TLSF and corrupted its free list.
+
+v8.library frees any pointer inside a registered range to the range's
+owner. Register the regular pool with Chromium's free() before ChromeMain()
+and remove it when ChromeMain() returns, so a restarted browser registers
+its own pool.
+---
+ .../partition_address_space.cc                | 15 ++++
+ chrome/BUILD.gn                               |  2 +
+ chrome/app/aros_v8_heap_owner.cc              | 81 +++++++++++++++++++
+ chrome/app/aros_v8_heap_owner.h               | 13 +++
+ chrome/app/chrome_exe_main_aura.cc            |  5 ++
+ 5 files changed, 116 insertions(+)
+ create mode 100644 chrome/app/aros_v8_heap_owner.cc
+ create mode 100644 chrome/app/aros_v8_heap_owner.h
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+index bd5a8bec5d..8238976b7e 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+@@ -591,3 +591,18 @@ PageCharacteristics page_characteristics;
+ #endif  // BUILDFLAG(HAS_64_BIT_POINTERS)
+ 
+ }  // namespace partition_alloc::internal
++
++#if BUILDFLAG(IS_AROS) && BUILDFLAG(HAS_64_BIT_POINTERS)
++extern "C" uintptr_t ArosPartitionAllocRegularPoolBase() {
++  return partition_alloc::internal::PartitionAddressSpace::IsInitialized()
++             ? partition_alloc::internal::PartitionAddressSpace::
++                   RegularPoolBase()
++             : 0;
++}
++
++extern "C" size_t ArosPartitionAllocRegularPoolSize() {
++  return ~partition_alloc::internal::PartitionAddressSpace::
++              RegularPoolBaseMask() +
++         1;
++}
++#endif
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index c6d0efa814..9c831978c2 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -270,6 +270,8 @@ if (!is_android && !is_mac) {
+           sources += [
+             "app/aros_close_trace.cc",
+             "app/aros_codec_threads.cc",
++            "app/aros_v8_heap_owner.cc",
++            "app/aros_v8_heap_owner.h",
+           ]
+           configs += [ ":aros_close_trace" ]
+         }
+diff --git a/chrome/app/aros_v8_heap_owner.cc b/chrome/app/aros_v8_heap_owner.cc
+new file mode 100644
+index 0000000000..f1d80be6e8
+--- /dev/null
++++ b/chrome/app/aros_v8_heap_owner.cc
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/app/aros_v8_heap_owner.h"
++
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#include <aros/libcall.h>
++#include <exec/libraries.h>
++#include <proto/exec.h>
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++extern "C" uintptr_t ArosPartitionAllocRegularPoolBase();
++extern "C" size_t ArosPartitionAllocRegularPoolSize();
++
++namespace {
++
++struct Library* g_v8_base = nullptr;
++uintptr_t g_registered_base = 0;
++
++void FreeToChromiumHeap(void* ptr) {
++  free(ptr);
++}
++
++BOOL V8OwnerRangeAdd(struct Library* V8Base, APTR base, IPTR size, APTR fn) {
++  return AROS_LC3(BOOL, V8OwnerRangeAdd, AROS_LCA(APTR, base, A0),
++                  AROS_LCA(IPTR, size, D0), AROS_LCA(APTR, fn, A1),
++                  struct Library*, V8Base, 22, V8);
++}
++
++BOOL V8OwnerRangeRemove(struct Library* V8Base, APTR base) {
++  return AROS_LC1(BOOL, V8OwnerRangeRemove, AROS_LCA(APTR, base, A0),
++                  struct Library*, V8Base, 23, V8);
++}
++
++}  // namespace
++
++void ArosRegisterHeapWithV8Library() {
++  const uintptr_t base = ArosPartitionAllocRegularPoolBase();
++  const size_t size = ArosPartitionAllocRegularPoolSize();
++  char line[160];
++
++  if (!base || !size) {
++    return;
++  }
++  g_v8_base = OpenLibrary("v8.library", 0);
++  if (!g_v8_base) {
++    return;
++  }
++  if (g_v8_base->lib_Version < 1 || g_v8_base->lib_NegSize < 23 * LIB_VECTSIZE) {
++    ArosKPutStr("[Chromium:AROS] v8.library has no owner ranges\n");
++    CloseLibrary(g_v8_base);
++    g_v8_base = nullptr;
++    return;
++  }
++  if (V8OwnerRangeAdd(g_v8_base, reinterpret_cast<APTR>(base), size,
++                      reinterpret_cast<APTR>(&FreeToChromiumHeap))) {
++    g_registered_base = base;
++  }
++  snprintf(line, sizeof(line),
++           "[Chromium:AROS] v8.library owner range %p+%zu %s\n",
++           reinterpret_cast<void*>(base), size,
++           g_registered_base ? "registered" : "REFUSED");
++  ArosKPutStr(line);
++}
++
++void ArosUnregisterHeapFromV8Library() {
++  if (!g_v8_base) {
++    return;
++  }
++  if (g_registered_base) {
++    V8OwnerRangeRemove(g_v8_base, reinterpret_cast<APTR>(g_registered_base));
++    g_registered_base = 0;
++  }
++  CloseLibrary(g_v8_base);
++  g_v8_base = nullptr;
++}
+diff --git a/chrome/app/aros_v8_heap_owner.h b/chrome/app/aros_v8_heap_owner.h
+new file mode 100644
+index 0000000000..6cd382986f
+--- /dev/null
++++ b/chrome/app/aros_v8_heap_owner.h
+@@ -0,0 +1,13 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_APP_AROS_V8_HEAP_OWNER_H_
++#define CHROME_APP_AROS_V8_HEAP_OWNER_H_
++
++// Registers PartitionAlloc's regular pool with v8.library, so a block Blink
++// allocates and V8 destroys is freed back to PartitionAlloc.
++void ArosRegisterHeapWithV8Library();
++void ArosUnregisterHeapFromV8Library();
++
++#endif  // CHROME_APP_AROS_V8_HEAP_OWNER_H_
+diff --git a/chrome/app/chrome_exe_main_aura.cc b/chrome/app/chrome_exe_main_aura.cc
+index e03add9187..9b5a1f19d2 100644
+--- a/chrome/app/chrome_exe_main_aura.cc
++++ b/chrome/app/chrome_exe_main_aura.cc
+@@ -13,6 +13,8 @@
+ 
+ #include <exec/types.h>
+ #include <clib/alib_protos.h>
++
++#include "chrome/app/aros_v8_heap_owner.h"
+ #endif
+ 
+ // The entry point for all invocations of Chromium, browser and renderer. On
+@@ -26,6 +28,7 @@ int ChromeMain(int argc, const char** argv);
+ 
+ int main(int argc, const char** argv) {
+ #if BUILDFLAG(IS_AROS)
++  ArosRegisterHeapWithV8Library();
+   if (argc == 0) {
+     constexpr char kToolTypePrefix[] = "CHROME_ARG=";
+     std::vector<std::string> argument_storage = {"chrome"};
+@@ -53,6 +56,7 @@ int main(int argc, const char** argv) {
+                                arguments.data());
+     VLOG(1) << "[Chromium:AROS:ChildReturn] ChromeMain returned to WB main"
+                << " exit_code=" << exit_code;
++    ArosUnregisterHeapFromV8Library();
+     return exit_code;
+   }
+ #endif
+@@ -60,6 +64,7 @@ int main(int argc, const char** argv) {
+ #if BUILDFLAG(IS_AROS)
+   VLOG(1) << "[Chromium:AROS:ChildReturn] ChromeMain returned to CLI main"
+              << " exit_code=" << exit_code;
++  ArosUnregisterHeapFromV8Library();
+ #endif
+   return exit_code;
+ }

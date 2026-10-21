@@ -1,0 +1,49 @@
+From 2faed1c19de6534cf8bf4d3b0e6980bd6fd39c72 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 06:22:44 -0500
+Subject: [PATCH 642/689] aros: wrap __posixc_close, the symbol close()
+ compiles to on AROS
+
+---
+ chrome/BUILD.gn                | 2 +-
+ chrome/app/aros_close_trace.cc | 8 ++++----
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 9402b1bc6d..7f49aed2b2 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1925,6 +1925,6 @@ if (is_aros) {
+   # __wrap_close (base/files/scoped_file.cc), which logs when
+   # CHROMIUM_CLOSE_TRACE is set.
+   config("aros_close_trace") {
+-    ldflags = [ "-Wl,--wrap=close" ]
++    ldflags = [ "-Wl,--wrap=__posixc_close" ]
+   }
+ }
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+index f607712357..b751842a6a 100644
+--- a/chrome/app/aros_close_trace.cc
++++ b/chrome/app/aros_close_trace.cc
+@@ -12,17 +12,17 @@
+ extern "C" void ArosKPutStr(const char*) asm("KPutStr");
+ 
+ // Diagnostic: every close() the chrome executable makes goes through here
+-// (linked with -Wl,--wrap=close). With a global CHROMIUM_CLOSE_TRACE variable
++// (posixc names it __posixc_close; linked with -Wl,--wrap=__posixc_close). With a global CHROMIUM_CLOSE_TRACE variable
+ // (SetEnv), each close of a descriptor above stderr is written to serial
+ // with its result, thread and caller, to find who closes a descriptor twice.
+-extern "C" int __real_close(int fd);
+-extern "C" int __wrap_close(int fd) {
++extern "C" int __real___posixc_close(int fd);
++extern "C" int __wrap___posixc_close(int fd) {
+   static int trace = -1;
+   if (trace < 0)
+     // A global AROS variable is a file in ENV:; posixc getenv() only sees
+     // its own per-process environment, so test for the file.
+     trace = access("ENV:CHROMIUM_CLOSE_TRACE", F_OK) == 0 ? 1 : 0;
+-  const int ret = __real_close(fd);
++  const int ret = __real___posixc_close(fd);
+   if (trace && fd > 2) {
+     const int saved_errno = errno;
+     char line[200];

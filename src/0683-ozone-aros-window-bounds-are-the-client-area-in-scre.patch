@@ -1,0 +1,102 @@
+From 154e4ec5e2af5ada8866c0bdf903edd899a206fd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sun, 18 Oct 2026 04:00:19 -0500
+Subject: [PATCH 683/689] ozone/aros: window bounds are the client area in
+ screen coordinates
+
+GetBoundsInPixels() returned the outer window corner with the client
+size, while Chromium treats the bounds as the client area in screen
+coordinates. Every client-to-screen conversion of a framed window was
+short by its border, so a tooltip opened under the pointer instead of
+below it and took the click meant for the control beneath.
+
+Keep bounds_ as the client area: add the border when reading the native
+box, and subtract it when placing the outer box (open, SetBounds), with
+the work-area limit applied to the outer box.
+---
+ ui/ozone/platform/aros/aros_window.cc | 46 +++++++++++++++++++--------
+ 1 file changed, 32 insertions(+), 14 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 5361f85d79..92ab48eebc 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -547,16 +547,24 @@ bool ArosWindow::OpenNativeWindow(NativeMode mode) {
+   ApplyNativeTitle();
+   UpdateBoundsFromNative(/*notify_delegate=*/false);
+   if (mode == NativeMode::kNormal) {
++    // The window was opened with its outer box at the requested client
++    // origin; its borders were only known once it was open. Move the outer
++    // box so the client area is where it was asked for, within the work area.
+     const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+-    const gfx::Rect native_bounds = bounds_;
+-    const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
+-        native_bounds, work_area, window_->BorderLeft, window_->BorderTop,
++    const gfx::Rect outer = ConstrainClientBoundsToWorkArea(
++        gfx::Rect(client.x() - window_->BorderLeft,
++                  client.y() - window_->BorderTop, bounds_.width(),
++                  bounds_.height()),
++        work_area, window_->BorderLeft, window_->BorderTop,
+         window_->BorderRight, window_->BorderBottom);
+-    if (constrained != native_bounds) {
+-      ChangeWindowBox(
+-          window_, constrained.x(), constrained.y(),
+-          constrained.width() + window_->BorderLeft + window_->BorderRight,
+-          constrained.height() + window_->BorderTop + window_->BorderBottom);
++    const int outer_width =
++        outer.width() + window_->BorderLeft + window_->BorderRight;
++    const int outer_height =
++        outer.height() + window_->BorderTop + window_->BorderBottom;
++    if (window_->LeftEdge != outer.x() || window_->TopEdge != outer.y() ||
++        window_->Width != outer_width || window_->Height != outer_height) {
++      ChangeWindowBox(window_, outer.x(), outer.y(), outer_width,
++                      outer_height);
+       UpdateBoundsFromNative(/*notify_delegate=*/false);
+     }
+   }
+@@ -681,10 +689,17 @@ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
+   }
+   const gfx::Rect old_bounds = bounds_;
+   const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+-  const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
+-      bounds, work_area, window_ ? window_->BorderLeft : 0,
+-      window_ ? window_->BorderTop : 0, window_ ? window_->BorderRight : 0,
++  const int border_left = window_ ? window_->BorderLeft : 0;
++  const int border_top = window_ ? window_->BorderTop : 0;
++  // bounds is the client area in screen coordinates; the work area limits
++  // the outer box, which starts one border up and to the left of it.
++  const gfx::Rect outer = ConstrainClientBoundsToWorkArea(
++      gfx::Rect(bounds.x() - border_left, bounds.y() - border_top,
++                bounds.width(), bounds.height()),
++      work_area, border_left, border_top, window_ ? window_->BorderRight : 0,
+       window_ ? window_->BorderBottom : 0);
++  const gfx::Rect constrained(outer.x() + border_left, outer.y() + border_top,
++                              outer.width(), outer.height());
+   bounds_ = constrained;
+   if (window_) {
+     const int outer_width =
+@@ -695,9 +710,9 @@ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
+     // the first Show. Intuition queues even a zero-delta ChangeWindowBox as a
+     // MoveSizeLayer on the still-hidden layer, so only ask for a box that
+     // differs from the one the window has.
+-    if (window_->LeftEdge != bounds_.x() || window_->TopEdge != bounds_.y() ||
++    if (window_->LeftEdge != outer.x() || window_->TopEdge != outer.y() ||
+         window_->Width != outer_width || window_->Height != outer_height) {
+-      ChangeWindowBox(window_, bounds_.x(), bounds_.y(), outer_width,
++      ChangeWindowBox(window_, outer.x(), outer.y(), outer_width,
+                       outer_height);
+     }
+     UpdateBoundsFromNative(/*notify_delegate=*/false);
+@@ -1418,8 +1433,11 @@ void ArosWindow::UpdateBoundsFromNative(bool notify_delegate) {
+   if (!window_) {
+     return;
+   }
++  // Chromium's bounds are the client area in screen coordinates; Intuition
++  // places a window by its outer box.
+   const gfx::Rect new_bounds(
+-      window_->LeftEdge, window_->TopEdge,
++      window_->LeftEdge + window_->BorderLeft,
++      window_->TopEdge + window_->BorderTop,
+       std::max<int>(
+           1, window_->Width - window_->BorderLeft - window_->BorderRight),
+       std::max<int>(

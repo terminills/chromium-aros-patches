@@ -1,0 +1,1722 @@
+From 17569eaeb1b01bc4749dfe455edfe8407e31cc49 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 6 Oct 2026 10:12:09 -0500
+Subject: [PATCH 670/689] AROS: hardware VP9 decoding on the AMD VCN
+
+Add a VP9 accelerator for VP9Decoder that builds VCN messages the way
+radeonsi does on VCN 5.0 with a linear output: the dynamic (tier 2)
+DPB, one 256B_D-swizzled DPB buffer per picture index tracked against
+the eight reference slots, the probability table and segmentation data
+in the message buffer, and the default probabilities seeded into the
+context buffer. Profile 0 and profile 2 (decoded down to 8 bits) are
+accepted.
+
+amdgpu.hidd never reuses GART addresses, so buffers released by a
+decoding session are kept and reused by later sessions instead of
+being returned.
+
+vcn_vp9_default.h is Mesa's ac_vcn_vp9_default.h (MIT).
+
+Tested on the RX 9060 XT with bear-vp9.webm, bear-vp9-bt709.webm and
+bear-vp9-odd-dimensions.webm: decoded through the VCN with correct
+pictures.
+---
+ media/gpu/aros/BUILD.gn              |   3 +
+ media/gpu/aros/aros_amdgpu.cc        |  42 +-
+ media/gpu/aros/aros_amdgpu.h         |   2 +
+ media/gpu/aros/aros_vcn_vp9.cc       | 391 ++++++++++++++++++
+ media/gpu/aros/aros_vcn_vp9.h        |  95 +++++
+ media/gpu/aros/aros_video_decoder.cc | 243 ++++++++++-
+ media/gpu/aros/aros_video_decoder.h  |   7 +-
+ media/gpu/aros/vcn_dec_msg.h         | 159 ++++++++
+ media/gpu/aros/vcn_vp9_default.h     | 585 +++++++++++++++++++++++++++
+ 9 files changed, 1513 insertions(+), 14 deletions(-)
+ create mode 100644 media/gpu/aros/aros_vcn_vp9.cc
+ create mode 100644 media/gpu/aros/aros_vcn_vp9.h
+ create mode 100644 media/gpu/aros/vcn_vp9_default.h
+
+diff --git a/media/gpu/aros/BUILD.gn b/media/gpu/aros/BUILD.gn
+index f47b4c3048..e897396c67 100644
+--- a/media/gpu/aros/BUILD.gn
++++ b/media/gpu/aros/BUILD.gn
+@@ -10,9 +10,12 @@ source_set("aros") {
+     "aros_amdgpu.h",
+     "aros_vcn_h264.cc",
+     "aros_vcn_h264.h",
++    "aros_vcn_vp9.cc",
++    "aros_vcn_vp9.h",
+     "aros_video_decoder.cc",
+     "aros_video_decoder.h",
+     "vcn_dec_msg.h",
++    "vcn_vp9_default.h",
+   ]
+   deps = [
+     "//base",
+diff --git a/media/gpu/aros/aros_amdgpu.cc b/media/gpu/aros/aros_amdgpu.cc
+index 4e5e87e710..271a9d9413 100644
+--- a/media/gpu/aros/aros_amdgpu.cc
++++ b/media/gpu/aros/aros_amdgpu.cc
+@@ -12,6 +12,7 @@
+ #include <proto/exec.h>
+ 
+ #include <mutex>
++#include <vector>
+ 
+ namespace media::aros {
+ 
+@@ -45,6 +46,11 @@ F Vec(void* base, int lvo) {
+ AmdgpuVcn* g_vcn = nullptr;
+ std::once_flag g_once;
+ 
++// amdgpu.hidd never hands out a GART address twice, so released buffers are
++// kept here and reused rather than given back.
++std::mutex g_cache_lock;
++std::vector<AmdgpuBuffer>* g_cache = nullptr;
++
+ }  // namespace
+ 
+ // static
+@@ -86,6 +92,25 @@ bool AmdgpuVcn::Alloc(size_t size, AmdgpuBuffer* out) {
+ 
+   *out = AmdgpuBuffer();
+   size = (size + 4095) & ~static_cast<size_t>(4095);
++  {
++    std::lock_guard<std::mutex> lock(g_cache_lock);
++    if (g_cache) {
++      size_t best = g_cache->size();
++      for (size_t i = 0; i < g_cache->size(); ++i) {
++        const size_t have = (*g_cache)[i].size;
++        if (have >= size && have <= size * 2 &&
++            (best == g_cache->size() || have < (*g_cache)[best].size)) {
++          best = i;
++        }
++      }
++      if (best != g_cache->size()) {
++        *out = (*g_cache)[best];
++        g_cache->erase(g_cache->begin() + best);
++        memset(out->cpu, 0, out->size);
++        return true;
++      }
++    }
++  }
+   if (Vec<LONG (*)(void*, UQUAD, UQUAD, ULONG, ULONG, ULONG*)>(base_, kBoAlloc)(
+           device_, size, 4096, kDomainGtt, 0, &bo)) {
+     return false;
+@@ -97,13 +122,13 @@ bool AmdgpuVcn::Alloc(size_t size, AmdgpuBuffer* out) {
+           base_, kVaRangeAlloc)(device_, size, 4096, 0, &va, &address)) {
+     out->cpu = static_cast<uint8_t*>(cpu);
+     out->va = va;
+-    Free(out);
++    Release(out);
+     return false;
+   }
+   out->cpu = static_cast<uint8_t*>(cpu);
+   out->va = va;
+   if (Vec<LONG (*)(void*, ULONG, ULONG)>(base_, kBoVaBind)(device_, bo, va)) {
+-    Free(out);
++    Release(out);
+     return false;
+   }
+   out->gpu_address = address;
+@@ -112,6 +137,19 @@ bool AmdgpuVcn::Alloc(size_t size, AmdgpuBuffer* out) {
+ }
+ 
+ void AmdgpuVcn::Free(AmdgpuBuffer* buffer) {
++  if (buffer->gpu_address && buffer->cpu) {
++    std::lock_guard<std::mutex> lock(g_cache_lock);
++    if (!g_cache) {
++      g_cache = new std::vector<AmdgpuBuffer>();
++    }
++    g_cache->push_back(*buffer);
++    *buffer = AmdgpuBuffer();
++    return;
++  }
++  Release(buffer);
++}
++
++void AmdgpuVcn::Release(AmdgpuBuffer* buffer) {
+   if (buffer->gpu_address) {
+     Vec<LONG (*)(void*, ULONG)>(base_, kBoVaUnbind)(device_, buffer->va);
+   }
+diff --git a/media/gpu/aros/aros_amdgpu.h b/media/gpu/aros/aros_amdgpu.h
+index ebd00786d5..1b986dced9 100644
+--- a/media/gpu/aros/aros_amdgpu.h
++++ b/media/gpu/aros/aros_amdgpu.h
+@@ -27,6 +27,7 @@ class AmdgpuVcn {
+   static AmdgpuVcn* Get();
+ 
+   bool Alloc(size_t size, AmdgpuBuffer* out);
++  // Returns the buffer to a cache for reuse by a later Alloc().
+   void Free(AmdgpuBuffer* buffer);
+ 
+   // Write back CPU caches before the GPU reads, drop them before the CPU
+@@ -39,6 +40,7 @@ class AmdgpuVcn {
+ 
+  private:
+   AmdgpuVcn() = default;
++  void Release(AmdgpuBuffer* buffer);
+ 
+   void* base_ = nullptr;
+   void* device_ = nullptr;
+diff --git a/media/gpu/aros/aros_vcn_vp9.cc b/media/gpu/aros/aros_vcn_vp9.cc
+new file mode 100644
+index 0000000000..080eb06503
+--- /dev/null
++++ b/media/gpu/aros/aros_vcn_vp9.cc
+@@ -0,0 +1,391 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "media/gpu/aros/aros_vcn_vp9.h"
++
++#include <string.h>
++
++#include <atomic>
++#include <initializer_list>
++
++#include "media/gpu/aros/vcn_dec_msg.h"
++#include "media/gpu/aros/vcn_vp9_default.h"
++
++namespace media::aros {
++
++namespace {
++
++constexpr uint32_t kFeedbackOffset = 0x2000;
++constexpr uint32_t kFeedbackSize = 2048;
++constexpr uint32_t kProbsOffset = kFeedbackOffset + kFeedbackSize;
++constexpr uint32_t kProbsSize = RDECODE_VP9_PROBS_DATA_SIZE + 256;
++constexpr uint32_t kDbAlignment = 64;
++constexpr uint32_t kDtPitchAlignment = 256;
++constexpr uint32_t kSwizzle256BD = 1;
++
++constexpr uint32_t Align(uint32_t v, uint32_t a) {
++  return (v + a - 1) & ~(a - 1);
++}
++
++std::atomic<uint32_t> g_next_handle{0x41525000};
++
++// ac_vcn_vp9_fill_probs_table() from Mesa.
++void FillProbs(void* ptr) {
++  auto* probs = static_cast<rvcn_dec_vp9_probs_t*>(ptr);
++  memcpy(&probs->coef_probs[0], default_coef_probs_4x4, sizeof(default_coef_probs_4x4));
++  memcpy(&probs->coef_probs[1], default_coef_probs_8x8, sizeof(default_coef_probs_8x8));
++  memcpy(&probs->coef_probs[2], default_coef_probs_16x16, sizeof(default_coef_probs_16x16));
++  memcpy(&probs->coef_probs[3], default_coef_probs_32x32, sizeof(default_coef_probs_32x32));
++  memcpy(probs->y_mode_prob, default_if_y_probs, sizeof(default_if_y_probs));
++  memcpy(probs->uv_mode_prob, default_if_uv_probs, sizeof(default_if_uv_probs));
++  memcpy(probs->single_ref_prob, default_single_ref_p, sizeof(default_single_ref_p));
++  memcpy(probs->switchable_interp_prob, default_switchable_interp_prob,
++         sizeof(default_switchable_interp_prob));
++  memcpy(probs->partition_prob, default_partition_probs, sizeof(default_partition_probs));
++  memcpy(probs->inter_mode_probs, default_inter_mode_probs, sizeof(default_inter_mode_probs));
++  memcpy(probs->mbskip_probs, default_skip_probs, sizeof(default_skip_probs));
++  memcpy(probs->intra_inter_prob, default_intra_inter_p, sizeof(default_intra_inter_p));
++  memcpy(probs->comp_inter_prob, default_comp_inter_p, sizeof(default_comp_inter_p));
++  memcpy(probs->comp_ref_prob, default_comp_ref_p, sizeof(default_comp_ref_p));
++  memcpy(probs->tx_probs_32x32, default_tx_probs_32x32, sizeof(default_tx_probs_32x32));
++  memcpy(probs->tx_probs_16x16, default_tx_probs_16x16, sizeof(default_tx_probs_16x16));
++  memcpy(probs->tx_probs_8x8, default_tx_probs_8x8, sizeof(default_tx_probs_8x8));
++  memcpy(probs->mv_joints, default_nmv_joints, sizeof(default_nmv_joints));
++  memcpy(&probs->mv_comps[0], default_nmv_components, sizeof(default_nmv_components));
++  memset(&probs->nmvc_mask, 0, sizeof(rvcn_dec_vp9_nmv_ctx_mask_t));
++}
++
++uint32_t ContextSize(bool profile2) {
++  uint32_t size = 2304 * 5;
++  size += 32 * 2 * 128 * 68;
++  size += 9 * 64 * 2 * 128 * 68;
++  size += 8 * 2 * 2 * 8192;
++  if (profile2) {
++    size += 8 * 2 * 4096;
++  }
++  return size;
++}
++
++}  // namespace
++
++VcnVp9Session::VcnVp9Session() : vcn_(AmdgpuVcn::Get()) {}
++
++VcnVp9Session::~VcnVp9Session() {
++  Destroy();
++}
++
++bool VcnVp9Session::Create(uint32_t width, uint32_t height, bool profile2) {
++  Destroy();
++  if (!vcn_ || !width || !height) {
++    return false;
++  }
++  profile2_ = profile2;
++  if (!vcn_->Alloc(RDECODE_SESSION_CONTEXT_SIZE, &session_) ||
++      !vcn_->Alloc(kProbsOffset + kProbsSize, &msg_) ||
++      !vcn_->Alloc(ContextSize(profile2), &ctx_) || !vcn_->Alloc(4096, &ib_) ||
++      !EnsureFrameBuffers(width, height)) {
++    Destroy();
++    return false;
++  }
++  FillProbs(msg_.cpu + kProbsOffset);
++  FillProbs(ctx_.cpu);
++  AmdgpuVcn::Flush(ctx_, ctx_.size);
++
++  stream_handle_ = ++g_next_handle;
++  frame_number_ = 0;
++
++  auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
++  auto* create = reinterpret_cast<rvcn_dec_message_create_t*>(
++      msg_.cpu + sizeof(*header));
++  memset(msg_.cpu, 0, kFeedbackOffset);
++  header->header_size = sizeof(*header);
++  header->total_size = sizeof(*header) + sizeof(*create);
++  header->num_buffers = 1;
++  header->msg_type = RDECODE_MSG_CREATE;
++  header->stream_handle = stream_handle_;
++  header->index[0].message_id = RDECODE_MESSAGE_CREATE;
++  header->index[0].offset = sizeof(*header);
++  header->index[0].size = sizeof(*create);
++  create->stream_type = RDECODE_CODEC_VP9;
++  create->width_in_samples = width;
++  create->height_in_samples = height;
++  if (!Submit(false)) {
++    Destroy();
++    return false;
++  }
++  created_ = true;
++  return true;
++}
++
++void VcnVp9Session::Destroy() {
++  if (!vcn_) {
++    return;
++  }
++  if (created_) {
++    memset(msg_.cpu, 0, kFeedbackOffset);
++    auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
++    header->header_size = sizeof(*header);
++    header->total_size = sizeof(*header);
++    header->msg_type = RDECODE_MSG_DESTROY;
++    header->stream_handle = stream_handle_;
++    Submit(false);
++    created_ = false;
++  }
++  for (AmdgpuBuffer* b : {&session_, &msg_, &ctx_, &bs_, &dt_, &ib_}) {
++    if (b->bo) {
++      vcn_->Free(b);
++    }
++  }
++  for (AmdgpuBuffer& b : dpb_) {
++    if (b.bo) {
++      vcn_->Free(&b);
++    }
++  }
++  width_ = height_ = dpb_w_ = dpb_h_ = 0;
++}
++
++bool VcnVp9Session::EnsureFrameBuffers(uint32_t width, uint32_t height) {
++  if (width == width_ && height == height_ && dt_.bo) {
++    return true;
++  }
++  if (dt_.bo) {
++    vcn_->Free(&dt_);
++  }
++  if (bs_.bo) {
++    vcn_->Free(&bs_);
++  }
++  width_ = width;
++  height_ = height;
++  dt_pitch_ = Align(width, kDtPitchAlignment);
++  dt_height_ = Align(height, 16);
++  return vcn_->Alloc(dt_pitch_ * dt_height_ * 3 / 2, &dt_) &&
++         vcn_->Alloc(Align(width, 64) * Align(height, 64) * 3 / 2 + 4096, &bs_);
++}
++
++bool VcnVp9Session::EnsureDpb(int index) {
++  const uint32_t w64 = Align(width_, kDbAlignment);
++  const uint32_t h64 = Align(height_, kDbAlignment);
++  if (w64 != dpb_w_ || h64 != dpb_h_) {
++    for (AmdgpuBuffer& b : dpb_) {
++      if (b.bo) {
++        vcn_->Free(&b);
++      }
++    }
++    dpb_w_ = w64;
++    dpb_h_ = h64;
++  }
++  if (dpb_[index].bo) {
++    return true;
++  }
++  const uint32_t bpe = profile2_ ? 2 : 1;
++  return vcn_->Alloc(w64 * h64 * 3 / 2 * bpe, &dpb_[index]);
++}
++
++const uint8_t* VcnVp9Session::uv_plane() const {
++  return dt_.cpu + dt_pitch_ * dt_height_;
++}
++
++bool VcnVp9Session::Decode(const VcnVp9Frame& f, const uint8_t* data,
++                           size_t size) {
++  if (!created_ || !size || f.curr_pic_idx >= kVcnVp9MaxPictures ||
++      !EnsureFrameBuffers(f.width, f.height) || size + 128 > bs_.size) {
++    return false;
++  }
++  if (!EnsureDpb(f.curr_pic_idx)) {
++    return false;
++  }
++  for (int k = 0; k < 8; ++k) {
++    if (f.ref_frame_map[k] < kVcnVp9MaxPictures &&
++        !dpb_[f.ref_frame_map[k]].bo) {
++      return false;
++    }
++  }
++
++  const uint32_t bsd_size = Align(size, 128);
++  memcpy(bs_.cpu, data, size);
++  memset(bs_.cpu + size, 0, bsd_size - size);
++  AmdgpuVcn::Flush(bs_, bsd_size);
++
++  memset(msg_.cpu, 0, kFeedbackOffset);
++  auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
++  uint32_t sizes = sizeof(*header);
++  auto* index_codec =
++      reinterpret_cast<rvcn_dec_message_index_t*>(msg_.cpu + sizes);
++  sizes += sizeof(*index_codec);
++  auto* index_dpb =
++      reinterpret_cast<rvcn_dec_message_index_t*>(msg_.cpu + sizes);
++  sizes += sizeof(*index_dpb);
++  const uint32_t offset_decode = sizes;
++  auto* decode =
++      reinterpret_cast<rvcn_dec_message_decode_t*>(msg_.cpu + sizes);
++  sizes += sizeof(*decode);
++  const uint32_t offset_dpb = sizes;
++  auto* t2 =
++      reinterpret_cast<rvcn_dec_message_dynamic_dpb_t2_t*>(msg_.cpu + sizes);
++  sizes += sizeof(*t2);
++  const uint32_t offset_codec = sizes;
++  auto* vp9 = reinterpret_cast<rvcn_dec_message_vp9_t*>(msg_.cpu + sizes);
++
++  header->header_size = sizeof(*header);
++  header->total_size = sizes + sizeof(*vp9);
++  header->msg_type = RDECODE_MSG_DECODE;
++  header->stream_handle = stream_handle_;
++  header->status_report_feedback_number = ++frame_number_;
++  header->num_buffers = 3;
++  header->index[0].message_id = RDECODE_MESSAGE_DECODE;
++  header->index[0].offset = offset_decode;
++  header->index[0].size = sizeof(*decode);
++  index_codec->message_id = RDECODE_MESSAGE_VP9;
++  index_codec->offset = offset_codec;
++  index_codec->size = sizeof(*vp9);
++  index_dpb->message_id = RDECODE_MESSAGE_DYNAMIC_DPB;
++  index_dpb->offset = offset_dpb;
++  index_dpb->size = sizeof(*t2);
++
++  decode->stream_type = RDECODE_CODEC_VP9;
++  decode->decode_flags = RDECODE_FLAGS_USE_DYNAMIC_DPB_MASK;
++  decode->width_in_samples = f.width;
++  decode->height_in_samples = f.height;
++  decode->bsd_size = bsd_size;
++  decode->dt_size = dt_.size;
++  decode->hw_ctxt_size = ctx_.size;
++  decode->sw_ctxt_size = RDECODE_SESSION_CONTEXT_SIZE;
++  decode->db_pitch = dpb_w_;
++  decode->db_aligned_height = dpb_h_;
++  decode->db_swizzle_mode = kSwizzle256BD;
++  decode->db_array_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11;
++  decode->dt_pitch = dt_pitch_;
++  decode->dt_uv_pitch = dt_pitch_ / 2;
++  decode->dt_swizzle_mode = RDECODE_SW_MODE_LINEAR;
++  decode->dt_array_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11;
++  decode->dt_chroma_top_offset = dt_pitch_ * dt_height_;
++  decode->dt_chroma_bottom_offset = dt_pitch_ * dt_height_;
++  decode->mif_wrc_en = 1;
++
++  const uint32_t bpe = profile2_ ? 2 : 1;
++  t2->dpbLumaPitch = dpb_w_;
++  t2->dpbLumaAlignedHeight = dpb_h_;
++  t2->dpbLumaAlignedSize = dpb_w_ * dpb_h_ * bpe;
++  t2->dpbChromaPitch = dpb_w_ / 2;
++  t2->dpbChromaAlignedHeight = dpb_h_ / 2;
++  t2->dpbChromaAlignedSize = dpb_w_ * dpb_h_ / 2 * bpe;
++  t2->dpbCurrLo = static_cast<uint32_t>(dpb_[f.curr_pic_idx].gpu_address);
++  t2->dpbCurrHi =
++      static_cast<uint32_t>(dpb_[f.curr_pic_idx].gpu_address >> 32);
++  for (int k = 0; k < 8; ++k) {
++    if (f.ref_frame_map[k] < kVcnVp9MaxPictures) {
++      const uint64_t a = dpb_[f.ref_frame_map[k]].gpu_address;
++      t2->dpbAddrLo[k] = static_cast<uint32_t>(a);
++      t2->dpbAddrHi[k] = static_cast<uint32_t>(a >> 32);
++      ++t2->dpbArraySize;
++    }
++  }
++
++  vp9->frame_header_flags = f.frame_header_flags;
++  vp9->frame_context_idx = f.frame_context_idx;
++  vp9->reset_frame_context = f.reset_frame_context;
++  vp9->curr_pic_idx = f.curr_pic_idx;
++  vp9->interp_filter = f.interp_filter;
++  vp9->filter_level = f.filter_level;
++  vp9->sharpness_level = f.sharpness_level;
++  memcpy(vp9->lf_adj_level, f.lf_adj_level, sizeof(vp9->lf_adj_level));
++  vp9->base_qindex = f.base_qindex;
++  vp9->y_dc_delta_q = f.y_dc_delta_q;
++  vp9->uv_ac_delta_q = f.uv_ac_delta_q;
++  vp9->uv_dc_delta_q = f.uv_dc_delta_q;
++  vp9->log2_tile_cols = f.log2_tile_cols;
++  vp9->log2_tile_rows = f.log2_tile_rows;
++  vp9->chroma_format = 1;
++  memcpy(vp9->ref_frame_map, f.ref_frame_map, sizeof(vp9->ref_frame_map));
++  memcpy(vp9->frame_refs, f.frame_refs, sizeof(vp9->frame_refs));
++  memcpy(vp9->ref_frame_sign_bias, f.ref_frame_sign_bias,
++         sizeof(vp9->ref_frame_sign_bias));
++  vp9->bit_depth_luma_minus8 = vp9->bit_depth_chroma_minus8 = f.bit_depth - 8;
++  if (profile2_) {
++    vp9->luma_10to8 = 1;
++    vp9->chroma_10to8 = 1;
++  }
++  vp9->vp9_frame_size = bsd_size;
++  vp9->compressed_header_size = f.compressed_header_size;
++  vp9->uncompressed_header_size = f.uncompressed_header_size;
++
++  auto* seg = reinterpret_cast<rvcn_dec_vp9_probs_segment_t*>(msg_.cpu +
++                                                             kProbsOffset);
++  if (f.segmentation_enabled) {
++    for (int i = 0; i < 8; ++i) {
++      seg->seg.feature_data[i] = f.seg_feature_data[i];
++      seg->seg.feature_mask[i] = f.seg_feature_mask[i];
++    }
++    memcpy(seg->seg.tree_probs, f.seg_tree_probs, sizeof(seg->seg.tree_probs));
++    memcpy(seg->seg.pred_probs, f.seg_pred_probs, sizeof(seg->seg.pred_probs));
++    seg->seg.abs_delta = f.seg_abs_delta;
++  } else {
++    memset(seg->segment_data, 0, sizeof(seg->segment_data));
++  }
++
++  auto* fb = reinterpret_cast<rvcn_dec_feedback_header_t*>(msg_.cpu +
++                                                           kFeedbackOffset);
++  fb->header_size = sizeof(*fb);
++  fb->total_size = sizeof(*fb);
++  fb->num_buffers = 0;
++
++  if (!Submit(true)) {
++    return false;
++  }
++  AmdgpuVcn::Invalidate(dt_, dt_.size);
++  return true;
++}
++
++bool VcnVp9Session::Submit(bool decode) {
++  uint32_t* dw = reinterpret_cast<uint32_t*>(ib_.cpu);
++  uint32_t n = 0;
++
++  memset(dw, 0, 1024);
++  dw[n++] = RADEON_VCN_ENGINE_INFO_SIZE;
++  dw[n++] = RADEON_VCN_ENGINE_INFO;
++  dw[n++] = RADEON_VCN_ENGINE_TYPE_DECODE;
++  const uint32_t size_slot = n++;
++  auto* pkg = reinterpret_cast<rvcn_decode_ib_package_t*>(&dw[n]);
++  pkg->package_size =
++      sizeof(rvcn_decode_buffer_t) + sizeof(rvcn_decode_ib_package_t);
++  pkg->package_type = RDECODE_IB_PARAM_DECODE_BUFFER;
++  n += 2;
++  auto* db = reinterpret_cast<rvcn_decode_buffer_t*>(&dw[n]);
++  n += sizeof(rvcn_decode_buffer_t) / 4;
++
++  auto set = [db](uint32_t flag, unsigned int* lo, unsigned int* hi,
++                  uint64_t addr) {
++    db->valid_buf_flag |= flag;
++    *hi = static_cast<uint32_t>(addr >> 32);
++    *lo = static_cast<uint32_t>(addr);
++  };
++  set(RDECODE_CMDBUF_FLAGS_SESSION_CONTEXT_BUFFER,
++      &db->session_contex_buffer_address_lo,
++      &db->session_contex_buffer_address_hi, session_.gpu_address);
++  set(RDECODE_CMDBUF_FLAGS_MSG_BUFFER, &db->msg_buffer_address_lo,
++      &db->msg_buffer_address_hi, msg_.gpu_address);
++  if (decode) {
++    set(RDECODE_CMDBUF_FLAGS_CONTEXT_BUFFER, &db->context_buffer_address_lo,
++        &db->context_buffer_address_hi, ctx_.gpu_address);
++    set(RDECODE_CMDBUF_FLAGS_BITSTREAM_BUFFER,
++        &db->bitstream_buffer_address_lo, &db->bitstream_buffer_address_hi,
++        bs_.gpu_address);
++    set(RDECODE_CMDBUF_FLAGS_DECODING_TARGET_BUFFER,
++        &db->target_buffer_address_lo, &db->target_buffer_address_hi,
++        dt_.gpu_address);
++    set(RDECODE_CMDBUF_FLAGS_FEEDBACK_BUFFER, &db->feedback_buffer_address_lo,
++        &db->feedback_buffer_address_hi, msg_.gpu_address + kFeedbackOffset);
++    set(RDECODE_CMDBUF_FLAGS_PROB_TBL_BUFFER,
++        &db->prob_tbl_buffer_address_lo, &db->prob_tbl_buffer_address_hi,
++        msg_.gpu_address + kProbsOffset);
++  }
++  dw[size_slot] = (n - size_slot + 3) * 4;
++
++  AmdgpuVcn::Flush(msg_, msg_.size);
++  AmdgpuVcn::Flush(ib_, ib_.size);
++  uint32_t fence = 0;
++  return vcn_->Submit(ib_.gpu_address, n, &fence) && vcn_->WaitFence(fence);
++}
++
++}  // namespace media::aros
+diff --git a/media/gpu/aros/aros_vcn_vp9.h b/media/gpu/aros/aros_vcn_vp9.h
+new file mode 100644
+index 0000000000..7208004202
+--- /dev/null
++++ b/media/gpu/aros/aros_vcn_vp9.h
+@@ -0,0 +1,95 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MEDIA_GPU_AROS_AROS_VCN_VP9_H_
++#define MEDIA_GPU_AROS_AROS_VCN_VP9_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "media/gpu/aros/aros_amdgpu.h"
++
++namespace media::aros {
++
++constexpr uint8_t kVcnVp9NoPicture = 0x7f;
++constexpr int kVcnVp9MaxPictures = 9;
++
++// Per-frame VP9 parameters, the content of rvcn_dec_message_vp9_t plus the
++// segmentation table.
++struct VcnVp9Frame {
++  uint32_t width = 0;
++  uint32_t height = 0;
++  uint32_t frame_header_flags = 0;
++  uint8_t frame_context_idx = 0;
++  uint8_t reset_frame_context = 0;
++  uint8_t curr_pic_idx = 0;
++  uint8_t interp_filter = 0;
++  uint8_t filter_level = 0;
++  uint8_t sharpness_level = 0;
++  uint8_t lf_adj_level[8][4][2] = {};
++  uint8_t base_qindex = 0;
++  int8_t y_dc_delta_q = 0;
++  int8_t uv_ac_delta_q = 0;
++  int8_t uv_dc_delta_q = 0;
++  uint8_t log2_tile_cols = 0;
++  uint8_t log2_tile_rows = 0;
++  uint8_t ref_frame_map[8] = {};
++  uint8_t frame_refs[3] = {};
++  uint8_t ref_frame_sign_bias[3] = {};
++  uint8_t bit_depth = 8;
++  uint32_t compressed_header_size = 0;
++  uint32_t uncompressed_header_size = 0;
++
++  bool segmentation_enabled = false;
++  uint32_t seg_feature_data[8] = {};
++  uint8_t seg_feature_mask[8] = {};
++  uint8_t seg_tree_probs[7] = {};
++  uint8_t seg_pred_probs[3] = {};
++  uint8_t seg_abs_delta = 0;
++};
++
++// One VCN VP9 decoding session with the dynamic (tier 2) DPB: one swizzled
++// DPB buffer per picture index, a linear NV12 target for output.
++class VcnVp9Session {
++ public:
++  VcnVp9Session();
++  ~VcnVp9Session();
++
++  VcnVp9Session(const VcnVp9Session&) = delete;
++  VcnVp9Session& operator=(const VcnVp9Session&) = delete;
++
++  bool Create(uint32_t width, uint32_t height, bool profile2);
++  void Destroy();
++  bool created() const { return created_; }
++  bool profile2() const { return profile2_; }
++
++  // Decodes one frame (uncompressed header, compressed header and tiles).
++  bool Decode(const VcnVp9Frame& frame, const uint8_t* data, size_t size);
++
++  uint32_t width() const { return width_; }
++  uint32_t height() const { return height_; }
++  const uint8_t* y_plane() const { return dt_.cpu; }
++  const uint8_t* uv_plane() const;
++  size_t stride() const { return dt_pitch_; }
++
++ private:
++  bool EnsureFrameBuffers(uint32_t width, uint32_t height);
++  bool EnsureDpb(int index);
++  bool Submit(bool decode);
++
++  AmdgpuVcn* vcn_ = nullptr;
++  bool created_ = false;
++  bool profile2_ = false;
++  uint32_t width_ = 0, height_ = 0;
++  uint32_t dt_pitch_ = 0, dt_height_ = 0;
++  uint32_t dpb_w_ = 0, dpb_h_ = 0;
++  uint32_t stream_handle_ = 0;
++  uint32_t frame_number_ = 0;
++  AmdgpuBuffer session_, msg_, ctx_, bs_, dt_, ib_;
++  AmdgpuBuffer dpb_[kVcnVp9MaxPictures];
++};
++
++}  // namespace media::aros
++
++#endif  // MEDIA_GPU_AROS_AROS_VCN_VP9_H_
+diff --git a/media/gpu/aros/aros_video_decoder.cc b/media/gpu/aros/aros_video_decoder.cc
+index ba4ea566ee..63c564f58d 100644
+--- a/media/gpu/aros/aros_video_decoder.cc
++++ b/media/gpu/aros/aros_video_decoder.cc
+@@ -14,8 +14,12 @@
+ #include "media/base/video_frame.h"
+ #include "media/gpu/aros/aros_amdgpu.h"
+ #include "media/gpu/aros/aros_vcn_h264.h"
++#include "media/gpu/aros/aros_vcn_vp9.h"
+ #include "media/gpu/h264_decoder.h"
+ #include "media/gpu/h264_dpb.h"
++#include "media/gpu/vp9_decoder.h"
++#include "media/gpu/vp9_picture.h"
++#include "media/gpu/vp9_reference_frame_vector.h"
+ 
+ extern "C" void ArosVcnKPutStr(const char*) asm("KPutStr");
+ 
+@@ -199,6 +203,212 @@ class ArosVcnH264Accelerator : public H264Decoder::H264Accelerator {
+   bool have_slice_header_ = false;
+ };
+ 
++
++class ArosVP9Picture : public VP9Picture {
++ public:
++  ArosVP9Picture() = default;
++  scoped_refptr<VideoFrame> frame;
++  uint8_t dpb_index = aros::kVcnVp9NoPicture;
++
++ private:
++  ~ArosVP9Picture() override = default;
++};
++
++scoped_refptr<VideoFrame> CopyNV12(const uint8_t* y,
++                                   const uint8_t* uv,
++                                   size_t stride,
++                                   uint32_t width,
++                                   uint32_t height) {
++  const gfx::Size coded(width, height);
++  scoped_refptr<VideoFrame> frame = VideoFrame::CreateFrame(
++      PIXEL_FORMAT_NV12, coded, gfx::Rect(coded), coded, base::TimeDelta());
++  if (!frame) {
++    return nullptr;
++  }
++  for (uint32_t row = 0; row < height; ++row) {
++    memcpy(frame->writable_data(VideoFrame::kYPlane) +
++               row * frame->stride(VideoFrame::kYPlane),
++           y + row * stride, width);
++  }
++  for (uint32_t row = 0; row < (height + 1) / 2; ++row) {
++    memcpy(frame->writable_data(VideoFrame::kUVPlane) +
++               row * frame->stride(VideoFrame::kUVPlane),
++           uv + row * stride, (width + 1) & ~1u);
++  }
++  return frame;
++}
++
++class ArosVcnVP9Accelerator : public VP9Decoder::VP9Accelerator {
++ public:
++  explicit ArosVcnVP9Accelerator(ArosVcnVideoDecoder* owner) : owner_(owner) {}
++
++  scoped_refptr<VP9Picture> CreateVP9Picture() override {
++    return base::MakeRefCounted<ArosVP9Picture>();
++  }
++
++  Status SubmitDecode(scoped_refptr<VP9Picture> pic,
++                      const Vp9SegmentationParams& seg,
++                      const Vp9LoopFilterParams& lf,
++                      const Vp9ReferenceFrameVector& refs) override {
++    const Vp9FrameHeader* hdr = pic->frame_hdr.get();
++    const bool profile2 = hdr->profile == 2;
++    if (!session_.created() || session_.profile2() != profile2) {
++      if (!session_.Create(hdr->frame_width, hdr->frame_height, profile2)) {
++        VcnLog("[Chromium:AROS:VCN] VP9 session %dx%d could not be created\n",
++               hdr->frame_width, hdr->frame_height);
++        return Status::kFail;
++      }
++      VcnLog("[Chromium:AROS:VCN] VP9 session %dx%d profile %d\n",
++             hdr->frame_width, hdr->frame_height, hdr->profile);
++    }
++
++    aros::VcnVp9Frame f;
++    const bool keyframe = hdr->IsKeyframe();
++    uint8_t valid = aros::kVcnVp9NoPicture;
++    for (size_t k = 0; k < 8; ++k) {
++      f.ref_frame_map[k] = aros::kVcnVp9NoPicture;
++      if (keyframe) {
++        continue;
++      }
++      scoped_refptr<VP9Picture> ref = refs.GetFrame(k);
++      if (!ref) {
++        continue;
++      }
++      const uint8_t idx = static_cast<ArosVP9Picture*>(ref.get())->dpb_index;
++      f.ref_frame_map[k] = idx;
++      if (idx < aros::kVcnVp9MaxPictures) {
++        valid = idx;
++      }
++    }
++    for (size_t k = 0; k < 8; ++k) {
++      if (!keyframe && refs.GetFrame(k) &&
++          f.ref_frame_map[k] >= aros::kVcnVp9MaxPictures) {
++        f.ref_frame_map[k] = valid < aros::kVcnVp9MaxPictures ? valid : 0;
++      }
++    }
++    uint8_t curr = 0;
++    for (; curr < aros::kVcnVp9MaxPictures; ++curr) {
++      bool used = false;
++      for (size_t k = 0; k < 8; ++k) {
++        used |= f.ref_frame_map[k] == curr;
++      }
++      if (!used) {
++        break;
++      }
++    }
++    if (curr >= aros::kVcnVp9MaxPictures) {
++      return Status::kFail;
++    }
++    static_cast<ArosVP9Picture*>(pic.get())->dpb_index = curr;
++    f.curr_pic_idx = curr;
++
++    f.width = hdr->frame_width;
++    f.height = hdr->frame_height;
++    const bool use_prev_mvs = prev_show_frame_ && !hdr->error_resilient_mode &&
++                              prev_width_ == hdr->frame_width &&
++                              prev_height_ == hdr->frame_height;
++    uint32_t flags = 0;
++    flags |= (keyframe ? 0u : 1u) << 1;
++    flags |= hdr->error_resilient_mode << 2;
++    flags |= hdr->intra_only << 3;
++    flags |= hdr->allow_high_precision_mv << 4;
++    flags |= hdr->refresh_frame_context << 5;
++    flags |= hdr->frame_parallel_decoding_mode << 6;
++    flags |= seg.enabled << 7;
++    flags |= (seg.enabled && seg.update_map) << 8;
++    flags |= (seg.enabled && seg.temporal_update) << 9;
++    flags |= seg.update_data << 10;
++    flags |= lf.delta_enabled << 11;
++    flags |= lf.delta_update << 12;
++    flags |= use_prev_mvs << 13;
++    flags |= 1u << 14;
++    f.frame_header_flags = flags;
++    f.frame_context_idx = hdr->frame_context_idx_to_save_probs;
++    f.reset_frame_context = hdr->reset_frame_context;
++    f.interp_filter = static_cast<uint8_t>(hdr->interpolation_filter);
++    f.filter_level = lf.level;
++    f.sharpness_level = lf.sharpness;
++    if (lf.level) {
++      for (int i = 0; i < 8; ++i) {
++        for (int r = 0; r < 4; ++r) {
++          for (int m = 0; m < 2; ++m) {
++            f.lf_adj_level[i][r][m] = lf.lvl[i][r][m];
++          }
++        }
++      }
++    }
++    if (!hdr->quant_params.IsLossless()) {
++      f.base_qindex = hdr->quant_params.base_q_idx;
++      f.y_dc_delta_q = hdr->quant_params.delta_q_y_dc;
++      f.uv_ac_delta_q = hdr->quant_params.delta_q_uv_ac;
++      f.uv_dc_delta_q = hdr->quant_params.delta_q_uv_dc;
++    }
++    f.log2_tile_cols = hdr->tile_cols_log2;
++    f.log2_tile_rows = hdr->tile_rows_log2;
++    for (int n = 0; n < 3; ++n) {
++      f.frame_refs[n] = f.ref_frame_map[hdr->ref_frame_idx[n]];
++      f.ref_frame_sign_bias[n] = hdr->ref_frame_sign_bias[n + 1];
++    }
++    f.bit_depth = hdr->bit_depth;
++    f.compressed_header_size = hdr->header_size_in_bytes;
++    f.uncompressed_header_size = hdr->uncompressed_header_size;
++
++    f.segmentation_enabled = seg.enabled;
++    if (seg.enabled) {
++      using S = Vp9SegmentationParams;
++      for (int i = 0; i < 8; ++i) {
++        f.seg_feature_data[i] =
++            (seg.FeatureData(i, S::SEG_LVL_ALT_Q) & 0xffff) |
++            ((seg.FeatureData(i, S::SEG_LVL_ALT_LF) & 0xff) << 16) |
++            ((seg.FeatureData(i, S::SEG_LVL_REF_FRAME) & 0xf) << 24);
++        f.seg_feature_mask[i] =
++            seg.FeatureEnabled(i, S::SEG_LVL_ALT_Q) |
++            (seg.FeatureEnabled(i, S::SEG_LVL_ALT_LF) << 1) |
++            (seg.FeatureEnabled(i, S::SEG_LVL_REF_FRAME) << 2) |
++            (seg.FeatureEnabled(i, S::SEG_LVL_SKIP) << 3);
++      }
++      memcpy(f.seg_tree_probs, seg.tree_probs, sizeof(f.seg_tree_probs));
++      memcpy(f.seg_pred_probs, seg.pred_probs, sizeof(f.seg_pred_probs));
++      f.seg_abs_delta = seg.abs_or_delta_update;
++    }
++
++    prev_show_frame_ = hdr->show_frame;
++    prev_width_ = hdr->frame_width;
++    prev_height_ = hdr->frame_height;
++
++    if (!session_.Decode(f, hdr->data, hdr->frame_size)) {
++      VcnLog("[Chromium:AROS:VCN] VP9 decode failed (%dx%d, picture %d)\n",
++             hdr->frame_width, hdr->frame_height, curr);
++      return Status::kFail;
++    }
++    scoped_refptr<VideoFrame> frame =
++        CopyNV12(session_.y_plane(), session_.uv_plane(), session_.stride(),
++                 hdr->frame_width, hdr->frame_height);
++    if (!frame) {
++      return Status::kFail;
++    }
++    static_cast<ArosVP9Picture*>(pic.get())->frame = std::move(frame);
++    return Status::kOk;
++  }
++
++  bool OutputPicture(scoped_refptr<VP9Picture> pic) override {
++    auto* p = static_cast<ArosVP9Picture*>(pic.get());
++    if (!p->frame) {
++      return false;
++    }
++    owner_->OutputFrame(p->frame, pic->bitstream_id(), pic->visible_rect());
++    return true;
++  }
++
++  bool NeedsCompressedHeaderParsed() const override { return false; }
++
++ private:
++  const raw_ptr<ArosVcnVideoDecoder> owner_;
++  aros::VcnVp9Session session_;
++  bool prev_show_frame_ = false;
++  uint32_t prev_width_ = 0, prev_height_ = 0;
++};
++
+ }  // namespace
+ 
+ ArosVcnVideoDecoder::ArosVcnVideoDecoder(MediaLog* media_log) {}
+@@ -221,24 +431,39 @@ void ArosVcnVideoDecoder::Initialize(const VideoDecoderConfig& config,
+                                      const OutputCB& output_cb,
+                                      const WaitingCB& waiting_cb) {
+   const VideoCodecProfile profile = config.profile();
+-  const bool supported =
+-      config.codec() == VideoCodec::kH264 && !config.is_encrypted() &&
++  const bool h264 =
++      config.codec() == VideoCodec::kH264 &&
+       (profile == H264PROFILE_BASELINE || profile == H264PROFILE_MAIN ||
+        profile == H264PROFILE_HIGH);
+-  if (!supported) {
++  const bool vp9 = config.codec() == VideoCodec::kVP9 &&
++                   (profile == VP9PROFILE_PROFILE0 ||
++                    profile == VP9PROFILE_PROFILE2);
++  if (config.is_encrypted() || (!h264 && !vp9)) {
+     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE, base::BindOnce(std::move(init_cb),
+                                   DecoderStatus::Codes::kUnsupportedConfig));
+     return;
+   }
+-  VcnLog("[Chromium:AROS:VCN] hardware H.264 decoder selected, profile %d %dx%d\n",
+-         profile, config.coded_size().width(), config.coded_size().height());
++  {
++    char line[160];
++    snprintf(line, sizeof(line),
++             "[Chromium:AROS:VCN] hardware %s decoder selected, profile %d %dx%d\n",
++             h264 ? "H.264" : "VP9", static_cast<int>(profile),
++             config.coded_size().width(), config.coded_size().height());
++    ArosVcnKPutStr(line);
++  }
+   config_ = config;
+   output_cb_ = output_cb;
+   timestamps_.clear();
+-  decoder_ = std::make_unique<H264Decoder>(
+-      std::make_unique<ArosVcnH264Accelerator>(this), profile,
+-      config.color_space_info());
++  if (h264) {
++    decoder_ = std::make_unique<H264Decoder>(
++        std::make_unique<ArosVcnH264Accelerator>(this), profile,
++        config.color_space_info());
++  } else {
++    decoder_ = std::make_unique<VP9Decoder>(
++        std::make_unique<ArosVcnVP9Accelerator>(this), profile,
++        config.color_space_info());
++  }
+   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE, base::BindOnce(std::move(init_cb), DecoderStatus::Codes::kOk));
+ }
+@@ -308,7 +533,7 @@ void ArosVcnVideoDecoder::OutputFrame(scoped_refptr<VideoFrame> frame,
+ }
+ 
+ bool ArosVcnVideoDecoder::NeedsBitstreamConversion() const {
+-  return true;
++  return config_.codec() == VideoCodec::kH264;
+ }
+ 
+ bool ArosVcnVideoDecoder::CanReadWithoutStalling() const {
+diff --git a/media/gpu/aros/aros_video_decoder.h b/media/gpu/aros/aros_video_decoder.h
+index d64a5e86a3..65a9a18a5b 100644
+--- a/media/gpu/aros/aros_video_decoder.h
++++ b/media/gpu/aros/aros_video_decoder.h
+@@ -17,9 +17,10 @@ namespace media {
+ class AcceleratedVideoDecoder;
+ class MediaLog;
+ 
+-// H.264 decoding on the AMD VCN through amdgpu.hidd. Chromium's H264Decoder
+-// parses the stream and orders output; the accelerator turns each picture
+-// into a VCN decode message. Pictures are copied into NV12 VideoFrames.
++// H.264 and VP9 decoding on the AMD VCN through amdgpu.hidd. Chromium's
++// H264Decoder / VP9Decoder parse the stream and order output; the
++// accelerators turn each picture into a VCN decode message. Pictures are
++// copied into NV12 VideoFrames.
+ class ArosVcnVideoDecoder : public VideoDecoder {
+  public:
+   explicit ArosVcnVideoDecoder(MediaLog* media_log);
+diff --git a/media/gpu/aros/vcn_dec_msg.h b/media/gpu/aros/vcn_dec_msg.h
+index a29a619d6b..77abf37d17 100644
+--- a/media/gpu/aros/vcn_dec_msg.h
++++ b/media/gpu/aros/vcn_dec_msg.h
+@@ -240,4 +240,163 @@ typedef struct rvcn_decode_ib_package_s {
+    unsigned int package_type;
+ } rvcn_decode_ib_package_t;
+ 
++#define RDECODE_CODEC_VP9                                   0x00000011
++#define RDECODE_MESSAGE_VP9                                 0x0000000E
++#define RDECODE_MESSAGE_DYNAMIC_DPB                         0x00000010
++#define RDECODE_VP9_PROBS_DATA_SIZE                         2304
++#define RDECODE_FLAGS_USE_DYNAMIC_DPB_MASK                  0x00000001
++#define RDECODE_CMDBUF_FLAGS_PROB_TBL_BUFFER                         (0x00001000)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_FRAME_SIZE_AS_OFFSET_SHIFT     (15)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_UNCOMPRESSED_HEADER_SHIFT      (14)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_PREV_IN_FIND_MV_REFS_SHIFT     (13)
++#define RDECODE_FRAME_HDR_INFO_VP9_MODE_REF_DELTA_UPDATE_SHIFT        (12)
++#define RDECODE_FRAME_HDR_INFO_VP9_MODE_REF_DELTA_ENABLED_SHIFT       (11)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_UPDATE_DATA_SHIFT     (10)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_TEMPORAL_UPDATE_SHIFT (9)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_UPDATE_MAP_SHIFT      (8)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_ENABLED_SHIFT         (7)
++#define RDECODE_FRAME_HDR_INFO_VP9_FRAME_PARALLEL_DECODING_MODE_SHIFT (6)
++#define RDECODE_FRAME_HDR_INFO_VP9_REFRESH_FRAME_CONTEXT_SHIFT        (5)
++#define RDECODE_FRAME_HDR_INFO_VP9_ALLOW_HIGH_PRECISION_MV_SHIFT      (4)
++#define RDECODE_FRAME_HDR_INFO_VP9_INTRA_ONLY_SHIFT                   (3)
++#define RDECODE_FRAME_HDR_INFO_VP9_ERROR_RESILIENT_MODE_SHIFT         (2)
++#define RDECODE_FRAME_HDR_INFO_VP9_FRAME_TYPE_SHIFT                   (1)
++#define RDECODE_FRAME_HDR_INFO_VP9_SHOW_EXISTING_FRAME_SHIFT          (0)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_FRAME_SIZE_AS_OFFSET_MASK     (0x00008000)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_UNCOMPRESSED_HEADER_MASK      (0x00004000)
++#define RDECODE_FRAME_HDR_INFO_VP9_USE_PREV_IN_FIND_MV_REFS_MASK     (0x00002000)
++#define RDECODE_FRAME_HDR_INFO_VP9_MODE_REF_DELTA_UPDATE_MASK        (0x00001000)
++#define RDECODE_FRAME_HDR_INFO_VP9_MODE_REF_DELTA_ENABLED_MASK       (0x00000800)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_UPDATE_DATA_MASK     (0x00000400)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_TEMPORAL_UPDATE_MASK (0x00000200)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_UPDATE_MAP_MASK      (0x00000100)
++#define RDECODE_FRAME_HDR_INFO_VP9_SEGMENTATION_ENABLED_MASK         (0x00000080)
++#define RDECODE_FRAME_HDR_INFO_VP9_FRAME_PARALLEL_DECODING_MODE_MASK (0x00000040)
++#define RDECODE_FRAME_HDR_INFO_VP9_REFRESH_FRAME_CONTEXT_MASK        (0x00000020)
++#define RDECODE_FRAME_HDR_INFO_VP9_ALLOW_HIGH_PRECISION_MV_MASK      (0x00000010)
++#define RDECODE_FRAME_HDR_INFO_VP9_INTRA_ONLY_MASK                   (0x00000008)
++#define RDECODE_FRAME_HDR_INFO_VP9_ERROR_RESILIENT_MODE_MASK         (0x00000004)
++#define RDECODE_FRAME_HDR_INFO_VP9_FRAME_TYPE_MASK                   (0x00000002)
++#define RDECODE_FRAME_HDR_INFO_VP9_SHOW_EXISTING_FRAME_MASK          (0x00000001)
++
++typedef struct rvcn_dec_message_dynamic_dpb_t2_s {
++    unsigned int dpbConfigFlags;
++    unsigned int dpbLumaPitch;
++    unsigned int dpbLumaAlignedHeight;
++    unsigned int dpbLumaAlignedSize;
++    unsigned int dpbChromaPitch;
++    unsigned int dpbChromaAlignedHeight;
++    unsigned int dpbChromaAlignedSize;
++    unsigned int dpbArraySize;
++
++    unsigned int dpbCurrLo;
++    unsigned int dpbCurrHi;
++    unsigned int dpbAddrLo[16];
++    unsigned int dpbAddrHi[16];
++} rvcn_dec_message_dynamic_dpb_t2_t;
++
++typedef struct rvcn_dec_message_vp9_s {
++   unsigned int frame_header_flags;
++
++   unsigned char frame_context_idx;
++   unsigned char reset_frame_context;
++
++   unsigned char curr_pic_idx;
++   unsigned char interp_filter;
++
++   unsigned char filter_level;
++   unsigned char sharpness_level;
++   unsigned char lf_adj_level[8][4][2];
++   unsigned char base_qindex;
++   signed char y_dc_delta_q;
++   signed char uv_ac_delta_q;
++   signed char uv_dc_delta_q;
++
++   unsigned char log2_tile_cols;
++   unsigned char log2_tile_rows;
++   unsigned char tx_mode;
++   unsigned char reference_mode;
++   unsigned char chroma_format;
++
++   unsigned char ref_frame_map[8];
++
++   unsigned char frame_refs[3];
++   unsigned char ref_frame_sign_bias[3];
++   unsigned char frame_to_show;
++   unsigned char bit_depth_luma_minus8;
++   unsigned char bit_depth_chroma_minus8;
++
++   unsigned char p010_mode;
++   unsigned char msb_mode;
++   unsigned char luma_10to8;
++   unsigned char chroma_10to8;
++
++   unsigned int vp9_frame_size;
++   unsigned int compressed_header_size;
++   unsigned int uncompressed_header_size;
++   unsigned char reserved[2];
++} rvcn_dec_message_vp9_t;
++
++typedef struct rvcn_dec_vp9_nmv_ctx_mask_s {
++   unsigned short classes_mask[2];
++   unsigned short bits_mask[2];
++   unsigned char joints_mask;
++   unsigned char sign_mask[2];
++   unsigned char class0_mask[2];
++   unsigned char class0_fp_mask[2];
++   unsigned char fp_mask[2];
++   unsigned char class0_hp_mask[2];
++   unsigned char hp_mask[2];
++   unsigned char reserve[11];
++} rvcn_dec_vp9_nmv_ctx_mask_t;
++
++typedef struct rvcn_dec_vp9_nmv_component_s {
++   unsigned char sign;
++   unsigned char classes[10];
++   unsigned char class0[1];
++   unsigned char bits[10];
++   unsigned char class0_fp[2][3];
++   unsigned char fp[3];
++   unsigned char class0_hp;
++   unsigned char hp;
++} rvcn_dec_vp9_nmv_component_t;
++
++typedef struct rvcn_dec_vp9_probs_s {
++   rvcn_dec_vp9_nmv_ctx_mask_t nmvc_mask;
++   unsigned char coef_probs[4][2][2][6][6][3];
++   unsigned char y_mode_prob[4][9];
++   unsigned char uv_mode_prob[10][9];
++   unsigned char single_ref_prob[5][2];
++   unsigned char switchable_interp_prob[4][2];
++   unsigned char partition_prob[16][3];
++   unsigned char inter_mode_probs[7][3];
++   unsigned char mbskip_probs[3];
++   unsigned char intra_inter_prob[4];
++   unsigned char comp_inter_prob[5];
++   unsigned char comp_ref_prob[5];
++   unsigned char tx_probs_32x32[2][3];
++   unsigned char tx_probs_16x16[2][2];
++   unsigned char tx_probs_8x8[2][1];
++   unsigned char mv_joints[3];
++   rvcn_dec_vp9_nmv_component_t mv_comps[2];
++} rvcn_dec_vp9_probs_t;
++
++typedef struct rvcn_dec_vp9_probs_segment_s {
++   union {
++      rvcn_dec_vp9_probs_t probs;
++      unsigned char probs_data[RDECODE_VP9_PROBS_DATA_SIZE];
++   };
++
++   union {
++      struct {
++         unsigned int feature_data[8];
++         unsigned char tree_probs[7];
++         unsigned char pred_probs[3];
++         unsigned char abs_delta;
++         unsigned char feature_mask[8];
++      } seg;
++      unsigned char segment_data[256];
++   };
++} rvcn_dec_vp9_probs_segment_t;
++
+ #endif
+diff --git a/media/gpu/aros/vcn_vp9_default.h b/media/gpu/aros/vcn_vp9_default.h
+new file mode 100644
+index 0000000000..9e4d4ada97
+--- /dev/null
++++ b/media/gpu/aros/vcn_vp9_default.h
+@@ -0,0 +1,585 @@
++/**************************************************************************
++ *
++ * Copyright 2018 Advanced Micro Devices, Inc.
++ * All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the
++ * "Software"), to deal in the Software without restriction, including
++ * without limitation the rights to use, copy, modify, merge, publish,
++ * distribute, sub license, and/or sell copies of the Software, and to
++ * permit persons to whom the Software is furnished to do so, subject to
++ * the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the
++ * next paragraph) shall be included in all copies or substantial portions
++ * of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
++ * IN NO EVENT SHALL THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
++ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
++ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ **************************************************************************/
++
++#ifndef vl_probs_table_h
++#define vl_probs_table_h
++
++static const unsigned char default_coef_probs_4x4[2][2][6][6][3] = {
++   {  /* Y plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 195,  29, 183 }, {  84,  49, 136 }, {   8,  42,  71 }
++         },
++         {  /* Band 1 */
++           {  31, 107, 169 }, {  35,  99, 159 }, {  17,  82, 140 },
++           {   8,  66, 114 }, {   2,  44,  76 }, {   1,  19,  32 }
++         },
++         {  /* Band 2 */
++           {  40, 132, 201 }, {  29, 114, 187 }, {  13,  91, 157 },
++           {   7,  75, 127 }, {   3,  58,  95 }, {   1,  28,  47 }
++         },
++         {  /* Band 3 */
++           {  69, 142, 221 }, {  42, 122, 201 }, {  15,  91, 159 },
++           {   6,  67, 121 }, {   1,  42,  77 }, {   1,  17,  31 }
++         },
++         {  /* Band 4 */
++           { 102, 148, 228 }, {  67, 117, 204 }, {  17,  82, 154 },
++           {   6,  59, 114 }, {   2,  39,  75 }, {   1,  15,  29 }
++         },
++         {  /* Band 5 */
++           { 156,  57, 233 }, { 119,  57, 212 }, {  58,  48, 163 },
++           {  29,  40, 124 }, {  12,  30,  81 }, {   3,  12,  31 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++           { 191, 107, 226 }, { 124, 117, 204 }, {  25,  99, 155 }
++         },
++         {  /* Band 1 */
++           {  29, 148, 210 }, {  37, 126, 194 }, {   8,  93, 157 },
++           {   2,  68, 118 }, {   1,  39,  69 }, {   1,  17,  33 }
++         },
++         {  /* Band 2 */
++           {  41, 151, 213 }, {  27, 123, 193 }, {   3,  82, 144 },
++           {   1,  58, 105 }, {   1,  32,  60 }, {   1,  13,  26 }
++         },
++         {  /* Band 3 */
++           {  59, 159, 220 }, {  23, 126, 198 }, {   4,  88, 151 },
++           {   1,  66, 114 }, {   1,  38,  71 }, {   1,  18,  34 }
++         },
++         {  /* Band 4 */
++           { 114, 136, 232 }, {  51, 114, 207 }, {  11,  83, 155 },
++           {   3,  56, 105 }, {   1,  33,  65 }, {   1,  17,  34 }
++         },
++         {  /* Band 5 */
++           { 149,  65, 234 }, { 121,  57, 215 }, {  61,  49, 166 },
++           {  28,  36, 114 }, {  12,  25,  76 }, {   3,  16,  42 }
++         }
++      }
++   },
++   {  /* UV plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 214,  49, 220 }, { 132,  63, 188 }, {  42,  65, 137 }
++         },
++         {  /* Band 1 */
++            {  85, 137, 221 }, { 104, 131, 216 }, {  49, 111, 192 },
++            {  21,  87, 155 }, {   2,  49,  87 }, {   1,  16,  28 }
++         },
++         {  /* Band 2 */
++            {  89, 163, 230 }, {  90, 137, 220 }, {  29, 100, 183 },
++            {  10,  70, 135 }, {   2,  42,  81 }, {   1,  17,  33 }
++         },
++         {  /* Band 3 */
++            { 108, 167, 237 }, {  55, 133, 222 }, {  15,  97, 179 },
++            {   4,  72, 135 }, {   1,  45,  85 }, {   1,  19,  38 }
++         },
++         {  /* Band 4 */
++            { 124, 146, 240 }, {  66, 124, 224 }, {  17,  88, 175 },
++            {   4,  58, 122 }, {   1,  36,  75 }, {   1,  18,  37 }
++         },
++         {  /*  Band 5 */
++            { 141,  79, 241 }, { 126,  70, 227 }, {  66,  58, 182 },
++            {  30,  44, 136 }, {  12,  34,  96 }, {   2,  20,  47 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            { 229,  99, 249 }, { 143, 111, 235 }, {  46, 109, 192 }
++         },
++         {  /* Band 1 */
++            {  82, 158, 236 }, {  94, 146, 224 }, {  25, 117, 191 },
++            {   9,  87, 149 }, {   3,  56,  99 }, {   1,  33,  57 }
++         },
++         {  /* Band 2 */
++            {  83, 167, 237 }, {  68, 145, 222 }, {  10, 103, 177 },
++            {   2,  72, 131 }, {   1,  41,  79 }, {   1,  20,  39 }
++         },
++         {  /* Band 3 */
++            {  99, 167, 239 }, {  47, 141, 224 }, {  10, 104, 178 },
++            {   2,  73, 133 }, {   1,  44,  85 }, {   1,  22,  47 }
++         },
++         {  /* Band 4 */
++            { 127, 145, 243 }, {  71, 129, 228 }, {  17,  93, 177 },
++            {   3,  61, 124 }, {   1,  41,  84 }, {   1,  21,  52 }
++         },
++         {  /* Band 5 */
++            { 157,  78, 244 }, { 140,  72, 231 }, {  69,  58, 184 },
++            {  31,  44, 137 }, {  14,  38, 105 }, {   8,  23,  61 }
++         }
++      }
++   }
++};
++
++static const unsigned char default_coef_probs_8x8[2][2][6][6][3] = {
++   {  /* Y plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 125,  34, 187 }, {  52,  41, 133 }, {   6,  31,  56 }
++         },
++         {  /* Band 1 */
++            {  37, 109, 153 }, {  51, 102, 147 }, {  23,  87, 128 },
++            {   8,  67, 101 }, {   1,  41,  63 }, {   1,  19,  29 }
++         },
++         {  /* Band 2 */
++            {  31, 154, 185 }, {  17, 127, 175 }, {   6,  96, 145 },
++            {   2,  73, 114 }, {   1,  51,  82 }, {   1,  28,  45 }
++         },
++         {  /* Band 3 */
++            {  23, 163, 200 }, {  10, 131, 185 }, {   2,  93, 148 },
++            {   1,  67, 111 }, {   1,  41,  69 }, {   1,  14,  24 }
++         },
++         {  /* Band 4 */
++            {  29, 176, 217 }, {  12, 145, 201 }, {   3, 101, 156 },
++            {   1,  69, 111 }, {   1,  39,  63 }, {   1,  14,  23 }
++         },
++         {  /* Band 5 */
++            {  57, 192, 233 }, {  25, 154, 215 }, {   6, 109, 167 },
++            {   3,  78, 118 }, {   1,  48,  69 }, {   1,  21,  29 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            { 202, 105, 245 }, { 108, 106, 216 }, {  18,  90, 144 }
++         },
++         {  /* Band 1 */
++            {  33, 172, 219 }, {  64, 149, 206 }, {  14, 117, 177 },
++            {   5,  90, 141 }, {   2,  61,  95 }, {   1,  37,  57 }
++         },
++         {  /* Band 2 */
++            {  33, 179, 220 }, {  11, 140, 198 }, {   1,  89, 148 },
++            {   1,  60, 104 }, {   1,  33,  57 }, {   1,  12,  21 }
++         },
++         {  /* Band 3 */
++            {  30, 181, 221 }, {   8, 141, 198 }, {   1,  87, 145 },
++            {   1,  58, 100 }, {   1,  31,  55 }, {   1,  12,  20 }
++         },
++         {  /* Band 4 */
++            {  32, 186, 224 }, {   7, 142, 198 }, {   1,  86, 143 },
++            {   1,  58, 100 }, {   1,  31,  55 }, {   1,  12,  22 }
++         },
++         {  /* Band 5 */
++            {  57, 192, 227 }, {  20, 143, 204 }, {   3,  96, 154 },
++            {   1,  68, 112 }, {   1,  42,  69 }, {   1,  19,  32 }
++         }
++      }
++   },
++   {  /* UV plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 212,  35, 215 }, { 113,  47, 169 }, {  29,  48, 105 }
++         },
++         {  /* Band 1 */
++            {  74, 129, 203 }, { 106, 120, 203 }, {  49, 107, 178 },
++            {  19,  84, 144 }, {   4,  50,  84 }, {   1,  15,  25 }
++         },
++         {  /* Band 2 */
++            {  71, 172, 217 }, {  44, 141, 209 }, {  15, 102, 173 },
++            {   6,  76, 133 }, {   2,  51,  89 }, {   1,  24,  42 }
++         },
++         {  /* Band 3 */
++            {  64, 185, 231 }, {  31, 148, 216 }, {   8, 103, 175 },
++            {   3,  74, 131 }, {   1,  46,  81 }, {   1,  18,  30 }
++         },
++         {  /* Band 4 */
++            {  65, 196, 235 }, {  25, 157, 221 }, {   5, 105, 174 },
++            {   1,  67, 120 }, {   1,  38,  69 }, {   1,  15,  30 }
++         },
++         {  /* Band 5 */
++            {  65, 204, 238 }, {  30, 156, 224 }, {   7, 107, 177 },
++            {   2,  70, 124 }, {   1,  42,  73 }, {   1,  18,  34 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            { 225,  86, 251 }, { 144, 104, 235 }, {  42,  99, 181 }
++         },
++         {  /* Band 1 */
++            {  85, 175, 239 }, { 112, 165, 229 }, {  29, 136, 200 },
++            {  12, 103, 162 }, {   6,  77, 123 }, {   2,  53,  84 }
++         },
++         {  /* Band 2 */
++            {  75, 183, 239 }, {  30, 155, 221 }, {   3, 106, 171 },
++            {   1,  74, 128 }, {   1,  44,  76 }, {   1,  17,  28 }
++         },
++         {  /* Band 3 */
++            {  73, 185, 240 }, {  27, 159, 222 }, {   2, 107, 172 },
++            {   1,  75, 127 }, {   1,  42,  73 }, {   1,  17,  29 }
++         },
++         {  /* Band 4 */
++            {  62, 190, 238 }, {  21, 159, 222 }, {   2, 107, 172 },
++            {   1,  72, 122 }, {   1,  40,  71 }, {   1,  18,  32 }
++         },
++         {  /* Band 5 */
++            {  61, 199, 240 }, {  27, 161, 226 }, {   4, 113, 180 },
++            {   1,  76, 129 }, {   1,  46,  80 }, {   1,  23,  41 }
++         }
++      }
++   }
++};
++
++static const unsigned char default_coef_probs_16x16[2][2][6][6][3] = {
++   {  /* Y plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            {   7,  27, 153 }, {   5,  30,  95 }, {   1,  16,  30 }
++         },
++         {  /* Band 1 */
++            {  50,  75, 127 }, {  57,  75, 124 }, {  27,  67, 108 },
++            {  10,  54,  86 }, {   1,  33,  52 }, {   1,  12,  18 }
++         },
++         {  /* Band 2 */
++            {  43, 125, 151 }, {  26, 108, 148 }, {   7,  83, 122 },
++            {   2,  59,  89 }, {   1,  38,  60 }, {   1,  17,  27 }
++         },
++         {  /* Band 3 */
++            {  23, 144, 163 }, {  13, 112, 154 }, {   2,  75, 117 },
++            {   1,  50,  81 }, {   1,  31,  51 }, {   1,  14,  23 }
++         },
++         {  /* Band 4 */
++            {  18, 162, 185 }, {   6, 123, 171 }, {   1,  78, 125 },
++            {   1,  51,  86 }, {   1,  31,  54 }, {   1,  14,  23 }
++         },
++         {  /* Band 5 */
++            {  15, 199, 227 }, {   3, 150, 204 }, {   1,  91, 146 },
++            {   1,  55,  95 }, {   1,  30,  53 }, {   1,  11,  20 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            {  19,  55, 240 }, {  19,  59, 196 }, {   3,  52, 105 }
++         },
++         {  /* Band 1 */
++            {  41, 166, 207 }, { 104, 153, 199 }, {  31, 123, 181 },
++            {  14, 101, 152 }, {   5,  72, 106 }, {   1,  36,  52 }
++         },
++         {  /* Band 2 */
++            {  35, 176, 211 }, {  12, 131, 190 }, {   2,  88, 144 },
++            {   1,  60, 101 }, {   1,  36,  60 }, {   1,  16,  28 }
++         },
++         {  /* Band 3 */
++            {  28, 183, 213 }, {   8, 134, 191 }, {   1,  86, 142 },
++            {   1,  56,  96 }, {   1,  30,  53 }, {   1,  12,  20 }
++         },
++         {  /* Band 4 */
++            {  20, 190, 215 }, {   4, 135, 192 }, {   1,  84, 139 },
++            {   1,  53,  91 }, {   1,  28,  49 }, {   1,  11,  20 }
++         },
++         {  /* Band 5 */
++            {  13, 196, 216 }, {   2, 137, 192 }, {   1,  86, 143 },
++            {   1,  57,  99 }, {   1,  32,  56 }, {   1,  13,  24 }
++         }
++      }
++   },
++   {  /* UV plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 211,  29, 217 }, {  96,  47, 156 }, {  22,  43,  87 }
++         },
++         {  /* Band 1 */
++            {  78, 120, 193 }, { 111, 116, 186 }, {  46, 102, 164 },
++            {  15,  80, 128 }, {   2,  49,  76 }, {   1,  18,  28 }
++         },
++         {  /* Band 2 */
++            {  71, 161, 203 }, {  42, 132, 192 }, {  10,  98, 150 },
++            {   3,  69, 109 }, {   1,  44,  70 }, {   1,  18,  29 }
++         },
++         {  /* Band 3 */
++            {  57, 186, 211 }, {  30, 140, 196 }, {   4,  93, 146 },
++            {   1,  62, 102 }, {   1,  38,  65 }, {   1,  16,  27 }
++         },
++         {  /* Band 4 */
++            {  47, 199, 217 }, {  14, 145, 196 }, {   1,  88, 142 },
++            {   1,  57,  98 }, {   1,  36,  62 }, {   1,  15,  26 }
++         },
++         {  /* Band 5 */
++            {  26, 219, 229 }, {   5, 155, 207 }, {   1,  94, 151 },
++            {   1,  60, 104 }, {   1,  36,  62 }, {   1,  16,  28 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            { 233,  29, 248 }, { 146,  47, 220 }, {  43,  52, 140 }
++         },
++         {  /* Band 1 */
++            { 100, 163, 232 }, { 179, 161, 222 }, {  63, 142, 204 },
++            {  37, 113, 174 }, {  26,  89, 137 }, {  18,  68,  97 }
++         },
++         {  /* Band 2 */
++            {  85, 181, 230 }, {  32, 146, 209 }, {   7, 100, 164 },
++            {   3,  71, 121 }, {   1,  45,  77 }, {   1,  18,  30 }
++         },
++         {  /* Band 3 */
++            {  65, 187, 230 }, {  20, 148, 207 }, {   2,  97, 159 },
++            {   1,  68, 116 }, {   1,  40,  70 }, {   1,  14,  29 }
++         },
++         {  /* Band 4 */
++            {  40, 194, 227 }, {   8, 147, 204 }, {   1,  94, 155 },
++            {   1,  65, 112 }, {   1,  39,  66 }, {   1,  14,  26 }
++         },
++         {  /* Band 5 */
++            {  16, 208, 228 }, {   3, 151, 207 }, {   1,  98, 160 },
++            {   1,  67, 117 }, {   1,  41,  74 }, {   1,  17,  31 }
++         }
++      }
++   }
++};
++
++static const unsigned char default_coef_probs_32x32[2][2][6][6][3] = {
++   {  /* Y plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            {  17,  38, 140 }, {   7,  34,  80 }, {   1,  17,  29 }
++         },
++         {  /* Band 1 */
++            {  37,  75, 128 }, {  41,  76, 128 }, {  26,  66, 116 },
++            {  12,  52,  94 }, {   2,  32,  55 }, {   1,  10,  16 }
++         },
++         {  /* Band 2 */
++            {  50, 127, 154 }, {  37, 109, 152 }, {  16,  82, 121 },
++            {   5,  59,  85 }, {   1,  35,  54 }, {   1,  13,  20 }
++         },
++         {  /* Band 3 */
++            {  40, 142, 167 }, {  17, 110, 157 }, {   2,  71, 112 },
++            {   1,  44,  72 }, {   1,  27,  45 }, {   1,  11,  17 }
++         },
++         {  /* Band 4 */
++            {  30, 175, 188 }, {   9, 124, 169 }, {   1,  74, 116 },
++            {   1,  48,  78 }, {   1,  30,  49 }, {   1,  11,  18 }
++         },
++         {  /* Band 5 */
++            {  10, 222, 223 }, {   2, 150, 194 }, {   1,  83, 128 },
++            {   1,  48,  79 }, {   1,  27,  45 }, {   1,  11,  17 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            {  36,  41, 235 }, {  29,  36, 193 }, {  10,  27, 111 }
++         },
++         {  /* Band 1 */
++            {  85, 165, 222 }, { 177, 162, 215 }, { 110, 135, 195 },
++            {  57, 113, 168 }, {  23,  83, 120 }, {  10,  49,  61 }
++         },
++         {  /* Band 2 */
++            {  85, 190, 223 }, {  36, 139, 200 }, {   5,  90, 146 },
++            {   1,  60, 103 }, {   1,  38,  65 }, {   1,  18,  30 }
++         },
++         {  /* Band 3 */
++            {  72, 202, 223 }, {  23, 141, 199 }, {   2,  86, 140 },
++            {   1,  56,  97 }, {   1,  36,  61 }, {   1,  16,  27 }
++         },
++         {  /* Band 4 */
++            {  55, 218, 225 }, {  13, 145, 200 }, {   1,  86, 141 },
++            {   1,  57,  99 }, {   1,  35,  61 }, {   1,  13,  22 }
++         },
++         {  /* Band 5 */
++            {  15, 235, 212 }, {   1, 132, 184 }, {   1,  84, 139 },
++            {   1,  57,  97 }, {   1,  34,  56 }, {   1,  14,  23 }
++         }
++      }
++   },
++   {  /* UV plane */
++      {  /* Intra */
++         {  /* Band 0 */
++            { 181,  21, 201 }, {  61,  37, 123 }, {  10,  38,  71 }
++         },
++         {  /* Band 1 */
++            {  47, 106, 172 }, {  95, 104, 173 }, {  42,  93, 159 },
++            {  18,  77, 131 }, {   4,  50,  81 }, {   1,  17,  23 }
++         },
++         {  /* Band 2 */
++            {  62, 147, 199 }, {  44, 130, 189 }, {  28, 102, 154 },
++            {  18,  75, 115 }, {   2,  44,  65 }, {   1,  12,  19 }
++         },
++         {  /* Band 3 */
++            {  55, 153, 210 }, {  24, 130, 194 }, {   3,  93, 146 },
++            {   1,  61,  97 }, {   1,  31,  50 }, {   1,  10,  16 }
++         },
++         {  /* Band 4 */
++            {  49, 186, 223 }, {  17, 148, 204 }, {   1,  96, 142 },
++            {   1,  53,  83 }, {   1,  26,  44 }, {   1,  11,  17 }
++         },
++         {  /* Band 5 */
++            {  13, 217, 212 }, {   2, 136, 180 }, {   1,  78, 124 },
++            {   1,  50,  83 }, {   1,  29,  49 }, {   1,  14,  23 }
++         }
++      },
++      {  /* Inter */
++         {  /* Band 0 */
++            { 197,  13, 247 }, {  82,  17, 222 }, {  25,  17, 162 }
++         },
++         {  /* Band 1 */
++            { 126, 186, 247 }, { 234, 191, 243 }, { 176, 177, 234 },
++            { 104, 158, 220 }, {  66, 128, 186 }, {  55,  90, 137 }
++         },
++         {  /* Band 2 */
++            { 111, 197, 242 }, {  46, 158, 219 }, {   9, 104, 171 },
++            {   2,  65, 125 }, {   1,  44,  80 }, {   1,  17,  91 }
++         },
++         {  /* Band 3 */
++            { 104, 208, 245 }, {  39, 168, 224 }, {   3, 109, 162 },
++            {   1,  79, 124 }, {   1,  50, 102 }, {   1,  43, 102 }
++         },
++         {  /* Band 4 */
++            {  84, 220, 246 }, {  31, 177, 231 }, {   2, 115, 180 },
++            {   1,  79, 134 }, {   1,  55,  77 }, {   1,  60,  79 }
++         },
++         {  /* Band 5 */
++            {  43, 243, 240 }, {   8, 180, 217 }, {   1, 115, 166 },
++            {   1,  84, 121 }, {   1,  51,  67 }, {   1,  16,   6 }
++         }
++      }
++   }
++};
++
++static const unsigned char default_if_y_probs[4][9] = {
++   {  65,  32,  18, 144, 162, 194,  41,  51,  98 },  /* block_size < 8x8 */
++   { 132,  68,  18, 165, 217, 196,  45,  40,  78 },  /* block_size < 16x16 */
++   { 173,  80,  19, 176, 240, 193,  64,  35,  46 },  /* block_size < 32x32 */
++   { 221, 135,  38, 194, 248, 121,  96,  85,  29 }   /* block_size >= 32x32 */
++};
++
++static const unsigned char default_if_uv_probs[10][9] = {
++   { 120,   7,  76, 176, 208, 126,  28,  54, 103 },  /* y = dc */
++   {  48,  12, 154, 155, 139,  90,  34, 117, 119 },  /* y = v */
++   {  67,   6,  25, 204, 243, 158,  13,  21,  96 },  /* y = h */
++   {  97,   5,  44, 131, 176, 139,  48,  68,  97 },  /* y = d45 */
++   {  83,   5,  42, 156, 111, 152,  26,  49, 152 },  /* y = d135 */
++   {  80,   5,  58, 178,  74,  83,  33,  62, 145 },  /* y = d117 */
++   {  86,   5,  32, 154, 192, 168,  14,  22, 163 },  /* y = d153 */
++   {  85,   5,  32, 156, 216, 148,  19,  29,  73 },  /* y = d207 */
++   {  77,   7,  64, 116, 132, 122,  37, 126, 120 },  /* y = d63 */
++   { 101,  21, 107, 181, 192, 103,  19,  67, 125 }   /* y = tm */
++};
++
++static const unsigned char default_single_ref_p[5][2] = {
++   {  33,  16 },
++   {  77,  74 },
++   { 142, 142 },
++   { 172, 170 },
++   { 238, 247 }
++};
++
++static const unsigned char  default_switchable_interp_prob[4][2] = {
++   { 235, 162, },
++   { 36, 255, },
++   { 34, 3, },
++   { 149, 144, },
++};
++
++static const unsigned char default_partition_probs[16][3] = {
++   /* 8x8 -> 4x4 */
++   { 199, 122, 141 },  /* a/l both not split */
++   { 147,  63, 159 },  /* a split, l not split */
++   { 148, 133, 118 },  /* l split, a not split */
++   { 121, 104, 114 },  /* a/l both split */
++   /* 16x16 -> 8x8 */
++   { 174,  73,  87 },  /* a/l both not split */
++   {  92,  41,  83 },  /* a split, l not split */
++   {  82,  99,  50 },  /* l split, a not split */
++   {  53,  39,  39 },  /* a/l both split */
++   /* 32x32 -> 16x16 */
++   { 177,  58,  59 },  /* a/l both not split */
++   {  68,  26,  63 },  /* a split, l not split */
++   {  52,  79,  25 },  /* l split, a not split */
++   {  17,  14,  12 },  /* a/l both split */
++   /* 64x64 -> 32x32 */
++   { 222,  34,  30 },  /* a/l both not split */
++   {  72,  16,  44 },  /* a split, l not split */
++   {  58,  32,  12 },  /* l split, a not split */
++   {  10,   7,   6 },  /* a/l both split */
++};
++
++static const unsigned char default_inter_mode_probs[7][3] = {
++   {2,       173,   34},  /* 0 = both zero mv */
++   {7,       145,   85},  /* 1 = one zero mv + one a predicted mv */
++   {7,       166,   63},  /* 2 = two predicted mvs */
++   {7,       94,    66},  /* 3 = one predicted/zero and one new mv */
++   {8,       64,    46},  /* 4 = two new mvs */
++   {17,      81,    31},  /* 5 = one intra neighbour + x */
++   {25,      29,    30},  /* 6 = two intra neighbours */
++};
++
++static const unsigned char default_skip_probs[3] = {
++   192, 128, 64
++};
++
++static const unsigned char default_intra_inter_p[4] = {
++   9, 102, 187, 225
++};
++
++static const unsigned char default_comp_inter_p[5] = {
++   239, 183, 119,  96,  41
++};
++
++static const unsigned char default_comp_ref_p[5] = {
++   50, 126, 123, 221, 226
++};
++
++static const unsigned char default_tx_probs_32x32[2][3] = {
++   { 3, 136, 37 },
++   { 5, 52,  13 }
++};
++
++static const unsigned char default_tx_probs_16x16[2][2] = {
++   { 20, 152 },
++   { 15, 101 }
++};
++
++static const unsigned char default_tx_probs_8x8[2][1] = {
++   { 100 },
++   { 66  }
++};
++
++static const unsigned char default_nmv_joints[3] = {
++   32, 64, 96
++};
++
++static const unsigned char default_nmv_components[2][33] = {
++   {  /* Vertical component */
++      128,                                                  /* sign */
++      224, 144, 192, 168, 192, 176, 192, 198, 198, 245,     /* class */
++      216,                                                  /* class0 */
++      136, 140, 148, 160, 176, 192, 224, 234, 234, 240,     /* bits */
++      128, 128, 64, 96, 112, 64,                            /* class0_fp */
++      64, 96, 64,                                           /* fp */
++      160,                                                  /* class0_hp bit */
++      128,                                                  /* hp */
++   },
++   {  /* Horizontal component */
++      128,                                                  /* sign */
++      216, 128, 176, 160, 176, 176, 192, 198, 198, 208,     /* class */
++      208,                                                  /* class0 */
++      136, 140, 148, 160, 176, 192, 224, 234, 234, 240,     /* bits */
++      128, 128, 64, 96, 112, 64,                            /* class0_fp */
++      64, 96, 64,                                           /* fp */
++      160,                                                  /* class0_hp bit */
++      128,                                                  /* hp */
++   }
++};
++
++#endif /* vl_probs_table_h */

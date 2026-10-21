@@ -1,0 +1,225 @@
+From b4bf8d50eef11270d2781fcff7fc385e05c4d790 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 10:36:43 -0500
+Subject: [PATCH 649/689] aros: optional placement of threads that codec
+ libraries create
+
+AROS gives a new task its creator's CPU and never migrates it, so the
+decode threads libvpx, dav1d and ffmpeg start from the media thread all
+share one core. With --aros-pin-codec-threads, every pthread_create that
+does not come from PlatformThread (wrapped in the chrome executable) is
+placed round-robin on CPUs 1..N-1, following the explicit-placement design
+(TASKAFFINITY_ANY would only race the single ready-list lock).
+---
+ base/base_switches.cc                         |  7 +++
+ base/base_switches.h                          |  1 +
+ base/threading/platform_thread_aros.cc        | 52 +++++++++++++++++++
+ .../platform_thread_internal_posix.h          | 11 ++++
+ base/threading/platform_thread_posix.cc       |  6 +++
+ chrome/BUILD.gn                               | 11 +++-
+ chrome/app/aros_codec_threads.cc              | 34 ++++++++++++
+ 7 files changed, 120 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/app/aros_codec_threads.cc
+
+diff --git a/base/base_switches.cc b/base/base_switches.cc
+index 192e7c4b3b..446851155f 100644
+--- a/base/base_switches.cc
++++ b/base/base_switches.cc
+@@ -232,6 +232,13 @@ const char kArosCpuLimit[] = "aros-cpu-limit";
+ // switch pins over every CPU but 0, as before.
+ const char kArosPinWorkers[] = "aros-pin-workers";
+ 
++// Place threads that Chromium does not create itself - the ones libvpx,
++// dav1d and ffmpeg start for multi-threaded video decode - round-robin on
++// CPUs 1..N-1. AROS gives a new task its creator's CPU and never migrates it,
++// so without this every decoder thread shares the media thread's core.
++// OFF BY DEFAULT, so one binary is both configurations.
++const char kArosPinCodecThreads[] = "aros-pin-codec-threads";
++
+ // Let the thread pool choose WHICH worker to wake by the load on that worker's
+ // core, instead of taking whichever idle worker is at the front of the set.
+ //
+diff --git a/base/base_switches.h b/base/base_switches.h
+index 07ef2062a8..0e5a4fa151 100644
+--- a/base/base_switches.h
++++ b/base/base_switches.h
+@@ -68,6 +68,7 @@ extern const char kSchedulerBoostUrgent[];
+ #if BUILDFLAG(IS_AROS)
+ extern const char kArosCpuLimit[];
+ extern const char kArosPinWorkers[];
++extern const char kArosPinCodecThreads[];
+ extern const char kArosNativeThreadPool[];
+ extern const char kArosMultiProcess[];
+ #endif
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index 88865f3bc4..b1eedde327 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -108,6 +108,58 @@ bool MaybePinWorkersEnabled() {
+ 
+ }  // namespace
+ 
++namespace {
++thread_local bool g_creating_platform_thread = false;
++
++int PinCodecThreadsEnabled() {
++  static std::atomic<int> state{-2};  // -2 unknown, -1 off, 1 on
++  int known = state.load(std::memory_order_relaxed);
++  if (known != -2)
++    return known;
++  if (!base::CommandLine::InitializedForCurrentProcess())
++    return -1;
++  known = base::CommandLine::ForCurrentProcess()->HasSwitch(
++              switches::kArosPinCodecThreads)
++              ? 1
++              : -1;
++  state.store(known, std::memory_order_relaxed);
++  return known;
++}
++}  // namespace
++
++bool ArosCreatingPlatformThread() {
++  return g_creating_platform_thread;
++}
++
++void ArosSetCreatingPlatformThread(bool creating) {
++  g_creating_platform_thread = creating;
++}
++
++void MaybePinForeignThread(pthread_attr_t* attributes) {
++  if (PinCodecThreadsEnabled() < 0)
++    return;
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return;
++  const int cpus = static_cast<int>(KrnGetCPUCount());
++  if (cpus < 2)
++    return;
++  static std::atomic<unsigned> next{0};
++  const unsigned slot = next.fetch_add(1, std::memory_order_relaxed);
++  const int cpu = 1 + static_cast<int>(slot % static_cast<unsigned>(cpus - 1));
++  void* mask = KrnAllocCPUMask();
++  if (!mask)
++    return;
++  KrnClearCPUMask(mask);
++  KrnGetCPUMask(cpu, mask);
++  pthread_attr_setaffinity_np(attributes, 0, mask);
++  char line[96];
++  std::snprintf(line, sizeof(line),
++                "[Chromium:SMP] pin foreign thread slot=%u cpu=%d of %d\n", slot,
++                cpu, cpus);
++  ArosKPutStr(line);
++}
++
+ void MaybePinThreadRoundRobin(pthread_attr_t* attributes) {
+   const int cap = PinWorkersCpuCap();
+   if (cap < 0)
+diff --git a/base/threading/platform_thread_internal_posix.h b/base/threading/platform_thread_internal_posix.h
+index ae963cfcbe..3815ee0551 100644
+--- a/base/threading/platform_thread_internal_posix.h
++++ b/base/threading/platform_thread_internal_posix.h
+@@ -25,6 +25,17 @@ namespace internal {
+ // in, so AROS headers stay in the AROS translation unit.
+ void MaybePinThreadRoundRobin(pthread_attr_t* attributes);
+ 
++// Threads created outside PlatformThread (codec libraries calling
++// pthread_create directly): place on the next CPU when
++// --aros-pin-codec-threads is given. The chrome executable routes every
++// pthread_create through a wrapper that calls this unless the thread is one
++// of PlatformThread's own (see ArosCreatingPlatformThread()).
++void MaybePinForeignThread(pthread_attr_t* attributes);
++
++// True while PlatformThread is inside its own pthread_create on this thread.
++bool ArosCreatingPlatformThread();
++void ArosSetCreatingPlatformThread(bool creating);
++
+ // The CPU the CALLING thread is running on, or -1 if it cannot be determined.
+ // Same reason as above for living in platform_thread_aros.cc: this wraps
+ // KrnGetCPUNumber(), and <proto/kernel.h> must not be pulled into large C++
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index ad0417963a..b698f8dec8 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -169,7 +169,13 @@ bool CreateThread(size_t stack_size,
+   params->message_pump_type = message_pump_type;
+ 
+   pthread_t handle;
++#if BUILDFLAG(IS_AROS)
++  internal::ArosSetCreatingPlatformThread(true);
++#endif
+   int err = pthread_create(&handle, &attributes, ThreadFunc, params.get());
++#if BUILDFLAG(IS_AROS)
++  internal::ArosSetCreatingPlatformThread(false);
++#endif
+   bool success = !err;
+   if (success) {
+     // ThreadParams should be deleted on the created thread after used.
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 1b2f45c2fe..c6d0efa814 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -267,7 +267,10 @@ if (!is_android && !is_mac) {
+         # Non-Windows aura entrypoint.
+         sources += [ "app/chrome_exe_main_aura.cc" ]
+         if (is_aros) {
+-          sources += [ "app/aros_close_trace.cc" ]
++          sources += [
++            "app/aros_close_trace.cc",
++            "app/aros_codec_threads.cc",
++          ]
+           configs += [ ":aros_close_trace" ]
+         }
+       }
+@@ -1925,7 +1928,11 @@ if (is_aros) {
+   # __wrap_close (base/files/scoped_file.cc), which logs when
+   # CHROMIUM_CLOSE_TRACE is set.
+   config("aros_close_trace") {
+-    ldflags = [ "-Wl,--wrap=__posixc_close", "-Wl,--wrap=__posixc_open" ]
++    ldflags = [
++      "-Wl,--wrap=__posixc_close",
++      "-Wl,--wrap=__posixc_open",
++      "-Wl,--wrap=pthread_create",
++    ]
+ 
+     # Experiment only: the posixc 0.41 descriptor-transfer stubs, until the
+     # AROS SDK this out directory is built against carries them.
+diff --git a/chrome/app/aros_codec_threads.cc b/chrome/app/aros_codec_threads.cc
+new file mode 100644
+index 0000000000..cbd7b7b149
+--- /dev/null
++++ b/chrome/app/aros_codec_threads.cc
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Every pthread_create in the chrome executable comes through here (linked
++// with -Wl,--wrap=pthread_create). PlatformThread's own threads pass straight
++// through - they are placed by MaybePinThreadRoundRobin. Any other thread is
++// one a third-party library started itself (video decoders above all) and is
++// placed by MaybePinForeignThread when --aros-pin-codec-threads is given.
++
++#include <pthread.h>
++
++#include "base/threading/platform_thread_internal_posix.h"
++
++extern "C" int __real_pthread_create(pthread_t* thread,
++                                     const pthread_attr_t* attr,
++                                     void* (*start)(void*),
++                                     void* arg);
++
++extern "C" int __wrap_pthread_create(pthread_t* thread,
++                                     const pthread_attr_t* attr,
++                                     void* (*start)(void*),
++                                     void* arg) {
++  if (base::internal::ArosCreatingPlatformThread())
++    return __real_pthread_create(thread, attr, start, arg);
++
++  pthread_attr_t placed;
++  if (attr)
++    placed = *attr;
++  else
++    pthread_attr_init(&placed);
++  base::internal::MaybePinForeignThread(&placed);
++  return __real_pthread_create(thread, &placed, start, arg);
++}

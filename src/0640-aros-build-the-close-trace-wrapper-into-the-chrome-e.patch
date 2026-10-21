@@ -1,0 +1,102 @@
+From 726163284a45ae4bd9cb74ca716cb15ea1710aac Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 05:59:13 -0500
+Subject: [PATCH 640/689] aros: build the close() trace wrapper into the chrome
+ executable only
+
+Every AROS executable links base, but only chrome is linked with
+--wrap=close; the wrapper's __real_close left the others unlinkable.
+---
+ base/files/scoped_file.cc      | 25 ------------------------
+ chrome/BUILD.gn                |  1 +
+ chrome/app/aros_close_trace.cc | 35 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 36 insertions(+), 25 deletions(-)
+ create mode 100644 chrome/app/aros_close_trace.cc
+
+diff --git a/base/files/scoped_file.cc b/base/files/scoped_file.cc
+index 693401484b..4c80f819e4 100644
+--- a/base/files/scoped_file.cc
++++ b/base/files/scoped_file.cc
+@@ -72,29 +72,4 @@ void ScopedFDCloseTraits::Free(int fd) {
+ 
+ }  // namespace internal
+ 
+-#if BUILDFLAG(IS_AROS)
+-// Diagnostic: every close() the chrome executable makes goes through here
+-// (linked with -Wl,--wrap=close). With CHROMIUM_CLOSE_TRACE set in the
+-// environment, each close of a descriptor above stderr is written to serial
+-// with its result, thread and caller, to find who closes a descriptor twice.
+-extern "C" int __real_close(int fd);
+-extern "C" int __wrap_close(int fd) {
+-  static int trace = -1;
+-  if (trace < 0)
+-    trace = getenv("CHROMIUM_CLOSE_TRACE") != nullptr ? 1 : 0;
+-  const int ret = __real_close(fd);
+-  if (trace && fd > 2) {
+-    const int saved_errno = errno;
+-    char line[200];
+-    snprintf(line, sizeof(line),
+-             "[Chromium:AROS:CloseTrace] close(%d)=%d errno=%d thread=%s "
+-             "caller=%p\n",
+-             fd, ret, ret == 0 ? 0 : saved_errno,
+-             base::PlatformThread::GetName(), __builtin_return_address(0));
+-    ArosKPutStr(line);
+-    errno = saved_errno;
+-  }
+-  return ret;
+-}
+-#endif
+ }  // namespace base
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 6e6e1bee3b..9402b1bc6d 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -267,6 +267,7 @@ if (!is_android && !is_mac) {
+         # Non-Windows aura entrypoint.
+         sources += [ "app/chrome_exe_main_aura.cc" ]
+         if (is_aros) {
++          sources += [ "app/aros_close_trace.cc" ]
+           configs += [ ":aros_close_trace" ]
+         }
+       }
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+new file mode 100644
+index 0000000000..75a8f3d26a
+--- /dev/null
++++ b/chrome/app/aros_close_trace.cc
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#include "base/threading/platform_thread.h"
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++// Diagnostic: every close() the chrome executable makes goes through here
++// (linked with -Wl,--wrap=close). With CHROMIUM_CLOSE_TRACE set in the
++// environment, each close of a descriptor above stderr is written to serial
++// with its result, thread and caller, to find who closes a descriptor twice.
++extern "C" int __real_close(int fd);
++extern "C" int __wrap_close(int fd) {
++  static int trace = -1;
++  if (trace < 0)
++    trace = getenv("CHROMIUM_CLOSE_TRACE") != nullptr ? 1 : 0;
++  const int ret = __real_close(fd);
++  if (trace && fd > 2) {
++    const int saved_errno = errno;
++    char line[200];
++    snprintf(line, sizeof(line),
++             "[Chromium:AROS:CloseTrace] close(%d)=%d errno=%d thread=%s "
++             "caller=%p\n",
++             fd, ret, ret == 0 ? 0 : saved_errno,
++             base::PlatformThread::GetName(), __builtin_return_address(0));
++    ArosKPutStr(line);
++    errno = saved_errno;
++  }
++  return ret;
++}

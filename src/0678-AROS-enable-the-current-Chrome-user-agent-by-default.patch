@@ -1,0 +1,26 @@
+From 497beb918688c9056ec3c5c38823bfa1f4e49d80 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 22:41:07 -0500
+Subject: [PATCH 678/689] AROS: enable the current-Chrome user agent by default
+
+Slack (Chrome 137+) and other version-gated sites accept Chromium 124
+with it. Measured with it active: YouTube plays, VP9 1080p 29.9 fps with
+no dropped frames, Google and Slack sign-in work. It stays an ordinary
+icon tooltype, so it can be disabled or updated without a rebuild.
+---
+ chrome/app/theme/aros/Chromium.info.src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/app/theme/aros/Chromium.info.src b/chrome/app/theme/aros/Chromium.info.src
+index ef257fe3ba..1587cb0e95 100644
+--- a/chrome/app/theme/aros/Chromium.info.src
++++ b/chrome/app/theme/aros/Chromium.info.src
+@@ -10,7 +10,7 @@ TOOLTYPE = "CHROME_ARG=--no-default-browser-check"
+ TOOLTYPE = "CHROME_ARG=--aros-spoof-platform=linux"
+ TOOLTYPE = "CHROME_ARG=--v8-cache-options=none"
+ TOOLTYPE = "CHROME_ARG=--disable-features=ConsumeCodeCacheOffThread,ScriptStreaming"
+-TOOLTYPE = "(CHROME_ARG=--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36)"
++TOOLTYPE = "CHROME_ARG=--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+ TOOLTYPE = "(CHROME_ARG=--aros-pin-workers)"
+ TOOLTYPE = "(CHROME_ARG=--user-data-dir=PROGDIR:Profiles)"
+ TOOLTYPE = "(CHROME_ARG=--incognito)"

@@ -1,0 +1,145 @@
+From e25031d430f295b3136c638ad333dedbf23d21a8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 06:39:37 -0500
+Subject: [PATCH 664/689] aros: bind each thread to its process identity at
+ creation
+
+CommandLine::ForCurrentProcess() found a task's process by walking the
+Exec parent chain on every call. A parent that exits while a child walks
+the chain leaves the walk reading a freed or relinked ETask, so the
+lookup can fail. ThreadPoolInstance::Get() then returns null and a job
+created on that thread has no delegate; V8's concurrent OSR posted such a
+job and faulted in JobTaskSource::NotifyConcurrencyIncrease().
+
+Record the creator's CommandLine in CreateThread(), while the creator is
+running, bind it to the new task when the thread starts, and drop the
+binding when it exits. A binding only counts while its CommandLine is
+still registered.
+---
+ base/command_line.cc                    | 26 +++++++++++++++++++++++++
+ base/command_line.h                     |  6 ++++++
+ base/threading/platform_thread_posix.cc | 15 ++++++++++++++
+ 3 files changed, 47 insertions(+)
+
+diff --git a/base/command_line.cc b/base/command_line.cc
+index 3adcd18fa1..4a6b79d4aa 100644
+--- a/base/command_line.cc
++++ b/base/command_line.cc
+@@ -59,6 +59,7 @@ namespace {
+ struct CommandLineProcessRegistry {
+   Lock lock;
+   std::map<struct Task*, CommandLine*> command_lines;
++  std::map<struct Task*, CommandLine*> thread_bindings;
+ };
+ 
+ CommandLineProcessRegistry& GetCommandLineProcessRegistry() {
+@@ -69,6 +70,15 @@ CommandLineProcessRegistry& GetCommandLineProcessRegistry() {
+ CommandLine* FindCommandLineForTask(
+     const CommandLineProcessRegistry& registry,
+     struct Task* task) {
++  const auto bound = registry.thread_bindings.find(task);
++  if (bound != registry.thread_bindings.end()) {
++    for (const auto& entry : registry.command_lines) {
++      if (entry.second == bound->second) {
++        return bound->second;
++      }
++    }
++  }
++
+   for (size_t depth = 0; task && depth < 64; ++depth) {
+     const auto it = registry.command_lines.find(task);
+     if (it != registry.command_lines.end() && it->second) {
+@@ -365,6 +375,22 @@ bool CommandLine::InitializedForCurrentProcess() {
+ #endif
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++// static
++void CommandLine::ArosBindCurrentThread(CommandLine* command_line) {
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  registry.thread_bindings[FindTask(nullptr)] = command_line;
++}
++
++// static
++void CommandLine::ArosUnbindCurrentThread() {
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  registry.thread_bindings.erase(FindTask(nullptr));
++}
++#endif
++
+ // static
+ CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
+   CommandLine cmd(NO_PROGRAM);
+diff --git a/base/command_line.h b/base/command_line.h
+index 1b3c8b1935..bb37564e10 100644
+--- a/base/command_line.h
++++ b/base/command_line.h
+@@ -126,6 +126,12 @@ class BASE_EXPORT CommandLine {
+   // Returns true if the CommandLine has been initialized for the given process.
+   static bool InitializedForCurrentProcess();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Binds the calling task to |command_line|'s process for its lifetime.
++  static void ArosBindCurrentThread(CommandLine* command_line);
++  static void ArosUnbindCurrentThread();
++#endif
++
+   // Initialize from an argv vector.
+   void InitFromArgv(int argc, const CharType* const* argv);
+   void InitFromArgv(const StringVector& argv);
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index 3a6ff24e90..a09d9bb7c5 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -16,6 +16,7 @@
+ #include <memory>
+ #include <tuple>
+ 
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
+ #include "base/lazy_instance.h"
+ #include "base/logging.h"
+@@ -73,6 +74,9 @@ struct ThreadParams {
+   bool joinable = false;
+   ThreadType thread_type = ThreadType::kDefault;
+   MessagePumpType message_pump_type = MessagePumpType::DEFAULT;
++#if BUILDFLAG(IS_AROS)
++  raw_ptr<CommandLine> command_line = nullptr;
++#endif
+ };
+ 
+ void* ThreadFunc(void* params) {
+@@ -83,6 +87,10 @@ void* ThreadFunc(void* params) {
+         static_cast<ThreadParams*>(params));
+ 
+     delegate = thread_params->delegate;
++#if BUILDFLAG(IS_AROS)
++    if (thread_params->command_line)
++      CommandLine::ArosBindCurrentThread(thread_params->command_line);
++#endif
+     if (!thread_params->joinable)
+       base::DisallowSingleton();
+ 
+@@ -126,6 +134,9 @@ void* ThreadFunc(void* params) {
+ #endif
+ 
+   base::TerminateOnThread();
++#if BUILDFLAG(IS_AROS)
++  CommandLine::ArosUnbindCurrentThread();
++#endif
+   return nullptr;
+ }
+ 
+@@ -169,6 +180,10 @@ bool CreateThread(size_t stack_size,
+   params->joinable = joinable;
+   params->thread_type = thread_type;
+   params->message_pump_type = message_pump_type;
++#if BUILDFLAG(IS_AROS)
++  if (CommandLine::InitializedForCurrentProcess())
++    params->command_line = CommandLine::ForCurrentProcess();
++#endif
+ 
+   pthread_t handle;
+ #if BUILDFLAG(IS_AROS)

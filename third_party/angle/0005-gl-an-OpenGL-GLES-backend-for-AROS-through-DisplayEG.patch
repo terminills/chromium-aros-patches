@@ -1,0 +1,164 @@
+From 81316a00f2f8a6db80b48a196cc2344bbc33fa6d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 26 Sep 2026 18:07:26 -0500
+Subject: [PATCH] gl: an OpenGL/GLES backend for AROS through DisplayEGL
+
+AROS's native EGL is egl.library over Mesa. Build the EGL display
+sources (and the DMA-buf format helper they need) for AROS, create a
+DisplayEGL for both the OpenGL and OpenGLES platform types, and replace
+FunctionsEGLDL's dlopen/dlsym with a resolver the embedder installs
+(ANGLEArosSetNativeEGLResolver), since AROS has no dlopen and reaches
+egl.library through linked stubs.
+---
+ src/libANGLE/Display.cpp                      |  9 +++++
+ src/libANGLE/renderer/gl/BUILD.gn             |  2 +-
+ .../renderer/gl/egl/FunctionsEGLDL.cpp        | 40 ++++++++++++++++++-
+ src/libANGLE/renderer/gl/gl_backend.gni       |  3 +-
+ 4 files changed, 50 insertions(+), 4 deletions(-)
+
+diff --git a/src/libANGLE/Display.cpp b/src/libANGLE/Display.cpp
+index 176536a..7bd77df 100644
+--- a/src/libANGLE/Display.cpp
++++ b/src/libANGLE/Display.cpp
+@@ -67,6 +67,8 @@
+ #        endif
+ #    elif defined(ANGLE_PLATFORM_ANDROID)
+ #        include "libANGLE/renderer/gl/egl/android/DisplayAndroid.h"
++#    elif defined(ANGLE_PLATFORM_AROS)
++#        include "libANGLE/renderer/gl/egl/DisplayEGL.h"
+ #    else
+ #        error Unsupported OpenGL platform.
+ #    endif
+@@ -451,6 +453,11 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
+             impl = nullptr;
+             break;
+ 
++#    elif defined(ANGLE_PLATFORM_AROS)
++            // egl.library over Mesa is the only native EGL.
++            impl = new rx::DisplayEGL(state);
++            break;
++
+ #    else
+ #        error Unsupported OpenGL platform.
+ #    endif
+@@ -495,6 +502,8 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
+             }
+ #    elif defined(ANGLE_PLATFORM_ANDROID)
+             impl = new rx::DisplayAndroid(state);
++#    elif defined(ANGLE_PLATFORM_AROS)
++            impl = new rx::DisplayEGL(state);
+ #    else
+             // No GLES support on this platform, fail display creation.
+             impl = nullptr;
+diff --git a/src/libANGLE/renderer/gl/BUILD.gn b/src/libANGLE/renderer/gl/BUILD.gn
+index d421339..8cbc9c2 100644
+--- a/src/libANGLE/renderer/gl/BUILD.gn
++++ b/src/libANGLE/renderer/gl/BUILD.gn
+@@ -70,7 +70,7 @@ angle_source_set("angle_gl_backend") {
+       "Xext",
+     ]
+   }
+-  if (is_android || is_linux || is_chromeos) {
++  if (is_android || is_linux || is_chromeos || is_aros) {
+     deps += [ "$angle_root/src/common/linux:angle_dma_buf" ]
+   }
+   if (is_apple) {
+diff --git a/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp b/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
+index 8ad1e18..7ffa4de 100644
+--- a/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
++++ b/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
+@@ -8,10 +8,26 @@
+ 
+ #include "libANGLE/renderer/gl/egl/FunctionsEGLDL.h"
+ 
+-#include <dlfcn.h>
++#if defined(ANGLE_PLATFORM_AROS)
++namespace
++{
++// AROS has no dlopen: its native EGL is egl.library over Mesa, reached
++// through stubs the embedder links. The embedder (Chromium's AROS ozone
++// platform) installs the resolver before it asks for an ANGLE GL display.
++void *(*gArosNativeEGLResolver)(const char *name);
++}  // anonymous namespace
++
++extern "C" void ANGLEArosSetNativeEGLResolver(void *(*resolver)(const char *name))
++{
++    gArosNativeEGLResolver = resolver;
++}
++#else
++#    include <dlfcn.h>
++#endif
+ 
+ namespace rx
+ {
++#if !defined(ANGLE_PLATFORM_AROS)
+ namespace
+ {
+ // In ideal world, we would want this to be a member of FunctionsEGLDL,
+@@ -23,6 +39,7 @@ namespace
+ // referencing crbug.com/250813 and http://www.xfree86.org/4.3.0/DRI11.html
+ void *nativeEGLHandle;
+ }  // anonymous namespace
++#endif
+ 
+ FunctionsEGLDL::FunctionsEGLDL() : mGetProcAddressPtr(nullptr) {}
+ 
+@@ -33,7 +50,19 @@ egl::Error FunctionsEGLDL::initialize(EGLAttrib platformType,
+                                       const char *libName,
+                                       void *eglHandle)
+ {
+-
++#if defined(ANGLE_PLATFORM_AROS)
++    if (!gArosNativeEGLResolver)
++    {
++        return egl::EglNotInitialized() << "No native EGL resolver installed";
++    }
++    mGetProcAddressPtr = reinterpret_cast<PFNEGLGETPROCADDRESSPROC>(
++        gArosNativeEGLResolver("eglGetProcAddress"));
++    if (!mGetProcAddressPtr)
++    {
++        return egl::EglNotInitialized() << "Could not find eglGetProcAddress";
++    }
++    return FunctionsEGL::initialize(platformType, nativeDisplay);
++#else
+     if (eglHandle)
+     {
+         // If the handle is provided, use it.
+@@ -58,16 +87,23 @@ egl::Error FunctionsEGLDL::initialize(EGLAttrib platformType,
+     }
+ 
+     return FunctionsEGL::initialize(platformType, nativeDisplay);
++#endif
+ }
+ 
+ void *FunctionsEGLDL::getProcAddress(const char *name) const
+ {
++#if defined(ANGLE_PLATFORM_AROS)
++    // The resolver covers the core EGL entry points (which eglGetProcAddress
++    // need not return), extensions and the gl* functions.
++    return gArosNativeEGLResolver(name);
++#else
+     void *f = reinterpret_cast<void *>(mGetProcAddressPtr(name));
+     if (f)
+     {
+         return f;
+     }
+     return dlsym(nativeEGLHandle, name);
++#endif
+ }
+ 
+ }  // namespace rx
+diff --git a/src/libANGLE/renderer/gl/gl_backend.gni b/src/libANGLE/renderer/gl/gl_backend.gni
+index cc22ae0..1b6fcd3 100644
+--- a/src/libANGLE/renderer/gl/gl_backend.gni
++++ b/src/libANGLE/renderer/gl/gl_backend.gni
+@@ -120,7 +120,8 @@ if (angle_use_x11) {
+   ]
+ }
+ 
+-if (is_android || is_linux || is_chromeos) {
++# AROS reaches its native EGL (egl.library over Mesa) through DisplayEGL too.
++if (is_android || is_linux || is_chromeos || is_aros) {
+   gl_backend_sources += [
+     "egl/ContextEGL.cpp",
+     "egl/ContextEGL.h",

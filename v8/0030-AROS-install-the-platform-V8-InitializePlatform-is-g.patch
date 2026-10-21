@@ -1,0 +1,35 @@
+From 93340e495de06006aff3d43b427bc8e313adb4b4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 13 Oct 2026 21:08:20 -0500
+Subject: [PATCH 30/31] AROS: install the platform V8::InitializePlatform() is
+ given
+
+v8.library resolves a platform per task. Selecting one for the calling
+task and installing a program's platform for its threads are now
+separate entry points; V8::InitializePlatform() is the install.
+---
+ src/init/v8.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/init/v8.cc b/src/init/v8.cc
+index 0afca32..e58327f 100644
+--- a/src/init/v8.cc
++++ b/src/init/v8.cc
+@@ -40,7 +40,7 @@
+ #endif
+ 
+ #if defined(__AROS__)
+-extern "C" void __aros_v8_set_current_platform(v8::Platform* platform);
++extern "C" void __aros_v8_install_platform(v8::Platform* platform);
+ extern "C" v8::Platform* __aros_v8_get_current_platform();
+ #endif
+ 
+@@ -104,7 +104,7 @@ V8_DECLARE_ONCE(init_snapshot_once);
+ void V8::InitializePlatform(v8::Platform* platform) {
+ #if defined(__AROS__)
+   CHECK_NOT_NULL(platform);
+-  __aros_v8_set_current_platform(platform);
++  __aros_v8_install_platform(platform);
+ 
+   V8StartupState expected = V8StartupState::kIdle;
+   if (!v8_startup_state_.compare_exchange_strong(

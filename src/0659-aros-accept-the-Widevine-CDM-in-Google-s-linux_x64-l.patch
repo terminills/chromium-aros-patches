@@ -1,0 +1,38 @@
+From 506c4c1f76dd34898549a8d20d37f787f9e33d58 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 28 Sep 2026 09:10:29 -0500
+Subject: [PATCH 659/689] aros: accept the Widevine CDM in Google's linux_x64
+ layout
+
+The AROS build looks for the CDM next to chrome, under
+WidevineCdm/_platform_specific/aros_x64/. The CDM itself is the Linux
+x64 one, which Google ships under linux_x64/, so fall back to that: a
+user can install it by copying WidevineCdm/ from a Linux Chrome as is.
+---
+ chrome/common/media/cdm_registration.cc | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/common/media/cdm_registration.cc b/chrome/common/media/cdm_registration.cc
+index a1f3755b6b..59e9839660 100644
+--- a/chrome/common/media/cdm_registration.cc
++++ b/chrome/common/media/cdm_registration.cc
+@@ -82,10 +82,18 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+     const base::FilePath& cdm_base_path) {
+   // Library should be inside a platform specific directory.
+ #if BUILDFLAG(IS_AROS)
+-  // The CDM is a loadable module (lib*.so), not an exec library.
++  // The CDM is a loadable module (lib*.so), not an exec library. It is the
++  // Linux x64 CDM, so also accept the layout Google ships it in: a user can
++  // then copy WidevineCdm/ from any Linux Chrome install unchanged.
+   auto cdm_library_path =
+       media::GetPlatformSpecificDirectory(cdm_base_path)
+           .Append(base::GetLoadableModuleName(kWidevineCdmLibraryName));
++  if (!base::PathExists(cdm_library_path)) {
++    cdm_library_path =
++        cdm_base_path.Append(FILE_PATH_LITERAL("_platform_specific"))
++            .Append(FILE_PATH_LITERAL("linux_x64"))
++            .Append(base::GetLoadableModuleName(kWidevineCdmLibraryName));
++  }
+ #else
+   auto cdm_library_path =
+       media::GetPlatformSpecificDirectory(cdm_base_path)

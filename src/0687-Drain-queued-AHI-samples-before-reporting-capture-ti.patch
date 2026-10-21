@@ -1,0 +1,24 @@
+From 0818df2709e76a00d793525285c5209ffef72179 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 10:32:44 -0500
+Subject: [PATCH 687/689] Drain queued AHI samples before reporting capture
+ timeout
+
+---
+ media/audio/aros/ahi_input_stream.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/media/audio/aros/ahi_input_stream.cc b/media/audio/aros/ahi_input_stream.cc
+index 24b914c229..4364845943 100644
+--- a/media/audio/aros/ahi_input_stream.cc
++++ b/media/audio/aros/ahi_input_stream.cc
+@@ -250,7 +250,8 @@ void AhiInputStream::Run() {
+     const auto available = state->buffer.Available();
+     const auto now = base::TimeTicks::Now();
+     if (__atomic_load_n(&state->bad_format, __ATOMIC_RELAXED) ||
+-        now - last_data > base::Seconds(3)) {
++        (available < static_cast<size_t>(params_.frames_per_buffer()) &&
++         now - last_data > base::Seconds(3))) {
+       if (!stopped_.load(std::memory_order_relaxed)) {
+         callback_->OnError();
+       }

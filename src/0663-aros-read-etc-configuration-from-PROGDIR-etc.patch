@@ -1,0 +1,44 @@
+From 6cae21341d998dfbfd1fab53e0130ed424c13554 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 06:39:36 -0500
+Subject: [PATCH 663/689] aros: read /etc configuration from PROGDIR:etc
+
+posixc maps /etc to the etc: volume, which does not exist on a stock
+system, so every lookup raised a volume requester. Read the policy
+directory and nsswitch.conf from the program's own etc drawer instead.
+---
+ components/policy/core/common/policy_paths.cc | 4 +++-
+ net/dns/nsswitch_reader.cc                    | 5 ++++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/components/policy/core/common/policy_paths.cc b/components/policy/core/common/policy_paths.cc
+index 7c15eeaa4f..17e5e06389 100644
+--- a/components/policy/core/common/policy_paths.cc
++++ b/components/policy/core/common/policy_paths.cc
+@@ -13,7 +13,9 @@ namespace policy {
+ // policies for the browser.
+ // Intentionally not using base::FilePath to minimize dependencies.
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
++#if BUILDFLAG(IS_AROS)
++const char kPolicyPath[] = "PROGDIR:etc/chromium/policies";
++#elif BUILDFLAG(GOOGLE_CHROME_BRANDING)
+ const char kPolicyPath[] = "/etc/opt/chrome/policies";
+ #elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+ const char kPolicyPath[] = "/etc/opt/chrome_for_testing/policies";
+diff --git a/net/dns/nsswitch_reader.cc b/net/dns/nsswitch_reader.cc
+index 4af5ebc746..fae7b567e8 100644
+--- a/net/dns/nsswitch_reader.cc
++++ b/net/dns/nsswitch_reader.cc
+@@ -26,7 +26,10 @@ namespace net {
+ 
+ namespace {
+ 
+-#ifdef _PATH_NSSWITCH_CONF
++#if BUILDFLAG(IS_AROS)
++constexpr base::FilePath::CharType kNsswitchPath[] =
++    FILE_PATH_LITERAL("PROGDIR:etc/nsswitch.conf");
++#elif defined(_PATH_NSSWITCH_CONF)
+ constexpr base::FilePath::CharType kNsswitchPath[] =
+     FILE_PATH_LITERAL(_PATH_NSSWITCH_CONF);
+ #else

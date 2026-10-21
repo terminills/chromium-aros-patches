@@ -1,0 +1,24 @@
+From c15a9e09b9e810ea1510f3365461b1ce07ada533 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 11:40:55 -0500
+Subject: [PATCH 689/689] docs: qualify sustained VHI preview performance
+
+---
+ .acd/decisions/20261021-vhi-camera.md | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/.acd/decisions/20261021-vhi-camera.md b/.acd/decisions/20261021-vhi-camera.md
+index c91967a527..5df080a17c 100644
+--- a/.acd/decisions/20261021-vhi-camera.md
++++ b/.acd/decisions/20261021-vhi-camera.md
+@@ -25,7 +25,9 @@ The final driver uses a persistent task producer, MJPEG decode through
+ jfif.library and aligned packet slots that avoid split-TRB short-length errors.
+ Five combined video/microphone sessions and four stop/reopen cycles pass;
+ removing the camera returns NotFoundError. Preview frame rate remains below the
+-requested 5 fps (typically 2-4 fps in these bounded sessions). No Twitch or
++requested 5 fps (typically 2-4 fps in these bounded sessions). A longer restored
++run delivered 175 displayed frames in 226 seconds while both tracks stayed
++live, so sustained preview performance remains a limitation. No Twitch or
+ bare-metal claim is made. Website/playback release regressions are recorded
+ separately from capture proof.
+ 

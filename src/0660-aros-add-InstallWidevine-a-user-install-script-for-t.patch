@@ -1,0 +1,81 @@
+From 0dd01dae07d903da1f05ef6a0e1055ec9667b330 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 29 Sep 2026 17:17:52 -0500
+Subject: [PATCH 660/689] aros: add InstallWidevine, a user install script for
+ the Widevine CDM
+
+Ships next to Chromium. It checks that the given directory is Google's
+WidevineCdm with the linux_x64 library, copies it next to Chromium (or a
+directory given as the second argument), and explains the usual mistakes:
+a non-CDM directory, a Windows/macOS copy, no Chromium at the target, and
+the read-only Live CD.
+---
+ chrome/app/theme/aros/InstallWidevine | 59 +++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+ create mode 100644 chrome/app/theme/aros/InstallWidevine
+
+diff --git a/chrome/app/theme/aros/InstallWidevine b/chrome/app/theme/aros/InstallWidevine
+new file mode 100644
+index 0000000000..30a6776471
+--- /dev/null
++++ b/chrome/app/theme/aros/InstallWidevine
+@@ -0,0 +1,59 @@
++.KEY FROM/A,TO
++.BRA {
++.KET }
++; Copyright (C) 2026, The AROS Development Team. All rights reserved.
++;
++; InstallWidevine - add Google's Widevine CDM to Chromium, so DRM video
++; (Netflix and similar sites) can play.
++;
++; The CDM is Google's and cannot be shipped with AROS. Chromium on AROS
++; uses the Linux x64 CDM unchanged:
++;   1. On a Linux machine with Google Chrome installed, copy the directory
++;      /opt/google/chrome/WidevineCdm to a disk or share AROS can read
++;      (Microsoft Edge's /opt/microsoft/msedge/WidevineCdm works too).
++;   2. On AROS, run:
++;        Execute SYS:Applications/Internet/Chromium/InstallWidevine <dir>
++;      where <dir> is the copied WidevineCdm directory, e.g.
++;        Execute SYS:Applications/Internet/Chromium/InstallWidevine USB0:WidevineCdm
++;   3. Restart Chromium.
++; A second argument installs into another Chromium directory. The Live CD's
++; SYS: is read-only: install AROS to disk first.
++
++FailAt 21
++
++; Default target: the Chromium this script ships next to. (Execute's .DEF
++; left {TO} empty on AROS.)
++IF "{TO}" EQ ""
++    Set dest "SYS:Applications/Internet/Chromium"
++ELSE
++    Set dest "{TO}"
++EndIF
++
++IF NOT EXISTS "{FROM}/manifest.json"
++    Echo "{FROM} is not a WidevineCdm directory (no manifest.json)."
++    Quit 20
++EndIF
++IF NOT EXISTS "{FROM}/_platform_specific/linux_x64/libwidevinecdm.so"
++    Echo "{FROM} has no _platform_specific/linux_x64/libwidevinecdm.so."
++    Echo "Copy WidevineCdm from a 64-bit Linux Chrome, not Windows or macOS."
++    Quit 20
++EndIF
++IF NOT EXISTS "$dest/Chromium"
++    Echo "No Chromium in $dest."
++    Quit 20
++EndIF
++
++IF NOT EXISTS "$dest/WidevineCdm"
++    MakeDir "$dest/WidevineCdm"
++    IF WARN
++        Echo "Cannot create $dest/WidevineCdm (read-only disk?)."
++        Quit 20
++    EndIF
++EndIF
++Copy "{FROM}" TO "$dest/WidevineCdm" ALL CLONE QUIET
++IF WARN
++    Echo "Copying the CDM failed."
++    Quit 20
++EndIF
++
++Echo "Widevine installed in $dest/WidevineCdm. Restart Chromium to use it."

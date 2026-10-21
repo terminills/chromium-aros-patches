@@ -1,0 +1,187 @@
+From 74f111b11c45856e8d94237f78534543d30d9356 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 13 Oct 2026 09:49:36 -0500
+Subject: [PATCH 29/31] AROS: one flag set for the resident engine
+
+On AROS every program runs on the one V8 in v8.library, so v8_flags is
+shared by all of them.  V8 freezes flags after initialization by making
+them read-only, but AROS mprotect does nothing, so a program started
+later silently rewrote the flags under the ones already running:
+Chromium's --minor-ms switched a running Node's heap to the paged
+young generation and Node crashed in StartSweepNewSpace.
+
+Once frozen, a flag now refuses a new value (reported through
+v8.library) instead of being trapped, and the resident engine always
+freezes even when an embedder asks it not to.  Cap wasm memories at
+2048 pages by default: AROS backs a whole reservation with memory, so
+this is the engine's limit for every embedder rather than a flag one
+of them sets.  The GC's core counts are read per collection, since
+programs sharing the engine have different platforms.
+---
+ src/flags/flag-definitions.h |  5 +++++
+ src/flags/flags.cc           | 32 ++++++++++++++++++++++++++++++++
+ src/flags/flags.h            | 12 ++++++++++++
+ src/heap/mark-compact.cc     |  5 +++++
+ src/heap/scavenger.cc        |  5 +++++
+ 5 files changed, 59 insertions(+)
+
+diff --git a/src/flags/flag-definitions.h b/src/flags/flag-definitions.h
+index 534edec..876fa9d 100644
+--- a/src/flags/flag-definitions.h
++++ b/src/flags/flag-definitions.h
+@@ -1438,8 +1438,13 @@ DEFINE_EXPERIMENTAL_FEATURE(
+     turboshaft_wasm_wrappers,
+     "compile the wasm wrappers with Turboshaft (instead of TurboFan)")
+ // The actual value used at runtime is clamped to kV8MaxWasmMemory{32,64}Pages.
++#if V8_OS_AROS
++DEFINE_UINT(wasm_max_mem_pages, 2048,
++            "maximum number of 64KiB memory pages per wasm memory")
++#else
+ DEFINE_UINT(wasm_max_mem_pages, kMaxUInt32,
+             "maximum number of 64KiB memory pages per wasm memory")
++#endif
+ DEFINE_UINT(wasm_max_table_size, wasm::kV8MaxWasmTableSize,
+             "maximum table size of a wasm instance")
+ DEFINE_UINT(wasm_max_committed_code_mb, kMaxCommittedWasmCodeMB,
+diff --git a/src/flags/flags.cc b/src/flags/flags.cc
+index 1eb183b..728158f 100644
+--- a/src/flags/flags.cc
++++ b/src/flags/flags.cc
+@@ -88,6 +88,12 @@ void Flag::set_string_value(const char* new_value, bool owns_new_value,
+                          ? !new_value || std::strcmp(old_value, new_value) != 0
+                          : !!new_value;
+   change_flag = CheckFlagChange(set_by, change_flag);
++#if V8_OS_AROS
++  if (change_flag && FlagList::IsFrozen()) {
++    FlagList::NoteRefusedChange();
++    change_flag = false;
++  }
++#endif
+   if (change_flag) {
+     if (owns_ptr_) DeleteArray(old_value);
+     *flag_value = new_value;
+@@ -429,6 +435,9 @@ std::ostream& operator<<(std::ostream& os, const Flag& flag) {
+ 
+ static std::atomic<uint32_t> flag_hash{0};
+ static std::atomic<bool> flags_frozen{false};
++#if V8_OS_AROS
++static std::atomic<uint32_t> aros_refused_changes{0};
++#endif
+ 
+ uint32_t ComputeFlagListHash() {
+   std::ostringstream modified_args_as_string;
+@@ -579,6 +588,11 @@ bool TryParseUnsigned(Flag* flag, const char* arg, const char* value,
+   return true;
+ }
+ 
++#if V8_OS_AROS
++// Provided by v8.library (engine/platform-context-aros.c).
++extern "C" void __aros_v8_flag_refused(const char* arg);
++#endif
++
+ // static
+ int FlagList::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags,
+                                       HelpOptions help_options) {
+@@ -631,6 +645,13 @@ int FlagList::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags,
+       }
+     }
+ 
++#if V8_OS_AROS
++    // Every program shares the resident engine's flags, so they are always
++    // frozen once it is initialized.
++    if (flag->PointsTo(&v8_flags.freeze_flags_after_init) && negated) continue;
++    const uint32_t aros_refused = aros_refused_changes.load();
++#endif
++
+     // Set the flag.
+     char* endp = const_cast<char*>("");  // *endp is only read
+     switch (flag->type()) {
+@@ -681,6 +702,12 @@ int FlagList::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags,
+         break;
+     }
+ 
++#if V8_OS_AROS
++    if (aros_refused_changes.load() != aros_refused) {
++      __aros_v8_flag_refused(arg);
++    }
++#endif
++
+     // Handle errors.
+     bool is_bool_type = flag->type() == Flag::TYPE_BOOL ||
+                         flag->type() == Flag::TYPE_MAYBE_BOOL;
+@@ -994,6 +1021,11 @@ uint32_t FlagList::Hash() {
+   return hash;
+ }
+ 
++#if V8_OS_AROS
++// static
++void FlagList::NoteRefusedChange() { aros_refused_changes.fetch_add(1); }
++#endif
++
+ // static
+ void FlagList::ResetFlagHash() {
+   // If flags are frozen, we should not need to reset the hash since we cannot
+diff --git a/src/flags/flags.h b/src/flags/flags.h
+index f1b0d1b..45a4414 100644
+--- a/src/flags/flags.h
++++ b/src/flags/flags.h
+@@ -144,6 +144,12 @@ class V8_EXPORT_PRIVATE FlagList {
+   // This hash is calculated during V8::Initialize and cached.
+   static uint32_t Hash();
+ 
++#if V8_OS_AROS
++  // AROS runs one resident V8 for every program and cannot write-protect
++  // v8_flags, so a frozen flag refuses a new value instead of being trapped.
++  static void NoteRefusedChange();
++#endif
++
+  private:
+   // Reset the flag hash on flag changes. This is a private method called from
+   // {FlagValue<T>::operator=}; there should be no need to call it from any
+@@ -158,6 +164,12 @@ class V8_EXPORT_PRIVATE FlagList {
+ template <typename T>
+ FlagValue<T>& FlagValue<T>::operator=(T new_value) {
+   if (new_value != value_) {
++#if V8_OS_AROS
++    if (FlagList::IsFrozen()) {
++      FlagList::NoteRefusedChange();
++      return *this;
++    }
++#endif
+     FlagList::ResetFlagHash();
+     value_ = new_value;
+   }
+diff --git a/src/heap/mark-compact.cc b/src/heap/mark-compact.cc
+index 3f7d666..2da9e14 100644
+--- a/src/heap/mark-compact.cc
++++ b/src/heap/mark-compact.cc
+@@ -211,7 +211,12 @@ class FullMarkingVerifier : public MarkingVerifierBase {
+ namespace {
+ 
+ int NumberOfAvailableCores() {
++#if V8_OS_AROS
++  // One resident engine serves programs with different platforms.
++  int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
++#else
+   static int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
++#endif
+   // This number of cores should be greater than zero and never change.
+   DCHECK_GE(num_cores, 1);
+   DCHECK_EQ(num_cores, V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1);
+diff --git a/src/heap/scavenger.cc b/src/heap/scavenger.cc
+index e399e82..cfffdb6 100644
+--- a/src/heap/scavenger.cc
++++ b/src/heap/scavenger.cc
+@@ -604,7 +604,12 @@ int ScavengerCollector::NumberOfScavengeTasks() {
+           SemiSpaceNewSpace::From(heap_->new_space())->TotalCapacity()) /
+           MB +
+       1;
++#if V8_OS_AROS
++  // One resident engine serves programs with different platforms.
++  int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
++#else
+   static int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
++#endif
+   int tasks = std::max(
+       1, std::min({num_scavenge_tasks, kMaxScavengerTasks, num_cores}));
+   if (!heap_->CanPromoteYoungAndExpandOldGeneration(

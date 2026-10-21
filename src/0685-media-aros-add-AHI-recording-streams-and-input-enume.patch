@@ -1,0 +1,635 @@
+From 9786fd6ec59bcaad05dda98f7dfd47065b34ae27 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 07:29:12 -0500
+Subject: [PATCH 685/689] media/aros: add AHI recording streams and input
+ enumeration
+
+AI_PHASE: chromium-ahi-capture
+AI_STATUS: draft-cross-compiled
+ROOT_CAUSE: AROS audio manager provided only fake input streams and required a playback unit.
+FIX_REASON: Record through AHI on an owned task with an integer-only bounded callback buffer.
+SCOPE: media/audio and recording decision record
+VALIDATION: Input and manager cross-compile; ASan/UBSan buffer tests pass including100000 concurrent frames; hook disassembly has no SIMD registers.
+RISK: Native Chromium recording and combined AV lifecycle await baseline confirmation.
+AI_DECISION_CHAIN: JOB-0066 -> JOB-0212 -> .acd/decisions/20261021-ahi-recording.md
+---
+ .acd/decisions/20261021-ahi-recording.md      |  31 ++
+ media/audio/BUILD.gn                          |   3 +
+ media/audio/aros/ahi_capture_buffer.h         |  68 +++++
+ media/audio/aros/ahi_input_stream.cc          | 285 ++++++++++++++++++
+ media/audio/aros/ahi_input_stream.h           |  48 +++
+ media/audio/aros/audio_manager_aros.cc        |  25 +-
+ media/audio/aros/audio_manager_aros.h         |   6 +-
+ .../aros/tests/ahi_capture_buffer_test.cc     |  41 +++
+ 8 files changed, 494 insertions(+), 13 deletions(-)
+ create mode 100644 .acd/decisions/20261021-ahi-recording.md
+ create mode 100644 media/audio/aros/ahi_capture_buffer.h
+ create mode 100644 media/audio/aros/ahi_input_stream.cc
+ create mode 100644 media/audio/aros/ahi_input_stream.h
+ create mode 100644 media/audio/aros/tests/ahi_capture_buffer_test.cc
+
+diff --git a/.acd/decisions/20261021-ahi-recording.md b/.acd/decisions/20261021-ahi-recording.md
+new file mode 100644
+index 0000000000..5dcee009a9
+--- /dev/null
++++ b/.acd/decisions/20261021-ahi-recording.md
+@@ -0,0 +1,31 @@
++# Chromium AROS recording through AHI
++
++Status: hypothesis
++
++## Rationale
++
++The AROS AudioManager currently has playback only and fake input streams.
++Enumerate AHI recording modes and open the selected mode through AHI_NO_UNIT,
++independently of the configured playback unit. Recording, message ports and
++control lifetime belong to a worker task. Stop joins it after AHI recording
++is stopped and its audio control released.
++
++The hook is an integer-only producer into a bounded single-producer,
++single-consumer buffer. It cannot allocate, lock, log, call Chromium, or alter
++unpreserved SIMD registers. The consumer converts signed native 8/16/32-bit
++mono/stereo PCM to AudioBus float channels. Overflow drops the incoming block
++and reports dropped duration. A rate mismatch or stalled recording reports
++an error instead of relabeling samples or synthesizing silence.
++
++## Baseline and validation
++
++Draft uses Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd; Claude's integration
++baseline/build confirmation is pending. Both AHI input and AudioManager objects
++cross-compile with the current CEF command into private outputs. Disassembly
++confirms no SIMD registers in the recording hook. Standalone ASan/UBSan tests
++pass conversion, partial reads, wrap, overflow and 100000 concurrent frames.
++The driver-side USB mic was previously tested on AROS; this new Chromium stream
++still needs native runtime, stop/reopen and combined-camera verification.
++
++Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
++Relay: JOB-0212 (parent JOB-0066)
+diff --git a/media/audio/BUILD.gn b/media/audio/BUILD.gn
+index 6b7566f6c4..b9a9085f1e 100644
+--- a/media/audio/BUILD.gn
++++ b/media/audio/BUILD.gn
+@@ -276,6 +276,9 @@ source_set("audio") {
+ 
+   if (is_aros) {
+     sources += [
++      "aros/ahi_capture_buffer.h",
++      "aros/ahi_input_stream.cc",
++      "aros/ahi_input_stream.h",
+       "aros/ahi_output_stream.cc",
+       "aros/ahi_output_stream.h",
+       "aros/audio_manager_aros.cc",
+diff --git a/media/audio/aros/ahi_capture_buffer.h b/media/audio/aros/ahi_capture_buffer.h
+new file mode 100644
+index 0000000000..2a3896b898
+--- /dev/null
++++ b/media/audio/aros/ahi_capture_buffer.h
+@@ -0,0 +1,68 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef MEDIA_AUDIO_AROS_AHI_CAPTURE_BUFFER_H_
++#define MEDIA_AUDIO_AROS_AHI_CAPTURE_BUFFER_H_
++#include <cstddef>
++#include <cstdint>
++namespace media {
++// One serialized AHI producer and one capture-thread consumer. The hook never
++// allocates, locks or invokes Chromium. Overflow drops a complete incoming
++// block.
++template <size_t Capacity>
++class AhiCaptureBuffer {
++ public:
++  static_assert((Capacity & (Capacity - 1)) == 0);
++  static_assert(__atomic_always_lock_free(sizeof(size_t), nullptr));
++  template <typename Sample>
++#if defined(__AROS__) && defined(__x86_64__)
++  __attribute__((target("general-regs-only")))
++#endif
++  bool Write(const Sample* samples, size_t frames, int channels) {
++    static_assert(sizeof(Sample) <= sizeof(int32_t));
++    constexpr int64_t scale = int64_t{1} << (32 - sizeof(Sample) * 8);
++    const auto write = __atomic_load_n(&write_, __ATOMIC_RELAXED);
++    const auto read = __atomic_load_n(&read_, __ATOMIC_ACQUIRE);
++    if (frames > Capacity - (write - read)) {
++      __atomic_fetch_add(&dropped_, frames, __ATOMIC_RELAXED);
++      return false;
++    }
++    for (size_t i = 0; i < frames; ++i) {
++      const size_t slot = ((write + i) & (Capacity - 1)) * 2;
++      data_[slot] = int64_t(samples[i * channels]) * scale;
++      data_[slot + 1] = int64_t(samples[i * channels + (channels == 2)]) * scale;
++    }
++    __atomic_store_n(&write_, write + frames, __ATOMIC_RELEASE);
++    return true;
++  }
++  size_t Available() const {
++    return __atomic_load_n(&write_, __ATOMIC_ACQUIRE) -
++           __atomic_load_n(&read_, __ATOMIC_RELAXED);
++  }
++  bool Read(float* left, float* right, size_t frames) {
++    if (Available() < frames) {
++      return false;
++    }
++    const auto read = __atomic_load_n(&read_, __ATOMIC_RELAXED);
++    for (size_t i = 0; i < frames; ++i) {
++      const size_t slot = ((read + i) & (Capacity - 1)) * 2;
++      if (right) {
++        left[i] = data_[slot] / 2147483648.0f;
++        right[i] = data_[slot + 1] / 2147483648.0f;
++      } else {
++        left[i] = (int64_t(data_[slot]) + data_[slot + 1]) / 4294967296.0f;
++      }
++    }
++    __atomic_store_n(&read_, read + frames, __ATOMIC_RELEASE);
++    return true;
++  }
++  size_t TakeDroppedFrames() {
++    return __atomic_exchange_n(&dropped_, 0, __ATOMIC_RELAXED);
++  }
++
++ private:
++  int32_t data_[Capacity * 2]{};
++  size_t write_ = 0, read_ = 0, dropped_ = 0;
++};
++}  // namespace media
++#endif
+diff --git a/media/audio/aros/ahi_input_stream.cc b/media/audio/aros/ahi_input_stream.cc
+new file mode 100644
+index 0000000000..24b914c229
+--- /dev/null
++++ b/media/audio/aros/ahi_input_stream.cc
+@@ -0,0 +1,285 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include "media/audio/aros/ahi_input_stream.h"
++#include <cstdint>
++#include <memory>
++#include <vector>
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
++#include "base/threading/platform_thread.h"
++#include "base/time/time.h"
++#include "media/audio/aros/ahi_capture_buffer.h"
++#include "media/audio/audio_device_description.h"
++#include "media/audio/audio_manager_base.h"
++#include "media/base/audio_bus.h"
++#include "media/base/audio_glitch_info.h"
++
++// AHIBase is owned by each session, not a shared global. Exec macros last.
++#include <aros/asmcall.h>
++#include <devices/ahi.h>
++#include <proto/exec.h>
++#define __NOLIBBASE__
++#include <proto/ahi.h>
++#undef __NOLIBBASE__
++#include <utility/hooks.h>
++
++namespace media {
++namespace {
++struct CaptureState {
++  AhiCaptureBuffer<32768> buffer;
++  bool bad_format = false;
++};
++#if defined(__x86_64__)
++#pragma GCC push_options
++#pragma GCC target("general-regs-only")
++#endif
++AROS_UFH3(void,
++          RecordHook,
++          AROS_UFHA(struct Hook*, hook, A0),
++          AROS_UFHA(struct AHIAudioCtrl*, control, A2),
++          AROS_UFHA(struct AHIRecordMessage*, message, A1)) {
++  AROS_USERFUNC_INIT
++  auto* state = static_cast<CaptureState*>(hook->h_Data);
++  if (!message || !message->ahirm_Buffer) {
++    __atomic_store_n(&state->bad_format, true, __ATOMIC_RELAXED);
++  } else {
++    const int channels =
++        (message->ahirm_Type == AHIST_S8S ||
++         message->ahirm_Type == AHIST_S16S || message->ahirm_Type == AHIST_S32S)
++            ? 2
++            : 1;
++    switch (message->ahirm_Type) {
++      case AHIST_M8S:
++      case AHIST_S8S:
++        state->buffer.Write(static_cast<const int8_t*>(message->ahirm_Buffer),
++                            message->ahirm_Length, channels);
++        break;
++      case AHIST_M16S:
++      case AHIST_S16S:
++        state->buffer.Write(static_cast<const int16_t*>(message->ahirm_Buffer),
++                            message->ahirm_Length, channels);
++        break;
++      case AHIST_M32S:
++      case AHIST_S32S:
++        state->buffer.Write(static_cast<const int32_t*>(message->ahirm_Buffer),
++                            message->ahirm_Length, channels);
++        break;
++      default:
++        __atomic_store_n(&state->bad_format, true, __ATOMIC_RELAXED);
++    }
++  }
++  AROS_USERFUNC_EXIT
++}
++
++#if defined(__x86_64__)
++#pragma GCC pop_options
++#endif
++
++struct Mode {
++  ULONG id;
++  std::string name;
++};
++class AhiSession {
++ public:
++  ~AhiSession() {
++    if (control_) {
++      AHI_ControlAudio(control_, AHIC_Record, FALSE, TAG_DONE);
++      AHI_FreeAudio(control_);
++    }
++    if (AHIBase) {
++      CloseDevice(reinterpret_cast<struct IORequest*>(io_));
++    }
++    if (io_) {
++      DeleteIORequest(reinterpret_cast<struct IORequest*>(io_));
++    }
++    if (port_) {
++      DeleteMsgPort(port_);
++    }
++  }
++  bool Open() {
++    port_ = CreateMsgPort();
++    if (!port_) {
++      return false;
++    }
++    io_ = reinterpret_cast<struct AHIRequest*>(
++        CreateIORequest(port_, sizeof(*io_)));
++    if (!io_) {
++      return false;
++    }
++    io_->ahir_Version = 4;
++    if (OpenDevice(AHINAME, AHI_NO_UNIT,
++                   reinterpret_cast<struct IORequest*>(io_), 0)) {
++      return false;
++    }
++    AHIBase = reinterpret_cast<struct Library*>(io_->ahir_Std.io_Device);
++    return true;
++  }
++  std::vector<Mode> Modes() {
++    std::vector<Mode> modes;
++    ULONG id = AHI_INVALID_ID;
++    while ((id = AHI_NextAudioID(id)) != AHI_INVALID_ID) {
++      char name[128] = {};
++      ULONG record = 0;
++      AHI_GetAudioAttrs(id, nullptr, AHIDB_BufferLen, sizeof(name), AHIDB_Name,
++                        reinterpret_cast<IPTR>(name), AHIDB_Record,
++                        reinterpret_cast<IPTR>(&record), TAG_DONE);
++      if (record) {
++        modes.push_back({id, name});
++      }
++    }
++    return modes;
++  }
++  bool Start(ULONG id, ULONG frequency, struct Hook* hook) {
++    control_ = AHI_AllocAudio(AHIA_AudioID, id, AHIA_MixFreq, frequency,
++                              AHIA_Channels, 1, AHIA_Sounds, 1, AHIA_RecordFunc,
++                              reinterpret_cast<IPTR>(hook), TAG_DONE);
++    if (!control_) {
++      return false;
++    }
++    ULONG actual_frequency = 0;
++    AHI_ControlAudio(control_, AHIC_MixFreq_Query,
++                     reinterpret_cast<IPTR>(&actual_frequency), TAG_DONE);
++    // Never mislabel samples with a different rate. Negotiation/resampling
++    // belongs above this stream; fail rather than changing pitch or A/V timing.
++    if (actual_frequency != frequency) {
++      return false;
++    }
++    return AHI_ControlAudio(control_, AHIC_Record, TRUE, TAG_DONE) == 0;
++  }
++
++ private:
++  struct MsgPort* port_ = nullptr;
++  struct AHIRequest* io_ = nullptr;
++  struct Library* AHIBase = nullptr;
++  struct AHIAudioCtrl* control_ = nullptr;
++};
++}  // namespace
++
++AhiInputStream::AhiInputStream(const AudioParameters& params,
++                               const std::string& device_id,
++                               AudioManagerBase* manager)
++    : params_(params), device_id_(device_id), manager_(manager) {}
++AhiInputStream::~AhiInputStream() {
++  Stop();
++}
++void AhiInputStream::GetDeviceNames(AudioDeviceNames* names) {
++  AhiSession session;
++  if (!session.Open()) {
++    return;
++  }
++  const auto modes = session.Modes();
++  if (!modes.empty()) {
++    names->push_back(AudioDeviceName::CreateDefault());
++  }
++  for (const auto& mode : modes) {
++    names->emplace_back(mode.name, base::StringPrintf("ahi:%08x", mode.id));
++  }
++}
++AudioInputStream::OpenOutcome AhiInputStream::Open() {
++  if (opened_) {
++    return OpenOutcome::kAlreadyOpen;
++  }
++  if (!params_.IsValid() || params_.channels() < 1 || params_.channels() > 2 ||
++      params_.frames_per_buffer() > 32768) {
++    return OpenOutcome::kFailed;
++  }
++  AhiSession session;
++  if (!session.Open()) {
++    return OpenOutcome::kFailed;
++  }
++  const auto modes = session.Modes();
++  if (modes.empty()) {
++    return OpenOutcome::kFailed;
++  }
++  if (device_id_.empty() ||
++      device_id_ == AudioDeviceDescription::kDefaultDeviceId) {
++    mode_id_ = modes.front().id;
++  } else if (device_id_.compare(0, 4, "ahi:") != 0 ||
++             !base::HexStringToUInt(device_id_.substr(4), &mode_id_)) {
++    return OpenOutcome::kFailed;
++  }
++  for (const auto& mode : modes) {
++    if (mode.id == mode_id_) {
++      opened_ = true;
++      return OpenOutcome::kSuccess;
++    }
++  }
++  return OpenOutcome::kFailed;
++}
++void AhiInputStream::Start(AudioInputCallback* callback) {
++  DCHECK(opened_);
++  DCHECK(!thread_);
++  callback_ = callback;
++  stopped_.store(false, std::memory_order_relaxed);
++  thread_ = std::make_unique<base::DelegateSimpleThread>(this, "AHI capture");
++  thread_->Start();
++}
++void AhiInputStream::Stop() {
++  stopped_.store(true, std::memory_order_relaxed);
++  if (thread_) {
++    thread_->Join();
++    thread_.reset();
++  }
++  callback_ = nullptr;
++}
++void AhiInputStream::Close() {
++  Stop();
++  manager_->ReleaseInputStream(this);
++}
++void AhiInputStream::Run() {
++  // Destruction order matters: unregister/quiesce the hook before its state.
++  auto state = std::make_unique<CaptureState>();
++  struct Hook hook = {};
++  hook.h_Entry = reinterpret_cast<decltype(hook.h_Entry)>(RecordHook);
++  hook.h_Data = state.get();
++  AhiSession session;
++  auto bus = AudioBus::Create(params_);
++  if (!session.Open() ||
++      !session.Start(mode_id_, params_.sample_rate(), &hook)) {
++    if (!stopped_.load(std::memory_order_relaxed)) {
++      callback_->OnError();
++    }
++    return;
++  }
++  auto last_data = base::TimeTicks::Now();
++  base::TimeTicks last_timestamp;
++  const auto buffer_duration = base::Seconds(
++      double(params_.frames_per_buffer()) / params_.sample_rate());
++  while (!stopped_.load(std::memory_order_relaxed)) {
++    const auto available = state->buffer.Available();
++    const auto now = base::TimeTicks::Now();
++    if (__atomic_load_n(&state->bad_format, __ATOMIC_RELAXED) ||
++        now - last_data > base::Seconds(3)) {
++      if (!stopped_.load(std::memory_order_relaxed)) {
++        callback_->OnError();
++      }
++      return;
++    }
++    if (state->buffer.Read(bus->channel(0),
++                           params_.channels() == 2 ? bus->channel(1) : nullptr,
++                           params_.frames_per_buffer())) {
++      auto timestamp =
++          now - base::Seconds(double(available) / params_.sample_rate());
++      if (!last_timestamp.is_null() &&
++          timestamp < last_timestamp + buffer_duration) {
++        timestamp = last_timestamp + buffer_duration;
++      }
++      last_timestamp = timestamp;
++      last_data = now;
++      AudioGlitchInfo glitch;
++      const auto dropped = state->buffer.TakeDroppedFrames();
++      if (dropped) {
++        glitch.count = 1;
++        glitch.duration =
++            base::Seconds(double(dropped) / params_.sample_rate());
++      }
++      if (!stopped_.load(std::memory_order_relaxed)) {
++        callback_->OnData(bus.get(), timestamp, 1.0, glitch);
++      }
++    } else {
++      base::PlatformThread::Sleep(base::Milliseconds(2));
++    }
++  }
++}
++}  // namespace media
+diff --git a/media/audio/aros/ahi_input_stream.h b/media/audio/aros/ahi_input_stream.h
+new file mode 100644
+index 0000000000..bb03a200c4
+--- /dev/null
++++ b/media/audio/aros/ahi_input_stream.h
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef MEDIA_AUDIO_AROS_AHI_INPUT_STREAM_H_
++#define MEDIA_AUDIO_AROS_AHI_INPUT_STREAM_H_
++#include <atomic>
++#include <memory>
++#include <string>
++#include "base/memory/raw_ptr.h"
++#include "base/threading/simple_thread.h"
++#include "media/audio/audio_device_name.h"
++#include "media/audio/audio_io.h"
++#include "media/base/audio_parameters.h"
++namespace media {
++class AudioManagerBase;
++class AhiInputStream final : public AudioInputStream,
++                             public base::DelegateSimpleThread::Delegate {
++ public:
++  AhiInputStream(const AudioParameters& params,
++                 const std::string& device_id,
++                 AudioManagerBase* manager);
++  ~AhiInputStream() override;
++  static void GetDeviceNames(AudioDeviceNames* names);
++  OpenOutcome Open() override;
++  void Start(AudioInputCallback* callback) override;
++  void Stop() override;
++  void Close() override;
++  double GetMaxVolume() override { return 0.0; }
++  void SetVolume(double volume) override {}
++  double GetVolume() override { return 1.0; }
++  bool SetAutomaticGainControl(bool enabled) override { return !enabled; }
++  bool GetAutomaticGainControl() override { return false; }
++  bool IsMuted() override { return false; }
++  void SetOutputDeviceForAec(const std::string& device_id) override {}
++  void Run() override;
++
++ private:
++  const AudioParameters params_;
++  const std::string device_id_;
++  const raw_ptr<AudioManagerBase> manager_;
++  uint32_t mode_id_ = 0;
++  bool opened_ = false;
++  raw_ptr<AudioInputCallback> callback_ = nullptr;
++  std::atomic<bool> stopped_{false};
++  std::unique_ptr<base::DelegateSimpleThread> thread_;
++};
++}  // namespace media
++#endif
+diff --git a/media/audio/aros/audio_manager_aros.cc b/media/audio/aros/audio_manager_aros.cc
+index 65ce9712fd..6d582ba096 100644
+--- a/media/audio/aros/audio_manager_aros.cc
++++ b/media/audio/aros/audio_manager_aros.cc
+@@ -10,8 +10,8 @@
+ 
+ #include "base/logging.h"
+ #include "media/audio/aros/ahi_output_stream.h"
++#include "media/audio/aros/ahi_input_stream.h"
+ #include "media/audio/audio_device_description.h"
+-#include "media/audio/fake_audio_input_stream.h"
+ #include "media/audio/fake_audio_manager.h"
+ #include "media/base/audio_parameters.h"
+ #include "media/base/limits.h"
+@@ -44,7 +44,14 @@ bool AudioManagerAros::HasAudioOutputDevices() {
+ }
+ 
+ bool AudioManagerAros::HasAudioInputDevices() {
+-  return false;
++  AudioDeviceNames names;
++  AhiInputStream::GetDeviceNames(&names);
++  return !names.empty();
++}
++
++void AudioManagerAros::GetAudioInputDeviceNames(AudioDeviceNames* names) {
++  DCHECK(names->empty());
++  AhiInputStream::GetDeviceNames(names);
+ }
+ 
+ void AudioManagerAros::GetAudioOutputDeviceNames(
+@@ -92,14 +99,14 @@ AudioInputStream* AudioManagerAros::MakeLinearInputStream(
+     const AudioParameters& params,
+     const std::string& device_id,
+     const LogCallback& log_callback) {
+-  return FakeAudioInputStream::MakeFakeStream(this, params);
++  return new AhiInputStream(params, device_id, this);
+ }
+ 
+ AudioInputStream* AudioManagerAros::MakeLowLatencyInputStream(
+     const AudioParameters& params,
+     const std::string& device_id,
+     const LogCallback& log_callback) {
+-  return FakeAudioInputStream::MakeFakeStream(this, params);
++  return new AhiInputStream(params, device_id, this);
+ }
+ 
+ AudioParameters AudioManagerAros::GetPreferredOutputStreamParameters(
+@@ -127,11 +134,11 @@ AudioParameters AudioManagerAros::GetPreferredOutputStreamParameters(
+ std::unique_ptr<AudioManager> CreateAudioManager(
+     std::unique_ptr<AudioThread> audio_thread,
+     AudioLogFactory* audio_log_factory) {
+-  // Probe on the caller's task: the AHI unit the user configured may not open
+-  // (no driver, unit 0 unset).  Then keep the fake manager, which paces
+-  // media clocks without a device, rather than a manager whose every stream
+-  // fails Open().
+-  if (AhiOutputStream::ProbeDevice()) {
++  // Input-only USB microphones remain usable when no playback unit is set.
++  // Fall back only when neither recording modes nor playback are available.
++  AudioDeviceNames inputs;
++  AhiInputStream::GetDeviceNames(&inputs);
++  if (AhiOutputStream::ProbeDevice() || !inputs.empty()) {
+     return std::make_unique<AudioManagerAros>(std::move(audio_thread),
+                                               audio_log_factory);
+   }
+diff --git a/media/audio/aros/audio_manager_aros.h b/media/audio/aros/audio_manager_aros.h
+index fbc2ca47e6..316963a8da 100644
+--- a/media/audio/aros/audio_manager_aros.h
++++ b/media/audio/aros/audio_manager_aros.h
+@@ -12,10 +12,7 @@
+ 
+ namespace media {
+ 
+-// Output through ahi.device (AhiOutputStream); no capture devices yet, input
+-// streams are the fake ones so getUserMedia() fails cleanly instead of
+-// crashing.  CreateAudioManager() only picks this manager when AHI's default
+-// unit opens; otherwise it stays on FakeAudioManager.
++// AHI playback units and low-level recording modes, independently available.
+ class MEDIA_EXPORT AudioManagerAros : public AudioManagerBase {
+  public:
+   AudioManagerAros(std::unique_ptr<AudioThread> audio_thread,
+@@ -27,6 +24,7 @@ class MEDIA_EXPORT AudioManagerAros : public AudioManagerBase {
+   // AudioManager:
+   bool HasAudioOutputDevices() override;
+   bool HasAudioInputDevices() override;
++  void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
+   void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
+   AudioParameters GetInputStreamParameters(
+       const std::string& device_id) override;
+diff --git a/media/audio/aros/tests/ahi_capture_buffer_test.cc b/media/audio/aros/tests/ahi_capture_buffer_test.cc
+new file mode 100644
+index 0000000000..fad55b664a
+--- /dev/null
++++ b/media/audio/aros/tests/ahi_capture_buffer_test.cc
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++// Standalone host regression test: c++ -std=c++20 -pthread -I<source-root>
++// ahi_capture_buffer_test.cc -o ahi_capture_buffer_test
++#include "media/audio/aros/ahi_capture_buffer.h"
++#include <cassert>
++#include <cstdint>
++#include <iostream>
++#include <thread>
++int main() {
++  media::AhiCaptureBuffer<8> ring;
++  const int16_t stereo[] = {-32768, 32767, 16384, -16384};
++  float left[8]{}, right[8]{};
++  assert(ring.Write(stereo, 2, 2));
++  assert(!ring.Read(left, right, 3));
++  assert(ring.Read(left, right, 2));
++  assert(left[0] == -1 && right[0] == 32767.0f / 32768);
++  assert(left[1] == .5f && right[1] == -.5f);
++  const int16_t mono[8] = {1,2,3,4,5,6,7,8};
++  assert(ring.Write(mono, 8, 1));
++  assert(!ring.Write(mono, 1, 1));
++  assert(ring.TakeDroppedFrames() == 1 && ring.TakeDroppedFrames() == 0);
++  assert(ring.Read(left, right, 8));
++  for (int i=0;i<8;i++) assert(left[i] == (i+1)/32768.0f && right[i] == (i+1)/32768.0f);
++  assert(ring.Write(stereo, 2, 2));
++  assert(ring.Read(left, nullptr, 2));
++  assert(left[1] == 0);
++  const int8_t eight[] = {-128, 127};
++  assert(ring.Write(eight, 2, 1));
++  assert(ring.Read(left, right, 2) && left[0] == -1 && right[1] == 127.0f/128);
++  const int32_t thirtytwo[] = {INT32_MIN, 1073741824};
++  assert(ring.Write(thirtytwo, 2, 1));
++  assert(ring.Read(left, right, 2) && left[0] == -1 && right[1] == .5f);
++  media::AhiCaptureBuffer<1024> threaded;
++  constexpr int count = 100000;
++  std::thread producer([&]{for(int i=0;i<count;++i){int32_t sample[2]={i,-i};while(!threaded.Write(sample,1,2))std::this_thread::yield();}});
++  for(int i=0;i<count;++i){while(!threaded.Read(left,right,1))std::this_thread::yield();assert(left[0]==i/2147483648.0f && right[0]==-i/2147483648.0f);}
++  producer.join();assert(threaded.Available()==0);
++  std::cout << "PASS: format conversion, mono/stereo, wrap, overflow, partial reads, 100000 concurrent frames\n";
++}

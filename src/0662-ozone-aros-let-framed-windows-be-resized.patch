@@ -1,0 +1,38 @@
+From ab8f73ccf27cd4e63f126f27c566fcfea11fdf37 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 06:39:35 -0500
+Subject: [PATCH 662/689] ozone/aros: let framed windows be resized
+
+Intuition makes a window's minimum and maximum size its opening size
+unless told otherwise, so Chromium windows could not be resized. Give
+framed windows a usable minimum and no maximum.
+---
+ ui/ozone/platform/aros/aros_window.cc | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index ea1da3878f..6b8132b4f9 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -41,6 +41,8 @@ namespace {
+ 
+ constexpr int kDefaultWindowWidth = 1024;
+ constexpr int kDefaultWindowHeight = 720;
++constexpr int kMinFramedWidth = 400;
++constexpr int kMinFramedHeight = 300;
+ constexpr ULONG kWindowEventMask =
+     IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_CHANGEWINDOW |
+     IDCMP_REFRESHWINDOW | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW |
+@@ -513,7 +515,11 @@ bool ArosWindow::OpenNativeWindow(NativeMode mode) {
+       client.x(), WA_Top, client.y(), WA_InnerWidth, client.width(),
+       WA_InnerHeight, client.height(), WA_CloseGadget, framed, WA_DepthGadget,
+       framed, WA_DragBar, framed, WA_SizeGadget, framed, WA_SizeBBottom,
+-      framed, WA_Borderless, !framed, WA_Backdrop,
++      framed, framed ? WA_MinWidth : TAG_IGNORE, kMinFramedWidth,
++      framed ? WA_MinHeight : TAG_IGNORE, kMinFramedHeight,
++      framed ? WA_MaxWidth : TAG_IGNORE, static_cast<IPTR>(~0u),
++      framed ? WA_MaxHeight : TAG_IGNORE, static_cast<IPTR>(~0u),
++      WA_Borderless, !framed, WA_Backdrop,
+       mode == NativeMode::kOwnScreen, WA_Activate,
+       visible_ && mode != NativeMode::kNormal, WA_Hidden, !visible_,
+       WA_AutoAdjust, TRUE, WA_SmartRefresh, TRUE, WA_ReportMouse, TRUE,

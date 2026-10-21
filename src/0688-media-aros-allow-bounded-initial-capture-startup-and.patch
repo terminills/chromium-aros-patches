@@ -1,0 +1,95 @@
+From ee28c359070cba8f04bca34cc0ae5836f2c9cf5b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 11:35:30 -0500
+Subject: [PATCH 688/689] media/aros: allow bounded initial capture startup and
+ record native validation
+
+---
+ .acd/decisions/20261021-ahi-recording.md | 18 ++++++++++--------
+ .acd/decisions/20261021-vhi-camera.md    | 21 +++++++++++----------
+ media/audio/aros/ahi_input_stream.cc     |  3 ++-
+ 3 files changed, 23 insertions(+), 19 deletions(-)
+
+diff --git a/.acd/decisions/20261021-ahi-recording.md b/.acd/decisions/20261021-ahi-recording.md
+index b9c3d566b6..33146f3640 100644
+--- a/.acd/decisions/20261021-ahi-recording.md
++++ b/.acd/decisions/20261021-ahi-recording.md
+@@ -1,6 +1,6 @@
+ # Chromium AROS recording through AHI
+ 
+-Status: hypothesis
++Status: bounded native capture validated
+ 
+ ## Rationale
+ 
+@@ -25,11 +25,13 @@ build uses out/uvc-01a15bd6 with the shipping native ADT SDK. Both AHI input and
+ cross-compile with the current CEF command into private outputs. Disassembly
+ confirms no SIMD registers in the recording hook. Standalone ASan/UBSan tests
+ pass conversion, partial reads, wrap, overflow and 100000 concurrent frames.
+-The driver-side USB mic was previously tested on AROS; this new Chromium stream
+-still needs native runtime, stop/reopen and combined-camera verification.
+-
+-Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
+-Full shipping-config build has compiled the input backend and AudioManager.
+-Final link and native capture validation are pending.
+-
++The full shipping-config browser build passes. Native Chromium captured real
++stereo 48-kHz UGREEN microphone samples simultaneously with the VHI camera in
++five sessions, including four stop/reopen cycles. A populated ring is drained
++before a scheduling delay can trigger a timeout. Initial acquisition allows
++ten seconds for hardware startup; an established recording still fails after
++three seconds without enough samples. Stop joins before releasing hook state.
++No A/V synchronization, Twitch, or bare-metal compatibility claim is made.
++
++Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-runtime
+ Relay: JOB-0212 (parent JOB-0066)
+diff --git a/.acd/decisions/20261021-vhi-camera.md b/.acd/decisions/20261021-vhi-camera.md
+index b3149948dc..c91967a527 100644
+--- a/.acd/decisions/20261021-vhi-camera.md
++++ b/.acd/decisions/20261021-vhi-camera.md
+@@ -1,6 +1,6 @@
+ # Chromium AROS camera capture through VHI
+ 
+-Status: hypothesis
++Status: bounded native capture validated
+ 
+ ## Rationale
+ 
+@@ -20,13 +20,14 @@ Draft based on observed Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd.
+ Claude confirmed this baseline in TRIG-1445 (hash corrected in JOB-0212).
+ Integration uses the shipping out/adt-smp-pin args in private out/uvc-01a15bd6;
+ ADT runtime base is alpha16c-upstream 7714463606, including the existing SMP fix.
+-Cross compilation of the backend, factory wiring and RGB24 conversion succeeds
+-using recorded existing CEF build commands with private output files. Existing
+-base/containers/span.h constexpr warnings persist. This is not browser runtime
+-proof. Live getUserMedia, stop/reopen and device-removal tests remain required.
+-
+-Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
+-Full shipping-config build has compiled the new backend, factory and conversion
+-objects. Final link and native capture validation are pending.
+-
++The full shipping-config browser build and native QEMU capture validation pass.
++The final driver uses a persistent task producer, MJPEG decode through
++jfif.library and aligned packet slots that avoid split-TRB short-length errors.
++Five combined video/microphone sessions and four stop/reopen cycles pass;
++removing the camera returns NotFoundError. Preview frame rate remains below the
++requested 5 fps (typically 2-4 fps in these bounded sessions). No Twitch or
++bare-metal claim is made. Website/playback release regressions are recorded
++separately from capture proof.
++
++Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-runtime
+ Relay: JOB-0212 (parent JOB-0066)
+diff --git a/media/audio/aros/ahi_input_stream.cc b/media/audio/aros/ahi_input_stream.cc
+index 4364845943..226cc376b5 100644
+--- a/media/audio/aros/ahi_input_stream.cc
++++ b/media/audio/aros/ahi_input_stream.cc
+@@ -251,7 +251,8 @@ void AhiInputStream::Run() {
+     const auto now = base::TimeTicks::Now();
+     if (__atomic_load_n(&state->bad_format, __ATOMIC_RELAXED) ||
+         (available < static_cast<size_t>(params_.frames_per_buffer()) &&
+-         now - last_data > base::Seconds(3))) {
++         now - last_data > (last_timestamp.is_null() ? base::Seconds(10)
++                                                    : base::Seconds(3)))) {
+       if (!stopped_.load(std::memory_order_relaxed)) {
+         callback_->OnError();
+       }

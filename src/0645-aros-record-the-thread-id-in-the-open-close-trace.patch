@@ -1,0 +1,36 @@
+From b24cf2d70a07a2cab9ec2a60fe1c66618bd39be1 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 06:52:09 -0500
+Subject: [PATCH 645/689] aros: record the thread id in the open/close trace
+
+---
+ chrome/app/aros_close_trace.cc | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+index 2ce0d03ea3..f0ff06c4b1 100644
+--- a/chrome/app/aros_close_trace.cc
++++ b/chrome/app/aros_close_trace.cc
+@@ -29,9 +29,9 @@ extern "C" int __wrap___posixc_close(int fd) {
+     const int saved_errno = errno;
+     char line[240];
+     snprintf(line, sizeof(line),
+-             "[Chromium:AROS:CloseTrace] pid=%d close(%d)=%d errno=%d "
++             "[Chromium:AROS:CloseTrace] pid=%d tid=%lld close(%d)=%d errno=%d "
+              "thread=%s callerrel=%+lld\n",
+-             (int)getpid(), fd, ret, ret == 0 ? 0 : saved_errno,
++             (int)getpid(), (long long)base::PlatformThread::CurrentId(), fd, ret, ret == 0 ? 0 : saved_errno,
+              base::PlatformThread::GetName(),
+              // Relative to this function, so it maps to a symbol in the
+              // unstripped binary whatever address the process loaded at.
+@@ -62,8 +62,8 @@ extern "C" int __wrap___posixc_open(const char* path, int flags, ...) {
+     const int saved_errno = errno;
+     char line[320];
+     snprintf(line, sizeof(line),
+-             "[Chromium:AROS:OpenTrace] pid=%d open(%.160s)=%d thread=%s\n",
+-             (int)getpid(), path ? path : "(null)", ret,
++             "[Chromium:AROS:OpenTrace] pid=%d tid=%lld open(%.160s)=%d thread=%s\n",
++             (int)getpid(), (long long)base::PlatformThread::CurrentId(), path ? path : "(null)", ret,
+              base::PlatformThread::GetName());
+     ArosKPutStr(line);
+     errno = saved_errno;

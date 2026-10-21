@@ -1,0 +1,68 @@
+From 699464d00e3fb2d893123f3a92f20bd67ff744aa Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 06:43:06 -0500
+Subject: [PATCH 644/689] aros: trace open() alongside close() to match a
+ failing close to its open
+
+---
+ chrome/BUILD.gn                |  2 +-
+ chrome/app/aros_close_trace.cc | 30 ++++++++++++++++++++++++++++++
+ 2 files changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 7f49aed2b2..935320da79 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1925,6 +1925,6 @@ if (is_aros) {
+   # __wrap_close (base/files/scoped_file.cc), which logs when
+   # CHROMIUM_CLOSE_TRACE is set.
+   config("aros_close_trace") {
+-    ldflags = [ "-Wl,--wrap=__posixc_close" ]
++    ldflags = [ "-Wl,--wrap=__posixc_close", "-Wl,--wrap=__posixc_open" ]
+   }
+ }
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+index 54d574b607..2ce0d03ea3 100644
+--- a/chrome/app/aros_close_trace.cc
++++ b/chrome/app/aros_close_trace.cc
+@@ -3,6 +3,8 @@
+ // found in the LICENSE file.
+ 
+ #include <errno.h>
++#include <fcntl.h>
++#include <stdarg.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -40,3 +42,31 @@ extern "C" int __wrap___posixc_close(int fd) {
+   }
+   return ret;
+ }
++
++// The open side of the same trace: which task a descriptor was created on,
++// so a close that fails with EBADF can be matched to its open.
++extern "C" int __real___posixc_open(const char* path, int flags, ...);
++extern "C" int __wrap___posixc_open(const char* path, int flags, ...) {
++  int mode = 0;
++  if (flags & O_CREAT) {
++    va_list args;
++    va_start(args, flags);
++    mode = va_arg(args, int);
++    va_end(args);
++  }
++  const int ret = __real___posixc_open(path, flags, mode);
++  static int trace = -1;
++  if (trace < 0)
++    trace = access("ENV:CHROMIUM_CLOSE_TRACE", F_OK) == 0 ? 1 : 0;
++  if (trace) {
++    const int saved_errno = errno;
++    char line[320];
++    snprintf(line, sizeof(line),
++             "[Chromium:AROS:OpenTrace] pid=%d open(%.160s)=%d thread=%s\n",
++             (int)getpid(), path ? path : "(null)", ret,
++             base::PlatformThread::GetName());
++    ArosKPutStr(line);
++    errno = saved_errno;
++  }
++  return ret;
++}

@@ -1,0 +1,27 @@
+From be95bd96064275956ddf20267761b10e05db795b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 20:03:30 -0500
+Subject: [PATCH 675/689] AROS: show popup windows frontmost
+
+ArosWindow::Show passed NULL as ShowWindow's placement argument. AROS
+intuition now implements the AmigaOS 4 semantics of that argument, where
+NULL is WINDOW_BACKMOST, so menus and other popups opened behind the
+browser window and were invisible. Older intuition ignores the argument,
+so WINDOW_FRONTMOST is correct on both.
+---
+ ui/ozone/platform/aros/aros_window.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 6b8132b4f9..5361f85d79 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -638,7 +638,7 @@ void ArosWindow::Show(bool inactive) {
+   VLOG(1) << "[Chromium:Ozone:AROS] Show(inactive=" << inactive
+           << ") widget=" << widget_ << " native=" << window_;
+   if (window_) {
+-    ShowWindow(window_, nullptr);
++    ShowWindow(window_, WINDOW_FRONTMOST);
+     if (!inactive && activatable_) {
+       VLOG(1) << "[Chromium:Ozone:AROS] show activates widget=" << widget_;
+       RequestIntuitionActivation();

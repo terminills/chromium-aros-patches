@@ -1,0 +1,503 @@
+From 585d31f56f685c7180a00e94d80d1826e312a65e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 29 Sep 2026 22:19:41 -0500
+Subject: [PATCH 661/689] ozone/aros: F11 fullscreen, Alt+F11 on an own screen,
+ Latin-1 titles
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fullscreen resized the framed window to the Workbench work area, the same
+as Maximize. It now reopens the Intuition window, since Intuition cannot
+change a window's border or screen in place:
+
+- F11: a borderless window filling the whole Workbench screen.
+- Alt+F11: a screen of Chromium's own (like Workbench, draggable, with
+  its title bar kept) holding a borderless backdrop window, so it can be
+  dragged down or flipped away like any AROS screen. Alt+F11 while
+  fullscreen on Workbench moves it to the own screen.
+
+Menus and popups open on their parent's custom screen. The switch runs
+as a posted task (it drains the IDCMP port, and F11 arrives inside that
+port's dispatch), and window_ and the backing store are swapped under the
+presentation lock the compositor draws under.
+
+AROS's PC keyboard drivers report F11 as Amiga Help (i8042 stdkeytable),
+so Help maps to F11.
+
+Window and screen titles are converted to Latin-1, which Intuition draws:
+page titles were passed as UTF-8, so "Leo’s" showed as "Leoâ..s".
+Typographic quotes, dashes and ellipses become ASCII, anything else
+outside Latin-1 '?'.
+---
+ ui/ozone/platform/aros/aros_window.cc        | 293 +++++++++++++++----
+ ui/ozone/platform/aros/aros_window.h         |  23 ++
+ ui/ozone/platform/aros/aros_window_manager.h |   4 +
+ 3 files changed, 269 insertions(+), 51 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
+index 7bd91262b2..ea1da3878f 100644
+--- a/ui/ozone/platform/aros/aros_window.cc
++++ b/ui/ozone/platform/aros/aros_window.cc
+@@ -6,8 +6,10 @@
+ 
+ #include <algorithm>
+ 
++#include "base/functional/bind.h"
++#include "base/location.h"
+ #include "base/logging.h"
+-#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "ui/base/cursor/platform_cursor.h"
+ #include "ui/display/types/display_constants.h"
+ #include "ui/events/base_event_utils.h"
+@@ -26,6 +28,7 @@
+ #include <devices/inputevent.h>
+ #include <devices/rawkeycodes.h>
+ #include <intuition/intuition.h>
++#include <intuition/screens.h>
+ #include <proto/cybergraphics.h>
+ #include <proto/exec.h>
+ #include <proto/graphics.h>
+@@ -324,7 +327,10 @@ DomCode DomCodeFromRawKey(uint16_t code) {
+     case RAWKEY_PAGEDOWN:
+       return DomCode::PAGE_DOWN;
+     case RAWKEY_HELP:
+-      return DomCode::HELP;
++      // AROS's PC keyboard drivers report the F11 key as Amiga Help
++      // (arch/all-pc/hidds/i8042/stdkeytable.h), so Help is F11 here:
++      // fullscreen, like F11 everywhere else.
++      return DomCode::F11;
+     case RAWKEY_UP:
+       return DomCode::ARROW_UP;
+     case RAWKEY_LEFT:
+@@ -387,6 +393,42 @@ bool IsMouseWheelRawKey(uint16_t code) {
+   return code >= RAWKEY_NM_WHEEL_UP && code <= RAWKEY_NM_WHEEL_RIGHT;
+ }
+ 
++// Intuition draws window and screen titles in Latin-1; page titles are
++// Unicode. Common typographic punctuation becomes its ASCII look-alike and
++// anything else outside Latin-1 becomes '?', instead of UTF-8 bytes drawn as
++// Latin-1 ("Leo’s" showed as "Leoâ..s").
++std::string TitleForIntuition(const std::u16string& title) {
++  std::string out;
++  out.reserve(title.size());
++  for (const char16_t c : title) {
++    switch (c) {
++      case u'\u2018':
++      case u'\u2019':
++      case u'\u201A':
++      case u'\u2032':
++        out += '\'';
++        break;
++      case u'\u201C':
++      case u'\u201D':
++      case u'\u201E':
++      case u'\u2033':
++        out += '"';
++        break;
++      case u'\u2013':
++      case u'\u2014':
++      case u'\u2212':
++        out += '-';
++        break;
++      case u'\u2026':
++        out += "...";
++        break;
++      default:
++        out += c <= 0xFF ? static_cast<char>(c) : '?';
++    }
++  }
++  return out;
++}
++
+ }  // namespace
+ 
+ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+@@ -406,39 +448,100 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+   const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+   bounds_ = ConstrainClientBoundsToWorkArea(bounds_, work_area, 0, 0, 0, 0);
+ 
+-  const bool use_standard_frame =
+-      properties.type == PlatformWindowType::kWindow &&
+-      !properties.remove_standard_frame;
++  use_standard_frame_ = properties.type == PlatformWindowType::kWindow &&
++                       !properties.remove_standard_frame;
+   widget_ = manager_->AddWindow(this);
+-  window_ = OpenWindowTags(
+-      nullptr, WA_Title,
+-      reinterpret_cast<IPTR>(use_standard_frame ? "Chromium" : nullptr),
+-      WA_Left, bounds_.x(), WA_Top, bounds_.y(), WA_InnerWidth, bounds_.width(),
+-      WA_InnerHeight, bounds_.height(), WA_CloseGadget, use_standard_frame,
+-      WA_DepthGadget, use_standard_frame, WA_DragBar, use_standard_frame,
+-      WA_SizeGadget, use_standard_frame, WA_SizeBBottom, use_standard_frame,
+-      WA_Borderless, !use_standard_frame, WA_Activate, FALSE, WA_Hidden, TRUE,
++  if (OpenNativeWindow(NativeMode::kNormal)) {
++    LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
++              << widget_ << " native=" << window_
++              << " client=" << bounds_.ToString()
++              << " type=" << static_cast<int>(properties.type)
++              << " activatable=" << activatable_
++              << " parent=" << parent_widget_
++              << " standard_frame=" << use_standard_frame_
++              << " work_area=" << work_area.ToString();
++  }
++
++  delegate_->OnAcceleratedWidgetAvailable(widget_);
++}
++
++struct Screen* ArosWindow::ParentScreen() const {
++  if (parent_widget_ == gfx::kNullAcceleratedWidget) {
++    return nullptr;
++  }
++  ArosWindow* const parent = manager_->GetWindow(parent_widget_);
++  if (!parent || !parent->window_ || !parent->window_->WScreen) {
++    return nullptr;
++  }
++  struct Screen* const screen = parent->window_->WScreen;
++  return (screen->Flags & SCREENTYPE) == CUSTOMSCREEN ? screen : nullptr;
++}
++
++bool ArosWindow::OpenNativeWindow(NativeMode mode) {
++  struct Screen* screen = nullptr;
++  if (mode == NativeMode::kOwnScreen) {
++    if (!own_screen_) {
++      own_screen_ = OpenScreenTags(
++          nullptr, SA_LikeWorkbench, TRUE, SA_Type, CUSTOMSCREEN, SA_Title,
++          reinterpret_cast<IPTR>("Chromium"), SA_ShowTitle, TRUE,
++          SA_Draggable, TRUE, TAG_DONE);
++    }
++    if (!own_screen_) {
++      LOG(WARNING) << "[Chromium:Ozone:AROS] cannot open a screen widget="
++                   << widget_ << "; filling the Workbench screen instead";
++      mode = NativeMode::kFullscreen;
++    }
++    screen = own_screen_;
++  } else if (mode == NativeMode::kNormal) {
++    screen = ParentScreen();
++  }
++
++  gfx::Rect client = bounds_;
++  if (mode == NativeMode::kFullscreen) {
++    client = GetPrimaryArosScreenGeometry().bounds;
++  } else if (mode == NativeMode::kOwnScreen) {
++    // Below the screen's title bar, which stays visible to drag the screen.
++    const int top = own_screen_->BarHeight + 1;
++    client = gfx::Rect(0, top, own_screen_->Width,
++                       std::max(1, own_screen_->Height - top));
++  }
++  const bool framed = use_standard_frame_ && mode == NativeMode::kNormal;
++  struct Window* const native = OpenWindowTags(
++      nullptr, screen ? WA_CustomScreen : TAG_IGNORE,
++      reinterpret_cast<IPTR>(screen), WA_Title,
++      reinterpret_cast<IPTR>(framed ? "Chromium" : nullptr), WA_Left,
++      client.x(), WA_Top, client.y(), WA_InnerWidth, client.width(),
++      WA_InnerHeight, client.height(), WA_CloseGadget, framed, WA_DepthGadget,
++      framed, WA_DragBar, framed, WA_SizeGadget, framed, WA_SizeBBottom,
++      framed, WA_Borderless, !framed, WA_Backdrop,
++      mode == NativeMode::kOwnScreen, WA_Activate,
++      visible_ && mode != NativeMode::kNormal, WA_Hidden, !visible_,
+       WA_AutoAdjust, TRUE, WA_SmartRefresh, TRUE, WA_ReportMouse, TRUE,
+       WA_RMBTrap, TRUE, TAG_DONE);
+-
+-  if (!window_) {
++  if (!native) {
+     LOG(ERROR) << "[Chromium:Ozone:AROS] OpenWindowTags failed widget="
+-               << widget_ << " requested=" << bounds_.ToString();
+-  } else {
+-    window_->UserPort = manager_->event_port();
+-    native_events_enabled_ = ModifyIDCMP(window_, kWindowEventMask);
+-    if (!native_events_enabled_) {
+-      window_->UserPort = nullptr;
+-      CloseWindow(window_);
+-      window_ = nullptr;
+-      LOG(ERROR) << "[Chromium:Ozone:AROS] could not enable IDCMP widget="
+-                 << widget_;
+-    }
++               << widget_ << " requested=" << client.ToString();
++    return false;
+   }
+-
+-  if (window_) {
+-    manager_->AttachNativeWindow(widget_, this, window_);
+-    UpdateBoundsFromNative(/*notify_delegate=*/false);
++  native->UserPort = manager_->event_port();
++  if (!ModifyIDCMP(native, kWindowEventMask)) {
++    native->UserPort = nullptr;
++    CloseWindow(native);
++    LOG(ERROR) << "[Chromium:Ozone:AROS] could not enable IDCMP widget="
++               << widget_;
++    return false;
++  }
++  native_events_enabled_ = true;
++  {
++    base::AutoLock lock(manager_->presentation_lock());
++    window_ = native;
++  }
++  native_mode_ = mode;
++  manager_->AttachNativeWindow(widget_, this, window_);
++  ApplyNativeTitle();
++  UpdateBoundsFromNative(/*notify_delegate=*/false);
++  if (mode == NativeMode::kNormal) {
++    const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+     const gfx::Rect native_bounds = bounds_;
+     const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
+         native_bounds, work_area, window_->BorderLeft, window_->BorderTop,
+@@ -450,17 +553,63 @@ ArosWindow::ArosWindow(PlatformWindowDelegate* delegate,
+           constrained.height() + window_->BorderTop + window_->BorderBottom);
+       UpdateBoundsFromNative(/*notify_delegate=*/false);
+     }
+-    LOG(INFO) << "[Chromium:Ozone:AROS] opened Intuition window widget="
+-              << widget_ << " native=" << window_
+-              << " client=" << bounds_.ToString()
+-              << " type=" << static_cast<int>(properties.type)
+-              << " activatable=" << activatable_
+-              << " parent=" << parent_widget_
+-              << " standard_frame=" << use_standard_frame
+-              << " work_area=" << work_area.ToString();
+   }
++  return true;
++}
+ 
+-  delegate_->OnAcceleratedWidgetAvailable(widget_);
++void ArosWindow::CloseNativeWindow() {
++  if (!window_) {
++    return;
++  }
++  ReturnIntuitionActivationToOwner();
++  DisableNativeEvents();
++  struct Window* const native = window_;
++  manager_->DetachNativeWindow(widget_, this, native);
++  {
++    // The compositor presents into window_ and the backing store under this
++    // lock; neither may disappear under a present in progress.
++    base::AutoLock lock(manager_->presentation_lock());
++    window_ = nullptr;
++    ReleaseNativeBackingStore();
++  }
++  CloseWindow(native);
++}
++
++void ArosWindow::SwitchNativeMode(NativeMode mode) {
++  if (shutting_down_ || !window_ || mode == native_mode_) {
++    return;
++  }
++  const NativeMode old_mode = native_mode_;
++  const gfx::Rect old_bounds = bounds_;
++  scoped_refptr<PlatformCursor> cursor = cursor_;
++  ResetNativeCursor();
++  CloseNativeWindow();
++  if (old_mode == NativeMode::kOwnScreen && own_screen_) {
++    // Fails while a menu or popup is still open on it; the destructor retries.
++    if (CloseScreen(own_screen_)) {
++      own_screen_ = nullptr;
++    }
++  }
++  if (mode == NativeMode::kNormal && restored_bounds_) {
++    bounds_ = *restored_bounds_;
++    restored_bounds_.reset();
++  }
++  if (!OpenNativeWindow(mode) && mode != NativeMode::kNormal) {
++    OpenNativeWindow(NativeMode::kNormal);
++  }
++  if (cursor) {
++    SetCursor(std::move(cursor));
++  }
++  if (visible_ && activatable_) {
++    RequestIntuitionActivation();
++  }
++  LOG(INFO) << "[Chromium:Ozone:AROS] window mode widget=" << widget_ << " "
++            << static_cast<int>(old_mode) << " -> "
++            << static_cast<int>(native_mode_)
++            << " client=" << bounds_.ToString();
++  if (bounds_ != old_bounds) {
++    delegate_->OnBoundsChanged({bounds_.origin() != old_bounds.origin()});
++  }
+ }
+ 
+ ArosWindow::~ArosWindow() {
+@@ -468,13 +617,12 @@ ArosWindow::~ArosWindow() {
+   VLOG(1) << "[Chromium:Ozone:AROS] destroying widget=" << widget_
+           << " native=" << window_ << " presented=" << presented_frames_;
+   if (window_) {
+-    ReturnIntuitionActivationToOwner();
+-    DisableNativeEvents();
+     ResetNativeCursor();
+-    ReleaseNativeBackingStore();
+-    manager_->DetachNativeWindow(widget_, this, window_);
+-    CloseWindow(window_);
+-    window_ = nullptr;
++    CloseNativeWindow();
++  }
++  if (own_screen_) {
++    CloseScreen(own_screen_);
++    own_screen_ = nullptr;
+   }
+   manager_->ClearCaptureWindow(this);
+   manager_->RemoveWindow(widget_, this);
+@@ -521,6 +669,10 @@ void ArosWindow::PrepareForShutdown() {
+ }
+ 
+ void ArosWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
++  if (native_mode_ != NativeMode::kNormal) {
++    // A fullscreen window's box is its screen's; keep it.
++    return;
++  }
+   const gfx::Rect old_bounds = bounds_;
+   const gfx::Rect work_area = GetPrimaryArosScreenGeometry().work_area;
+   const gfx::Rect constrained = ConstrainClientBoundsToWorkArea(
+@@ -567,10 +719,21 @@ gfx::Rect ArosWindow::GetBoundsInDIP() const {
+ }
+ 
+ void ArosWindow::SetTitle(const std::u16string& title) {
+-  title_ = base::UTF16ToUTF8(title);
+-  if (window_) {
+-    SetWindowTitles(window_, const_cast<char*>(title_.c_str()),
+-                    reinterpret_cast<char*>(~uintptr_t{0}));
++  title_ = TitleForIntuition(title);
++  ApplyNativeTitle();
++}
++
++void ArosWindow::ApplyNativeTitle() {
++  if (!window_ || title_.empty()) {
++    return;
++  }
++  char* const keep = reinterpret_cast<char*>(~uintptr_t{0});
++  char* const text = const_cast<char*>(title_.c_str());
++  if (native_mode_ == NativeMode::kOwnScreen) {
++    // The window has no title bar there; the screen's shows the page.
++    SetWindowTitles(window_, keep, text);
++  } else if (native_mode_ == NativeMode::kNormal && use_standard_frame_) {
++    SetWindowTitles(window_, text, keep);
+   }
+ }
+ 
+@@ -589,14 +752,24 @@ void ArosWindow::ReleaseCapture() {
+ 
+ void ArosWindow::SetFullscreen(bool fullscreen, int64_t target_display_id) {
+   DCHECK_EQ(target_display_id, display::kInvalidDisplayId);
++  // Reached from key dispatch (F11): reopening the Intuition window drains
++  // its IDCMP port, so it must not happen inside that dispatch.
++  auto switch_later = [&](NativeMode mode) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&ArosWindow::SwitchNativeMode,
++                                  weak_factory_.GetWeakPtr(), mode));
++  };
+   if (fullscreen) {
+     if (!restored_bounds_) {
+       restored_bounds_ = bounds_;
+     }
+-    SetBoundsInPixels(PrimaryScreenWorkArea());
++    switch_later(own_screen_requested_ ? NativeMode::kOwnScreen
++                                       : NativeMode::kFullscreen);
++    own_screen_requested_ = false;
+     UpdateWindowState(PlatformWindowState::kFullScreen);
+   } else if (window_state_ == PlatformWindowState::kFullScreen) {
+-    Restore();
++    switch_later(NativeMode::kNormal);
++    UpdateWindowState(PlatformWindowState::kNormal);
+   }
+ }
+ 
+@@ -1055,6 +1228,24 @@ void ArosWindow::DispatchRawKey(uint16_t code,
+     return;
+   }
+ 
++  // Alt+F11 is fullscreen on a screen of our own: the browser gets plain
++  // F11, and its fullscreen request then opens the screen. Already
++  // fullscreen on Workbench, it moves the window to its own screen.
++  if (!released && (raw_code == RAWKEY_F11 || raw_code == RAWKEY_HELP) &&
++      (qualifier & (IEQUALIFIER_LALT | IEQUALIFIER_RALT))) {
++    ArosWindow* const top = FocusOwner();
++    if (top->window_state_ != PlatformWindowState::kFullScreen) {
++      top->own_screen_requested_ = true;
++    } else if (top->native_mode_ == NativeMode::kFullscreen) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&ArosWindow::SwitchNativeMode,
++                                    top->weak_factory_.GetWeakPtr(),
++                                    NativeMode::kOwnScreen));
++      return;
++    }
++    qualifier &= ~(IEQUALIFIER_LALT | IEQUALIFIER_RALT);
++  }
++
+   const DomCode dom_code = DomCodeFromRawKey(raw_code);
+   if (dom_code == DomCode::NONE) {
+     VLOG(1) << "[Chromium:Ozone:AROS] unmapped raw key=" << raw_code;
+diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
+index 80e0353808..41c42023d8 100644
+--- a/ui/ozone/platform/aros/aros_window.h
++++ b/ui/ozone/platform/aros/aros_window.h
+@@ -14,6 +14,7 @@
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
+@@ -27,6 +28,7 @@
+ struct Window;
+ struct BitMap;
+ struct RastPort;
++struct Screen;
+ 
+ namespace ui {
+ 
+@@ -94,6 +96,20 @@ class ArosWindow : public PlatformWindow {
+                       const gfx::ImageSkia& app_icon) override;
+   void SizeConstraintsChanged() override;
+ 
++  // How the Intuition window is shown. F11 fills the Workbench screen with
++  // a borderless window; Alt+F11 opens a screen of Chromium's own, which can
++  // be dragged down or flipped away like any AROS screen. Intuition cannot
++  // change a window's border or screen in place, so a mode change reopens it.
++  enum class NativeMode { kNormal, kFullscreen, kOwnScreen };
++  bool OpenNativeWindow(NativeMode mode);
++  void CloseNativeWindow();
++  void SwitchNativeMode(NativeMode mode);
++  // A menu or popup opens on its parent's screen.
++  struct Screen* ParentScreen() const;
++  // Shows title_ where this mode has a title: the window bar, or the screen
++  // bar of an own screen.
++  void ApplyNativeTitle();
++
+   void UpdateBoundsFromNative(bool notify_delegate);
+   void UpdateWindowState(PlatformWindowState state);
+   bool EnsureNativeBackingStore(const gfx::Size& size);
+@@ -140,6 +156,7 @@ class ArosWindow : public PlatformWindow {
+   scoped_refptr<PlatformCursor> cursor_;
+   gfx::Rect bounds_;
+   std::optional<gfx::Rect> restored_bounds_;
++  // The page title in Latin-1, as Intuition draws it.
+   std::string title_;
+   PlatformWindowState window_state_ = PlatformWindowState::kNormal;
+   bool visible_ = false;
+@@ -149,6 +166,12 @@ class ArosWindow : public PlatformWindow {
+   bool capture_ = false;
+   bool shutting_down_ = false;
+   bool native_events_enabled_ = false;
++  bool use_standard_frame_ = false;
++  NativeMode native_mode_ = NativeMode::kNormal;
++  // Set by Alt+F11 so the browser's fullscreen request uses an own screen.
++  bool own_screen_requested_ = false;
++  RAW_PTR_EXCLUSION struct Screen* own_screen_ = nullptr;
++  base::WeakPtrFactory<ArosWindow> weak_factory_{this};
+ };
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
+index ab9354e7e3..5c85ff31fb 100644
+--- a/ui/ozone/platform/aros/aros_window_manager.h
++++ b/ui/ozone/platform/aros/aros_window_manager.h
+@@ -79,6 +79,10 @@ class ArosWindowManager {
+                      const gfx::Size& pixel_size,
+                      const gfx::Rect& damage);
+ 
++  // PresentCanvas() draws into a window's Intuition window under this lock;
++  // a window that replaces its Intuition window at runtime swaps it under it.
++  base::Lock& presentation_lock() LOCK_RETURNED(lock_) { return lock_; }
++
+  private:
+   base::Lock lock_;
+   gfx::AcceleratedWidget next_widget_ GUARDED_BY(lock_) = 1;

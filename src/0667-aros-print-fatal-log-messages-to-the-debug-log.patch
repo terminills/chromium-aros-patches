@@ -1,0 +1,28 @@
+From e0cc73013cc8b380f7d25848631bb19ba8efdc09 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 19:34:25 -0500
+Subject: [PATCH 667/689] aros: print fatal log messages to the debug log
+
+A CHECK failure's message goes to stderr, which is NIL: when Chromium is
+started from its icon or with Run >NIL:, so the crash report shows only
+a breakpoint in HandleFatal. Write the message to the debug log first.
+---
+ base/logging.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/base/logging.cc b/base/logging.cc
+index 6fe5d9c608..d2775b63cb 100644
+--- a/base/logging.cc
++++ b/base/logging.cc
+@@ -1022,6 +1022,11 @@ void LogMessage::HandleFatal(size_t stack_start,
+   char str_stack[1024];
+   base::strlcpy(str_stack, str_newline.data(), std::size(str_stack));
+   base::debug::Alias(&str_stack);
++#if BUILDFLAG(IS_AROS)
++  ArosKPutStr("[Chromium:FATAL] ");
++  ArosKPutStr(str_stack);
++  ArosKPutStr("\n");
++#endif
+ 
+   if (!GetLogAssertHandlerStack().empty()) {
+     LogAssertHandlerFunction log_assert_handler =

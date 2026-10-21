@@ -1,0 +1,387 @@
+From ed0d7d7a05fee39e0b1928d51a9ea9f07f33f8f9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 07:29:11 -0500
+Subject: [PATCH 684/689] media/aros: add VHI camera enumeration and capture
+
+AI_PHASE: chromium-vhi-capture
+AI_STATUS: draft-cross-compiled
+ROOT_CAUSE: AROS camera factory enumerated no devices and RGB24 conversion rejected AROS.
+FIX_REASON: Consume validated VHI camera inputs on an owned capture thread and enable RGB byte ordering.
+SCOPE: media/capture and camera decision record
+VALIDATION: Backend, factory and conversion objects cross-compile; native browser validation pending.
+RISK: Baseline confirmation and live getUserMedia lifecycle remain unverified.
+AI_DECISION_CHAIN: JOB-0066 -> JOB-0212 -> .acd/decisions/20261021-vhi-camera.md
+---
+ .acd/decisions/20261021-vhi-camera.md         |  27 +++
+ media/capture/BUILD.gn                        |   7 +
+ .../aros/video_capture_device_factory_aros.cc | 226 ++++++++++++++++++
+ .../aros/video_capture_device_factory_aros.h  |  16 ++
+ .../create_video_capture_device_factory.cc    |  22 +-
+ .../video/video_capture_device_client.cc      |   5 +-
+ 6 files changed, 282 insertions(+), 21 deletions(-)
+ create mode 100644 .acd/decisions/20261021-vhi-camera.md
+ create mode 100644 media/capture/video/aros/video_capture_device_factory_aros.cc
+ create mode 100644 media/capture/video/aros/video_capture_device_factory_aros.h
+
+diff --git a/.acd/decisions/20261021-vhi-camera.md b/.acd/decisions/20261021-vhi-camera.md
+new file mode 100644
+index 0000000000..4bcc228ac0
+--- /dev/null
++++ b/.acd/decisions/20261021-vhi-camera.md
+@@ -0,0 +1,27 @@
++# Chromium AROS camera capture through VHI
++
++Status: hypothesis
++
++## Rationale
++
++The existing AROS factory always enumerates zero cameras. The validated
++uvc.library exposes real UVC cameras as VHI inputs after the synthetic input
++zero. Consume that ABI rather than USB directly. Each capture thread owns
++its library and handle; stop joins before releasing the client. The driver
++bounds capture waits. Fail on changed input names, invalid frames and capture
++errors rather than silently falling back to a test pattern.
++
++VHI RGB24 stores red first. Chromium previously only accepted RGB24 camera
++conversion on Linux/ChromeOS/Windows; AROS must select libyuv FOURCC_RAW.
++
++## Baseline and validation
++
++Draft based on observed Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd.
++Claude coordination TRIG-1443/TRIG-1444 is pending before integration.
++Cross compilation of the backend, factory wiring and RGB24 conversion succeeds
++using recorded existing CEF build commands with private output files. Existing
++base/containers/span.h constexpr warnings persist. This is not browser runtime
++proof. Live getUserMedia, stop/reopen and device-removal tests remain required.
++
++Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
++Relay: JOB-0212 (parent JOB-0066)
+diff --git a/media/capture/BUILD.gn b/media/capture/BUILD.gn
+index b7cb0f299a..2096ca1aff 100644
+--- a/media/capture/BUILD.gn
++++ b/media/capture/BUILD.gn
+@@ -93,6 +93,13 @@ source_set("capture_device_specific") {
+     "video/video_capture_metrics.h",
+   ]
+ 
++  if (is_aros) {
++    sources += [
++      "video/aros/video_capture_device_factory_aros.cc",
++      "video/aros/video_capture_device_factory_aros.h",
++    ]
++  }
++
+   public_deps = [ ":capture_base" ]
+   deps = [
+     "//base",
+diff --git a/media/capture/video/aros/video_capture_device_factory_aros.cc b/media/capture/video/aros/video_capture_device_factory_aros.cc
+new file mode 100644
+index 0000000000..0820b57fb6
+--- /dev/null
++++ b/media/capture/video/aros/video_capture_device_factory_aros.cc
+@@ -0,0 +1,226 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include "media/capture/video/aros/video_capture_device_factory_aros.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cmath>
++#include <memory>
++#include <string>
++#include <utility>
++#include "base/location.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/threading/platform_thread.h"
++#include "base/threading/simple_thread.h"
++#include "base/time/time.h"
++#include "ui/gfx/color_space.h"
++
++// Exec macros must follow Chromium headers. Each VHI session owns its library
++// base and handle; there is no shared process-global VHIBase.
++#include <aros/libcall.h>
++#include <proto/exec.h>
++#include <vhi/vhi.h>
++
++namespace media {
++namespace {
++constexpr char kIdPrefix[] = "vhi:uvc.library:";
++constexpr unsigned kMaxInputs = 256;
++constexpr unsigned kMaxDimension = 4096;
++
++class VhiSession {
++ public:
++  ~VhiSession() {
++    if (handle_) {
++      Call(VHI_METHOD_CLOSE, 0, nullptr);
++    }
++    if (library_) {
++      CloseLibrary(library_);
++    }
++  }
++  bool Open() {
++    library_ = OpenLibrary("uvc.library", 1);
++    if (!library_) {
++      return false;
++    }
++    handle_ = reinterpret_cast<APTR>(Call(VHI_METHOD_OPEN, 0, nullptr));
++    return handle_ && !error_;
++  }
++  IPTR Call(ULONG method, ULONG submethod, APTR attr) {
++    error_ = 0;
++    return AROS_LC5(IPTR, vhi_api, AROS_LCA(ULONG, method, D2),
++                    AROS_LCA(ULONG, submethod, D3), AROS_LCA(APTR, attr, D4),
++                    AROS_LCA(ULONG*, &error_, D5), AROS_LCA(APTR, handle_, D6),
++                    struct Library*, library_, 5, Vhi);
++  }
++  bool Select(unsigned input, std::string* name, gfx::Size* size) {
++    struct vhi_setoptions option = {VHI_OPT_INPUT, input};
++    Call(VHI_METHOD_SET, VHI_OPTIONS, &option);
++    if (error_) {
++      return false;
++    }
++    auto* text = reinterpret_cast<char*>(
++        Call(VHI_METHOD_GET, VHI_NAME_OF_INPUT, reinterpret_cast<APTR>(input)));
++    if (!text || error_) {
++      if (text) {
++        FreeVec(text);
++      }
++      return false;
++    }
++    *name = text;
++    FreeVec(text);
++    struct vhi_size maximum = {};
++    Call(VHI_METHOD_GET, VHI_MAXIMUM_SIZE, &maximum);
++    if (error_ || !maximum.max_width || !maximum.max_height ||
++        maximum.max_width > kMaxDimension ||
++        maximum.max_height > kMaxDimension) {
++      return false;
++    }
++    *size = gfx::Size(maximum.max_width, maximum.max_height);
++    return true;
++  }
++  ULONG error() const { return error_; }
++
++ private:
++  struct Library* library_ = nullptr;
++  APTR handle_ = nullptr;
++  ULONG error_ = 0;
++};
++
++class VhiCaptureDevice final : public VideoCaptureDevice,
++                               public base::DelegateSimpleThread::Delegate {
++ public:
++  VhiCaptureDevice(unsigned input, std::string name)
++      : input_(input), name_(std::move(name)) {}
++  ~VhiCaptureDevice() override { StopAndDeAllocate(); }
++  void AllocateAndStart(const VideoCaptureParams& params,
++                        std::unique_ptr<Client> client) override {
++    DCHECK(!thread_);
++    client_ = std::move(client);
++    const float fps = params.requested_format.frame_rate;
++    if (!std::isfinite(fps) || fps <= 0) {
++      client_->OnError(
++          VideoCaptureError::
++              kVideoCaptureControllerInvalidOrUnsupportedVideoCaptureParametersRequested,
++          FROM_HERE, "Invalid VHI frame rate");
++      return;
++    }
++    fps_ = std::min(fps, 30.0f);
++    stopped_.store(false, std::memory_order_relaxed);
++    thread_ = std::make_unique<base::DelegateSimpleThread>(this, "VHI capture");
++    thread_->Start();
++  }
++  void StopAndDeAllocate() override {
++    stopped_.store(true, std::memory_order_relaxed);
++    // uvc.library has a bounded capture timeout. Join before releasing client
++    // or driver resources so Stop guarantees there are no later callbacks.
++    if (thread_) {
++      thread_->Join();
++      thread_.reset();
++    }
++    client_.reset();
++  }
++  void Run() override {
++    VhiSession session;
++    std::string name;
++    gfx::Size size;
++    if (!session.Open() || !session.Select(input_, &name, &size) ||
++        name != name_) {
++      Error("VHI camera unavailable or enumeration changed");
++      return;
++    }
++    VideoCaptureFormat format(size, fps_, PIXEL_FORMAT_RGB24);
++    const auto start = base::TimeTicks::Now();
++    const auto interval = base::Seconds(1.0 / fps_);
++    client_->OnStarted();
++    while (!stopped_.load(std::memory_order_relaxed)) {
++      const auto begin = base::TimeTicks::Now();
++      struct vhi_digitize request = {};
++      auto* frame = reinterpret_cast<struct vhi_image*>(
++          session.Call(VHI_METHOD_PERFORM, VHI_DIGITIZE_PICTURE, &request));
++      const bool valid = frame && !session.error() && frame->chunky &&
++                         frame->type == VHI_RGB_24 &&
++                         frame->width == unsigned(size.width()) &&
++                         frame->height == unsigned(size.height());
++      if (valid && !stopped_.load(std::memory_order_relaxed)) {
++        const auto now = base::TimeTicks::Now();
++        client_->OnIncomingCapturedData(
++            static_cast<const uint8_t*>(frame->chunky),
++            size.width() * size.height() * 3, format,
++            gfx::ColorSpace::CreateSRGB(), 0, false, now, now - start, begin);
++      }
++      if (frame) {
++        FreeVec(frame->chunky);
++        FreeVec(frame);
++      }
++      if (!valid) {
++        Error("VHI capture failed or camera disconnected");
++        return;
++      }
++      // Short sleeps let Stop interrupt frame pacing promptly.
++      const auto deadline = begin + interval;
++      while (!stopped_.load(std::memory_order_relaxed) &&
++             base::TimeTicks::Now() < deadline) {
++        base::PlatformThread::Sleep(base::Milliseconds(5));
++      }
++    }
++  }
++
++ private:
++  void Error(const char* message) {
++    if (!stopped_.load(std::memory_order_relaxed)) {
++      client_->OnError(
++          VideoCaptureError::kVideoCaptureManagerDeviceConnectionLost,
++          FROM_HERE, message);
++    }
++  }
++  const unsigned input_;
++  const std::string name_;
++  float fps_ = 30;
++  std::atomic<bool> stopped_{false};
++  std::unique_ptr<Client> client_;
++  std::unique_ptr<base::DelegateSimpleThread> thread_;
++};
++}  // namespace
++
++VideoCaptureErrorOrDevice VideoCaptureDeviceFactoryAros::CreateDevice(
++    const VideoCaptureDeviceDescriptor& descriptor) {
++  DCHECK(thread_checker_.CalledOnValidThread());
++  unsigned input = 0;
++  const std::string prefix(kIdPrefix);
++  if (descriptor.device_id.compare(0, prefix.size(), prefix) != 0 ||
++      !base::StringToUint(descriptor.device_id.substr(prefix.size()), &input) ||
++      !input || input >= kMaxInputs) {
++    return VideoCaptureErrorOrDevice(
++        VideoCaptureError::kVideoCaptureSystemDeviceIdNotFound);
++  }
++  return VideoCaptureErrorOrDevice(
++      std::make_unique<VhiCaptureDevice>(input, descriptor.display_name()));
++}
++
++void VideoCaptureDeviceFactoryAros::GetDevicesInfo(
++    GetDevicesInfoCallback callback) {
++  DCHECK(thread_checker_.CalledOnValidThread());
++  std::vector<VideoCaptureDeviceInfo> devices;
++  VhiSession session;
++  if (session.Open()) {
++    const auto count =
++        session.Call(VHI_METHOD_GET, VHI_NUMBER_OF_INPUTS, nullptr);
++    if (!session.error() && count <= kMaxInputs) {
++      // uvc.library input zero is explicitly synthetic, never a real camera.
++      for (unsigned input = 1; input < count; ++input) {
++        std::string name;
++        gfx::Size size;
++        if (!session.Select(input, &name, &size)) {
++          continue;
++        }
++        VideoCaptureDeviceInfo info(VideoCaptureDeviceDescriptor(
++            name, std::string(kIdPrefix) + base::NumberToString(input)));
++        info.supported_formats.emplace_back(size, 30.0f, PIXEL_FORMAT_RGB24);
++        devices.push_back(std::move(info));
++      }
++    }
++  }
++  std::move(callback).Run(std::move(devices));
++}
++}  // namespace media
+diff --git a/media/capture/video/aros/video_capture_device_factory_aros.h b/media/capture/video/aros/video_capture_device_factory_aros.h
+new file mode 100644
+index 0000000000..cbdf5ba9b0
+--- /dev/null
++++ b/media/capture/video/aros/video_capture_device_factory_aros.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef MEDIA_CAPTURE_VIDEO_AROS_VIDEO_CAPTURE_DEVICE_FACTORY_AROS_H_
++#define MEDIA_CAPTURE_VIDEO_AROS_VIDEO_CAPTURE_DEVICE_FACTORY_AROS_H_
++#include "media/capture/video/video_capture_device_factory.h"
++namespace media {
++class CAPTURE_EXPORT VideoCaptureDeviceFactoryAros final
++    : public VideoCaptureDeviceFactory {
++ public:
++  VideoCaptureErrorOrDevice CreateDevice(
++      const VideoCaptureDeviceDescriptor& descriptor) override;
++  void GetDevicesInfo(GetDevicesInfoCallback callback) override;
++};
++}  // namespace media
++#endif
+diff --git a/media/capture/video/create_video_capture_device_factory.cc b/media/capture/video/create_video_capture_device_factory.cc
+index 6e1f54b570..3c834ab7bb 100644
+--- a/media/capture/video/create_video_capture_device_factory.cc
++++ b/media/capture/video/create_video_capture_device_factory.cc
+@@ -13,7 +13,9 @@
+ #include "media/capture/video/fake_video_capture_device_factory.h"
+ #include "media/capture/video/file_video_capture_device_factory.h"
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
++#if BUILDFLAG(IS_AROS)
++#include "media/capture/video/aros/video_capture_device_factory_aros.h"
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+ #include "media/capture/video/linux/video_capture_device_factory_linux.h"
+ #elif BUILDFLAG(IS_CHROMEOS_ASH)
+ #include "media/capture/video/chromeos/public/cros_features.h"
+@@ -33,25 +35,7 @@ namespace media {
+ 
+ namespace {
+ 
+-#if BUILDFLAG(IS_AROS)
+-// AROS defines the VHI capture ABI, but current AROS installations do not ship
+-// a VHI provider. Keep normal media-device probing nonfatal until a VHI-backed
+-// factory can enumerate real capture hardware.
+-class VideoCaptureDeviceFactoryAros final : public VideoCaptureDeviceFactory {
+- public:
+-  VideoCaptureErrorOrDevice CreateDevice(
+-      const VideoCaptureDeviceDescriptor& device_descriptor) override {
+-    DCHECK(thread_checker_.CalledOnValidThread());
+-    return VideoCaptureErrorOrDevice(
+-        VideoCaptureError::kVideoCaptureSystemDeviceIdNotFound);
+-  }
+ 
+-  void GetDevicesInfo(GetDevicesInfoCallback callback) override {
+-    DCHECK(thread_checker_.CalledOnValidThread());
+-    std::move(callback).Run({});
+-  }
+-};
+-#endif
+ 
+ std::unique_ptr<VideoCaptureDeviceFactory>
+ CreateFakeVideoCaptureDeviceFactory() {
+diff --git a/media/capture/video/video_capture_device_client.cc b/media/capture/video/video_capture_device_client.cc
+index eb6ffa5bdd..95628c1935 100644
+--- a/media/capture/video/video_capture_device_client.cc
++++ b/media/capture/video/video_capture_device_client.cc
+@@ -151,8 +151,9 @@ FourccAndFlip GetFourccAndFlipFromPixelFormat(
+       CHECK(!is_width_odd && !is_height_odd);
+       return {libyuv::FOURCC_UYVY};
+     case media::PIXEL_FORMAT_RGB24:
+-      if constexpr (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) {
+-        // Linux RGB24 defines red at lowest byte address,
++      if constexpr (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
++                    BUILDFLAG(IS_AROS)) {
++        // Linux and AROS VHI RGB24 define red at lowest byte address,
+         // see http://linuxtv.org/downloads/v4l-dvb-apis/packed-rgb.html.
+         return {libyuv::FOURCC_RAW};
+       } else if constexpr (BUILDFLAG(IS_WIN)) {

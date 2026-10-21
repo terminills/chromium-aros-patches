@@ -1,0 +1,87 @@
+From 6d2e20ee4379f38b94e7aa6423cfd78e727f1764 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 13 Oct 2026 23:43:29 -0500
+Subject: [PATCH 31/31] AROS: let a program uninstall the platform it installed
+
+A program that shares the resident engine and ends disposes its own
+platform (Node does, at the end of each run). V8::UninstallPlatform()
+drops v8.library's records of it and moves V8's fallback platform to
+one another live program installed, so the fallback never points at a
+deleted platform. A program installing its platform after V8 is up
+becomes the fallback when none is left.
+---
+ src/init/v8.cc | 27 ++++++++++++++++++++++++++-
+ src/init/v8.h  |  4 ++++
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/src/init/v8.cc b/src/init/v8.cc
+index e58327f..402ff83 100644
+--- a/src/init/v8.cc
++++ b/src/init/v8.cc
+@@ -42,6 +42,7 @@
+ #if defined(__AROS__)
+ extern "C" void __aros_v8_install_platform(v8::Platform* platform);
+ extern "C" v8::Platform* __aros_v8_get_current_platform();
++extern "C" v8::Platform* __aros_v8_forget_platform(v8::Platform* platform);
+ #endif
+ 
+ namespace v8 {
+@@ -113,7 +114,14 @@ void V8::InitializePlatform(v8::Platform* platform) {
+     for (;;) {
+       const V8StartupState current =
+           v8_startup_state_.load(std::memory_order_acquire);
+-      if (current == V8StartupState::kV8Initialized) return;
++      if (current == V8StartupState::kV8Initialized) {
++        if (base::Relaxed_Load(reinterpret_cast<base::AtomicWord*>(
++                &platform_)) == 0) {
++          base::Relaxed_Store(reinterpret_cast<base::AtomicWord*>(&platform_),
++                              reinterpret_cast<base::AtomicWord>(platform));
++        }
++        return;
++      }
+       CHECK(current == V8StartupState::kPlatformInitializing ||
+             current == V8StartupState::kPlatformInitialized ||
+             current == V8StartupState::kV8Initializing);
+@@ -381,6 +389,17 @@ void V8::DisposePlatform() {
+   AdvanceStartupState(V8StartupState::kPlatformDisposed);
+ }
+ 
++#if defined(__AROS__)
++void V8::UninstallPlatform(v8::Platform* platform) {
++  v8::Platform* next = __aros_v8_forget_platform(platform);
++  if (reinterpret_cast<v8::Platform*>(base::Relaxed_Load(
++          reinterpret_cast<base::AtomicWord*>(&platform_))) == platform) {
++    base::Relaxed_Store(reinterpret_cast<base::AtomicWord*>(&platform_),
++                        reinterpret_cast<base::AtomicWord>(next));
++  }
++}
++#endif
++
+ v8::Platform* V8::GetCurrentPlatform() {
+ #if defined(__AROS__)
+   if (v8::Platform* platform = __aros_v8_get_current_platform()) {
+@@ -420,3 +439,9 @@ void ThreadIsolatedAllocator::SetDefaultPermissionsForSignalHandler() {
+ }
+ 
+ }  // namespace v8
++
++#if defined(__AROS__)
++extern "C" void __aros_v8_uninstall_platform(v8::Platform* platform) {
++  v8::internal::V8::UninstallPlatform(platform);
++}
++#endif
+diff --git a/src/init/v8.h b/src/init/v8.h
+index 68193bd..7bc056d 100644
+--- a/src/init/v8.h
++++ b/src/init/v8.h
+@@ -43,6 +43,10 @@ class V8 : public AllStatic {
+       Isolate* isolate, const char* location, const char* detail);
+ 
+   static void InitializePlatform(v8::Platform* platform);
++#if defined(__AROS__)
++  // A program sharing the resident engine is disposing its platform.
++  static void UninstallPlatform(v8::Platform* platform);
++#endif
+   V8_EXPORT_PRIVATE static void InitializePlatformForTesting(
+       v8::Platform* platform);
+   static void DisposePlatform();

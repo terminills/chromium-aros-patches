@@ -1,0 +1,112 @@
+From a65d978c043c49766c74e4bfffa2bd6875bbeb37 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 11:14:10 -0500
+Subject: [PATCH 650/689] aros: log which software video decoder runs and its
+ thread count
+
+---
+ chrome/app/aros_codec_threads.cc      | 13 +++++++++++++
+ media/filters/ffmpeg_video_decoder.cc | 15 +++++++++++++++
+ media/filters/vpx_video_decoder.cc    | 15 +++++++++++++++
+ 3 files changed, 43 insertions(+)
+
+diff --git a/chrome/app/aros_codec_threads.cc b/chrome/app/aros_codec_threads.cc
+index cbd7b7b149..a02be358a1 100644
+--- a/chrome/app/aros_codec_threads.cc
++++ b/chrome/app/aros_codec_threads.cc
+@@ -9,9 +9,12 @@
+ // placed by MaybePinForeignThread when --aros-pin-codec-threads is given.
+ 
+ #include <pthread.h>
++#include <stdio.h>
+ 
+ #include "base/threading/platform_thread_internal_posix.h"
+ 
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
+ extern "C" int __real_pthread_create(pthread_t* thread,
+                                      const pthread_attr_t* attr,
+                                      void* (*start)(void*),
+@@ -24,6 +27,16 @@ extern "C" int __wrap_pthread_create(pthread_t* thread,
+   if (base::internal::ArosCreatingPlatformThread())
+     return __real_pthread_create(thread, attr, start, arg);
+ 
++  // Count every foreign thread on serial, placed or not, so a run without
++  // the switch still shows which libraries start threads.
++  {
++    static int foreign = 0;
++    char line[96];
++    snprintf(line, sizeof(line), "[Chromium:SMP] foreign pthread_create #%d\n",
++             ++foreign);
++    ArosKPutStr(line);
++  }
++
+   pthread_attr_t placed;
+   if (attr)
+     placed = *attr;
+diff --git a/media/filters/ffmpeg_video_decoder.cc b/media/filters/ffmpeg_video_decoder.cc
+index bd75477fee..81d77c5a64 100644
+--- a/media/filters/ffmpeg_video_decoder.cc
++++ b/media/filters/ffmpeg_video_decoder.cc
+@@ -29,6 +29,11 @@
+ #include "media/ffmpeg/ffmpeg_decoding_loop.h"
+ #include "media/filters/ffmpeg_glue.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <stdio.h>
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ namespace media {
+ 
+ namespace {
+@@ -496,6 +501,16 @@ bool FFmpegVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config,
+   VideoDecoderConfigToAVCodecContext(config, codec_context_.get());
+ 
+   codec_context_->thread_count = GetFFmpegVideoDecoderThreadCount(config);
++#if BUILDFLAG(IS_AROS)
++  {
++    char line[160];
++    snprintf(line, sizeof(line),
++             "[Chromium:Media] ffmpeg decoder %s %dx%d threads=%d\n",
++             GetCodecName(config.codec()).c_str(), config.coded_size().width(),
++             config.coded_size().height(), codec_context_->thread_count);
++    ArosKPutStr(line);
++  }
++#endif
+   codec_context_->thread_type =
+       FF_THREAD_SLICE | (low_delay ? 0 : FF_THREAD_FRAME);
+   codec_context_->opaque = this;
+diff --git a/media/filters/vpx_video_decoder.cc b/media/filters/vpx_video_decoder.cc
+index 482b57d86c..34ad54d30c 100644
+--- a/media/filters/vpx_video_decoder.cc
++++ b/media/filters/vpx_video_decoder.cc
+@@ -32,6 +32,11 @@
+ #include "third_party/libyuv/include/libyuv/convert.h"
+ #include "third_party/libyuv/include/libyuv/planar_functions.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <stdio.h>
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ namespace media {
+ 
+ // Returns the number of threads.
+@@ -61,6 +66,16 @@ static std::unique_ptr<vpx_codec_ctx> InitializeVpxContext(
+   vpx_config.w = config.coded_size().width();
+   vpx_config.h = config.coded_size().height();
+   vpx_config.threads = GetVpxVideoDecoderThreadCount(config);
++#if BUILDFLAG(IS_AROS)
++  {
++    char line[160];
++    snprintf(line, sizeof(line),
++             "[Chromium:Media] vpx decoder %s %dx%d threads=%d\n",
++             GetCodecName(config.codec()).c_str(), config.coded_size().width(),
++             config.coded_size().height(), vpx_config.threads);
++    ArosKPutStr(line);
++  }
++#endif
+ 
+   vpx_codec_err_t status = vpx_codec_dec_init(context.get(),
+                                               config.codec() == VideoCodec::kVP9

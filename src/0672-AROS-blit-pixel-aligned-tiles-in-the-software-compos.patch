@@ -1,0 +1,109 @@
+From 97d46facc68a794bb30f2c63e42f2f579ba26859 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 11:03:26 -0500
+Subject: [PATCH 672/689] AROS: blit pixel-aligned tiles in the software
+ compositor
+
+SoftwareRenderer::DrawTileQuad draws every tile with bilinear filtering
+and a strict source rect, which sends each tile pixel through Skia's
+raster pipeline (bilerp_clamp_8888). The renderer draws a unit quad and
+puts the tile size in the canvas matrix, but almost every tile still
+lands on the target texel for pixel; on onet.pl that pipeline was 50-73%
+of the busiest CPU.
+
+When the matrix is scale+translate and the mapped quad sits on whole
+pixels with the same size as the source rect, draw the whole tile at
+its integer offset, clipped to the quad, with an identity matrix: Skia
+then takes the sprite blitter. The pixels are the ones the filtered draw
+produces at texel centres, and the clip keeps texels outside the source
+rect out. 94% of tile draws on onet.pl take this path; the rest are
+genuinely scaled.
+
+jank.html (48 boxes, 12 decodes, 30 s, 8 vCPU, 1080p): p95 frame time
+83 -> 67 ms, frames 485-518 -> 538-561, frames over 50 ms 277-300 ->
+218-255.
+---
+ .../viz/service/display/software_renderer.cc  | 61 ++++++++++++++++++-
+ 1 file changed, 58 insertions(+), 3 deletions(-)
+
+diff --git a/components/viz/service/display/software_renderer.cc b/components/viz/service/display/software_renderer.cc
+index 134c15eefe..275c41daf1 100644
+--- a/components/viz/service/display/software_renderer.cc
++++ b/components/viz/service/display/software_renderer.cc
+@@ -52,6 +52,39 @@
+ 
+ namespace viz {
+ namespace {
++#if BUILDFLAG(IS_AROS)
++// Within float noise of a whole pixel; the quad transform maps a unit quad.
++bool SnapToPixel(SkScalar v, SkScalar* snapped) {
++  *snapped = SkScalarRoundToScalar(v);
++  return SkScalarAbs(v - *snapped) < 1.0f / 256;
++}
++
++// True when |src| lands on the device texel for pixel under |matrix|: drawn
++// unscaled at |device| with nearest sampling it gives the same pixels as the
++// filtered draw and never reads outside |src|.
++bool GetPixelAlignedCopy(const SkMatrix& matrix,
++                         const SkRect& src,
++                         const SkRect& dst,
++                         SkRect* snapped_src,
++                         SkRect* device) {
++  if (!matrix.isScaleTranslate() || matrix.getScaleX() <= 0 ||
++      matrix.getScaleY() <= 0) {
++    return false;
++  }
++  const SkRect mapped = matrix.mapRect(dst);
++  return SnapToPixel(src.fLeft, &snapped_src->fLeft) &&
++         SnapToPixel(src.fTop, &snapped_src->fTop) &&
++         SnapToPixel(src.fRight, &snapped_src->fRight) &&
++         SnapToPixel(src.fBottom, &snapped_src->fBottom) &&
++         SnapToPixel(mapped.fLeft, &device->fLeft) &&
++         SnapToPixel(mapped.fTop, &device->fTop) &&
++         SnapToPixel(mapped.fRight, &device->fRight) &&
++         SnapToPixel(mapped.fBottom, &device->fBottom) &&
++         device->width() == snapped_src->width() &&
++         device->height() == snapped_src->height() && !device->isEmpty();
++}
++#endif
++
+ class AnimatedImagesProvider : public cc::ImageProvider {
+  public:
+   AnimatedImagesProvider(
+@@ -498,11 +531,33 @@ void SoftwareRenderer::DrawTileQuad(const TileDrawQuad* quad) {
+       QuadVertexRect(), gfx::RectF(quad->rect), gfx::RectF(quad->visible_rect));
+ 
+   SkRect uv_rect = gfx::RectFToSkRect(visible_tex_coord_rect);
++  SkRect dst_rect = gfx::RectFToSkRect(visible_quad_vertex_rect);
+   SkSamplingOptions sampling(quad->nearest_neighbor ? SkFilterMode::kNearest
+                                                     : SkFilterMode::kLinear);
+-  current_canvas_->drawImageRect(
+-      lock.sk_image(), uv_rect, gfx::RectFToSkRect(visible_quad_vertex_rect),
+-      sampling, &current_paint_, SkCanvas::kStrict_SrcRectConstraint);
++#if BUILDFLAG(IS_AROS)
++  SkRect snapped_uv_rect;
++  SkRect device_rect;
++  if (GetPixelAlignedCopy(current_canvas_->getTotalMatrix(), uv_rect, dst_rect,
++                          &snapped_uv_rect, &device_rect)) {
++    // The whole tile at an integer offset, clipped to |device_rect|, is a
++    // sprite blit; a subset draw would go through a sampling shader.
++    SkAutoCanvasRestore restore(current_canvas_, /*doSave=*/true);
++    current_canvas_->resetMatrix();
++    current_canvas_->clipRect(device_rect);
++    current_canvas_->drawImage(lock.sk_image(),
++                               device_rect.fLeft - snapped_uv_rect.fLeft,
++                               device_rect.fTop - snapped_uv_rect.fTop,
++                               SkSamplingOptions(), &current_paint_);
++  } else {
++    current_canvas_->drawImageRect(lock.sk_image(), uv_rect, dst_rect,
++                                   sampling, &current_paint_,
++                                   SkCanvas::kStrict_SrcRectConstraint);
++  }
++#else
++  current_canvas_->drawImageRect(lock.sk_image(), uv_rect, dst_rect, sampling,
++                                 &current_paint_,
++                                 SkCanvas::kStrict_SrcRectConstraint);
++#endif
+ 
+   if (software_toggle_capture()) {
+     SkPixmap pixmap;

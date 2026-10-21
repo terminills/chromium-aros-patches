@@ -1,0 +1,32 @@
+From e3a05043199bfc625f5622b9155b1b7174db3a90 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 07:59:33 -0500
+Subject: [PATCH 648/689] aros: forward-declare PlatformHandle in
+ aros_channel.h (platform_handle.h includes it)
+
+---
+ mojo/public/cpp/platform/aros_channel.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+index bd3245c87f..75fd8502db 100644
+--- a/mojo/public/cpp/platform/aros_channel.h
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -11,7 +11,6 @@
+ 
+ #include "base/component_export.h"
+ #include "mojo/public/c/system/platform_handle.h"
+-#include "mojo/public/cpp/platform/platform_handle.h"
+ 
+ struct MsgPort;
+ 
+@@ -68,6 +67,9 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) ArosChannelRetirementObserver {
+   CreateArosChannelRetirementObserver(ArosChannelHandle handle);
+ };
+ 
++// platform_handle.h includes this header, so only declare the class here.
++class PlatformHandle;
++
+ // Handles crossing a channel. A file descriptor is only meaningful in the
+ // posixc table of the process that owns it, so it travels as an exported
+ // open-file token (MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE) and the receiver

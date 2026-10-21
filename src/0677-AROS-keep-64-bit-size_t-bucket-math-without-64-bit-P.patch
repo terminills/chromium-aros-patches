@@ -1,0 +1,36 @@
+From a63e79a207d96f1fb1341e6fbc1912282b91a137 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 21:14:39 -0500
+Subject: [PATCH 677/689] AROS: keep 64-bit size_t bucket math without 64-bit
+ PA pools
+
+The on-demand reservation build disables has_64_bit_pointers on AROS, and
+partition_bucket_lookup.h used that flag to mean "size_t is 64 bits",
+failing static_assert(kBitsPerSizeT == 32). Select the 64-bit bucket math
+for AROS explicitly.
+---
+ .../src/partition_alloc/partition_bucket_lookup.h             | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_bucket_lookup.h b/base/allocator/partition_allocator/src/partition_alloc/partition_bucket_lookup.h
+index 181f2ac83b..b40da22abf 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_bucket_lookup.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_bucket_lookup.h
+@@ -8,6 +8,7 @@
+ #include <bit>
+ #include <cstdint>
+ 
++#include "build/build_config.h"
+ #include "partition_alloc/partition_alloc_base/bits.h"
+ #include "partition_alloc/partition_alloc_base/compiler_specific.h"
+ #include "partition_alloc/partition_alloc_buildflags.h"
+@@ -42,7 +43,8 @@ constexpr size_t OrderSubIndexMask(uint8_t order) {
+          (kNumBucketsPerOrderBits + 1);
+ }
+ 
+-#if BUILDFLAG(HAS_64_BIT_POINTERS)
++#if BUILDFLAG(HAS_64_BIT_POINTERS) || BUILDFLAG(IS_AROS)
++// AROS takes the pool-less configuration on 64-bit: size_t is still 64 bits.
+ #define PA_BITS_PER_SIZE_T 64
+ static_assert(kBitsPerSizeT == 64, "");
+ #else

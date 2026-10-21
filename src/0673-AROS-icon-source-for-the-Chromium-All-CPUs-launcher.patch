@@ -1,0 +1,26 @@
+From 416186c466be52d326c676d657a96ad49ae78f92 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 14 Oct 2026 13:04:20 -0500
+Subject: [PATCH 673/689] AROS: icon source for the Chromium All CPUs launcher
+
+A PROJECT icon run by C:IconX; install-layout.sh writes the launcher
+script next to it from the tool icon's CHROME_ARG tooltypes.
+---
+ chrome/app/theme/aros/ChromiumAnyCPU.info.src | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+ create mode 100644 chrome/app/theme/aros/ChromiumAnyCPU.info.src
+
+diff --git a/chrome/app/theme/aros/ChromiumAnyCPU.info.src b/chrome/app/theme/aros/ChromiumAnyCPU.info.src
+new file mode 100644
+index 0000000000..91e78916c3
+--- /dev/null
++++ b/chrome/app/theme/aros/ChromiumAnyCPU.info.src
+@@ -0,0 +1,8 @@
++; Workbench icon for SYS:Applications/Internet/Chromium/Chromium All CPUs.
++;
++; A PROJECT icon run by C:IconX: the launcher is an AmigaDOS script that
++; starts Chromium under SMP-AnyCPU with the tool icon's CHROME_ARG switches
++; (install-layout.sh writes it from Chromium.info.src).
++TYPE = PROJECT
++DEFAULTTOOL = "C:IconX"
++STACK = 10485760

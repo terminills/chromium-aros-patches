@@ -1,0 +1,82 @@
+From 2671ac464f2e14198d00dd510006c0916149a1c9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 13:39:47 -0500
+Subject: [PATCH 654/689] aros: name the process type on the PartitionAlloc
+ pool line
+
+The serial pool line is the per-process memory ladder of a multi-process
+run; with --type and --utility-sub-type on it, the ladder says which
+process took what (it showed the Unzipper processes the component updater
+starts).
+
+Claude-Session: https://claude.ai/code/session_01QHhVavHvnUWcvCukPGJBkG
+---
+ .../partition_address_space.cc                | 44 ++++++++++++++++---
+ 1 file changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+index cc8f4611c3..bd5a8bec5d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+@@ -145,12 +145,36 @@ constexpr size_t kFreeMemoryDivisor = 4;
+ constexpr size_t kGpuProcessPoolSize = kGiB / 2;
+ constexpr size_t kUtilityProcessPoolSize = kGiB / 4;
+ 
+-size_t ArosProcessTypePoolCap(size_t max_size) {
++// Copies the value of `--name=` in `args` into `out` (empty if absent).
++void ArosSwitchValue(const char* args,
++                     const char* name,
++                     char* out,
++                     size_t out_size) {
++  out[0] = '\0';
++  const char* value = args ? std::strstr(args, name) : nullptr;
++  if (!value) {
++    return;
++  }
++  value += std::strlen(name);
++  size_t n = 0;
++  while (value[n] && value[n] != ' ' && value[n] != '"' && value[n] != '\n' &&
++         n + 1 < out_size) {
++    out[n] = value[n];
++    ++n;
++  }
++  out[n] = '\0';
++}
++
++const char* ArosProcessArguments() {
+   const struct Task* task = FindTask(nullptr);
+   if (!task || task->tc_Node.ln_Type != NT_PROCESS) {
+-    return max_size;
++    return nullptr;
+   }
+-  const char* args = reinterpret_cast<const struct Process*>(task)->pr_Arguments;
++  return reinterpret_cast<const struct Process*>(task)->pr_Arguments;
++}
++
++size_t ArosProcessTypePoolCap(size_t max_size) {
++  const char* args = ArosProcessArguments();
+   if (!args) {
+     return max_size;
+   }
+@@ -190,10 +214,18 @@ size_t ArosRegularPoolSize(size_t max_size) {
+   size = std::clamp(size, kMinRegularPoolSize, cap);
+ 
+   // Fixed buffer, KPutStr: no allocation inside the allocator.
+-  char line[160];
++  // The process type goes on the same line, so the serial log reads as a
++  // per-process memory ladder.
++  char type[32];
++  char sub_type[64];
++  ArosSwitchValue(ArosProcessArguments(), "--type=", type, sizeof(type));
++  ArosSwitchValue(ArosProcessArguments(), "--utility-sub-type=", sub_type,
++                  sizeof(sub_type));
++  char line[256];
+   std::snprintf(line, sizeof(line),
+-                "[Chromium:PA] regular-pool size=%llu cap=%llu free=%llu "
+-                "largest=%llu\n",
++                "[Chromium:PA] regular-pool type=%s%s%s size=%llu cap=%llu "
++                "free=%llu largest=%llu\n",
++                type[0] ? type : "browser", sub_type[0] ? "/" : "", sub_type,
+                 static_cast<unsigned long long>(size),
+                 static_cast<unsigned long long>(cap),
+                 static_cast<unsigned long long>(free_bytes),

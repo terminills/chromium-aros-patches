@@ -1,0 +1,51 @@
+From a59c3aac52761382d52c9f575dacdfe1def1be25 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 22:52:58 -0500
+Subject: [PATCH 668/689] aros: keep a cancelled main frame that has already
+ committed
+
+When the browser cancels a navigation whose speculative main frame the
+renderer has already swapped in, it asks the renderer to delete that
+frame. The renderer cannot undo the swap, so upstream crashes the
+renderer (crbug.com/838348). In single-process mode on AROS the window
+between the commit and the cancellation is wide: switching YouTube videos
+quickly crashed the browser within minutes.
+
+Keep the frame instead. The next navigation, which is what cancelled this
+one, replaces it. 160 navigations at 12-second intervals hit the race 59
+times without a crash, and pages kept loading.
+---
+ content/renderer/render_frame_impl.cc | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+index 26d7155027..a12f191b5a 100644
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -2234,6 +2234,10 @@ void RenderFrameImpl::Unload(
+   task_runner->PostTask(FROM_HERE, std::move(send_unload_ack));
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void ArosNavKPutStr(const char*) asm("KPutStr");
++#endif
++
+ void RenderFrameImpl::Delete(mojom::FrameDeleteIntention intent) {
+   TRACE_EVENT(
+       "navigation", "RenderFrameImpl::Delete", [&](perfetto::EventContext ctx) {
+@@ -2278,6 +2282,15 @@ void RenderFrameImpl::Delete(mojom::FrameDeleteIntention intent) {
+       // main frame when a commit (and ownership transfer) is imminent.
+       // TODO(dcheng): This is the case of https://crbug.com/838348.
+       DCHECK(is_main_frame_);
++#if BUILDFLAG(IS_AROS)
++      if (in_frame_tree_) {
++        // The navigation already committed here. Leave the frame in place
++        // and let the browser's next navigation replace it.
++        ArosNavKPutStr("[Chromium:AROS:Nav] kept a cancelled main frame that "
++                       "had already committed\n");
++        return;
++      }
++#endif
+ #if !BUILDFLAG(IS_ANDROID)
+       // This check is not enabled on Android, since it seems like it's much
+       // easier to trigger data races there.

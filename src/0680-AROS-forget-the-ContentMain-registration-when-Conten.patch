@@ -1,0 +1,46 @@
+From 254aad0e2ec47146791f5180ba96ffb5409ee1b9 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 15 Oct 2026 06:36:07 -0500
+Subject: [PATCH 680/689] AROS: forget the ContentMain registration when
+ ContentMain shuts down
+
+A Shell runs each command in its own Process, so a second program started
+from the same Shell has the same Task, and a freed Task can be reused by
+the next program.  The registration therefore outlived the program that
+made it: the next ElectronShell took the ReInitializeParams path on a new
+ContentMainRunner whose delegate_ was never set and faulted in RunBrowser
+(cef-blink .text+0xd9f9463).  Erase the entry in ContentMainShutdown.
+---
+ content/app/content_main.cc | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/content/app/content_main.cc b/content/app/content_main.cc
+index 103a0c1a67..8e6995c10f 100644
+--- a/content/app/content_main.cc
++++ b/content/app/content_main.cc
+@@ -135,6 +135,15 @@ bool WasContentMainInitializedForCurrentProcess() {
+   return !inserted;
+ }
+ 
++// A Shell runs each command in its own Process, and a freed Task can be reused
++// by the next program, so the entry must not outlive ContentMain: the next
++// program in this process starts from a fresh Initialize().
++void ForgetContentMainInitializationForCurrentProcess() {
++  auto& registry = GetContentMainInitializationRegistry();
++  base::AutoLock lock(registry.lock);
++  registry.initialized_processes.erase(GetCurrentProcessTask());
++}
++
+ // AROS has no multi-process child launcher and no sandbox, and the GPU
+ // process path is not wired to a display driver yet. A launch that does not
+ // spell out the process model (a Workbench icon, OpenURL, a bare Shell line)
+@@ -438,6 +447,9 @@ void ContentMainShutdown(ContentMainRunner* content_main_runner) {
+ #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+   content_main_runner->Shutdown();
+ #endif
++#if BUILDFLAG(IS_AROS)
++  ForgetContentMainInitializationForCurrentProcess();
++#endif
+ }
+ 
+ // This function must be marked with NO_STACK_PROTECTOR or it may crash on

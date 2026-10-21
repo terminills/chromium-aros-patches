@@ -1,0 +1,65 @@
+From 8df9303cf1b1d314a91ca42106650b658a2098ca Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 21 Oct 2026 09:29:52 -0500
+Subject: [PATCH 686/689] media/aros: record confirmed capture integration
+ baseline
+
+AI_PHASE: chromium-capture-integration
+AI_STATUS: building
+ROOT_CAUSE: Draft records awaited the shared baseline handoff.
+FIX_REASON: Record Claude TRIG-1445 confirmation and shipping-config object compilation.
+SCOPE: capture decision records
+VALIDATION: ADT full build passed; Chromium capture objects compiled in shipping config; link/runtime pending.
+RISK: Browser capture remains unverified until the native test page runs.
+AI_DECISION_CHAIN: JOB-0212 -> TRIG-1445
+---
+ .acd/decisions/20261021-ahi-recording.md | 8 ++++++--
+ .acd/decisions/20261021-vhi-camera.md    | 7 ++++++-
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/.acd/decisions/20261021-ahi-recording.md b/.acd/decisions/20261021-ahi-recording.md
+index 5dcee009a9..b9c3d566b6 100644
+--- a/.acd/decisions/20261021-ahi-recording.md
++++ b/.acd/decisions/20261021-ahi-recording.md
+@@ -19,8 +19,9 @@ an error instead of relabeling samples or synthesizing silence.
+ 
+ ## Baseline and validation
+ 
+-Draft uses Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd; Claude's integration
+-baseline/build confirmation is pending. Both AHI input and AudioManager objects
++Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd and the shipping build args
++are confirmed by Claude in TRIG-1445 and JOB-0212. Private full integration
++build uses out/uvc-01a15bd6 with the shipping native ADT SDK. Both AHI input and AudioManager objects
+ cross-compile with the current CEF command into private outputs. Disassembly
+ confirms no SIMD registers in the recording hook. Standalone ASan/UBSan tests
+ pass conversion, partial reads, wrap, overflow and 100000 concurrent frames.
+@@ -28,4 +29,7 @@ The driver-side USB mic was previously tested on AROS; this new Chromium stream
+ still needs native runtime, stop/reopen and combined-camera verification.
+ 
+ Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
++Full shipping-config build has compiled the input backend and AudioManager.
++Final link and native capture validation are pending.
++
+ Relay: JOB-0212 (parent JOB-0066)
+diff --git a/.acd/decisions/20261021-vhi-camera.md b/.acd/decisions/20261021-vhi-camera.md
+index 4bcc228ac0..b3149948dc 100644
+--- a/.acd/decisions/20261021-vhi-camera.md
++++ b/.acd/decisions/20261021-vhi-camera.md
+@@ -17,11 +17,16 @@ conversion on Linux/ChromeOS/Windows; AROS must select libyuv FOURCC_RAW.
+ ## Baseline and validation
+ 
+ Draft based on observed Chromium 154e4ec5e2af5ada8866c0bdf903edd899a206fd.
+-Claude coordination TRIG-1443/TRIG-1444 is pending before integration.
++Claude confirmed this baseline in TRIG-1445 (hash corrected in JOB-0212).
++Integration uses the shipping out/adt-smp-pin args in private out/uvc-01a15bd6;
++ADT runtime base is alpha16c-upstream 7714463606, including the existing SMP fix.
+ Cross compilation of the backend, factory wiring and RGB24 conversion succeeds
+ using recorded existing CEF build commands with private output files. Existing
+ base/containers/span.h constexpr warnings persist. This is not browser runtime
+ proof. Live getUserMedia, stop/reopen and device-removal tests remain required.
+ 
+ Evidence: /run/media/terminills/Codex/adt-uvc-01a15bd6/evidence/chromium-capture-draft
++Full shipping-config build has compiled the new backend, factory and conversion
++objects. Final link and native capture validation are pending.
++
+ Relay: JOB-0212 (parent JOB-0066)

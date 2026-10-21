@@ -1,0 +1,50 @@
+From 0fddcb5cf1b9c4d79cf3f6dd65bd9d2c2bc38ba2 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Mon, 5 Oct 2026 06:39:38 -0500
+Subject: [PATCH 665/689] aros: report thread pool lookups that miss
+
+Print the task when ThreadPoolInstance::Get() finds no pool for it while
+pools exist, rate limited, so a job created without a delegate can be
+traced to the thread that made it.
+---
+ base/task/thread_pool/thread_pool_instance.cc | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/base/task/thread_pool/thread_pool_instance.cc b/base/task/thread_pool/thread_pool_instance.cc
+index 7badc96a39..040b1c28e3 100644
+--- a/base/task/thread_pool/thread_pool_instance.cc
++++ b/base/task/thread_pool/thread_pool_instance.cc
+@@ -20,8 +20,14 @@
+ #include "build/build_config.h"
+ 
+ #if BUILDFLAG(IS_AROS)
++#include <stdio.h>
++
++#include <atomic>
++
+ #include <exec/tasks.h>
+ #include <proto/exec.h>
++
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
+ #endif
+ 
+ namespace base {
+@@ -56,6 +62,18 @@ ThreadPoolInstance* GetThreadPoolForCurrentTask() {
+   auto& registry = GetThreadPoolProcessRegistry();
+   AutoLock lock(registry.lock);
+   const auto it = registry.pools.find(process_identity);
++  if (it == registry.pools.end() && !registry.pools.empty()) {
++    static std::atomic<int> reported{0};
++    if (reported.fetch_add(1, std::memory_order_relaxed) < 16) {
++      struct Task* task = FindTask(nullptr);
++      char line[160];
++      snprintf(line, sizeof(line),
++               "[Chromium:base] thread pool lookup MISSED for task %p '%s'\n",
++               static_cast<void*>(task),
++               task && task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "?");
++      ArosKPutStr(line);
++    }
++  }
+   return it != registry.pools.end() ? it->second : nullptr;
+ }
+ 

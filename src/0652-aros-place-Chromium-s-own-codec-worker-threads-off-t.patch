@@ -1,0 +1,191 @@
+From a39ba90ace77db86809b899af3cfe623d27b3c17 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 12:42:41 -0500
+Subject: [PATCH 652/689] aros: place Chromium's own codec worker threads off
+ the media core
+
+Chromium replaces the libvpx and libaom thread implementations with
+CodecWorkerImpl, so their decode workers are base::Threads rather than
+direct pthread_create calls, and the pthread_create wrapper never saw
+them. They inherited the media thread's CPU, leaving VP9 row-MT decode on
+one core.
+
+CodecWorkerImpl now starts its thread under ScopedArosCodecThreadPlacement,
+and PlatformThread places threads started in that scope round-robin on
+CPUs 1..N-1 when --aros-pin-codec-threads is given. 1080p high-bitrate VP9
+on 4 CPUs over 90 s: 23.9 fps / 165 dropped unplaced, 29.8 fps / 6 dropped
+with the codec workers placed, 28.3 fps / 137 dropped with every thread
+pinned (--aros-pin-workers).
+
+Claude-Session: https://claude.ai/code/session_01QHhVavHvnUWcvCukPGJBkG
+---
+ base/BUILD.gn                                 |  1 +
+ base/threading/aros_codec_thread_placement.h  | 38 +++++++++++++++++++
+ base/threading/platform_thread_aros.cc        | 15 ++++++++
+ .../platform_thread_internal_posix.h          |  6 ++-
+ base/threading/platform_thread_posix.cc       |  2 +
+ media/base/codec_worker_impl.h                |  8 ++++
+ 6 files changed, 69 insertions(+), 1 deletion(-)
+ create mode 100644 base/threading/aros_codec_thread_placement.h
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index c65396828a..1950dc516f 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1022,6 +1022,7 @@ component("base") {
+         "process/process_iterator_aros.cc",
+         "process/process_metrics_aros.cc",
+         "system/sys_info_aros.cc",
++        "threading/aros_codec_thread_placement.h",
+         "threading/platform_thread_aros.cc",
+       ]
+     }
+diff --git a/base/threading/aros_codec_thread_placement.h b/base/threading/aros_codec_thread_placement.h
+new file mode 100644
+index 0000000000..6217e397ed
+--- /dev/null
++++ b/base/threading/aros_codec_thread_placement.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef BASE_THREADING_AROS_CODEC_THREAD_PLACEMENT_H_
++#define BASE_THREADING_AROS_CODEC_THREAD_PLACEMENT_H_
++
++#include "base/base_export.h"
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++
++namespace base {
++
++// AROS gives a new task its creator's CPU and never migrates it, so the
++// worker threads a video decoder starts from the media thread all share that
++// one core. While an instance is alive, every PlatformThread the calling
++// thread starts is placed round-robin on CPUs 1..N-1 when
++// --aros-pin-codec-threads is given (the same placement as the threads codec
++// libraries create with pthread_create directly).
++class BASE_EXPORT ScopedArosCodecThreadPlacement {
++ public:
++  ScopedArosCodecThreadPlacement();
++  ScopedArosCodecThreadPlacement(const ScopedArosCodecThreadPlacement&) =
++      delete;
++  ScopedArosCodecThreadPlacement& operator=(
++      const ScopedArosCodecThreadPlacement&) = delete;
++  ~ScopedArosCodecThreadPlacement();
++
++ private:
++  const bool previous_;
++};
++
++}  // namespace base
++
++#endif  // BUILDFLAG(IS_AROS)
++
++#endif  // BASE_THREADING_AROS_CODEC_THREAD_PLACEMENT_H_
+diff --git a/base/threading/platform_thread_aros.cc b/base/threading/platform_thread_aros.cc
+index b1eedde327..0fbf4f2baa 100644
+--- a/base/threading/platform_thread_aros.cc
++++ b/base/threading/platform_thread_aros.cc
+@@ -27,6 +27,7 @@
+ #include "base/command_line.h"
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/threading/aros_codec_thread_placement.h"
+ #include "base/threading/platform_thread_internal_posix.h"
+ 
+ namespace base {
+@@ -110,6 +111,7 @@ bool MaybePinWorkersEnabled() {
+ 
+ namespace {
+ thread_local bool g_creating_platform_thread = false;
++thread_local bool g_placing_codec_threads = false;
+ 
+ int PinCodecThreadsEnabled() {
+   static std::atomic<int> state{-2};  // -2 unknown, -1 off, 1 on
+@@ -135,6 +137,10 @@ void ArosSetCreatingPlatformThread(bool creating) {
+   g_creating_platform_thread = creating;
+ }
+ 
++bool ArosPlacingCodecThreads() {
++  return g_placing_codec_threads;
++}
++
+ void MaybePinForeignThread(pthread_attr_t* attributes) {
+   if (PinCodecThreadsEnabled() < 0)
+     return;
+@@ -349,6 +355,15 @@ GetCurrentThreadPriorityForPlatformForTest() {
+ 
+ }  // namespace internal
+ 
++ScopedArosCodecThreadPlacement::ScopedArosCodecThreadPlacement()
++    : previous_(internal::g_placing_codec_threads) {
++  internal::g_placing_codec_threads = true;
++}
++
++ScopedArosCodecThreadPlacement::~ScopedArosCodecThreadPlacement() {
++  internal::g_placing_codec_threads = previous_;
++}
++
+ void PlatformThreadBase::SetName(const std::string& name) {
+   SetNameCommon(name);
+ 
+diff --git a/base/threading/platform_thread_internal_posix.h b/base/threading/platform_thread_internal_posix.h
+index 3815ee0551..acb27bc735 100644
+--- a/base/threading/platform_thread_internal_posix.h
++++ b/base/threading/platform_thread_internal_posix.h
+@@ -29,9 +29,13 @@ void MaybePinThreadRoundRobin(pthread_attr_t* attributes);
+ // pthread_create directly): place on the next CPU when
+ // --aros-pin-codec-threads is given. The chrome executable routes every
+ // pthread_create through a wrapper that calls this unless the thread is one
+-// of PlatformThread's own (see ArosCreatingPlatformThread()).
++// of PlatformThread's own (see ArosCreatingPlatformThread()). PlatformThread
++// calls it too for threads started under a ScopedArosCodecThreadPlacement.
+ void MaybePinForeignThread(pthread_attr_t* attributes);
+ 
++// True while a ScopedArosCodecThreadPlacement is alive on this thread.
++bool ArosPlacingCodecThreads();
++
+ // True while PlatformThread is inside its own pthread_create on this thread.
+ bool ArosCreatingPlatformThread();
+ void ArosSetCreatingPlatformThread(bool creating);
+diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
+index b698f8dec8..3a6ff24e90 100644
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -160,6 +160,8 @@ bool CreateThread(size_t stack_size,
+   // (50 errors when tried). Keeping AROS headers in the AROS file is the fix,
+   // not more #undef guards.
+   internal::MaybePinThreadRoundRobin(&attributes);
++  if (internal::ArosPlacingCodecThreads())
++    internal::MaybePinForeignThread(&attributes);
+ #endif
+ 
+   std::unique_ptr<ThreadParams> params(new ThreadParams);
+diff --git a/media/base/codec_worker_impl.h b/media/base/codec_worker_impl.h
+index 75d5f395ad..83a3ada42c 100644
+--- a/media/base/codec_worker_impl.h
++++ b/media/base/codec_worker_impl.h
+@@ -10,6 +10,11 @@
+ #include "base/functional/bind.h"
+ #include "base/synchronization/lock.h"
+ #include "base/threading/thread.h"
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/threading/aros_codec_thread_placement.h"
++#endif
+ #include "base/threading/thread_restrictions.h"
+ 
+ // This file contains guts of thread wrappers for libvpx and libaom to help
+@@ -40,6 +45,9 @@ class CodecWorkerImpl {
+   CodecWorkerImpl()
+       : thread_("CodecWorker"),
+         event_(base::WaitableEvent::ResetPolicy::AUTOMATIC) {
++#if BUILDFLAG(IS_AROS)
++    base::ScopedArosCodecThreadPlacement placement;
++#endif
+     thread_.Start();
+   }
+ 

@@ -1,0 +1,185 @@
+From 54f56860c94d6a4d4b486786aef3076dd08c5ebd Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 13 Oct 2026 15:56:36 -0500
+Subject: [PATCH 671/689] AROS: report image memory pinned by paint artifacts
+ to V8
+
+A replaced PaintArtifact is freed only by garbage collection, and the
+collector sees just the small artifact, not the raster images its
+drawings keep alive. A non-composited 2D canvas (every 2D canvas without
+GPU raster) is painted as a snapshot of its pixels each frame, so an
+animating canvas pins a full-size copy per frame: Arkose's 1000x940
+captcha on claude.ai left 254 unreachable artifacts (~850 MiB) and no
+GC ran before PartitionAlloc's regular pool was exhausted
+(OnNoMemoryInternal in Chrome_InProcRendererThread and Compositor).
+
+Count the non-lazy raster images in each recorded drawing and report
+them to V8 with AdjustAmountOfExternalAllocatedMemory for the artifact's
+lifetime, so the external memory limit schedules a GC. The captcha now
+runs indefinitely with V8 collecting about twice a second.
+---
+ .../graphics/paint/drawing_recorder.cc        |  4 +-
+ .../platform/graphics/paint/paint_artifact.cc | 59 +++++++++++++++++++
+ .../platform/graphics/paint/paint_artifact.h  | 15 ++++-
+ .../graphics/paint/paint_controller.h         |  4 ++
+ 4 files changed, 80 insertions(+), 2 deletions(-)
+
+diff --git a/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc b/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc
+index 40d98ab8c4..ae2b5b4d83 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc
+@@ -44,8 +44,10 @@ DrawingRecorder::~DrawingRecorder() {
+ 
+   context_.SetInDrawingRecorder(false);
+ 
++  PaintRecord record = context_.EndRecording();
++  context_.GetPaintController().AddPinnedImageMemory(record);
+   context_.GetPaintController().CreateAndAppend<DrawingDisplayItem>(
+-      client_, type_, visual_rect_, context_.EndRecording(),
++      client_, type_, visual_rect_, std::move(record),
+       client_.VisualRectOutsetForRasterEffects(),
+       client_.GetPaintInvalidationReason());
+ }
+diff --git a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
+index a5f7bfd740..cdfafe4bbc 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
+@@ -4,11 +4,70 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
+ 
++#include "cc/paint/paint_op.h"
++#include "cc/paint/paint_op_buffer.h"
++#include "cc/paint/paint_op_buffer_iterator.h"
++#include "v8/include/v8-isolate.h"
++
+ #include "third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk_subset.h"
+ 
+ namespace blink {
+ 
++namespace {
++
++int64_t PinnedImageBytes(const cc::PaintRecord& record) {
++  int64_t bytes = 0;
++  auto add = [&bytes](const cc::PaintImage& image) {
++    if (image && !image.IsLazyGenerated() && !image.IsTextureBacked() &&
++        !image.IsPaintWorklet()) {
++      bytes += image.GetSkImageInfo().computeMinByteSize();
++    }
++  };
++  for (const cc::PaintOp& op : record.buffer()) {
++    switch (op.GetType()) {
++      case cc::PaintOpType::kDrawImage:
++        add(static_cast<const cc::DrawImageOp&>(op).image);
++        break;
++      case cc::PaintOpType::kDrawImageRect:
++        add(static_cast<const cc::DrawImageRectOp&>(op).image);
++        break;
++      case cc::PaintOpType::kDrawRecord:
++        bytes +=
++            PinnedImageBytes(static_cast<const cc::DrawRecordOp&>(op).record);
++        break;
++      default:
++        break;
++    }
++  }
++  return bytes;
++}
++
++}  // namespace
++
++PaintArtifact::PaintArtifact() = default;
++
++PaintArtifact::~PaintArtifact() {
++  if (pinned_image_bytes_ && isolate_ &&
++      v8::Isolate::TryGetCurrent() == isolate_) {
++    isolate_->AdjustAmountOfExternalAllocatedMemory(-pinned_image_bytes_);
++  }
++}
++
++void PaintArtifact::AddPinnedImageMemory(const cc::PaintRecord& record) {
++  const int64_t bytes = PinnedImageBytes(record);
++  if (!bytes) {
++    return;
++  }
++  v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
++  if (!isolate || (isolate_ && isolate_ != isolate)) {
++    return;
++  }
++  isolate_ = isolate;
++  pinned_image_bytes_ += bytes;
++  isolate->AdjustAmountOfExternalAllocatedMemory(bytes);
++}
++
+ size_t PaintArtifact::ApproximateUnsharedMemoryUsage() const {
+   size_t total_size = sizeof(*this) + display_item_list_.MemoryUsageInBytes() -
+                       sizeof(display_item_list_) + chunks_.CapacityInBytes();
+diff --git a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.h b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.h
+index 865cb5ebc4..fa0e63b6fe 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.h
++++ b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.h
+@@ -6,12 +6,18 @@
+ #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_PAINT_ARTIFACT_H_
+ 
+ #include "base/check_op.h"
++#include "base/memory/raw_ptr.h"
++#include "cc/paint/paint_record.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/display_item_list.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+ #include "third_party/blink/renderer/platform/platform_export.h"
+ 
++namespace v8 {
++class Isolate;
++}  // namespace v8
++
+ namespace blink {
+ 
+ // A PaintArtifact represents the output of painting, consisting of paint chunks
+@@ -27,7 +33,8 @@ namespace blink {
+ class PLATFORM_EXPORT PaintArtifact final
+     : public GarbageCollected<PaintArtifact> {
+  public:
+-  PaintArtifact() = default;
++  PaintArtifact();
++  ~PaintArtifact();
+   PaintArtifact(const PaintArtifact& other) = delete;
+   PaintArtifact& operator=(const PaintArtifact& other) = delete;
+   PaintArtifact(PaintArtifact&& other) = delete;
+@@ -51,6 +58,10 @@ class PLATFORM_EXPORT PaintArtifact final
+     return display_item_list_.ItemsInRange(chunk.begin_index, chunk.end_index);
+   }
+ 
++  // Reports the raster image memory |record| pins to V8 as external memory
++  // until this artifact is collected.
++  void AddPinnedImageMemory(const cc::PaintRecord& record);
++
+   // Returns the approximate memory usage, excluding memory likely to be
+   // shared with the embedder after copying to cc::DisplayItemList.
+   size_t ApproximateUnsharedMemoryUsage() const;
+@@ -86,6 +97,8 @@ class PLATFORM_EXPORT PaintArtifact final
+   DisplayItemList display_item_list_;
+   PaintChunks chunks_;
+   DebugInfo debug_info_;
++  raw_ptr<v8::Isolate> isolate_ = nullptr;
++  int64_t pinned_image_bytes_ = 0;
+ };
+ 
+ PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, const PaintArtifact&);
+diff --git a/third_party/blink/renderer/platform/graphics/paint/paint_controller.h b/third_party/blink/renderer/platform/graphics/paint/paint_controller.h
+index 5315213b79..0d8c48f15d 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/paint_controller.h
++++ b/third_party/blink/renderer/platform/graphics/paint/paint_controller.h
+@@ -166,6 +166,10 @@ class PLATFORM_EXPORT PaintController
+     ProcessNewItem(client, display_item);
+   }
+ 
++  void AddPinnedImageMemory(const cc::PaintRecord& record) {
++    new_paint_artifact_->AddPinnedImageMemory(record);
++  }
++
+   // Tries to find the cached display item corresponding to the given
+   // parameters. If found, appends the cached display item to the new display
+   // list and returns true. Otherwise returns false.

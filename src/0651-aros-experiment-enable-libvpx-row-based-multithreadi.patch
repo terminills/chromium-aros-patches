@@ -1,0 +1,31 @@
+From e220c742ea838a49dbee99cdfa24224e0b6a75bf Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 11:23:10 -0500
+Subject: [PATCH 651/689] aros: experiment - enable libvpx row-based
+ multithreading for VP9
+
+---
+ media/filters/vpx_video_decoder.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/media/filters/vpx_video_decoder.cc b/media/filters/vpx_video_decoder.cc
+index 34ad54d30c..4effd8b8db 100644
+--- a/media/filters/vpx_video_decoder.cc
++++ b/media/filters/vpx_video_decoder.cc
+@@ -285,6 +285,16 @@ bool VpxVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config) {
+                   << vpx_codec_error(vpx_codec_.get());
+       return false;
+     }
++#if BUILDFLAG(IS_AROS)
++    // Row-based multithreading: parallel decode within a tile, so a stream
++    // with one tile column still uses the decoder threads. Experiment - off
++    // upstream; measured with and without --aros-pin-codec-threads.
++    if (GetVpxVideoDecoderThreadCount(config) > 1 &&
++        vpx_codec_control(vpx_codec_.get(), VP9D_SET_ROW_MT, 1) ==
++            VPX_CODEC_OK) {
++      ArosKPutStr("[Chromium:Media] vpx row-mt on\n");
++    }
++#endif
+   }
+ 
+   if (config.alpha_mode() == VideoDecoderConfig::AlphaMode::kIsOpaque)

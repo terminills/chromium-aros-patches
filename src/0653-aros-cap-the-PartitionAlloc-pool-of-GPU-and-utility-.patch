@@ -1,0 +1,109 @@
+From d5708b3ef5464c5e82084575d27729a03de88cc4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 13:06:51 -0500
+Subject: [PATCH 653/689] aros: cap the PartitionAlloc pool of GPU and utility
+ processes
+
+Every Chromium process sized its regular pool from the memory free at
+startup, so the GPU process and each utility process took up to 1 GiB -
+2 GiB physically, with the alignment over-reserve - that they never use.
+A 12 GiB guest ran out before the browser window appeared.
+
+Read the process type from the argument string CreateNewProc() passed the
+process (the pool is reserved before base::CommandLine exists) and cap the
+GPU process at 512 MiB and utility processes at 256 MiB. The browser and
+renderers keep the free-memory rule. The serial pool line now shows the
+cap. 12 GiB guest, 8 CPUs, multi-process: eight processes start instead of
+six, with the page rendering at the same frame rate.
+
+Claude-Session: https://claude.ai/code/session_01QHhVavHvnUWcvCukPGJBkG
+---
+ .../partition_address_space.cc                | 53 +++++++++++++++++--
+ 1 file changed, 50 insertions(+), 3 deletions(-)
+
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+index 185d66236d..cc8f4611c3 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_address_space.cc
+@@ -35,10 +35,14 @@
+ #include <algorithm>
+ #include <cstdio>
+ 
++#include <cstring>
++
++#include <dos/dosextens.h>
+ #include <exec/memory.h>
+ #include <proto/exec.h>
+ // inline/exec.h spells every exec call as a macro; this one collides with
+-// AddressPoolManager::Remove() below. AvailMem is the only exec call here.
++// AddressPoolManager::Remove() below. AvailMem and FindTask are the only exec
++// calls here.
+ #undef Remove
+ 
+ extern "C" void ArosKPutStr(const char*) asm("KPutStr");
+@@ -130,6 +134,46 @@ namespace {
+ constexpr size_t kMinRegularPoolSize = kGiB / 8;
+ constexpr size_t kFreeMemoryDivisor = 4;
+ 
++// Ceiling for a child that is neither a renderer nor the browser: the GPU
++// process and the utility processes (network, storage, audio, ...) never come
++// near the pool the free-memory rule would give them, and every byte of it is
++// physically backed twice. The browser and renderers keep the full rule.
++//
++// The process type is read from the argument string CreateNewProc() gave this
++// process (NP_Arguments, launch_aros.cc), since the pool is reserved long
++// before base::CommandLine exists and the allocator cannot depend on base.
++constexpr size_t kGpuProcessPoolSize = kGiB / 2;
++constexpr size_t kUtilityProcessPoolSize = kGiB / 4;
++
++size_t ArosProcessTypePoolCap(size_t max_size) {
++  const struct Task* task = FindTask(nullptr);
++  if (!task || task->tc_Node.ln_Type != NT_PROCESS) {
++    return max_size;
++  }
++  const char* args = reinterpret_cast<const struct Process*>(task)->pr_Arguments;
++  if (!args) {
++    return max_size;
++  }
++  const char* type = std::strstr(args, "--type=");
++  if (!type) {
++    return max_size;  // The browser.
++  }
++  type += std::strlen("--type=");
++  auto is = [type](const char* name) {
++    const size_t n = std::strlen(name);
++    return std::strncmp(type, name, n) == 0 &&
++           (type[n] == '\0' || type[n] == ' ' || type[n] == '"' ||
++            type[n] == '\n');
++  };
++  if (is("renderer")) {
++    return max_size;
++  }
++  if (is("gpu-process")) {
++    return std::min(max_size, kGpuProcessPoolSize);
++  }
++  return std::min(max_size, kUtilityProcessPoolSize);
++}
++
+ size_t ArosRegularPoolSize(size_t max_size) {
+   static size_t cached = 0;
+   if (cached) {
+@@ -142,13 +186,16 @@ size_t ArosRegularPoolSize(size_t max_size) {
+       std::min(static_cast<size_t>(free_bytes) / kFreeMemoryDivisor,
+                static_cast<size_t>(largest) / 2);
+   size_t size = std::bit_floor(budget);
+-  size = std::clamp(size, kMinRegularPoolSize, max_size);
++  const size_t cap = ArosProcessTypePoolCap(max_size);
++  size = std::clamp(size, kMinRegularPoolSize, cap);
+ 
+   // Fixed buffer, KPutStr: no allocation inside the allocator.
+   char line[160];
+   std::snprintf(line, sizeof(line),
+-                "[Chromium:PA] regular-pool size=%llu free=%llu largest=%llu\n",
++                "[Chromium:PA] regular-pool size=%llu cap=%llu free=%llu "
++                "largest=%llu\n",
+                 static_cast<unsigned long long>(size),
++                static_cast<unsigned long long>(cap),
+                 static_cast<unsigned long long>(free_bytes),
+                 static_cast<unsigned long long>(largest));
+   ArosKPutStr(line);

@@ -1,0 +1,197 @@
+From fbfdd3fe23d7e0885889ab4dbd038da7e475b9d4 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 07:58:05 -0500
+Subject: [PATCH 646/689] aros: pass open files across mojo channels as posixc
+ open-file tokens
+
+A descriptor number means nothing in another process's posixc table, so
+the browser opening files for the out-of-process storage service handed it
+numbers that failed with EBADF. Encode descriptors as posixc 0.41
+open-file tokens (MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE), import them into
+the receiver's table, and release tokens in packets that are dropped.
+The posixc entry points are weak so executables linked against an older
+SDK keep the numeric encoding; chrome links the 0.41 stubs directly for
+this experiment.
+---
+ chrome/BUILD.gn                          |  8 ++++
+ mojo/core/channel_aros.cc                | 12 ++----
+ mojo/public/c/system/platform_handle.h   |  6 +++
+ mojo/public/cpp/platform/aros_channel.cc | 55 ++++++++++++++++++++++--
+ mojo/public/cpp/platform/aros_channel.h  | 13 ++++++
+ 5 files changed, 82 insertions(+), 12 deletions(-)
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 935320da79..1b2f45c2fe 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1926,5 +1926,13 @@ if (is_aros) {
+   # CHROMIUM_CLOSE_TRACE is set.
+   config("aros_close_trace") {
+     ldflags = [ "-Wl,--wrap=__posixc_close", "-Wl,--wrap=__posixc_open" ]
++
++    # Experiment only: the posixc 0.41 descriptor-transfer stubs, until the
++    # AROS SDK this out directory is built against carries them.
++    ldflags += [
++      "/home/terminills/Documents/GitHub/aros-adt-websub-x86_64/bin/pc-x86_64-smp/gen/compiler/crt/posixc/posixc/linklib/posixc___posixc_fd_export_stub.o",
++      "/home/terminills/Documents/GitHub/aros-adt-websub-x86_64/bin/pc-x86_64-smp/gen/compiler/crt/posixc/posixc/linklib/posixc___posixc_fd_import_stub.o",
++      "/home/terminills/Documents/GitHub/aros-adt-websub-x86_64/bin/pc-x86_64-smp/gen/compiler/crt/posixc/posixc/linklib/posixc___posixc_fd_release_stub.o",
++    ]
+   }
+ }
+diff --git a/mojo/core/channel_aros.cc b/mojo/core/channel_aros.cc
+index 924174c178..6784b4fea1 100644
+--- a/mojo/core/channel_aros.cc
++++ b/mojo/core/channel_aros.cc
+@@ -154,8 +154,7 @@ void ChannelAros::Write(MessagePtr message) {
+     std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
+     std::vector<MojoPlatformHandle> encoded_handles(handles.size());
+     for (size_t i = 0; i < handles.size(); ++i) {
+-      PlatformHandle::ToMojoPlatformHandle(handles[i].TakeHandle(),
+-                                           &encoded_handles[i]);
++      EncodeArosTransferHandle(handles[i].TakeHandle(), &encoded_handles[i]);
+     }
+     if (SendArosChannelPacket(channel_, ArosChannelPacketType::kData,
+                               message->data(), message->data_num_bytes(),
+@@ -165,10 +164,8 @@ void ChannelAros::Write(MessagePtr message) {
+ 
+     // Encoding relinquished the PlatformHandle wrappers. Reconstitute
+     // ownership when allocation failed or the peer was already closed.
+-    for (const MojoPlatformHandle& encoded : encoded_handles) {
+-      PlatformHandle handle =
+-          PlatformHandle::FromMojoPlatformHandle(&encoded);
+-    }
++    for (const MojoPlatformHandle& encoded : encoded_handles)
++      ReleaseArosTransferHandle(&encoded);
+     reject_writes_ = true;
+     write_error = true;
+   }
+@@ -187,8 +184,7 @@ void ChannelAros::ProcessPacket(ArosChannelPacket* packet) {
+   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+   const ArosChannelPacketView view = GetArosChannelPacketView(packet);
+   for (size_t i = 0; i < view.handle_count; ++i) {
+-    incoming_handles_.push_back(
+-        PlatformHandle::FromMojoPlatformHandle(&view.handles[i]));
++    incoming_handles_.push_back(DecodeArosTransferHandle(&view.handles[i]));
+   }
+   MarkArosChannelPacketHandlesConsumed(packet);
+ 
+diff --git a/mojo/public/c/system/platform_handle.h b/mojo/public/c/system/platform_handle.h
+index c31c6a9342..21b41e9d6a 100644
+--- a/mojo/public/c/system/platform_handle.h
++++ b/mojo/public/c/system/platform_handle.h
+@@ -61,6 +61,12 @@ typedef uint32_t MojoPlatformHandleType;
+ // MEMF_PUBLIC channel state. Only usable on AROS hosts.
+ #define MOJO_PLATFORM_HANDLE_TYPE_AROS_CHANNEL ((MojoPlatformHandleType)7)
+ 
++// The value is a posixc open-file token (__posixc_fd_export()): an open file
++// passed to another process, which gets a descriptor of its own for it with
++// __posixc_fd_import(). A descriptor number cannot cross processes on AROS -
++// each posixc process has its own table. Only usable on AROS hosts.
++#define MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE ((MojoPlatformHandleType)8)
++
+ // |MojoPlatformHandle|: A handle to a native platform object.
+ //
+ //     |uint32_t struct_size|: The size of this structure. Used for versioning
+diff --git a/mojo/public/cpp/platform/aros_channel.cc b/mojo/public/cpp/platform/aros_channel.cc
+index e4be554d2b..6caa36df52 100644
+--- a/mojo/public/cpp/platform/aros_channel.cc
++++ b/mojo/public/cpp/platform/aros_channel.cc
+@@ -16,8 +16,18 @@
+ 
+ #include "base/check.h"
+ #include "base/check_op.h"
++#include "base/files/scoped_file.h"
+ #include "mojo/public/cpp/platform/platform_handle.h"
+ 
++extern "C" {
++// posixc 0.41: pass an open file to another process (SCM_RIGHTS on AROS).
++// Weak until every AROS SDK the Chromium build uses carries these stubs: an
++// executable linked without them keeps the old numeric encoding.
++__attribute__((weak)) void* __posixc_fd_export(int file_descriptor);
++__attribute__((weak)) int __posixc_fd_import(void* token, int fdflags);
++__attribute__((weak)) void __posixc_fd_release(void* token);
++}
++
+ namespace mojo {
+ 
+ struct ArosChannelState {
+@@ -148,14 +158,51 @@ bool QueueOrDeliver(ArosChannelState* state,
+ }
+ 
+ void ReleaseEncodedHandles(ArosChannelPacket* packet) {
+-  for (size_t i = 0; i < packet->handle_count; ++i) {
+-    PlatformHandle handle =
+-        PlatformHandle::FromMojoPlatformHandle(&PacketHandles(packet)[i]);
+-  }
++  for (size_t i = 0; i < packet->handle_count; ++i)
++    ReleaseArosTransferHandle(&PacketHandles(packet)[i]);
+ }
+ 
+ }  // namespace
+ 
++void EncodeArosTransferHandle(PlatformHandle handle, MojoPlatformHandle* out) {
++  if (handle.is_fd() && __posixc_fd_export) {
++    // Export the open file, then let |handle| close our descriptor: the
++    // token holds its own reference, so the file stays open for the peer.
++    void* token = __posixc_fd_export(handle.GetFD().get());
++    if (token) {
++      out->struct_size = sizeof(*out);
++      out->type = MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE;
++      out->value = reinterpret_cast<uintptr_t>(token);
++      return;
++    }
++    // Not exportable (a directory, or not a posixc file): fall back to the
++    // number, which is at least no worse than before.
++  }
++  PlatformHandle::ToMojoPlatformHandle(std::move(handle), out);
++}
++
++PlatformHandle DecodeArosTransferHandle(const MojoPlatformHandle* in) {
++  if (in->type == MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE) {
++    void* token = reinterpret_cast<void*>(static_cast<uintptr_t>(in->value));
++    const int fd = __posixc_fd_import(token, 0);
++    if (fd < 0) {
++      __posixc_fd_release(token);
++      return PlatformHandle();
++    }
++    return PlatformHandle(base::ScopedFD(fd));
++  }
++  return PlatformHandle::FromMojoPlatformHandle(in);
++}
++
++void ReleaseArosTransferHandle(const MojoPlatformHandle* in) {
++  if (in->type == MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE) {
++    __posixc_fd_release(
++        reinterpret_cast<void*>(static_cast<uintptr_t>(in->value)));
++    return;
++  }
++  PlatformHandle handle = PlatformHandle::FromMojoPlatformHandle(in);
++}
++
+ std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair() {
+   void* storage = AllocMem(sizeof(ArosChannelState), MEMF_PUBLIC | MEMF_CLEAR);
+   if (!storage)
+diff --git a/mojo/public/cpp/platform/aros_channel.h b/mojo/public/cpp/platform/aros_channel.h
+index dfe7a73081..3eb061f87d 100644
+--- a/mojo/public/cpp/platform/aros_channel.h
++++ b/mojo/public/cpp/platform/aros_channel.h
+@@ -67,6 +67,19 @@ class COMPONENT_EXPORT(MOJO_CPP_PLATFORM) ArosChannelRetirementObserver {
+   CreateArosChannelRetirementObserver(ArosChannelHandle handle);
+ };
+ 
++// Handles crossing a channel. A file descriptor is only meaningful in the
++// posixc table of the process that owns it, so it travels as an exported
++// open-file token (MOJO_PLATFORM_HANDLE_TYPE_AROS_FILE) and the receiver
++// imports it into its own table. Every other handle type is encoded as
++// PlatformHandle does. Each encoded handle is consumed by exactly one of
++// Decode (delivered) or Release (dropped).
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void EncodeArosTransferHandle(PlatformHandle handle, MojoPlatformHandle* out);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++PlatformHandle DecodeArosTransferHandle(const MojoPlatformHandle* in);
++COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
++void ReleaseArosTransferHandle(const MojoPlatformHandle* in);
++
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
+ std::pair<ArosChannelHandle, ArosChannelHandle> CreateArosChannelPair();
+ COMPONENT_EXPORT(MOJO_CPP_PLATFORM)

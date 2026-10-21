@@ -1,0 +1,1457 @@
+From 08f8a87066be8eb2ac592f24307495748cb48e09 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Sat, 17 Oct 2026 01:37:47 -0500
+Subject: [PATCH 682/689] Revert "AROS: hardware H.264 decoding on the AMD VCN"
+
+This reverts commit f543a033cfcd894863c77feea6e29705bc7dfe74.
+---
+ content/renderer/BUILD.gn                  |   4 -
+ content/renderer/media/media_factory.cc    |  11 -
+ media/gpu/aros/BUILD.gn                    |  24 --
+ media/gpu/aros/aros_amdgpu.cc              | 167 -----------
+ media/gpu/aros/aros_amdgpu.h               |  49 ---
+ media/gpu/aros/aros_vcn_h264.cc            | 306 -------------------
+ media/gpu/aros/aros_vcn_h264.h             |  93 ------
+ media/gpu/aros/aros_video_decoder.cc       | 330 ---------------------
+ media/gpu/aros/aros_video_decoder.h        |  64 ----
+ media/gpu/aros/vcn_dec_msg.h               | 243 ---------------
+ media/renderers/default_decoder_factory.cc |  18 --
+ media/renderers/default_decoder_factory.h  |   8 -
+ 12 files changed, 1317 deletions(-)
+ delete mode 100644 media/gpu/aros/BUILD.gn
+ delete mode 100644 media/gpu/aros/aros_amdgpu.cc
+ delete mode 100644 media/gpu/aros/aros_amdgpu.h
+ delete mode 100644 media/gpu/aros/aros_vcn_h264.cc
+ delete mode 100644 media/gpu/aros/aros_vcn_h264.h
+ delete mode 100644 media/gpu/aros/aros_video_decoder.cc
+ delete mode 100644 media/gpu/aros/aros_video_decoder.h
+ delete mode 100644 media/gpu/aros/vcn_dec_msg.h
+
+diff --git a/content/renderer/BUILD.gn b/content/renderer/BUILD.gn
+index fbd153ca3f..33cc781573 100644
+--- a/content/renderer/BUILD.gn
++++ b/content/renderer/BUILD.gn
+@@ -336,10 +336,6 @@ target(link_target_type, "renderer") {
+     "//url",
+     "//v8",
+   ]
+-
+-  if (is_aros) {
+-    deps += [ "//media/gpu/aros" ]
+-  }
+   allow_circular_includes_from = []
+ 
+   if (is_android) {
+diff --git a/content/renderer/media/media_factory.cc b/content/renderer/media/media_factory.cc
+index ad13ca3bf5..3bc07daab6 100644
+--- a/content/renderer/media/media_factory.cc
++++ b/content/renderer/media/media_factory.cc
+@@ -4,11 +4,6 @@
+ 
+ #include "content/renderer/media/media_factory.h"
+ 
+-#if BUILDFLAG(IS_AROS)
+-#include "base/command_line.h"
+-#include "media/gpu/aros/aros_video_decoder.h"
+-#endif
+-
+ #include <memory>
+ #include <string>
+ #include <tuple>
+@@ -870,12 +865,6 @@ void MediaFactory::EnsureDecoderFactory() {
+ 
+     external_decoder_factory = std::make_unique<media::FuchsiaDecoderFactory>(
+         std::move(media_codec_provider), /*allow_overlay=*/true);
+-#endif
+-#if BUILDFLAG(IS_AROS)
+-    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+-            "disable-aros-vcn-decode")) {
+-      media::SetArosVideoDecoderCreator(&media::ArosVcnVideoDecoder::Create);
+-    }
+ #endif
+     decoder_factory_ = std::make_unique<media::DefaultDecoderFactory>(
+         std::move(external_decoder_factory));
+diff --git a/media/gpu/aros/BUILD.gn b/media/gpu/aros/BUILD.gn
+deleted file mode 100644
+index f47b4c3048..0000000000
+--- a/media/gpu/aros/BUILD.gn
++++ /dev/null
+@@ -1,24 +0,0 @@
+-# Copyright 2026 The Chromium Authors
+-# Use of this source code is governed by a BSD-style license that can be
+-# found in the LICENSE file.
+-
+-assert(is_aros)
+-
+-source_set("aros") {
+-  sources = [
+-    "aros_amdgpu.cc",
+-    "aros_amdgpu.h",
+-    "aros_vcn_h264.cc",
+-    "aros_vcn_h264.h",
+-    "aros_video_decoder.cc",
+-    "aros_video_decoder.h",
+-    "vcn_dec_msg.h",
+-  ]
+-  deps = [
+-    "//base",
+-    "//media",
+-    "//media/gpu:common",
+-    "//ui/gfx",
+-    "//ui/gfx/geometry",
+-  ]
+-}
+diff --git a/media/gpu/aros/aros_amdgpu.cc b/media/gpu/aros/aros_amdgpu.cc
+deleted file mode 100644
+index 4e5e87e710..0000000000
+--- a/media/gpu/aros/aros_amdgpu.cc
++++ /dev/null
+@@ -1,167 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "media/gpu/aros/aros_amdgpu.h"
+-
+-#include <string.h>
+-#include <unistd.h>
+-
+-#include <exec/execbase.h>
+-#include <exec/libraries.h>
+-#include <proto/exec.h>
+-
+-#include <mutex>
+-
+-namespace media::aros {
+-
+-namespace {
+-
+-// amdgpu.hidd functions are plain C calls through the library vector table;
+-// function n of amdgpu.conf's list sits at slot -(4 + n).
+-enum Lvo {
+-  kGetDeviceCount = 5,
+-  kGetDevice = 6,
+-  kBoAlloc = 25,
+-  kBoFree = 26,
+-  kBoCpuMap = 28,
+-  kBoCpuUnmap = 29,
+-  kVaRangeAlloc = 31,
+-  kVaRangeFree = 32,
+-  kBoVaBind = 34,
+-  kBoVaUnbind = 35,
+-  kVcnSubmitIb = 51,
+-  kVcnQueryFence = 52,
+-};
+-
+-constexpr uint32_t kDomainGtt = 2;
+-constexpr uint32_t kMinRevision = 15;
+-
+-template <typename F>
+-F Vec(void* base, int lvo) {
+-  return reinterpret_cast<F>(reinterpret_cast<void**>(base)[-lvo]);
+-}
+-
+-AmdgpuVcn* g_vcn = nullptr;
+-std::once_flag g_once;
+-
+-}  // namespace
+-
+-// static
+-AmdgpuVcn* AmdgpuVcn::Get() {
+-  std::call_once(g_once, [] {
+-    struct Library* lib = OpenLibrary("amdgpu.hidd", 0);
+-    if (!lib) {
+-      return;
+-    }
+-    if (lib->lib_Version == 0 && lib->lib_Revision < kMinRevision) {
+-      CloseLibrary(lib);
+-      return;
+-    }
+-    auto count = Vec<ULONG (*)()>(lib, kGetDeviceCount);
+-    auto device = Vec<void* (*)(ULONG)>(lib, kGetDevice);
+-    void* ad = count() ? device(0) : nullptr;
+-    if (!ad) {
+-      CloseLibrary(lib);
+-      return;
+-    }
+-    // Probe that the VCN ring is running: fence 0 always reads complete.
+-    ULONG complete = 0;
+-    auto query = Vec<LONG (*)(void*, ULONG, ULONG*)>(lib, kVcnQueryFence);
+-    if (query(ad, 0, &complete) != 0) {
+-      CloseLibrary(lib);
+-      return;
+-    }
+-    g_vcn = new AmdgpuVcn();
+-    g_vcn->base_ = lib;
+-    g_vcn->device_ = ad;
+-  });
+-  return g_vcn;
+-}
+-
+-bool AmdgpuVcn::Alloc(size_t size, AmdgpuBuffer* out) {
+-  ULONG bo = 0, va = 0;
+-  UQUAD address = 0;
+-  APTR cpu = nullptr;
+-
+-  *out = AmdgpuBuffer();
+-  size = (size + 4095) & ~static_cast<size_t>(4095);
+-  if (Vec<LONG (*)(void*, UQUAD, UQUAD, ULONG, ULONG, ULONG*)>(base_, kBoAlloc)(
+-          device_, size, 4096, kDomainGtt, 0, &bo)) {
+-    return false;
+-  }
+-  out->bo = bo;
+-  out->size = size;
+-  if (Vec<LONG (*)(void*, ULONG, APTR*)>(base_, kBoCpuMap)(device_, bo, &cpu) ||
+-      Vec<LONG (*)(void*, UQUAD, UQUAD, UQUAD, ULONG*, UQUAD*)>(
+-          base_, kVaRangeAlloc)(device_, size, 4096, 0, &va, &address)) {
+-    out->cpu = static_cast<uint8_t*>(cpu);
+-    out->va = va;
+-    Free(out);
+-    return false;
+-  }
+-  out->cpu = static_cast<uint8_t*>(cpu);
+-  out->va = va;
+-  if (Vec<LONG (*)(void*, ULONG, ULONG)>(base_, kBoVaBind)(device_, bo, va)) {
+-    Free(out);
+-    return false;
+-  }
+-  out->gpu_address = address;
+-  memset(out->cpu, 0, size);
+-  return true;
+-}
+-
+-void AmdgpuVcn::Free(AmdgpuBuffer* buffer) {
+-  if (buffer->gpu_address) {
+-    Vec<LONG (*)(void*, ULONG)>(base_, kBoVaUnbind)(device_, buffer->va);
+-  }
+-  if (buffer->va) {
+-    Vec<LONG (*)(void*, ULONG)>(base_, kVaRangeFree)(device_, buffer->va);
+-  }
+-  if (buffer->cpu) {
+-    Vec<LONG (*)(void*, ULONG)>(base_, kBoCpuUnmap)(device_, buffer->bo);
+-  }
+-  if (buffer->bo) {
+-    Vec<LONG (*)(void*, ULONG)>(base_, kBoFree)(device_, buffer->bo);
+-  }
+-  *buffer = AmdgpuBuffer();
+-}
+-
+-// static
+-void AmdgpuVcn::Flush(const AmdgpuBuffer& buffer, size_t size) {
+-  CacheClearE(buffer.cpu, size, CACRF_ClearD);
+-}
+-
+-// static
+-void AmdgpuVcn::Invalidate(const AmdgpuBuffer& buffer, size_t size) {
+-  CacheClearE(buffer.cpu, size, CACRF_InvalidateD);
+-}
+-
+-bool AmdgpuVcn::Submit(uint64_t ib_address, uint32_t dwords, uint32_t* fence) {
+-  ULONG f = 0;
+-  if (Vec<LONG (*)(void*, UQUAD, ULONG, ULONG*)>(base_, kVcnSubmitIb)(
+-          device_, ib_address, dwords, &f)) {
+-    return false;
+-  }
+-  *fence = f;
+-  return true;
+-}
+-
+-bool AmdgpuVcn::WaitFence(uint32_t fence) {
+-  auto query = Vec<LONG (*)(void*, ULONG, ULONG*)>(base_, kVcnQueryFence);
+-  for (int poll = 0; poll < 200000; ++poll) {
+-    ULONG complete = 0;
+-    if (query(device_, fence, &complete)) {
+-      return false;
+-    }
+-    if (complete) {
+-      return true;
+-    }
+-    if (poll > 2000) {
+-      usleep(500);
+-    }
+-  }
+-  return false;
+-}
+-
+-}  // namespace media::aros
+diff --git a/media/gpu/aros/aros_amdgpu.h b/media/gpu/aros/aros_amdgpu.h
+deleted file mode 100644
+index ebd00786d5..0000000000
+--- a/media/gpu/aros/aros_amdgpu.h
++++ /dev/null
+@@ -1,49 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef MEDIA_GPU_AROS_AROS_AMDGPU_H_
+-#define MEDIA_GPU_AROS_AROS_AMDGPU_H_
+-
+-#include <stddef.h>
+-#include <stdint.h>
+-
+-namespace media::aros {
+-
+-// A GPU buffer from amdgpu.hidd: system memory mapped through the GART,
+-// visible to the CPU at |cpu| and to the GPU at |gpu_address|.
+-struct AmdgpuBuffer {
+-  uint32_t bo = 0;
+-  uint32_t va = 0;
+-  uint64_t gpu_address = 0;
+-  uint8_t* cpu = nullptr;
+-  size_t size = 0;
+-};
+-
+-// amdgpu.hidd's VCN submission interface (library 0.15 or later).
+-class AmdgpuVcn {
+- public:
+-  // Opens amdgpu.hidd once; nullptr when there is no VCN-capable device.
+-  static AmdgpuVcn* Get();
+-
+-  bool Alloc(size_t size, AmdgpuBuffer* out);
+-  void Free(AmdgpuBuffer* buffer);
+-
+-  // Write back CPU caches before the GPU reads, drop them before the CPU
+-  // reads what the GPU wrote.
+-  static void Flush(const AmdgpuBuffer& buffer, size_t size);
+-  static void Invalidate(const AmdgpuBuffer& buffer, size_t size);
+-
+-  bool Submit(uint64_t ib_address, uint32_t dwords, uint32_t* fence);
+-  bool WaitFence(uint32_t fence);
+-
+- private:
+-  AmdgpuVcn() = default;
+-
+-  void* base_ = nullptr;
+-  void* device_ = nullptr;
+-};
+-
+-}  // namespace media::aros
+-
+-#endif  // MEDIA_GPU_AROS_AROS_AMDGPU_H_
+diff --git a/media/gpu/aros/aros_vcn_h264.cc b/media/gpu/aros/aros_vcn_h264.cc
+deleted file mode 100644
+index 64fc2db0a7..0000000000
+--- a/media/gpu/aros/aros_vcn_h264.cc
++++ /dev/null
+@@ -1,306 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "media/gpu/aros/aros_vcn_h264.h"
+-
+-#include <string.h>
+-
+-#include <algorithm>
+-#include <atomic>
+-
+-#include "media/gpu/aros/vcn_dec_msg.h"
+-
+-namespace media::aros {
+-
+-namespace {
+-
+-constexpr uint32_t kFeedbackOffset = 0x2000;
+-constexpr uint32_t kFeedbackSize = 2048;
+-constexpr uint32_t kItSize = 992;
+-constexpr uint32_t kNumH264Refs = 17;
+-constexpr uint32_t kDbAlignment = 64;
+-constexpr uint32_t kDtPitchAlignment = 256;
+-
+-constexpr uint32_t Align(uint32_t v, uint32_t a) {
+-  return (v + a - 1) & ~(a - 1);
+-}
+-
+-std::atomic<uint32_t> g_next_handle{0x41524f00};
+-
+-}  // namespace
+-
+-VcnH264Session::VcnH264Session() : vcn_(AmdgpuVcn::Get()) {}
+-
+-VcnH264Session::~VcnH264Session() {
+-  Destroy();
+-}
+-
+-bool VcnH264Session::Create(uint32_t width, uint32_t height,
+-                            uint32_t level_idc, uint32_t max_num_ref_frames) {
+-  Destroy();
+-  if (!vcn_ || !width || !height) {
+-    return false;
+-  }
+-  width_ = width;
+-  height_ = height;
+-
+-  // calc_dpb_size() / calc_ctx_size_h264_perf() in radeon_vcn_dec.c.
+-  const uint32_t w_mb = Align(width, 16) / 16;
+-  const uint32_t h_mb = Align(Align(height, 16) / 16, 2);
+-  const uint32_t fs_in_mb = w_mb * h_mb;
+-  uint32_t refs;
+-  switch (level_idc) {
+-    case 30: refs = 8100 / fs_in_mb; break;
+-    case 31: refs = 18000 / fs_in_mb; break;
+-    case 32: refs = 20480 / fs_in_mb; break;
+-    case 41: refs = 32768 / fs_in_mb; break;
+-    case 42: refs = 34816 / fs_in_mb; break;
+-    case 50: refs = 110400 / fs_in_mb; break;
+-    default: refs = 184320 / fs_in_mb; break;
+-  }
+-  refs = std::min(refs + 1, kNumH264Refs);
+-  refs = std::max(refs, max_num_ref_frames + 1);
+-  uint32_t image = Align(width, kDbAlignment) * Align(height, kDbAlignment);
+-  image = Align(image + image / 2, 1024);
+-  dpb_size_ = image * refs;
+-  ctx_size_ = refs * Align(fs_in_mb * 192, 256);
+-  dt_pitch_ = Align(width, kDtPitchAlignment);
+-  dt_height_ = Align(height, 16);
+-
+-  if (!vcn_->Alloc(RDECODE_SESSION_CONTEXT_SIZE, &session_) ||
+-      !vcn_->Alloc(kFeedbackOffset + kFeedbackSize + kItSize, &msg_) ||
+-      !vcn_->Alloc(dpb_size_, &dpb_) || !vcn_->Alloc(ctx_size_, &ctx_) ||
+-      !vcn_->Alloc(dt_pitch_ * dt_height_ * 3 / 2, &dt_) ||
+-      !vcn_->Alloc(4096, &ib_) ||
+-      !vcn_->Alloc(Align(width, 16) * Align(height, 16) * 3 / 2 + 4096,
+-                   &bs_)) {
+-    Destroy();
+-    return false;
+-  }
+-
+-  stream_handle_ = ++g_next_handle;
+-  frame_number_ = 0;
+-
+-  auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
+-  auto* create = reinterpret_cast<rvcn_dec_message_create_t*>(
+-      msg_.cpu + sizeof(*header));
+-  header->header_size = sizeof(*header);
+-  header->total_size = sizeof(*header) + sizeof(*create);
+-  header->num_buffers = 1;
+-  header->msg_type = RDECODE_MSG_CREATE;
+-  header->stream_handle = stream_handle_;
+-  header->index[0].message_id = RDECODE_MESSAGE_CREATE;
+-  header->index[0].offset = sizeof(*header);
+-  header->index[0].size = sizeof(*create);
+-  create->stream_type = RDECODE_CODEC_H264_PERF;
+-  create->width_in_samples = width;
+-  create->height_in_samples = height;
+-  if (!Submit(false)) {
+-    Destroy();
+-    return false;
+-  }
+-  created_ = true;
+-  return true;
+-}
+-
+-void VcnH264Session::Destroy() {
+-  if (!vcn_) {
+-    return;
+-  }
+-  if (created_) {
+-    memset(msg_.cpu, 0, msg_.size);
+-    auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
+-    header->header_size = sizeof(*header);
+-    header->total_size = sizeof(*header);
+-    header->msg_type = RDECODE_MSG_DESTROY;
+-    header->stream_handle = stream_handle_;
+-    Submit(false);
+-    created_ = false;
+-  }
+-  for (AmdgpuBuffer* b : {&session_, &msg_, &dpb_, &ctx_, &bs_, &dt_, &ib_}) {
+-    if (b->bo) {
+-      vcn_->Free(b);
+-    }
+-  }
+-}
+-
+-void VcnH264Session::BeginPicture() {
+-  bs_bytes_ = 0;
+-}
+-
+-bool VcnH264Session::AddSlice(const uint8_t* data, size_t size) {
+-  if (bs_bytes_ + size + 3 + 128 > bs_.size) {
+-    return false;
+-  }
+-  bs_.cpu[bs_bytes_++] = 0;
+-  bs_.cpu[bs_bytes_++] = 0;
+-  bs_.cpu[bs_bytes_++] = 1;
+-  memcpy(bs_.cpu + bs_bytes_, data, size);
+-  bs_bytes_ += size;
+-  return true;
+-}
+-
+-bool VcnH264Session::Decode(const VcnH264Picture& pic) {
+-  if (!created_ || !bs_bytes_) {
+-    return false;
+-  }
+-  const uint32_t bsd_size = Align(bs_bytes_, 128);
+-  memset(bs_.cpu + bs_bytes_, 0, bsd_size - bs_bytes_);
+-  AmdgpuVcn::Flush(bs_, bsd_size);
+-
+-  memset(msg_.cpu, 0, msg_.size);
+-  auto* header = reinterpret_cast<rvcn_dec_message_header_t*>(msg_.cpu);
+-  uint32_t sizes = sizeof(*header);
+-  auto* index_codec =
+-      reinterpret_cast<rvcn_dec_message_index_t*>(msg_.cpu + sizes);
+-  sizes += sizeof(*index_codec);
+-  const uint32_t offset_decode = sizes;
+-  auto* decode =
+-      reinterpret_cast<rvcn_dec_message_decode_t*>(msg_.cpu + sizes);
+-  sizes += sizeof(*decode);
+-  const uint32_t offset_codec = sizes;
+-  auto* avc = reinterpret_cast<rvcn_dec_message_avc_t*>(msg_.cpu + sizes);
+-
+-  header->header_size = sizeof(*header);
+-  header->total_size = sizes + sizeof(*avc);
+-  header->msg_type = RDECODE_MSG_DECODE;
+-  header->stream_handle = stream_handle_;
+-  header->status_report_feedback_number = ++frame_number_;
+-  header->num_buffers = 2;
+-  header->index[0].message_id = RDECODE_MESSAGE_DECODE;
+-  header->index[0].offset = offset_decode;
+-  header->index[0].size = sizeof(*decode);
+-  index_codec->message_id = RDECODE_MESSAGE_AVC;
+-  index_codec->offset = offset_codec;
+-  index_codec->size = sizeof(*avc);
+-
+-  decode->stream_type = RDECODE_CODEC_H264_PERF;
+-  decode->width_in_samples = width_;
+-  decode->height_in_samples = height_;
+-  decode->bsd_size = bsd_size;
+-  decode->dpb_size = dpb_size_;
+-  decode->dt_size = dt_.size;
+-  decode->hw_ctxt_size = ctx_.size;
+-  decode->sw_ctxt_size = RDECODE_SESSION_CONTEXT_SIZE;
+-  decode->db_pitch = Align(width_, kDbAlignment);
+-  decode->db_swizzle_mode = RDECODE_VCN5_256B_D;
+-  decode->db_array_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11;
+-  decode->dt_pitch = dt_pitch_;
+-  decode->dt_uv_pitch = dt_pitch_ / 2;
+-  decode->dt_swizzle_mode = RDECODE_SW_MODE_LINEAR;
+-  decode->dt_array_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11;
+-  decode->dt_chroma_top_offset = dt_pitch_ * dt_height_;
+-  decode->dt_chroma_bottom_offset = dt_pitch_ * dt_height_;
+-  decode->mif_wrc_en = 1;
+-
+-  avc->profile = pic.profile_idc == 66   ? RDECODE_H264_PROFILE_BASELINE
+-                 : pic.profile_idc == 77 ? RDECODE_H264_PROFILE_MAIN
+-                                         : RDECODE_H264_PROFILE_HIGH;
+-  avc->level = pic.level_idc;
+-  avc->sps_info_flags = pic.sps_info_flags;
+-  avc->pps_info_flags = pic.pps_info_flags;
+-  avc->chroma_format = pic.chroma_format;
+-  avc->bit_depth_luma_minus8 = pic.bit_depth_luma_minus8;
+-  avc->bit_depth_chroma_minus8 = pic.bit_depth_chroma_minus8;
+-  avc->log2_max_frame_num_minus4 = pic.log2_max_frame_num_minus4;
+-  avc->pic_order_cnt_type = pic.pic_order_cnt_type;
+-  avc->log2_max_pic_order_cnt_lsb_minus4 =
+-      pic.log2_max_pic_order_cnt_lsb_minus4;
+-  avc->num_ref_frames = pic.num_ref_frames;
+-  avc->pic_init_qp_minus26 = pic.pic_init_qp_minus26;
+-  avc->pic_init_qs_minus26 = pic.pic_init_qs_minus26;
+-  avc->chroma_qp_index_offset = pic.chroma_qp_index_offset;
+-  avc->second_chroma_qp_index_offset = pic.second_chroma_qp_index_offset;
+-  avc->num_ref_idx_l0_active_minus1 = pic.num_ref_idx_l0_active_minus1;
+-  avc->num_ref_idx_l1_active_minus1 = pic.num_ref_idx_l1_active_minus1;
+-  memcpy(avc->scaling_list_4x4, pic.scaling_list_4x4, sizeof(avc->scaling_list_4x4));
+-  memcpy(avc->scaling_list_8x8, pic.scaling_list_8x8, sizeof(avc->scaling_list_8x8));
+-  uint8_t* it = msg_.cpu + kFeedbackOffset + kFeedbackSize;
+-  memcpy(it, pic.scaling_list_4x4, 6 * 16);
+-  memcpy(it + 96, pic.scaling_list_8x8, 2 * 64);
+-  avc->frame_num = pic.frame_num;
+-  avc->curr_field_order_cnt_list[0] = pic.curr_field_order_cnt[0];
+-  avc->curr_field_order_cnt_list[1] = pic.curr_field_order_cnt[1];
+-  for (uint32_t i = 0; i < pic.num_refs && i < 16; ++i) {
+-    avc->frame_num_list[i] = pic.frame_num_list[i];
+-    avc->field_order_cnt_list[i][0] = pic.field_order_cnt_list[i][0];
+-    avc->field_order_cnt_list[i][1] = pic.field_order_cnt_list[i][1];
+-  }
+-  avc->decoded_pic_idx = pic.decoded_pic_idx;
+-
+-  auto* fb = reinterpret_cast<rvcn_dec_feedback_header_t*>(msg_.cpu +
+-                                                           kFeedbackOffset);
+-  fb->header_size = sizeof(*fb);
+-  fb->total_size = sizeof(*fb);
+-
+-  if (!Submit(true)) {
+-    return false;
+-  }
+-  AmdgpuVcn::Invalidate(dt_, dt_.size);
+-  return true;
+-}
+-
+-const uint8_t* VcnH264Session::y_plane() const {
+-  return dt_.cpu;
+-}
+-
+-const uint8_t* VcnH264Session::uv_plane() const {
+-  return dt_.cpu + dt_pitch_ * dt_height_;
+-}
+-
+-bool VcnH264Session::Submit(bool decode) {
+-  uint32_t* dw = reinterpret_cast<uint32_t*>(ib_.cpu);
+-  uint32_t n = 0;
+-
+-  memset(dw, 0, 1024);
+-  dw[n++] = RADEON_VCN_ENGINE_INFO_SIZE;
+-  dw[n++] = RADEON_VCN_ENGINE_INFO;
+-  dw[n++] = RADEON_VCN_ENGINE_TYPE_DECODE;
+-  const uint32_t size_slot = n++;
+-  auto* pkg = reinterpret_cast<rvcn_decode_ib_package_t*>(&dw[n]);
+-  pkg->package_size =
+-      sizeof(rvcn_decode_buffer_t) + sizeof(rvcn_decode_ib_package_t);
+-  pkg->package_type = RDECODE_IB_PARAM_DECODE_BUFFER;
+-  n += 2;
+-  auto* db = reinterpret_cast<rvcn_decode_buffer_t*>(&dw[n]);
+-  n += sizeof(rvcn_decode_buffer_t) / 4;
+-
+-  auto set = [db](uint32_t flag, unsigned int* lo, unsigned int* hi,
+-                  uint64_t addr) {
+-    db->valid_buf_flag |= flag;
+-    *hi = static_cast<uint32_t>(addr >> 32);
+-    *lo = static_cast<uint32_t>(addr);
+-  };
+-  set(RDECODE_CMDBUF_FLAGS_SESSION_CONTEXT_BUFFER,
+-      &db->session_contex_buffer_address_lo,
+-      &db->session_contex_buffer_address_hi, session_.gpu_address);
+-  set(RDECODE_CMDBUF_FLAGS_MSG_BUFFER, &db->msg_buffer_address_lo,
+-      &db->msg_buffer_address_hi, msg_.gpu_address);
+-  if (decode) {
+-    set(RDECODE_CMDBUF_FLAGS_DPB_BUFFER, &db->dpb_buffer_address_lo,
+-        &db->dpb_buffer_address_hi, dpb_.gpu_address);
+-    set(RDECODE_CMDBUF_FLAGS_CONTEXT_BUFFER, &db->context_buffer_address_lo,
+-        &db->context_buffer_address_hi, ctx_.gpu_address);
+-    set(RDECODE_CMDBUF_FLAGS_BITSTREAM_BUFFER,
+-        &db->bitstream_buffer_address_lo, &db->bitstream_buffer_address_hi,
+-        bs_.gpu_address);
+-    set(RDECODE_CMDBUF_FLAGS_DECODING_TARGET_BUFFER,
+-        &db->target_buffer_address_lo, &db->target_buffer_address_hi,
+-        dt_.gpu_address);
+-    set(RDECODE_CMDBUF_FLAGS_FEEDBACK_BUFFER, &db->feedback_buffer_address_lo,
+-        &db->feedback_buffer_address_hi, msg_.gpu_address + kFeedbackOffset);
+-    set(RDECODE_CMDBUF_FLAGS_IT_SCALING_BUFFER,
+-        &db->it_sclr_table_buffer_address_lo,
+-        &db->it_sclr_table_buffer_address_hi,
+-        msg_.gpu_address + kFeedbackOffset + kFeedbackSize);
+-  }
+-  dw[size_slot] = (n - size_slot + 3) * 4;
+-
+-  AmdgpuVcn::Flush(msg_, msg_.size);
+-  AmdgpuVcn::Flush(ib_, ib_.size);
+-  uint32_t fence = 0;
+-  return vcn_->Submit(ib_.gpu_address, n, &fence) && vcn_->WaitFence(fence);
+-}
+-
+-}  // namespace media::aros
+diff --git a/media/gpu/aros/aros_vcn_h264.h b/media/gpu/aros/aros_vcn_h264.h
+deleted file mode 100644
+index 279c358ecb..0000000000
+--- a/media/gpu/aros/aros_vcn_h264.h
++++ /dev/null
+@@ -1,93 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef MEDIA_GPU_AROS_AROS_VCN_H264_H_
+-#define MEDIA_GPU_AROS_AROS_VCN_H264_H_
+-
+-#include <stddef.h>
+-#include <stdint.h>
+-
+-#include <vector>
+-
+-#include "media/gpu/aros/aros_amdgpu.h"
+-
+-namespace media::aros {
+-
+-// Per-picture H.264 parameters, the content of rvcn_dec_message_avc_t.
+-struct VcnH264Picture {
+-  uint32_t profile_idc = 0;
+-  uint32_t level_idc = 0;
+-  uint32_t sps_info_flags = 0;
+-  uint32_t pps_info_flags = 0;
+-  uint8_t chroma_format = 1;
+-  uint8_t bit_depth_luma_minus8 = 0;
+-  uint8_t bit_depth_chroma_minus8 = 0;
+-  uint8_t log2_max_frame_num_minus4 = 0;
+-  uint8_t pic_order_cnt_type = 0;
+-  uint8_t log2_max_pic_order_cnt_lsb_minus4 = 0;
+-  uint8_t num_ref_frames = 0;
+-  int8_t pic_init_qp_minus26 = 0;
+-  int8_t pic_init_qs_minus26 = 0;
+-  int8_t chroma_qp_index_offset = 0;
+-  int8_t second_chroma_qp_index_offset = 0;
+-  uint8_t num_ref_idx_l0_active_minus1 = 0;
+-  uint8_t num_ref_idx_l1_active_minus1 = 0;
+-  uint8_t scaling_list_4x4[6][16] = {};
+-  uint8_t scaling_list_8x8[2][64] = {};
+-  uint32_t frame_num = 0;
+-  int32_t curr_field_order_cnt[2] = {};
+-  uint32_t num_refs = 0;
+-  uint32_t frame_num_list[16] = {};
+-  int32_t field_order_cnt_list[16][2] = {};
+-  uint32_t decoded_pic_idx = 0;
+-};
+-
+-// One VCN H.264 decoding session (radeonsi DPB_MAX_RES layout on VCN 5.0):
+-// session context, message/feedback/IT buffer, DPB, context, bitstream and a
+-// linear NV12 target.
+-class VcnH264Session {
+- public:
+-  VcnH264Session();
+-  ~VcnH264Session();
+-
+-  VcnH264Session(const VcnH264Session&) = delete;
+-  VcnH264Session& operator=(const VcnH264Session&) = delete;
+-
+-  bool Create(uint32_t width, uint32_t height, uint32_t level_idc,
+-              uint32_t max_num_ref_frames);
+-  void Destroy();
+-  bool created() const { return created_; }
+-  uint32_t width() const { return width_; }
+-  uint32_t height() const { return height_; }
+-
+-  // Bitstream for the current picture: slice NAL units without start codes.
+-  void BeginPicture();
+-  bool AddSlice(const uint8_t* data, size_t size);
+-
+-  // Decodes the queued slices and waits for the VCN.
+-  bool Decode(const VcnH264Picture& pic);
+-
+-  // The decoded picture, NV12 with luma at y_plane() and interleaved chroma
+-  // at uv_plane(), both with stride().
+-  const uint8_t* y_plane() const;
+-  const uint8_t* uv_plane() const;
+-  size_t stride() const { return dt_pitch_; }
+-
+- private:
+-  bool Submit(bool decode);
+-
+-  AmdgpuVcn* vcn_ = nullptr;
+-  bool created_ = false;
+-  uint32_t width_ = 0, height_ = 0;
+-  uint32_t dpb_size_ = 0, ctx_size_ = 0;
+-  uint32_t dt_pitch_ = 0, dt_height_ = 0;
+-  uint32_t stream_handle_ = 0;
+-  uint32_t frame_number_ = 0;
+-  size_t bs_bytes_ = 0;
+-  AmdgpuBuffer session_, msg_, dpb_, ctx_, bs_, dt_, ib_;
+-};
+-
+-}  // namespace media::aros
+-
+-#endif  // MEDIA_GPU_AROS_AROS_VCN_H264_H_
+diff --git a/media/gpu/aros/aros_video_decoder.cc b/media/gpu/aros/aros_video_decoder.cc
+deleted file mode 100644
+index ba4ea566ee..0000000000
+--- a/media/gpu/aros/aros_video_decoder.cc
++++ /dev/null
+@@ -1,330 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "media/gpu/aros/aros_video_decoder.h"
+-
+-#include <stdio.h>
+-#include <string.h>
+-
+-#include "base/functional/bind.h"
+-#include "base/memory/raw_ptr.h"
+-#include "base/task/sequenced_task_runner.h"
+-#include "media/base/decoder_buffer.h"
+-#include "media/base/video_frame.h"
+-#include "media/gpu/aros/aros_amdgpu.h"
+-#include "media/gpu/aros/aros_vcn_h264.h"
+-#include "media/gpu/h264_decoder.h"
+-#include "media/gpu/h264_dpb.h"
+-
+-extern "C" void ArosVcnKPutStr(const char*) asm("KPutStr");
+-
+-namespace media {
+-
+-namespace {
+-
+-void VcnLog(const char* fmt, int a = 0, int b = 0, int c = 0) {
+-  char line[160];
+-  snprintf(line, sizeof(line), fmt, a, b, c);
+-  ArosVcnKPutStr(line);
+-}
+-
+-constexpr uint8_t kZigzag4x4[16] = {0, 1,  4,  8,  5, 2,  3,  6,
+-                                    9, 12, 13, 10, 7, 11, 14, 15};
+-constexpr uint8_t kZigzag8x8[64] = {
+-    0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
+-    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
+-    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+-    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+-
+-class ArosH264Picture : public H264Picture {
+- public:
+-  ArosH264Picture() = default;
+-  scoped_refptr<VideoFrame> frame;
+-
+- private:
+-  ~ArosH264Picture() override = default;
+-};
+-
+-class ArosVcnH264Accelerator : public H264Decoder::H264Accelerator {
+- public:
+-  explicit ArosVcnH264Accelerator(ArosVcnVideoDecoder* owner)
+-      : owner_(owner) {}
+-
+-  scoped_refptr<H264Picture> CreateH264Picture() override {
+-    return base::MakeRefCounted<ArosH264Picture>();
+-  }
+-
+-  Status SubmitFrameMetadata(const H264SPS* sps,
+-                             const H264PPS* pps,
+-                             const H264DPB& dpb,
+-                             const H264Picture::Vector& ref_pic_listp0,
+-                             const H264Picture::Vector& ref_pic_listb0,
+-                             const H264Picture::Vector& ref_pic_listb1,
+-                             scoped_refptr<H264Picture> pic) override {
+-    const uint32_t width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
+-    const uint32_t height = (sps->pic_height_in_map_units_minus1 + 1) * 16 *
+-                            (sps->frame_mbs_only_flag ? 1 : 2);
+-    if (!session_.created() || session_.width() != width ||
+-        session_.height() != height) {
+-      if (!session_.Create(width, height, sps->level_idc,
+-                           sps->max_num_ref_frames)) {
+-        VcnLog("[Chromium:AROS:VCN] H.264 session %dx%d could not be created\n",
+-               width, height);
+-        return Status::kFail;
+-      }
+-      VcnLog("[Chromium:AROS:VCN] H.264 session %dx%d level %d\n", width,
+-             height, sps->level_idc);
+-    }
+-
+-    p_ = aros::VcnH264Picture();
+-    p_.profile_idc = sps->profile_idc;
+-    p_.level_idc = sps->level_idc;
+-    p_.sps_info_flags = (sps->direct_8x8_inference_flag << 0) |
+-                        (sps->mb_adaptive_frame_field_flag << 1) |
+-                        (sps->frame_mbs_only_flag << 2) |
+-                        (sps->delta_pic_order_always_zero_flag << 3) |
+-                        (sps->gaps_in_frame_num_value_allowed_flag << 5) |
+-                        (1 << 7);
+-    p_.pps_info_flags = (pps->transform_8x8_mode_flag << 0) |
+-                        (pps->redundant_pic_cnt_present_flag << 1) |
+-                        (pps->constrained_intra_pred_flag << 2) |
+-                        (pps->deblocking_filter_control_present_flag << 3) |
+-                        (pps->weighted_bipred_idc << 4) |
+-                        (pps->weighted_pred_flag << 6) |
+-                        (pps->bottom_field_pic_order_in_frame_present_flag << 7) |
+-                        (pps->entropy_coding_mode_flag << 8);
+-    p_.chroma_format = sps->chroma_format_idc;
+-    p_.bit_depth_luma_minus8 = sps->bit_depth_luma_minus8;
+-    p_.bit_depth_chroma_minus8 = sps->bit_depth_chroma_minus8;
+-    p_.log2_max_frame_num_minus4 = sps->log2_max_frame_num_minus4;
+-    p_.pic_order_cnt_type = sps->pic_order_cnt_type;
+-    p_.log2_max_pic_order_cnt_lsb_minus4 =
+-        sps->log2_max_pic_order_cnt_lsb_minus4;
+-    p_.num_ref_frames = sps->max_num_ref_frames;
+-    p_.pic_init_qp_minus26 = pps->pic_init_qp_minus26;
+-    p_.pic_init_qs_minus26 = pps->pic_init_qs_minus26;
+-    p_.chroma_qp_index_offset = pps->chroma_qp_index_offset;
+-    p_.second_chroma_qp_index_offset = pps->second_chroma_qp_index_offset;
+-
+-    const bool pps_lists = pps->pic_scaling_matrix_present_flag;
+-    for (int i = 0; i < 6; ++i) {
+-      for (int j = 0; j < 16; ++j) {
+-        p_.scaling_list_4x4[i][kZigzag4x4[j]] =
+-            pps_lists ? pps->scaling_list4x4[i][j] : sps->scaling_list4x4[i][j];
+-      }
+-    }
+-    for (int i = 0; i < 2; ++i) {
+-      for (int j = 0; j < 64; ++j) {
+-        p_.scaling_list_8x8[i][kZigzag8x8[j]] =
+-            pps_lists ? pps->scaling_list8x8[i][j] : sps->scaling_list8x8[i][j];
+-      }
+-    }
+-
+-    p_.frame_num = pic->frame_num;
+-    p_.curr_field_order_cnt[0] = pic->top_field_order_cnt;
+-    p_.curr_field_order_cnt[1] = pic->bottom_field_order_cnt;
+-    p_.decoded_pic_idx = pic->frame_num;
+-    for (size_t i = 0; i < ref_pic_listp0.size() && i < 16; ++i) {
+-      const H264Picture* ref = ref_pic_listp0[i].get();
+-      p_.frame_num_list[i] =
+-          ref->long_term ? ref->long_term_frame_idx : ref->frame_num;
+-      p_.field_order_cnt_list[i][0] = ref->top_field_order_cnt;
+-      p_.field_order_cnt_list[i][1] = ref->bottom_field_order_cnt;
+-      p_.num_refs = i + 1;
+-    }
+-    have_slice_header_ = false;
+-    session_.BeginPicture();
+-    return Status::kOk;
+-  }
+-
+-  Status SubmitSlice(const H264PPS* pps,
+-                     const H264SliceHeader* slice_hdr,
+-                     const H264Picture::Vector& ref_pic_list0,
+-                     const H264Picture::Vector& ref_pic_list1,
+-                     scoped_refptr<H264Picture> pic,
+-                     const uint8_t* data,
+-                     size_t size,
+-                     const std::vector<SubsampleEntry>& subsamples) override {
+-    if (!have_slice_header_) {
+-      p_.num_ref_idx_l0_active_minus1 = slice_hdr->num_ref_idx_l0_active_minus1;
+-      p_.num_ref_idx_l1_active_minus1 = slice_hdr->num_ref_idx_l1_active_minus1;
+-      have_slice_header_ = true;
+-    }
+-    return session_.AddSlice(data, size) ? Status::kOk : Status::kFail;
+-  }
+-
+-  Status SubmitDecode(scoped_refptr<H264Picture> pic) override {
+-    if (!session_.Decode(p_)) {
+-      VcnLog("[Chromium:AROS:VCN] decode of frame_num %d failed\n",
+-             p_.frame_num);
+-      return Status::kFail;
+-    }
+-    const gfx::Size coded(session_.width(), session_.height());
+-    scoped_refptr<VideoFrame> frame = VideoFrame::CreateFrame(
+-        PIXEL_FORMAT_NV12, coded, gfx::Rect(coded), coded, base::TimeDelta());
+-    if (!frame) {
+-      return Status::kFail;
+-    }
+-    const size_t stride = session_.stride();
+-    for (uint32_t y = 0; y < session_.height(); ++y) {
+-      memcpy(frame->writable_data(VideoFrame::kYPlane) +
+-                 y * frame->stride(VideoFrame::kYPlane),
+-             session_.y_plane() + y * stride, session_.width());
+-    }
+-    for (uint32_t y = 0; y < session_.height() / 2; ++y) {
+-      memcpy(frame->writable_data(VideoFrame::kUVPlane) +
+-                 y * frame->stride(VideoFrame::kUVPlane),
+-             session_.uv_plane() + y * stride, session_.width());
+-    }
+-    static_cast<ArosH264Picture*>(pic.get())->frame = std::move(frame);
+-    return Status::kOk;
+-  }
+-
+-  bool OutputPicture(scoped_refptr<H264Picture> pic) override {
+-    auto* p = static_cast<ArosH264Picture*>(pic.get());
+-    if (!p->frame) {
+-      return false;
+-    }
+-    owner_->OutputFrame(p->frame, pic->bitstream_id(), pic->visible_rect());
+-    return true;
+-  }
+-
+-  void Reset() override {}
+-
+- private:
+-  const raw_ptr<ArosVcnVideoDecoder> owner_;
+-  aros::VcnH264Session session_;
+-  aros::VcnH264Picture p_;
+-  bool have_slice_header_ = false;
+-};
+-
+-}  // namespace
+-
+-ArosVcnVideoDecoder::ArosVcnVideoDecoder(MediaLog* media_log) {}
+-
+-ArosVcnVideoDecoder::~ArosVcnVideoDecoder() = default;
+-
+-// static
+-std::unique_ptr<VideoDecoder> ArosVcnVideoDecoder::Create(
+-    MediaLog* media_log) {
+-  if (!aros::AmdgpuVcn::Get()) {
+-    return nullptr;
+-  }
+-  return std::make_unique<ArosVcnVideoDecoder>(media_log);
+-}
+-
+-void ArosVcnVideoDecoder::Initialize(const VideoDecoderConfig& config,
+-                                     bool low_delay,
+-                                     CdmContext* cdm_context,
+-                                     InitCB init_cb,
+-                                     const OutputCB& output_cb,
+-                                     const WaitingCB& waiting_cb) {
+-  const VideoCodecProfile profile = config.profile();
+-  const bool supported =
+-      config.codec() == VideoCodec::kH264 && !config.is_encrypted() &&
+-      (profile == H264PROFILE_BASELINE || profile == H264PROFILE_MAIN ||
+-       profile == H264PROFILE_HIGH);
+-  if (!supported) {
+-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+-        FROM_HERE, base::BindOnce(std::move(init_cb),
+-                                  DecoderStatus::Codes::kUnsupportedConfig));
+-    return;
+-  }
+-  VcnLog("[Chromium:AROS:VCN] hardware H.264 decoder selected, profile %d %dx%d\n",
+-         profile, config.coded_size().width(), config.coded_size().height());
+-  config_ = config;
+-  output_cb_ = output_cb;
+-  timestamps_.clear();
+-  decoder_ = std::make_unique<H264Decoder>(
+-      std::make_unique<ArosVcnH264Accelerator>(this), profile,
+-      config.color_space_info());
+-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+-      FROM_HERE, base::BindOnce(std::move(init_cb), DecoderStatus::Codes::kOk));
+-}
+-
+-DecoderStatus ArosVcnVideoDecoder::DecodeOne(const DecoderBuffer& buffer) {
+-  const int32_t id = next_bitstream_id_++ & 0x3fffffff;
+-  timestamps_[id] = buffer.timestamp();
+-  decoder_->SetStream(id, buffer);
+-  for (;;) {
+-    switch (decoder_->Decode()) {
+-      case AcceleratedVideoDecoder::DecodeResult::kConfigChange:
+-        continue;
+-      case AcceleratedVideoDecoder::DecodeResult::kRanOutOfStreamData:
+-        return DecoderStatus::Codes::kOk;
+-      default:
+-        VcnLog("[Chromium:AROS:VCN] H264Decoder reported an error\n");
+-        return DecoderStatus::Codes::kFailed;
+-    }
+-  }
+-}
+-
+-void ArosVcnVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
+-                                 DecodeCB decode_cb) {
+-  DecoderStatus status = DecoderStatus::Codes::kOk;
+-  if (!decoder_) {
+-    status = DecoderStatus::Codes::kNotInitialized;
+-  } else if (buffer->end_of_stream()) {
+-    if (!decoder_->Flush()) {
+-      status = DecoderStatus::Codes::kFailed;
+-    }
+-  } else {
+-    status = DecodeOne(*buffer);
+-  }
+-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+-      FROM_HERE, base::BindOnce(std::move(decode_cb), status));
+-}
+-
+-void ArosVcnVideoDecoder::Reset(base::OnceClosure closure) {
+-  if (decoder_) {
+-    decoder_->Reset();
+-  }
+-  timestamps_.clear();
+-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+-                                                           std::move(closure));
+-}
+-
+-void ArosVcnVideoDecoder::OutputFrame(scoped_refptr<VideoFrame> frame,
+-                                      int32_t bitstream_id,
+-                                      const gfx::Rect& visible_rect) {
+-  auto it = timestamps_.find(bitstream_id);
+-  const base::TimeDelta timestamp =
+-      it != timestamps_.end() ? it->second : base::TimeDelta();
+-  if (it != timestamps_.end()) {
+-    timestamps_.erase(timestamps_.begin(), std::next(it));
+-  }
+-  gfx::Rect visible = visible_rect.IsEmpty() ? config_.visible_rect()
+-                                             : visible_rect;
+-  visible.Intersect(gfx::Rect(frame->coded_size()));
+-  scoped_refptr<VideoFrame> out = VideoFrame::WrapVideoFrame(
+-      frame, frame->format(), visible, config_.natural_size());
+-  if (!out) {
+-    return;
+-  }
+-  out->set_timestamp(timestamp);
+-  out->set_color_space(config_.color_space_info().ToGfxColorSpace());
+-  output_cb_.Run(std::move(out));
+-}
+-
+-bool ArosVcnVideoDecoder::NeedsBitstreamConversion() const {
+-  return true;
+-}
+-
+-bool ArosVcnVideoDecoder::CanReadWithoutStalling() const {
+-  return true;
+-}
+-
+-int ArosVcnVideoDecoder::GetMaxDecodeRequests() const {
+-  return 1;
+-}
+-
+-VideoDecoderType ArosVcnVideoDecoder::GetDecoderType() const {
+-  return VideoDecoderType::kVaapi;
+-}
+-
+-bool ArosVcnVideoDecoder::IsPlatformDecoder() const {
+-  return true;
+-}
+-
+-}  // namespace media
+diff --git a/media/gpu/aros/aros_video_decoder.h b/media/gpu/aros/aros_video_decoder.h
+deleted file mode 100644
+index d64a5e86a3..0000000000
+--- a/media/gpu/aros/aros_video_decoder.h
++++ /dev/null
+@@ -1,64 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#ifndef MEDIA_GPU_AROS_AROS_VIDEO_DECODER_H_
+-#define MEDIA_GPU_AROS_AROS_VIDEO_DECODER_H_
+-
+-#include <map>
+-#include <memory>
+-
+-#include "base/memory/weak_ptr.h"
+-#include "media/base/video_decoder.h"
+-#include "media/base/video_decoder_config.h"
+-
+-namespace media {
+-
+-class AcceleratedVideoDecoder;
+-class MediaLog;
+-
+-// H.264 decoding on the AMD VCN through amdgpu.hidd. Chromium's H264Decoder
+-// parses the stream and orders output; the accelerator turns each picture
+-// into a VCN decode message. Pictures are copied into NV12 VideoFrames.
+-class ArosVcnVideoDecoder : public VideoDecoder {
+- public:
+-  explicit ArosVcnVideoDecoder(MediaLog* media_log);
+-  ~ArosVcnVideoDecoder() override;
+-
+-  // Returns a decoder when a VCN is available, otherwise nullptr.
+-  static std::unique_ptr<VideoDecoder> Create(MediaLog* media_log);
+-
+-  // VideoDecoder implementation.
+-  void Initialize(const VideoDecoderConfig& config,
+-                  bool low_delay,
+-                  CdmContext* cdm_context,
+-                  InitCB init_cb,
+-                  const OutputCB& output_cb,
+-                  const WaitingCB& waiting_cb) override;
+-  void Decode(scoped_refptr<DecoderBuffer> buffer,
+-              DecodeCB decode_cb) override;
+-  void Reset(base::OnceClosure closure) override;
+-  bool NeedsBitstreamConversion() const override;
+-  bool CanReadWithoutStalling() const override;
+-  int GetMaxDecodeRequests() const override;
+-  VideoDecoderType GetDecoderType() const override;
+-  bool IsPlatformDecoder() const override;
+-
+-  void OutputFrame(scoped_refptr<VideoFrame> frame,
+-                   int32_t bitstream_id,
+-                   const gfx::Rect& visible_rect);
+-
+- private:
+-  DecoderStatus DecodeOne(const DecoderBuffer& buffer);
+-
+-  std::unique_ptr<AcceleratedVideoDecoder> decoder_;
+-  VideoDecoderConfig config_;
+-  OutputCB output_cb_;
+-  int32_t next_bitstream_id_ = 0;
+-  std::map<int32_t, base::TimeDelta> timestamps_;
+-  base::WeakPtrFactory<ArosVcnVideoDecoder> weak_factory_{this};
+-};
+-
+-}  // namespace media
+-
+-#endif  // MEDIA_GPU_AROS_AROS_VIDEO_DECODER_H_
+diff --git a/media/gpu/aros/vcn_dec_msg.h b/media/gpu/aros/vcn_dec_msg.h
+deleted file mode 100644
+index a29a619d6b..0000000000
+--- a/media/gpu/aros/vcn_dec_msg.h
++++ /dev/null
+@@ -1,243 +0,0 @@
+-/*
+- * VCN decode message layouts, from Mesa src/amd/common/ac_vcn_dec.h.
+- *
+- * Copyright 2017 Advanced Micro Devices, Inc.
+- *
+- * SPDX-License-Identifier: MIT
+- */
+-#ifndef VCN_DEC_MSG_H
+-#define VCN_DEC_MSG_H
+-
+-#define RDECODE_IB_PARAM_DECODE_BUFFER                               (0x00000001)
+-#define RDECODE_CMDBUF_FLAGS_MSG_BUFFER                              (0x00000001)
+-#define RDECODE_CMDBUF_FLAGS_DPB_BUFFER                              (0x00000002)
+-#define RDECODE_CMDBUF_FLAGS_BITSTREAM_BUFFER                        (0x00000004)
+-#define RDECODE_CMDBUF_FLAGS_DECODING_TARGET_BUFFER                  (0x00000008)
+-#define RDECODE_CMDBUF_FLAGS_FEEDBACK_BUFFER                         (0x00000010)
+-#define RDECODE_CMDBUF_FLAGS_IT_SCALING_BUFFER                       (0x00000200)
+-#define RDECODE_CMDBUF_FLAGS_CONTEXT_BUFFER                          (0x00000800)
+-#define RDECODE_CMDBUF_FLAGS_SESSION_CONTEXT_BUFFER                  (0x00100000)
+-#define RDECODE_MSG_CREATE                                  0x00000000
+-#define RDECODE_MSG_DECODE                                  0x00000001
+-#define RDECODE_MSG_DESTROY                                 0x00000002
+-#define RDECODE_CODEC_H264_PERF                             0x00000007
+-#define RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11                0x00000003
+-#define RDECODE_H264_PROFILE_BASELINE                       0x00000000
+-#define RDECODE_H264_PROFILE_MAIN                           0x00000001
+-#define RDECODE_H264_PROFILE_HIGH                           0x00000002
+-#define RDECODE_SW_MODE_LINEAR                              0x00000000
+-#define RDECODE_VCN5_256B_D                                 0x00000001
+-#define RDECODE_MESSAGE_CREATE                              0x00000001
+-#define RDECODE_MESSAGE_DECODE                              0x00000002
+-#define RDECODE_MESSAGE_AVC                                 0x00000006
+-#define RDECODE_SPS_INFO_H264_DIRECT_8X8_INFERENCE_FLAG_SHIFT            0
+-#define RDECODE_SPS_INFO_H264_MB_ADAPTIVE_FRAME_FIELD_FLAG_SHIFT         1
+-#define RDECODE_SPS_INFO_H264_FRAME_MBS_ONLY_FLAG_SHIFT                  2
+-#define RDECODE_SPS_INFO_H264_DELTA_PIC_ORDER_ALWAYS_ZERO_FLAG_SHIFT     3
+-#define RDECODE_SPS_INFO_H264_GAPS_IN_FRAME_NUM_VALUE_ALLOWED_FLAG_SHIFT 5
+-#define RDECODE_SPS_INFO_H264_EXTENSION_SUPPORT_FLAG_SHIFT               7
+-#define RDECODE_SESSION_CONTEXT_SIZE (128 * 1024)
+-
+-#define RADEON_VCN_ENGINE_INFO          (0x30000001)
+-#define RADEON_VCN_ENGINE_TYPE_DECODE   (0x00000003)
+-#define RADEON_VCN_ENGINE_INFO_SIZE     (0x00000010)
+-
+-typedef struct rvcn_dec_message_index_s {
+-   unsigned int message_id;
+-   unsigned int offset;
+-   unsigned int size;
+-   unsigned int filled;
+-} rvcn_dec_message_index_t;
+-
+-typedef struct rvcn_dec_message_header_s {
+-   unsigned int header_size;
+-   unsigned int total_size;
+-   unsigned int num_buffers;
+-   unsigned int msg_type;
+-   unsigned int stream_handle;
+-   unsigned int status_report_feedback_number;
+-
+-   rvcn_dec_message_index_t index[1];
+-} rvcn_dec_message_header_t;
+-
+-typedef struct rvcn_dec_message_create_s {
+-   unsigned int stream_type;
+-   unsigned int session_flags;
+-   unsigned int width_in_samples;
+-   unsigned int height_in_samples;
+-} rvcn_dec_message_create_t;
+-
+-typedef struct rvcn_dec_message_decode_s {
+-   unsigned int stream_type;
+-   unsigned int decode_flags;
+-   unsigned int width_in_samples;
+-   unsigned int height_in_samples;
+-
+-   unsigned int bsd_size;
+-   unsigned int dpb_size;
+-   unsigned int dt_size;
+-   unsigned int sct_size;
+-   unsigned int sc_coeff_size;
+-   unsigned int hw_ctxt_size;
+-   unsigned int sw_ctxt_size;
+-   unsigned int pic_param_size;
+-   unsigned int mb_cntl_size;
+-   unsigned int reserved0[4];
+-   unsigned int decode_buffer_flags;
+-
+-   unsigned int db_pitch;
+-   unsigned int db_aligned_height;
+-   unsigned int db_tiling_mode;
+-   unsigned int db_swizzle_mode;
+-   unsigned int db_array_mode;
+-   unsigned int db_field_mode;
+-   unsigned int db_surf_tile_config;
+-
+-   unsigned int dt_pitch;
+-   unsigned int dt_uv_pitch;
+-   unsigned int dt_tiling_mode;
+-   unsigned int dt_swizzle_mode;
+-   unsigned int dt_array_mode;
+-   unsigned int dt_field_mode;
+-   unsigned int dt_out_format;
+-   unsigned int dt_surf_tile_config;
+-   unsigned int dt_uv_surf_tile_config;
+-   unsigned int dt_luma_top_offset;
+-   unsigned int dt_luma_bottom_offset;
+-   unsigned int dt_chroma_top_offset;
+-   unsigned int dt_chroma_bottom_offset;
+-   unsigned int dt_chromaV_top_offset;
+-   unsigned int dt_chromaV_bottom_offset;
+-
+-   unsigned int mif_wrc_en;
+-   unsigned int db_pitch_uv;
+-
+-   unsigned char reserved1[20];
+-} rvcn_dec_message_decode_t;
+-
+-typedef struct {
+-   unsigned short viewOrderIndex;
+-   unsigned short viewId;
+-   unsigned short numOfAnchorRefsInL0;
+-   unsigned short viewIdOfAnchorRefsInL0[15];
+-   unsigned short numOfAnchorRefsInL1;
+-   unsigned short viewIdOfAnchorRefsInL1[15];
+-   unsigned short numOfNonAnchorRefsInL0;
+-   unsigned short viewIdOfNonAnchorRefsInL0[15];
+-   unsigned short numOfNonAnchorRefsInL1;
+-   unsigned short viewIdOfNonAnchorRefsInL1[15];
+-} radeon_mvcElement_t;
+-
+-typedef struct rvcn_dec_message_avc_s {
+-   unsigned int profile;
+-   unsigned int level;
+-
+-   unsigned int sps_info_flags;
+-   unsigned int pps_info_flags;
+-   unsigned char chroma_format;
+-   unsigned char bit_depth_luma_minus8;
+-   unsigned char bit_depth_chroma_minus8;
+-   unsigned char log2_max_frame_num_minus4;
+-
+-   unsigned char pic_order_cnt_type;
+-   unsigned char log2_max_pic_order_cnt_lsb_minus4;
+-   unsigned char num_ref_frames;
+-   unsigned char reserved_8bit;
+-
+-   signed char pic_init_qp_minus26;
+-   signed char pic_init_qs_minus26;
+-   signed char chroma_qp_index_offset;
+-   signed char second_chroma_qp_index_offset;
+-
+-   unsigned char num_slice_groups_minus1;
+-   unsigned char slice_group_map_type;
+-   unsigned char num_ref_idx_l0_active_minus1;
+-   unsigned char num_ref_idx_l1_active_minus1;
+-
+-   unsigned short slice_group_change_rate_minus1;
+-   unsigned short reserved_16bit_1;
+-
+-   unsigned char scaling_list_4x4[6][16];
+-   unsigned char scaling_list_8x8[2][64];
+-
+-   unsigned int frame_num;
+-   unsigned int frame_num_list[16];
+-   int curr_field_order_cnt_list[2];
+-   int field_order_cnt_list[16][2];
+-
+-   unsigned int decoded_pic_idx;
+-   unsigned int curr_pic_ref_frame_num;
+-   unsigned char ref_frame_list[16];
+-
+-   unsigned int reserved[122];
+-
+-   struct {
+-      unsigned int numViews;
+-      unsigned int viewId0;
+-      radeon_mvcElement_t mvcElements[1];
+-   } mvc;
+-
+-   unsigned short non_existing_frame_flags;
+-   unsigned int used_for_reference_flags;
+-} rvcn_dec_message_avc_t;
+-
+-typedef struct rvcn_dec_feature_index_s {
+-   unsigned int feature_id;
+-   unsigned int offset;
+-   unsigned int size;
+-   unsigned int filled;
+-} rvcn_dec_feature_index_t;
+-
+-typedef struct rvcn_dec_feedback_header_s {
+-   unsigned int header_size;
+-   unsigned int total_size;
+-   unsigned int num_buffers;
+-   unsigned int status_report_feedback_number;
+-   unsigned int status;
+-   unsigned int value;
+-   unsigned int errorBits;
+-   rvcn_dec_feature_index_t index[1];
+-} rvcn_dec_feedback_header_t;
+-
+-typedef struct rvcn_decode_buffer_s {
+-   unsigned int valid_buf_flag;
+-   unsigned int msg_buffer_address_hi;
+-   unsigned int msg_buffer_address_lo;
+-   unsigned int dpb_buffer_address_hi;
+-   unsigned int dpb_buffer_address_lo;
+-   unsigned int target_buffer_address_hi;
+-   unsigned int target_buffer_address_lo;
+-   unsigned int session_contex_buffer_address_hi;
+-   unsigned int session_contex_buffer_address_lo;
+-   unsigned int bitstream_buffer_address_hi;
+-   unsigned int bitstream_buffer_address_lo;
+-   unsigned int context_buffer_address_hi;
+-   unsigned int context_buffer_address_lo;
+-   unsigned int feedback_buffer_address_hi;
+-   unsigned int feedback_buffer_address_lo;
+-   unsigned int luma_hist_buffer_address_hi;
+-   unsigned int luma_hist_buffer_address_lo;
+-   unsigned int prob_tbl_buffer_address_hi;
+-   unsigned int prob_tbl_buffer_address_lo;
+-   unsigned int sclr_coeff_buffer_address_hi;
+-   unsigned int sclr_coeff_buffer_address_lo;
+-   unsigned int it_sclr_table_buffer_address_hi;
+-   unsigned int it_sclr_table_buffer_address_lo;
+-   unsigned int sclr_target_buffer_address_hi;
+-   unsigned int sclr_target_buffer_address_lo;
+-   unsigned int subsample_hi;
+-   unsigned int subsample_lo;
+-   unsigned int mpeg2_pic_param_buffer_address_hi;
+-   unsigned int mpeg2_pic_param_buffer_address_lo;
+-   unsigned int mpeg2_mb_control_buffer_address_hi;
+-   unsigned int mpeg2_mb_control_buffer_address_lo;
+-   unsigned int mpeg2_idct_coeff_buffer_address_hi;
+-   unsigned int mpeg2_idct_coeff_buffer_address_lo;
+-} rvcn_decode_buffer_t;
+-
+-typedef struct rvcn_decode_ib_package_s {
+-   unsigned int package_size;
+-   unsigned int package_type;
+-} rvcn_decode_ib_package_t;
+-
+-#endif
+diff --git a/media/renderers/default_decoder_factory.cc b/media/renderers/default_decoder_factory.cc
+index 0cbcda0425..b4ac303f82 100644
+--- a/media/renderers/default_decoder_factory.cc
++++ b/media/renderers/default_decoder_factory.cc
+@@ -84,16 +84,6 @@ void DefaultDecoderFactory::CreateAudioDecoders(
+   }
+ }
+ 
+-#if BUILDFLAG(IS_AROS)
+-namespace {
+-ArosVideoDecoderCreator g_aros_video_decoder_creator = nullptr;
+-}  // namespace
+-
+-void SetArosVideoDecoderCreator(ArosVideoDecoderCreator creator) {
+-  g_aros_video_decoder_creator = creator;
+-}
+-#endif
+-
+ void DefaultDecoderFactory::CreateVideoDecoders(
+     scoped_refptr<base::SequencedTaskRunner> task_runner,
+     GpuVideoAcceleratorFactories* gpu_factories,
+@@ -125,14 +115,6 @@ void DefaultDecoderFactory::CreateVideoDecoders(
+         std::move(request_overlay_info_cb), target_color_space, video_decoders);
+   }
+ 
+-#if BUILDFLAG(IS_AROS)
+-  if (g_aros_video_decoder_creator) {
+-    if (auto decoder = g_aros_video_decoder_creator(media_log)) {
+-      video_decoders->push_back(std::move(decoder));
+-    }
+-  }
+-#endif
+-
+ #if BUILDFLAG(ENABLE_LIBVPX)
+   video_decoders->push_back(std::make_unique<OffloadingVpxVideoDecoder>());
+ #endif
+diff --git a/media/renderers/default_decoder_factory.h b/media/renderers/default_decoder_factory.h
+index a0bc799f45..6989dc84ea 100644
+--- a/media/renderers/default_decoder_factory.h
++++ b/media/renderers/default_decoder_factory.h
+@@ -10,19 +10,11 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/synchronization/lock.h"
+ #include "base/task/sequenced_task_runner.h"
+-#include "build/build_config.h"
+ #include "media/base/decoder_factory.h"
+ #include "media/base/media_export.h"
+ 
+ namespace media {
+ 
+-#if BUILDFLAG(IS_AROS)
+-// Creates the platform's hardware video decoder, or returns nullptr. The
+-// decoder lives outside //media, so it registers itself here.
+-using ArosVideoDecoderCreator = std::unique_ptr<VideoDecoder> (*)(MediaLog*);
+-MEDIA_EXPORT void SetArosVideoDecoderCreator(ArosVideoDecoderCreator creator);
+-#endif
+-
+ class MEDIA_EXPORT DefaultDecoderFactory final : public DecoderFactory {
+  public:
+   // |external_decoder_factory| is optional decoder factory that provides

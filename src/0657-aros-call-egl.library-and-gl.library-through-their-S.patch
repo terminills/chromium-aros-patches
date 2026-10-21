@@ -1,0 +1,296 @@
+From 94f5a223bd7556d7d3ad92704683ef831573107e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 20:02:06 -0500
+Subject: [PATCH 657/689] aros: call egl.library and gl.library through their
+ SDK stubs
+
+egl.library and gl.library are stack-call libraries whose entry points
+expect the library base in %r11; Chromium was handed the raw library
+vectors. Resolve the EGL 1.4 core to libEGL.a's stubs (EGLBase defined
+here), GL entry points through gl.library's glAGetProcAddress (Mesa glapi
+dispatch, plain C), and EGL 1.5 / extension entry points through
+eglGetProcAddress when egl.library is 2.1 or newer (a stub for vector 68
+until the SDK carries one). Unresolved names are logged on serial.
+
+With --use-gl=egl on llvmpipe the display now initializes; config
+selection is the next step ("No suitable EGL configs found").
+
+Claude-Session: https://claude.ai/code/session_01QHhVavHvnUWcvCukPGJBkG
+---
+ ui/ozone/platform/aros/BUILD.gn             |   2 +
+ ui/ozone/platform/aros/aros_egl_library.cc  | 197 +++++++++++++-------
+ ui/ozone/platform/aros/gl_ozone_egl_aros.cc |   5 +-
+ 3 files changed, 131 insertions(+), 73 deletions(-)
+
+diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
+index 8022266660..ea3f461aaf 100644
+--- a/ui/ozone/platform/aros/BUILD.gn
++++ b/ui/ozone/platform/aros/BUILD.gn
+@@ -50,6 +50,8 @@ source_set("aros") {
+ 
+   libs = [
+     "cybergraphics",
++    "EGL",
++    "GL",
+     "graphics",
+     "intuition",
+   ]
+diff --git a/ui/ozone/platform/aros/aros_egl_library.cc b/ui/ozone/platform/aros/aros_egl_library.cc
+index 38a7a4fd08..bad85fefca 100644
+--- a/ui/ozone/platform/aros/aros_egl_library.cc
++++ b/ui/ozone/platform/aros/aros_egl_library.cc
+@@ -4,112 +4,167 @@
+ 
+ #include "ui/ozone/platform/aros/aros_egl_library.h"
+ 
++#include <cstdio>
+ #include <cstring>
+ 
+-#include <EGL/egl.h>
+ #include <defines/egl_LVO.h>
+ #include <exec/libraries.h>
+ #include <proto/exec.h>
+ 
++// egl.library and gl.library are stack-call AROS libraries: an entry point
++// expects its library base in %r11, which the SDK's linklib stubs (libEGL.a,
++// libGL.a) load from the EGLBase/GLBase globals before jumping through the
++// library vector. Chromium keeps bare function pointers, so the pointers it
++// is given must be those stubs, never the vectors themselves - calling a
++// vector directly runs the library with whatever %r11 happens to hold.
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++
++extern "C" {
++struct Library* EGLBase = nullptr;
++struct Library* GLBase = nullptr;
++}
++
++// The EGL 1.4 core that egl.library 2.0 exports, as the stub symbols
++// libEGL.a generates for it.
++#define AROS_EGL_CORE_FUNCTIONS(X)   \
++  X(eglGetError)                     \
++  X(eglGetDisplay)                   \
++  X(eglInitialize)                   \
++  X(eglTerminate)                    \
++  X(eglQueryString)                  \
++  X(eglGetConfigs)                   \
++  X(eglChooseConfig)                 \
++  X(eglGetConfigAttrib)              \
++  X(eglCreateWindowSurface)          \
++  X(eglCreatePbufferSurface)         \
++  X(eglCreatePixmapSurface)          \
++  X(eglDestroySurface)               \
++  X(eglQuerySurface)                 \
++  X(eglBindAPI)                      \
++  X(eglQueryAPI)                     \
++  X(eglWaitClient)                   \
++  X(eglReleaseThread)                \
++  X(eglCreatePbufferFromClientBuffer) \
++  X(eglSurfaceAttrib)                \
++  X(eglBindTexImage)                 \
++  X(eglReleaseTexImage)              \
++  X(eglSwapInterval)                 \
++  X(eglCreateContext)                \
++  X(eglDestroyContext)               \
++  X(eglMakeCurrent)                  \
++  X(eglGetCurrentContext)            \
++  X(eglGetCurrentSurface)            \
++  X(eglGetCurrentDisplay)            \
++  X(eglQueryContext)                 \
++  X(eglWaitGL)                       \
++  X(eglWaitNative)                   \
++  X(eglSwapBuffers)                  \
++  X(eglCopyBuffers)
++
++#define AROS_EGL_DECLARE_STUB(name) void __##name##_EGLBase_wrapper();
++extern "C" {
++AROS_EGL_CORE_FUNCTIONS(AROS_EGL_DECLARE_STUB)
++// gl.library's own lookup; everything it returns is a Mesa glapi dispatch
++// function, which is plain C (the current context is not in TLS) and needs
++// no library base.
++void __glAGetProcAddress_GLBase_wrapper();
++}
++#undef AROS_EGL_DECLARE_STUB
++
++// eglGetProcAddress arrived in egl.library 2.1 (vector 68, after
++// eglCopyBuffers). An SDK older than that has no libEGL.a stub for it, so
++// this is the same stub written out: load EGLBase into %r11 and jump through
++// the library vector. Only called once the opened library is 2.1 or newer.
++#if defined(LVOeglGetProcAddress)
++extern "C" void __eglGetProcAddress_EGLBase_wrapper();
++#define AROS_EGL_GET_PROC_ADDRESS_STUB __eglGetProcAddress_EGLBase_wrapper
++#else
++extern "C" void aros_eglGetProcAddress_stub();
++asm(".text\n"
++    ".globl aros_eglGetProcAddress_stub\n"
++    ".type aros_eglGetProcAddress_stub, @function\n"
++    "aros_eglGetProcAddress_stub:\n"
++    "  movabsq $EGLBase, %r11\n"
++    "  movq (%r11), %r11\n"
++    "  jmpq *-544(%r11)\n"  // -68 * sizeof(APTR)
++    ".size aros_eglGetProcAddress_stub, .-aros_eglGetProcAddress_stub\n");
++#define AROS_EGL_GET_PROC_ADDRESS_STUB aros_eglGetProcAddress_stub
++#endif
++
+ namespace ui {
+ namespace {
+ 
+ struct EglCoreEntry {
+   const char* name;
+-  unsigned int lvo;
++  gl::GLFunctionPointerType stub;
+ };
+ 
+-#define AROS_EGL_CORE_ENTRY(name) \
+-  { #name, LVO##name }
+-
+-constexpr EglCoreEntry kEglCoreEntries[] = {
+-    AROS_EGL_CORE_ENTRY(eglGetError),
+-    AROS_EGL_CORE_ENTRY(eglGetDisplay),
+-    AROS_EGL_CORE_ENTRY(eglInitialize),
+-    AROS_EGL_CORE_ENTRY(eglTerminate),
+-    AROS_EGL_CORE_ENTRY(eglQueryString),
+-    AROS_EGL_CORE_ENTRY(eglGetConfigs),
+-    AROS_EGL_CORE_ENTRY(eglChooseConfig),
+-    AROS_EGL_CORE_ENTRY(eglGetConfigAttrib),
+-    AROS_EGL_CORE_ENTRY(eglCreateWindowSurface),
+-    AROS_EGL_CORE_ENTRY(eglCreatePbufferSurface),
+-    AROS_EGL_CORE_ENTRY(eglCreatePixmapSurface),
+-    AROS_EGL_CORE_ENTRY(eglDestroySurface),
+-    AROS_EGL_CORE_ENTRY(eglQuerySurface),
+-    AROS_EGL_CORE_ENTRY(eglBindAPI),
+-    AROS_EGL_CORE_ENTRY(eglQueryAPI),
+-    AROS_EGL_CORE_ENTRY(eglWaitClient),
+-    AROS_EGL_CORE_ENTRY(eglReleaseThread),
+-    AROS_EGL_CORE_ENTRY(eglCreatePbufferFromClientBuffer),
+-    AROS_EGL_CORE_ENTRY(eglSurfaceAttrib),
+-    AROS_EGL_CORE_ENTRY(eglBindTexImage),
+-    AROS_EGL_CORE_ENTRY(eglReleaseTexImage),
+-    AROS_EGL_CORE_ENTRY(eglSwapInterval),
+-    AROS_EGL_CORE_ENTRY(eglCreateContext),
+-    AROS_EGL_CORE_ENTRY(eglDestroyContext),
+-    AROS_EGL_CORE_ENTRY(eglMakeCurrent),
+-    AROS_EGL_CORE_ENTRY(eglGetCurrentContext),
+-    AROS_EGL_CORE_ENTRY(eglGetCurrentSurface),
+-    AROS_EGL_CORE_ENTRY(eglGetCurrentDisplay),
+-    AROS_EGL_CORE_ENTRY(eglQueryContext),
+-    AROS_EGL_CORE_ENTRY(eglWaitGL),
+-    AROS_EGL_CORE_ENTRY(eglWaitNative),
+-    AROS_EGL_CORE_ENTRY(eglSwapBuffers),
+-    AROS_EGL_CORE_ENTRY(eglCopyBuffers),
+-#ifdef LVOeglGetProcAddress
+-    AROS_EGL_CORE_ENTRY(eglGetProcAddress),
+-#endif
+-};
++#define AROS_EGL_CORE_ENTRY(name)                                   \
++  {#name, reinterpret_cast<gl::GLFunctionPointerType>(              \
++              &__##name##_EGLBase_wrapper)},
+ 
+-#undef AROS_EGL_CORE_ENTRY
++const EglCoreEntry kEglCoreEntries[] = {
++    AROS_EGL_CORE_FUNCTIONS(AROS_EGL_CORE_ENTRY)};
+ 
+-struct Library* GetEGLLibrary() {
+-  // Chromium retains the resolved vectors for process lifetime, so the
+-  // matching library open intentionally has process lifetime as well.
+-  static struct Library* const egl_base = OpenLibrary("egl.library", 2);
+-  return egl_base;
+-}
++#undef AROS_EGL_CORE_ENTRY
+ 
+-gl::GLFunctionPointerType GetEGLVector(struct Library* egl_base,
+-                                       unsigned int lvo) {
+-  return reinterpret_cast<gl::GLFunctionPointerType>(
+-      reinterpret_cast<APTR*>(egl_base)[-static_cast<int>(lvo)]);
++bool OpenLibraries() {
++  // The resolved pointers are kept for the life of the process, so the
++  // libraries they point into are opened once and never closed.
++  static const bool opened = [] {
++    EGLBase = OpenLibrary("egl.library", 2);
++    GLBase = OpenLibrary("gl.library", 20);
++    return EGLBase != nullptr && GLBase != nullptr;
++  }();
++  return opened;
+ }
+ 
+ }  // namespace
+ 
+ bool InitializeArosEGLLibrary() {
+-  return GetEGLLibrary() != nullptr;
++  return OpenLibraries();
+ }
+ 
+ const void* GetArosEGLLibraryBase() {
+-  return GetEGLLibrary();
++  return EGLBase;
+ }
+ 
+ gl::GLFunctionPointerType GetArosEGLProcAddress(const char* name) {
+-  struct Library* egl_base = GetEGLLibrary();
+-  if (!egl_base || !name) {
++  if (!name || !OpenLibraries()) {
+     return nullptr;
+   }
+ 
+   for (const auto& entry : kEglCoreEntries) {
+     if (std::strcmp(name, entry.name) == 0) {
+-      return GetEGLVector(egl_base, entry.lvo);
++      return entry.stub;
+     }
+   }
+ 
+-#ifdef LVOeglGetProcAddress
+-  using GetProcAddressFunction =
+-      __eglMustCastToProperFunctionPointerType (*)(const char*);
+-  auto get_proc_address = reinterpret_cast<GetProcAddressFunction>(
+-      GetEGLVector(egl_base, LVOeglGetProcAddress));
+-  return reinterpret_cast<gl::GLFunctionPointerType>(get_proc_address(name));
+-#else
+-  // egl.library 2.0 (upstream AROS) exports only the EGL 1.4 core through
+-  // its jump table; extension entry points cannot be resolved, so the GL
+-  // bindings treat them as absent.
+-  return nullptr;
+-#endif
++  // EGL 1.5 and extension entry points come from eglGetProcAddress, which
++  // egl.library exports from 2.1 on (2.0 has only the 1.4 core, and then
++  // Mesa's advertised client extensions such as EGL_KHR_debug must not be
++  // used). GL entry points, core and extension alike, come from gl.library.
++  gl::GLFunctionPointerType proc = nullptr;
++  using GetProcAddressFunction = gl::GLFunctionPointerType (*)(const char*);
++  if (std::strncmp(name, "egl", 3) == 0 &&
++      (EGLBase->lib_Version > 2 ||
++       (EGLBase->lib_Version == 2 && EGLBase->lib_Revision >= 1))) {
++    auto get_proc_address = reinterpret_cast<GetProcAddressFunction>(
++        &AROS_EGL_GET_PROC_ADDRESS_STUB);
++    proc = get_proc_address(name);
++  } else if (std::strncmp(name, "gl", 2) == 0) {
++    auto get_proc_address = reinterpret_cast<GetProcAddressFunction>(
++        &__glAGetProcAddress_GLBase_wrapper);
++    proc = get_proc_address(name);
++  }
++  if (!proc) {
++    // Diagnostic: every name the bindings asked for and did not get.
++    char line[160];
++    std::snprintf(line, sizeof(line), "[Chromium:Ozone:AROS:EGL] unresolved %s\n",
++                  name);
++    ArosKPutStr(line);
++  }
++  return proc;
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+index 4264e1f5f9..ff19740a59 100644
+--- a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
++++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
+@@ -121,8 +121,9 @@ bool GLOzoneEGLAros::LoadGLES2Bindings(
+   }
+ 
+   gl::SetGLGetProcAddressProc(&GetArosEGLProcAddress);
+-  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using egl.library LVO entry points"
+-            << " base=" << GetArosEGLLibraryBase();
++  LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using egl.library/gl.library stubs"
++            << " base=" << GetArosEGLLibraryBase() << " self="
++            << reinterpret_cast<const void*>(&GetArosEGLProcAddress);
+   return true;
+ }
+ 

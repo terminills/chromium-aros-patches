@@ -1,0 +1,42 @@
+From 02ff656c311492386e7e5f4eec4f121dfae40eb8 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 06:12:40 -0500
+Subject: [PATCH 641/689] aros: enable the close() trace from a global ENV:
+ variable
+
+posixc getenv() does not see AROS global variables; test for the ENV: file.
+---
+ chrome/app/aros_close_trace.cc | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+index 75a8f3d26a..f607712357 100644
+--- a/chrome/app/aros_close_trace.cc
++++ b/chrome/app/aros_close_trace.cc
+@@ -5,20 +5,23 @@
+ #include <errno.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ 
+ #include "base/threading/platform_thread.h"
+ 
+ extern "C" void ArosKPutStr(const char*) asm("KPutStr");
+ 
+ // Diagnostic: every close() the chrome executable makes goes through here
+-// (linked with -Wl,--wrap=close). With CHROMIUM_CLOSE_TRACE set in the
+-// environment, each close of a descriptor above stderr is written to serial
++// (linked with -Wl,--wrap=close). With a global CHROMIUM_CLOSE_TRACE variable
++// (SetEnv), each close of a descriptor above stderr is written to serial
+ // with its result, thread and caller, to find who closes a descriptor twice.
+ extern "C" int __real_close(int fd);
+ extern "C" int __wrap_close(int fd) {
+   static int trace = -1;
+   if (trace < 0)
+-    trace = getenv("CHROMIUM_CLOSE_TRACE") != nullptr ? 1 : 0;
++    // A global AROS variable is a file in ENV:; posixc getenv() only sees
++    // its own per-process environment, so test for the file.
++    trace = access("ENV:CHROMIUM_CLOSE_TRACE", F_OK) == 0 ? 1 : 0;
+   const int ret = __real_close(fd);
+   if (trace && fd > 2) {
+     const int saved_errno = errno;

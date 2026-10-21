@@ -1,0 +1,36 @@
+From efe8e29abaafce4a161b29236876ee28ad210c5e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 25 Sep 2026 06:33:22 -0500
+Subject: [PATCH 643/689] aros: close() trace records pid and a
+ load-independent caller offset
+
+---
+ chrome/app/aros_close_trace.cc | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/app/aros_close_trace.cc b/chrome/app/aros_close_trace.cc
+index b751842a6a..54d574b607 100644
+--- a/chrome/app/aros_close_trace.cc
++++ b/chrome/app/aros_close_trace.cc
+@@ -25,12 +25,16 @@ extern "C" int __wrap___posixc_close(int fd) {
+   const int ret = __real___posixc_close(fd);
+   if (trace && fd > 2) {
+     const int saved_errno = errno;
+-    char line[200];
++    char line[240];
+     snprintf(line, sizeof(line),
+-             "[Chromium:AROS:CloseTrace] close(%d)=%d errno=%d thread=%s "
+-             "caller=%p\n",
+-             fd, ret, ret == 0 ? 0 : saved_errno,
+-             base::PlatformThread::GetName(), __builtin_return_address(0));
++             "[Chromium:AROS:CloseTrace] pid=%d close(%d)=%d errno=%d "
++             "thread=%s callerrel=%+lld\n",
++             (int)getpid(), fd, ret, ret == 0 ? 0 : saved_errno,
++             base::PlatformThread::GetName(),
++             // Relative to this function, so it maps to a symbol in the
++             // unstripped binary whatever address the process loaded at.
++             (long long)((const char*)__builtin_return_address(0) -
++                         (const char*)&__wrap___posixc_close));
+     ArosKPutStr(line);
+     errno = saved_errno;
+   }
