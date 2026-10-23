@@ -74,6 +74,17 @@ The tested browser configuration uses software rendering and single-process
 mode. It is a development port; process sandboxing and full application
 isolation are not established by the current shared-library implementation.
 
+### AArch64 target
+
+`target_cpu = "arm64"` builds for AArch64 AROS with the AROS LLVM toolchain
+(clang `--target=aarch64-unknown-aros`, linked through `collect-aros`)
+instead of GCC. Set `aros_clang_root` to the directory holding `clang`,
+`clang++` and the `llvm-*` tools, `aros_tool_dir` to the directory holding
+`collect-aros` (an AROS build's `bin/<host>/tools`), and `aros_sysroot` to
+the AArch64 SDK (`bin/<target>/AROS/Developer`). Standalone V8 builds and
+runs JavaScript on AArch64 AROS with this toolchain (jitless); Blink, CEF
+and the browser have not been built for arm64.
+
 ## Camera and microphone status
 
 Native ADT AROS Chromium captured a real UGREEN Camera 2K through VHI and its
