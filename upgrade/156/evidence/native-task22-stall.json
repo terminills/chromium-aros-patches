@@ -1,0 +1,40 @@
+{
+  "test": "native task adapter lifecycle, uninstrumented, QEMU 4 CPUs",
+  "result": "stalled during cycle 0",
+  "kernel_source_head": "51de41664494385b93c5285599b64ecec44bf0b0",
+  "kernel_sha256": "aa1cf05e05013af29d7cd32e71ec26d9a91247c916ea521a7454a4bc368a7e38",
+  "symbolization": {
+    "method": "exact ISO ELF .text matched against QMP physical-memory bytes",
+    "elf_text_file_offset": "0x40",
+    "matching_file_offset": "0x61c0",
+    "matching_runtime_address": "0x1a8d180",
+    "runtime_text_base": "0x1a87000",
+    "function": "APICHeartbeatServer",
+    "cpu0_text_offset": "0x6193",
+    "cpu1_to_3_text_offset": "0x623f"
+  },
+  "running_task_cycle": [
+    {
+      "address": "0x1003b64c0",
+      "name": "CPU #000 Idle",
+      "successor": "0x107bdc0"
+    },
+    {
+      "address": "0x107bdc0",
+      "name": "Bluetooth Event Broadcast",
+      "successor": "0x1003b64c0"
+    }
+  ],
+  "limitations": [
+    "Root cause of list corruption not established",
+    "Trace-enabled single-cycle test passed; does not validate uninstrumented backend",
+    "Native backend not connected to V8/Chromium yet"
+  ],
+  "evidence": [
+    "native-task22-registers.txt",
+    "native-task22-code.bin",
+    "native-task22-kernel.elf",
+    "native-task22.png",
+    "native-task21.png"
+  ]
+}

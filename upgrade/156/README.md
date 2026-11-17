@@ -220,3 +220,24 @@ The PDFium read-only mapping consumer now uses an owned file snapshot on AROS.
 Enterprise scanning uses Chromium's existing native `MemoryMappedFile` backend.
 These changes do not add an SDK mmap API. Full consumer runtime tests remain
 pending.
+
+
+## Native multicore migration in progress
+
+The direct AROS primitive probe runs on CPUs 0 and 1 using native process
+creation, CPU masks, Exec semaphores, task-local storage, and child-exit
+notification. It makes no pthread calls. The draft V8 `aros-native-task` backend
+is included in the snapshot but is not connected to the engine yet. It supports
+native creation and cross-task joins, including per-worker CRT initialization.
+A trace-enabled four-core C++ allocation/TLS/join test passes; an uninstrumented
+lifecycle test stalls. The retained kernel capture shows a circular running-task
+list; a subsequent controlled boot also exposed recursive task locking through
+`Wait` and the kernel spinlock priority adjustment. Root-cause work and private
+kernel diagnostics are ongoing. These results are not multicore qualification.
+
+![Native task primitive test](evidence/native-multicore18.png)
+
+The AArch64 standalone V8 archive and 124 MiB native `v8.library` now cross-link.
+`evidence/v8-arm64-build.json` records the exact library hash. AArch64 runtime and
+full CEF runtime remain pending; the built V8 artifact still uses the previous
+thread backend.

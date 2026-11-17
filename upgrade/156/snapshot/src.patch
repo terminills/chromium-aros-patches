@@ -17720,6 +17720,30 @@ index 25b03b8bdec8d36dcce9a7c36111b859f373b8e3..7eef7b632208d3fb3ca97e07132310ba
  #include "base/notreached.h"
  #include "base/rand_util.h"
  #include "base/time/time.h"
+diff --git a/cc/test/fake_raster_buffer_provider.cc b/cc/test/fake_raster_buffer_provider.cc
+index ca3157ed92ac0c2d592c94e50f0d65b75a80f960..840622265c06fab2151e84814b7e4a7f5a1cdc5f 100644
+--- a/cc/test/fake_raster_buffer_provider.cc
++++ b/cc/test/fake_raster_buffer_provider.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "cc/test/fake_raster_buffer_provider.h"
++#include "cc/raster/raster_buffer.h"
+ 
+ #include <utility>
+ 
+diff --git a/cc/test/fake_tile_manager_client.cc b/cc/test/fake_tile_manager_client.cc
+index 1d6578465d30c07ce8b97345482e92ad0fed953b..31ab37129ef534fed15aad2f5f07acf2077dd850 100644
+--- a/cc/test/fake_tile_manager_client.cc
++++ b/cc/test/fake_tile_manager_client.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "cc/test/fake_tile_manager_client.h"
++#include "cc/tiles/eviction_tile_priority_queue.h"
+ 
+ #include "cc/tiles/tiles_with_resource_iterator.h"
+ 
 diff --git a/cc/trees/proxy_impl.cc b/cc/trees/proxy_impl.cc
 index 262f63c01105897f9d790017e764a93a7c9ed208..9168789bac88388c399de4949f334b7e0652f31d 100644
 --- a/cc/trees/proxy_impl.cc
@@ -18881,7 +18905,7 @@ index 3de8ca69c9248a9ebf408526ca9192d6ddd035f4..71a076ab576504f48aca23fe35050983
          </message>
        </if>
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
-index 21e5fd0d9256fde91f8b129224c2665edcda9e56..fc9faeaf0fa103d8c16f3a949dc739fabdadc13c 100644
+index 21e5fd0d9256fde91f8b129224c2665edcda9e56..a9ce0fd813b35244a0b8427ee775c5ba563e383c 100644
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
 @@ -6324,7 +6324,7 @@ Keep your key file in a safe place. You will need it to create new versions of y
@@ -18901,6 +18925,15 @@ index 21e5fd0d9256fde91f8b129224c2665edcda9e56..fc9faeaf0fa103d8c16f3a949dc739fa
 +      <if expr="is_fuchsia or is_aros">
          <message name="IDS_DEPRECATED_APPS_MONITOR_RENDERER" desc="Dialog content that educates users that Chrome Apps will soon no longer launch.">
            Old versions of Chrome apps won't open after December 2022. You can check if there's a new version available.
+         </message>
+@@ -14807,7 +14807,7 @@ Check your passwords anytime in <ph name="GOOGLE_PASSWORD_MANAGER">$1<ex>Google
+       </message>
+ 
+       <!-- Device Trust Consent dialog -->
+-      <if expr="is_win or is_macosx or is_linux or is_chromeos">
++      <if expr="is_win or is_macosx or is_linux or is_chromeos or is_aros">
+         <message name="IDS_DEVICE_SIGNALS_CONSENT_DIALOG_TITLE" desc="Title of the dialog shown when user consent is required to share device signals.">
+           Share information about your device?
          </message>
 diff --git a/chrome/app/google_chrome_strings.grd b/chrome/app/google_chrome_strings.grd
 index ef29337031157065efc16347a8d2519f5f85c3ef..e878ce99404b8e3b6f2adb2c106214563f55bd54 100644
@@ -19521,6 +19554,19 @@ index bed9453f156ba5b94a8daa5261085045e288098e..d66f2259feaf4980947bdcefa5d49827
    os_crypt_async_ =
        std::make_unique<os_crypt_async::OSCryptAsync>(std::move(providers));
  
+diff --git a/chrome/browser/browser_resources.grd b/chrome/browser/browser_resources.grd
+index e8b4901c994232c7cec9311949cf112e87fd56da..c27466e28c1de2ca97b599e0ae0bb5de2a7a14c8 100644
+--- a/chrome/browser/browser_resources.grd
++++ b/chrome/browser/browser_resources.grd
+@@ -92,7 +92,7 @@
+       </if>
+     </structures>
+     <includes>
+-      <if expr="is_win or is_macosx or is_linux">
++      <if expr="is_win or is_macosx or is_linux or is_aros">
+         <!-- First Run audio resources -->
+         <include name="IDR_INTRO_SOUND_ALL_SET_FLAC" file="resources\intro\sounds\all_set.flac" type="BINDATA" />
+         <include name="IDR_INTRO_SOUND_AMBIENT_FLAC" file="resources\intro\sounds\ambient.flac" type="BINDATA" />
 diff --git a/chrome/browser/chooser_controller/BUILD.gn b/chrome/browser/chooser_controller/BUILD.gn
 index cefb95bba0f5462bc167052a96aa0e6101d6305d..4b8172cb0f01b339e08d2c2f4a2686dfec4bb54f 100644
 --- a/chrome/browser/chooser_controller/BUILD.gn
@@ -20840,6 +20886,32 @@ index 439a86f1b0f71eeb7b5286794bc43c8075971317..b55f860d7ffa84bb16dba2745fb54729
          !IsURLAllowedInIncognito(GURL(updated_url))) {
        return RespondNow(Error(ErrorUtils::FormatErrorMessage(
            tabs_constants::kURLsNotAllowedInIncognitoError, updated_url)));
+diff --git a/chrome/browser/extensions/chrome_app_deprecation.cc b/chrome/browser/extensions/chrome_app_deprecation.cc
+index 2e09dc212c7300af3ad2bd0f11139e8233e00fb7..37af7095da3b44924f4f56ef2454bff64c232838 100644
+--- a/chrome/browser/extensions/chrome_app_deprecation.cc
++++ b/chrome/browser/extensions/chrome_app_deprecation.cc
+@@ -16,7 +16,7 @@ namespace testing {
+ bool g_enable_chrome_apps_for_testing = false;
+ }  // namespace testing
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ bool IsExtensionUnsupportedDeprecatedApp(content::BrowserContext* context,
+                                          const std::string& extension_id) {
+   if (testing::g_enable_chrome_apps_for_testing) {
+diff --git a/chrome/browser/extensions/chrome_app_deprecation.h b/chrome/browser/extensions/chrome_app_deprecation.h
+index 83741c42d03cfa14f8d89765ae09522552a5f5a6..0cb173173760166853a57964f6923e4e05467fcb 100644
+--- a/chrome/browser/extensions/chrome_app_deprecation.h
++++ b/chrome/browser/extensions/chrome_app_deprecation.h
+@@ -24,7 +24,7 @@ namespace testing {
+ extern bool g_enable_chrome_apps_for_testing;
+ }  // namespace testing
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Returns whether the extension with `extension_id` is an unsupported
+ // deprecated app (hosted app, legacy packaged app, or platform app) on
+ // Windows/Mac/Linux.
 diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
 index dd919b9675f64712572b162ee15e23680edbbee2..fc2af59c4529bd6cfbd2505c317a6790fa440957 100644
 --- a/chrome/browser/extensions/extension_tab_util.cc
@@ -21423,6 +21495,19 @@ index 9f01a15f0665271f19d5e43420a6a795a019573f..f859a5ddaca5d3400ac4c4a0c0161f45
  
  import("//build/config/ozone.gni")
  import("//build/config/ui.gni")
+diff --git a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+index 9757afeaa2a5f4308caf1daaf828e43601271ea5..56238f718ce7f405f0c1b3331ed94dbbf7e18520 100644
+--- a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
++++ b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+@@ -82,7 +82,7 @@ MediaCaptureDevicesDispatcher::MediaCaptureDevicesDispatcher()
+     media_access_handlers_.push_back(
+         std::make_unique<DisplayMediaAccessHandler>());
+   }
+-#elif !BUILDFLAG(IS_ANDROID)
++#elif BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   media_access_handlers_.push_back(
+       std::make_unique<DisplayMediaAccessHandler>());
+ #endif
 diff --git a/chrome/browser/media/webrtc/webrtc_log_uploader.cc b/chrome/browser/media/webrtc/webrtc_log_uploader.cc
 index 710ebb85ab77d22b24e00636c608cd6db4190d6f..4d180f64efee45ce0ad9cbe8476845c838653af4 100644
 --- a/chrome/browser/media/webrtc/webrtc_log_uploader.cc
@@ -21576,6 +21661,23 @@ index 028fe9924cdbfe586c8a0029ac27d53746f995ff..f7c0073b0fc3a4e482232318728ef2e6
  #else
  #error Unknown platform.
  #endif
+diff --git a/chrome/browser/net/proxy_service_factory.cc b/chrome/browser/net/proxy_service_factory.cc
+index f7dace047f1738c30344fdb07d36a4c2350eacae..a83e4066f1c4b2f25d28f159ae61eaf39a0e5dcd 100644
+--- a/chrome/browser/net/proxy_service_factory.cc
++++ b/chrome/browser/net/proxy_service_factory.cc
+@@ -61,7 +61,11 @@ ProxyServiceFactory::CreatePrefProxyConfigTrackerOfProfile(
+ #else
+   return std::make_unique<PrefProxyConfigTrackerImpl>(
+       profile_prefs, /*proxy_config_service_task_runner=*/nullptr,
+-      policy_service, enterprise_proxy_service);
++      policy_service
++#if BUILDFLAG(ENTERPRISE_PROXY)
++      , enterprise_proxy_service
++#endif
++      );
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ }
+ 
 diff --git a/chrome/browser/notifications/notification_display_service_impl.cc b/chrome/browser/notifications/notification_display_service_impl.cc
 index 555b3c0ced2c5df3aa42cf8657a155c6fcb50c88..3b4908a6998be5db896ea4a87fa8518d491e3d86 100644
 --- a/chrome/browser/notifications/notification_display_service_impl.cc
@@ -22248,10 +22350,10 @@ index c6556171f4e2950b6818f80f7092777aa0a6e042..b68145aef9534b9e62b16fe509a1b0f6
        const base::flat_set<std::string>& device_affiliation_ids);
 diff --git a/chrome/browser/policy/policy_path_parser_aros.cc b/chrome/browser/policy/policy_path_parser_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..600d98f2c703486dacaa80a0d7823f9fcd85a2e2
+index 0000000000000000000000000000000000000000..902668ff82fc62b5231c7fd70086b5e9b2e16d3b
 --- /dev/null
 +++ b/chrome/browser/policy/policy_path_parser_aros.cc
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,50 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22293,10 +22395,8 @@ index 0000000000000000000000000000000000000000..600d98f2c703486dacaa80a0d7823f9f
 +  }
 +
 +  std::unique_ptr<base::Environment> environment(base::Environment::Create());
-+  std::string user_name = "user";
-+  std::string machine_name = "AROS";
-+  environment->GetVar("USER", &user_name);
-+  environment->GetVar("HOSTNAME", &machine_name);
++  std::string user_name = environment->GetVar("USER").value_or("user");
++  std::string machine_name = environment->GetVar("HOSTNAME").value_or("AROS");
 +
 +  ReplaceVariable(&result, kUserNamePolicyVarName, user_name);
 +  ReplaceVariable(&result, kMachineNamePolicyVarName, machine_name);
@@ -22406,7 +22506,7 @@ index 831aaa964eab5ee4d7fb40c60a101dcb4083478d..41f829e3213366b962ae664cf2e69af5
  source_set("prefs") {
    sources = [
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 35b02686a1d21b4311b222b85f2041a2c2cd5949..b8ef9acd95d0dbb61470c0e91be59cfa7fd757d4 100644
+index 35b02686a1d21b4311b222b85f2041a2c2cd5949..0a528eea68853a378ba2415d501b2d567dcd8dc5 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
 @@ -18,6 +18,7 @@
@@ -22468,6 +22568,15 @@ index 35b02686a1d21b4311b222b85f2041a2c2cd5949..b8ef9acd95d0dbb61470c0e91be59cfa
  #endif  // !BUILDFLAG(IS_ANDROID)
    NewTabPageHandler::RegisterProfilePrefs(registry);
    ThemeColorPickerHandler::RegisterProfilePrefs(registry);
+@@ -2259,7 +2274,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   ntp_tiles::EnterpriseShortcutsManagerImpl::RegisterProfilePrefs(registry);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS)
 @@ -2393,6 +2408,10 @@ void RegisterUserProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
                                const std::string& locale) {
    RegisterProfilePrefs(registry, locale);
@@ -23378,6 +23487,32 @@ index 704d50a2a9c59902017a891d712efab9b72b08b4..2d660315aa6249740021163bd5368760
  
  source_set("regional_capabilities") {
    sources = [
+diff --git a/chrome/browser/regional_capabilities/regional_capabilities_service_factory.cc b/chrome/browser/regional_capabilities/regional_capabilities_service_factory.cc
+index 6bb154ac0875012f67c12bfdcd4d55b1a80450de..0d5a3424df6fdc1715b90e7f05c5f8a85abf50f2 100644
+--- a/chrome/browser/regional_capabilities/regional_capabilities_service_factory.cc
++++ b/chrome/browser/regional_capabilities/regional_capabilities_service_factory.cc
+@@ -61,7 +61,7 @@ RegionalCapabilitiesServiceFactory::GetInstance() {
+   return instance.get();
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // static
+ bool RegionalCapabilitiesServiceFactory::
+     IsInSearchEngineChoiceScreenRegionForSystemProfile(Profile* profile) {
+diff --git a/chrome/browser/regional_capabilities/regional_capabilities_service_factory.h b/chrome/browser/regional_capabilities/regional_capabilities_service_factory.h
+index 4257c36e8765550dac475e67c9ff616f2396e731..1b42c8a27132bf41addd47b24210abe21f3c2fe2 100644
+--- a/chrome/browser/regional_capabilities/regional_capabilities_service_factory.h
++++ b/chrome/browser/regional_capabilities/regional_capabilities_service_factory.h
+@@ -31,7 +31,7 @@ class RegionalCapabilitiesServiceFactory : public ProfileKeyedServiceFactory {
+ 
+   static RegionalCapabilitiesServiceFactory* GetInstance();
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Returns whether the system profile is in a region where we can show a
+   // search engine choice screen. If the profile is not a system profile, this
+   // function crashes. Used for clients associated with system profiles (where
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 index b55c138d48f3b41695803f5e22f2ab9731d9378c..be1e148e2a52cb1c1d3c26594627118746e80f41 100644
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
@@ -23659,6 +23794,36 @@ index 091f14ebdee03ee7ad2ab2194c325285a42b698e..b3c9b918a41efe73c6ca8f1711d5ba12
      "//components/keyed_service/content",
      "//components/language/core/browser",
      "//components/no_state_prefetch/browser",
+diff --git a/chrome/browser/screen_ai/screen_ai_service_handler_base.cc b/chrome/browser/screen_ai/screen_ai_service_handler_base.cc
+index 69e252ff90f269c2b1a0c0d27e07d5548f4377c7..154d23bd115daabea668d59ddea2521bffb26464 100644
+--- a/chrome/browser/screen_ai/screen_ai_service_handler_base.cc
++++ b/chrome/browser/screen_ai/screen_ai_service_handler_base.cc
+@@ -31,6 +31,7 @@
+ #include "mojo/public/mojom/base/file_path.mojom.h"
+ #include "services/network/public/mojom/network_change_manager.mojom.h"
+ #include "services/screen_ai/public/cpp/utilities.h"
++#include "services/screen_ai/buildflags/buildflags.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "base/strings/utf_string_conversions.h"
+@@ -225,6 +226,9 @@ void ScreenAIServiceHandlerBase::CallPendingStatusRequests(bool successful) {
+ }
+ 
+ void ScreenAIServiceHandlerBase::LaunchIfNotRunning() {
++#if !BUILDFLAG(ENABLE_SCREEN_AI_SERVICE) || BUILDFLAG(IS_AROS)
++  CallPendingStatusRequests(false);
++#else
+   ScreenAIInstallState::GetInstance()->SetLastUsageTime();
+   if (screen_ai_service_factory_.is_bound()) {
+     return;
+@@ -283,6 +287,7 @@ void ScreenAIServiceHandlerBase::LaunchIfNotRunning() {
+   screen_ai_service_factory_.set_disconnect_handler(
+       base::BindOnce(&ScreenAIServiceHandlerBase::OnScreenAIServiceDisconnected,
+                      weak_ptr_factory_.GetWeakPtr()));
++#endif
+ }
+ 
+ void ScreenAIServiceHandlerBase::OnServiceLaunched(
 diff --git a/chrome/browser/search/BUILD.gn b/chrome/browser/search/BUILD.gn
 index 886a7756a301d84427c692b1e394654ec61bfecb..13b7b6edabb1185e0aff9326bbc02b411d3536cb 100644
 --- a/chrome/browser/search/BUILD.gn
@@ -23952,6 +24117,117 @@ index 7d4c893cbcd995c48a00631f9cbfd736fb188e63..db578f7e74abbcd860302c8ad1cda08d
  }
  
  // static
+diff --git a/chrome/browser/signin/chrome_signin_client.cc b/chrome/browser/signin/chrome_signin_client.cc
+index 9de17f69254ecbdd7a630a2d38571a0e31742281..d6c851de33226ec43f580e6ca5c6196dad293b55 100644
+--- a/chrome/browser/signin/chrome_signin_client.cc
++++ b/chrome/browser/signin/chrome_signin_client.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/signin/chrome_signin_client.h"
++#include "components/signin/public/base/bound_session_oauth_multilogin_delegate.h"
+ 
+ #include <stddef.h>
+ 
+diff --git a/chrome/browser/signin/signin_util.cc b/chrome/browser/signin/signin_util.cc
+index 6dbf124e71a2c331f250e2dbdcb42a3c28e0da29..b513b779d7fd4c9299acb2d180c4ead23c07eb6d 100644
+--- a/chrome/browser/signin/signin_util.cc
++++ b/chrome/browser/signin/signin_util.cc
+@@ -40,7 +40,7 @@
+ #include "google_apis/gaia/gaia_id.h"
+ #include "ui/base/l10n/l10n_util.h"
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "components/strings/grit/components_strings.h"
+ #include "ui/base/interaction/element_identifier.h"
+@@ -322,7 +322,7 @@ bool IsSyncingUserSelectableTypesAllowedByPolicy(
+   return true;
+ }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ bool HasExplicitlyDisabledHistorySync(
+     const syncer::SyncService* sync_service,
+     const signin::IdentityManager* identity_manager) {
+diff --git a/chrome/browser/signin/signin_util.h b/chrome/browser/signin/signin_util.h
+index 4624ffb7a55625936a6e8b5d47aae67783eea2ee..ff16bb3c4fe42520eea46903292ed46e598c9c59 100644
+--- a/chrome/browser/signin/signin_util.h
++++ b/chrome/browser/signin/signin_util.h
+@@ -172,7 +172,7 @@ bool IsSyncingUserSelectableTypesAllowedByPolicy(
+     const syncer::SyncService* sync_service,
+     const syncer::UserSelectableTypeSet& types);
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ // True if the user has explicitly disabled syncing history, tabs or saved tab
+ // groups through the settings. The primary account must be set (this crashes
+ // otherwise).
+diff --git a/chrome/browser/supervised_user/supervised_user_browser_utils.cc b/chrome/browser/supervised_user/supervised_user_browser_utils.cc
+index 8f6655459d0d7cf9f3972b618324f9262bfa7301..b40fe07355cd61d34e46839803420c5967debc78 100644
+--- a/chrome/browser/supervised_user/supervised_user_browser_utils.cc
++++ b/chrome/browser/supervised_user/supervised_user_browser_utils.cc
+@@ -42,7 +42,7 @@
+     BUILDFLAG(IS_ANDROID)
+ #include "chrome/browser/supervised_user/supervised_user_verification_controller_client.h"
+ #include "chrome/browser/supervised_user/supervised_user_verification_page_blocked_sites.h"
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/supervised_user/supervised_user_verification_page_youtube.h"
+ #endif
+ #endif
+@@ -166,7 +166,7 @@ void AssertChildStatusOfTheUser(Profile* profile, bool is_child) {
+ #endif
+ }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ std::string CreateReauthenticationInterstitialForYouTube(
+     content::NavigationHandle& navigation_handle) {
+   content::WebContents* web_contents = navigation_handle.GetWebContents();
+diff --git a/chrome/browser/supervised_user/supervised_user_browser_utils.h b/chrome/browser/supervised_user/supervised_user_browser_utils.h
+index baa686e737727c591f02f481f4cb87cb2e51a3c2..3e7f344e7a44f4dcf8649fe702d8e66ec3742c83 100644
+--- a/chrome/browser/supervised_user/supervised_user_browser_utils.h
++++ b/chrome/browser/supervised_user/supervised_user_browser_utils.h
+@@ -60,7 +60,7 @@ std::string CreateReauthenticationInterstitialForBlockedSites(
+     content::NavigationHandle& navigation_handle);
+ #endif
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ std::string CreateReauthenticationInterstitialForYouTube(
+     content::NavigationHandle& navigation_handle);
+ #endif
+diff --git a/chrome/browser/supervised_user/supervised_user_google_auth_navigation_throttle.cc b/chrome/browser/supervised_user/supervised_user_google_auth_navigation_throttle.cc
+index 63416163ad4aa9977d8b0b12d5dc8b251d3ab430..84aaebba04ef27da5dd222ead762e7f55b2ef721 100644
+--- a/chrome/browser/supervised_user/supervised_user_google_auth_navigation_throttle.cc
++++ b/chrome/browser/supervised_user/supervised_user_google_auth_navigation_throttle.cc
+@@ -33,13 +33,13 @@
+ #include "chrome/browser/supervised_user/child_accounts/child_account_service_android.h"
+ #include "components/signin/public/identity_manager/identity_manager.h"
+ #include "ui/android/view_android.h"
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/supervised_user/supervised_user_verification_controller_client.h"
+ #include "chrome/browser/supervised_user/supervised_user_verification_page.h"
+ #endif
+ 
+ namespace {
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ 
+ bool IsYouTubeInfrastructureSubframe(content::NavigationHandle* handle) {
+   if (handle->GetNavigatingFrameType() != content::FrameType::kSubframe) {
+@@ -173,7 +173,7 @@ SupervisedUserGoogleAuthNavigationThrottle::ShouldProceed() {
+     return content::NavigationThrottle::DEFER;
+   }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+   // When an unauthenticated supervised user tries to access YouTube, we force
+   // re-authentication with an interstitial so that YouTube can be subject to
+   // content restrictions. This interstitial is only available on Desktop
 diff --git a/chrome/browser/sync/BUILD.gn b/chrome/browser/sync/BUILD.gn
 index 28605d54c3cd85ef6d725ae17808915067ddcf0a..a8e71bbf9b839a3254b77331bb104d753e987d1d 100644
 --- a/chrome/browser/sync/BUILD.gn
@@ -25355,6 +25631,18 @@ index 12c3bc947ddb641a538f18bb742a69ca00ef6ec4..e28ef5223c966f24d8745dac756ea646
    auto bubble = std::make_unique<views::BubbleDialogModelHost>(
        std::move(dialog_model), std::move(anchor),
        views::BubbleBorder::TOP_RIGHT);
+diff --git a/chrome/browser/ui/extensions/settings_overridden_dialog.h b/chrome/browser/ui/extensions/settings_overridden_dialog.h
+index 63387fcbbf50393bc7e7fec9f88f14d7d337840f..cfb87ee166582df282b613c09d1d393afc562fd5 100644
+--- a/chrome/browser/ui/extensions/settings_overridden_dialog.h
++++ b/chrome/browser/ui/extensions/settings_overridden_dialog.h
+@@ -7,6 +7,7 @@
+ 
+ #include "extensions/buildflags/buildflags.h"
+ #include "ui/base/interaction/element_identifier.h"
++#include <memory>
+ #include "ui/gfx/native_ui_types.h"
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 diff --git a/chrome/browser/ui/file_system_access/BUILD.gn b/chrome/browser/ui/file_system_access/BUILD.gn
 index d156143edb3013c046628d69f4f595c8979a148f..d52f559088e45ac9f1e3dc462d204d9b5a053643 100644
 --- a/chrome/browser/ui/file_system_access/BUILD.gn
@@ -25537,6 +25825,31 @@ index 2354ca3aa4945fefeb5483b98c714b1df47f9b1a..9c47db1b4ddfd1dd83276da4352a48b1
    return tab && tab->CanShowModalUI();
  }
  
+diff --git a/chrome/browser/ui/lens/lens_composebox_handler.h b/chrome/browser/ui/lens/lens_composebox_handler.h
+index c1e49387a5a3ba6706869221d1dd22181348519e..b239a9afc382e5e25c8553eb4be43dcb015b823f 100644
+--- a/chrome/browser/ui/lens/lens_composebox_handler.h
++++ b/chrome/browser/ui/lens/lens_composebox_handler.h
+@@ -26,6 +26,8 @@ class LensComposeboxController;
+ class LensComposeboxHandler : public composebox::mojom::PageHandler,
+                               public SearchboxHandler {
+  public:
++  using GetSmartTabSharingActiveCallback =
++      composebox::mojom::PageHandler::GetSmartTabSharingActiveCallback;
+   explicit LensComposeboxHandler(
+       lens::LensComposeboxController* parent_controller,
+       Profile* profile,
+diff --git a/chrome/browser/ui/lens/lens_overlay_query_controller.cc b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
+index d91c259168895307e066f2ff63e550ad84fa8036..af4f190453b43a0edd1c7c23db3f64e9476f4701 100644
+--- a/chrome/browser/ui/lens/lens_overlay_query_controller.cc
++++ b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
+@@ -268,6 +268,7 @@ LenOverlayEntryPointFromInvocationSource(
+     case lens::LensOverlayInvocationSource::kNtpActionChips:
+     case lens::LensOverlayInvocationSource::kAppBarAimButton:
+     case lens::LensOverlayInvocationSource::kOmniboxEverywhereComposebox:
++      break;
+   }
+   return lens::LensOverlayClientLogs::UNKNOWN_ENTRY_POINT;
+ }
 diff --git a/chrome/browser/ui/login/BUILD.gn b/chrome/browser/ui/login/BUILD.gn
 index 00d74b100db6c89a2e3b9fe3ed271c613a7ce4d2..e6d580e98e8d1151f589575a8c584ba419597e6c 100644
 --- a/chrome/browser/ui/login/BUILD.gn
@@ -25811,6 +26124,31 @@ index f03747236622d59c420a4a1cb850e8592a60166d..7cfc77a97df2e251349ca0f94f594dbb
  
  import("//build/config/compiler/compiler.gni")
  import("//chrome/common/features.gni")
+diff --git a/chrome/browser/ui/read_anything/read_anything_contents_wrapper.cc b/chrome/browser/ui/read_anything/read_anything_contents_wrapper.cc
+index 56a14405520cf6c23e65292473ad54c487a22a61..605ebe30725bad1799a2db25c3b4265ec4b26b9b 100644
+--- a/chrome/browser/ui/read_anything/read_anything_contents_wrapper.cc
++++ b/chrome/browser/ui/read_anything/read_anything_contents_wrapper.cc
+@@ -15,3 +15,7 @@ ReadAnythingContentsWrapper::ReadAnythingContentsWrapper(
+ ReadAnythingContentsWrapper& ReadAnythingContentsWrapper::operator=(
+     ReadAnythingContentsWrapper&&) noexcept = default;
+ ReadAnythingContentsWrapper::~ReadAnythingContentsWrapper() = default;
++
++ReadAnythingContentsWrapper::Ptr ReadAnythingContentsWrapper::release() && {
++  return std::move(wrapper_);
++}
+diff --git a/chrome/browser/ui/read_anything/read_anything_contents_wrapper.h b/chrome/browser/ui/read_anything/read_anything_contents_wrapper.h
+index 8e1fa712e75c036a9c29343ee11600d0042ef0af..14b6792704ce1018c67021c90b04dce625678e20 100644
+--- a/chrome/browser/ui/read_anything/read_anything_contents_wrapper.h
++++ b/chrome/browser/ui/read_anything/read_anything_contents_wrapper.h
+@@ -47,7 +47,7 @@ class ReadAnythingContentsWrapper {
+     return *wrapper_;
+   }
+ 
+-  Ptr release() && { return std::move(wrapper_); }
++  Ptr release() &&;
+ 
+  private:
+   Ptr wrapper_;
 diff --git a/chrome/browser/ui/safety_hub/BUILD.gn b/chrome/browser/ui/safety_hub/BUILD.gn
 index 991bb4bb9e2f8158eba0612149e9852ee4eb047a..fd126a8c1275b8fb3365323252f499ea1643538c 100644
 --- a/chrome/browser/ui/safety_hub/BUILD.gn
@@ -25912,8 +26250,58 @@ index f7d200ff408600997fc7af0a7a340edc1b940465..be7a16c20f46db21fe4370adb62cde7d
  
  source_set("shortcuts") {
    sources = [
+diff --git a/chrome/browser/ui/signin/signin_view_controller.cc b/chrome/browser/ui/signin/signin_view_controller.cc
+index cc0e6e86125207b546d30a8134dba1f0942a830b..1e9c34f5ca2f6a83c93cf17c98f2a367a214efdd 100644
+--- a/chrome/browser/ui/signin/signin_view_controller.cc
++++ b/chrome/browser/ui/signin/signin_view_controller.cc
+@@ -598,7 +598,7 @@ void SigninViewController::ShowModalSyncConfirmationDialog(
+       GetOnModalDialogClosedCallback());
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ void SigninViewController::ShowModalHistorySyncOptInDialog(
+     bool should_close_modal_dialog,
+     HistorySyncOptinHelper::FlowCompletedCallback callback) {
+@@ -610,12 +610,12 @@ void SigninViewController::ShowModalHistorySyncOptInDialog(
+           HistorySyncOptinLaunchContext::kModal, std::move(callback)),
+       GetOnModalDialogClosedCallback());
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ void SigninViewController::ShowModalManagedUserNoticeDialog(
+     std::unique_ptr<signin::EnterpriseProfileCreationDialogParams>
+         create_param) {
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   CloseModalSignin();
+   dialog_ = std::make_unique<SigninModalDialogImpl>(
+       SigninViewControllerDelegate::CreateManagedUserNoticeDelegate(
+diff --git a/chrome/browser/ui/signin/signin_view_controller.h b/chrome/browser/ui/signin/signin_view_controller.h
+index 15ab75f2da7fc4b6e0ead5ea62aa4c1d1a03a1e7..bddac16ad6eefebbf9d39520f773e2f2996742f4 100644
+--- a/chrome/browser/ui/signin/signin_view_controller.h
++++ b/chrome/browser/ui/signin/signin_view_controller.h
+@@ -181,7 +181,7 @@ class SigninViewController {
+   void ShowModalSyncConfirmationDialog(bool is_signin_intercept,
+                                        bool is_sync_promo);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Shows the modal history sync opt in dialog as a browser-modal dialog on top
+   // of the `browser_`'s window. Executes the provided callback when the dialog
+   // closes.
+@@ -189,7 +189,7 @@ class SigninViewController {
+       bool should_close_modal_dialog,
+       HistorySyncOptinHelper::FlowCompletedCallback
+           history_optin_completed_callback);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+   // Shows the modal managed user notice dialog as a browser-modal dialog on
+   // top of the `browser_`'s window. `domain_name` is the domain of the
 diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
-index f212d0761b76b01aac7d875d92013267b6500225..598dd9789fecd5bd2bef945eda2059fa33153cd7 100644
+index f212d0761b76b01aac7d875d92013267b6500225..8361c4ac0e6fd09814ef1b71b3adcccdf17a814b 100644
 --- a/chrome/browser/ui/startup/bad_flags_prompt.cc
 +++ b/chrome/browser/ui/startup/bad_flags_prompt.cc
 @@ -289,6 +289,14 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
@@ -25923,8 +26311,8 @@ index f212d0761b76b01aac7d875d92013267b6500225..598dd9789fecd5bd2bef945eda2059fa
 +#if BUILDFLAG(IS_AROS)
 +    // The in-process, unsandboxed model is the platform's, not the user's
 +    // choice (see ApplyArosProcessModelDefaults in content_main.cc).
-+    if (base::StringPiece(flag) == sandbox::policy::switches::kNoSandbox ||
-+        base::StringPiece(flag) == switches::kSingleProcess) {
++    if (std::string_view(flag) == sandbox::policy::switches::kNoSandbox ||
++        std::string_view(flag) == switches::kSingleProcess) {
 +      continue;
 +    }
 +#endif
@@ -25956,6 +26344,31 @@ index 598e361a2988674243dd6ace9cc63de2f74ed1e1..6ca5429151834bb2c61a9f62a2cf07ea
  #include "build/buildflag.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/infobars/browser_infobar_manager.h"
+diff --git a/chrome/browser/ui/startup/profile_launch_observer.h b/chrome/browser/ui/startup/profile_launch_observer.h
+index 2dbe8b0ba171a3cdb61c2ff131bc6009114d049e..e804e25428c746b92136b1a4e4d470007337d327 100644
+--- a/chrome/browser/ui/startup/profile_launch_observer.h
++++ b/chrome/browser/ui/startup/profile_launch_observer.h
+@@ -66,12 +66,18 @@ class ProfileLaunchObserver : public ProfileObserver,
+ 
+   // These are the profiles that get launched by
+   // StartupBrowserCreator::LaunchBrowser.
+-  std::set<raw_ptr<Profile, SetExperimental>> launched_profiles_;
++  struct ProfileAddressLess {
++    using is_transparent = void;
++    bool operator()(const Profile* a, const Profile* b) const {
++      return std::less<const Profile*>{}(a, b);
++    }
++  };
++  std::set<raw_ptr<Profile, SetExperimental>, ProfileAddressLess> launched_profiles_;
+   // These are the profiles for which at least one browser window has been
+   // opened. This is needed to know when it is safe to activate
+   // |profile_to_activate_|, otherwise, new browser windows being opened will
+   // be activated on top of it.
+-  std::set<raw_ptr<Profile, SetExperimental>> opened_profiles_;
++  std::set<raw_ptr<Profile, SetExperimental>, ProfileAddressLess> opened_profiles_;
+   // This is null until the profile to activate has been chosen. This value
+   // should only be set once all profiles have been launched, otherwise,
+   // activation may not happen after the launch of newer profiles.
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
 index be05049fb59cc80be7fb0e767f814cbd5cd8cf52..e7011ef97c86bf2b16e270ca7f29b1dbf39fd081 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
@@ -26317,10 +26730,20 @@ index 9879f682e771b36bce60a0b92f7a7cbcbf109185..120fd556c64f46e639f662b93785e630
  import("//build/config/chrome_build.gni")
  import("//build/config/ui.gni")
 diff --git a/chrome/browser/ui/toolbar/app_menu_model.cc b/chrome/browser/ui/toolbar/app_menu_model.cc
-index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f022ca5e1 100644
+index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415d1352b3c 100644
 --- a/chrome/browser/ui/toolbar/app_menu_model.cc
 +++ b/chrome/browser/ui/toolbar/app_menu_model.cc
-@@ -778,18 +778,20 @@ FindAndEditSubMenuModel::FindAndEditSubMenuModel(
+@@ -3,6 +3,9 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/toolbar/app_menu_model.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/browser_delegate.h"
++#endif
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -778,18 +781,20 @@ FindAndEditSubMenuModel::FindAndEditSubMenuModel(
    AddItemWithStringIdAndVectorIcon(
        this, IDC_FIND, IDS_FIND,
        features::IsRoundedIconsEnabled() ? kFindInPageIcon : kSearchMenuOldIcon);
@@ -26353,7 +26776,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f
  }
  
  class SaveAndShareSubMenuModel : public ui::SimpleMenuModel {
-@@ -931,6 +933,56 @@ bool ArePromotionsEnabled() {
+@@ -931,6 +936,56 @@ bool ArePromotionsEnabled() {
    PrefService* local_state = g_browser_process->local_state();
    return local_state && local_state->GetBoolean(prefs::kPromotionsEnabled);
  }
@@ -26410,7 +26833,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f
  
  }  // namespace
  
-@@ -2019,7 +2071,7 @@ bool AppMenuModel::IsCommandIdChecked(int command_id) const {
+@@ -2019,7 +2074,7 @@ bool AppMenuModel::IsCommandIdChecked(int command_id) const {
    return false;
  }
  
@@ -26419,7 +26842,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f
    GlobalError* error =
        GlobalErrorServiceFactory::GetForProfile(browser_->GetProfile())
            ->GetGlobalErrorByMenuItemCommandID(command_id);
-@@ -2037,6 +2089,30 @@ bool AppMenuModel::IsCommandIdEnabled(int command_id) const {
+@@ -2037,6 +2092,30 @@ bool AppMenuModel::IsCommandIdEnabled(int command_id) const {
    }
  }
  
@@ -26450,7 +26873,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f
  bool AppMenuModel::IsCommandIdAlerted(int command_id) const {
    if (command_id == IDC_VIEW_PASSWORDS ||
        command_id == IDC_SHOW_PASSWORD_MANAGER) {
-@@ -2278,8 +2354,10 @@ void AppMenuModel::Build() {
+@@ -2278,8 +2357,10 @@ void AppMenuModel::Build() {
                           kClearBrowsingDataMenuItem);
  
    AddSeparator(ui::NORMAL_SEPARATOR);
@@ -26463,7 +26886,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..7993cd48f31be2f0526fe32839aa878f
  
    AddItemWithStringIdAndVectorIcon(
        this, IDC_PRINT, IDS_PRINT,
-@@ -2431,6 +2509,11 @@ void AppMenuModel::Build() {
+@@ -2431,6 +2512,11 @@ void AppMenuModel::Build() {
    }
  #endif  // !BUILDFLAG(IS_CHROMEOS)
  
@@ -26725,7 +27148,7 @@ index acd15177f6b03dc4bb914e54cb86ae88cb254bfe..6902dae7961846c9026c549f23c1a785
      parent_window = nullptr;
 diff --git a/chrome/browser/ui/views/chrome_views_delegate_aros.cc b/chrome/browser/ui/views/chrome_views_delegate_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..84b9ef05371bcf16b51143a34da888c211df9f3f
+index 0000000000000000000000000000000000000000..a3d433ecfed9d00e1f5c9da93a1667d0309ea6fc
 --- /dev/null
 +++ b/chrome/browser/ui/views/chrome_views_delegate_aros.cc
 @@ -0,0 +1,19 @@
@@ -26742,10 +27165,10 @@ index 0000000000000000000000000000000000000000..84b9ef05371bcf16b51143a34da888c2
 +    views::internal::NativeWidgetDelegate* delegate) {
 +  DCHECK(!params->native_widget);
 +  if (params->parent || params->context) {
-+    return ::CreateNativeWidget(NativeWidgetType::NATIVE_WIDGET_AURA, params,
++    return ::CreateNativeWidget(NativeWidgetType::kNativeWidgetAura, params,
 +                                delegate);
 +  }
-+  return ::CreateNativeWidget(NativeWidgetType::DESKTOP_NATIVE_WIDGET_AURA,
++  return ::CreateNativeWidget(NativeWidgetType::kDesktopNativeWidgetAura,
 +                              params, delegate);
 +}
 diff --git a/chrome/browser/ui/views/chrome_views_delegate_linux.cc b/chrome/browser/ui/views/chrome_views_delegate_linux.cc
@@ -26911,6 +27334,22 @@ index 6de34be12716efefd10d38ce36f4ca7b4e9e3af3..cf8c0b99cde4f163b590d0f8d56672b5
    return false;
  }
  
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_factory_views.cc b/chrome/browser/ui/views/frame/browser_frame_view_factory_views.cc
+index 8a4dd7514fb0c18087bb738ad248d565a609af48..c57d58f8f1380dd512a39711ed01309f2845c387 100644
+--- a/chrome/browser/ui/views/frame/browser_frame_view_factory_views.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_factory_views.cc
+@@ -122,6 +122,11 @@ std::unique_ptr<BrowserFrameView> CreateBrowserFrameView(
+     BrowserView* browser_view) {
+ #if BUILDFLAG(IS_WIN)
+   return CreateBrowserFrameViewWin(widget, browser_view);
++#elif BUILDFLAG(IS_AROS)
++  auto view = std::make_unique<OpaqueBrowserFrameView>(
++      widget, browser_view, new OpaqueBrowserFrameViewLayout());
++  view->InitViews();
++  return view;
+ #else
+   return CreateBrowserFrameViewLinux(widget, browser_view);
+ #endif
 diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.h b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
 index 2d84f6ff903e9d13ec3c1be83e3e110a12e243ef..279f38dd7f92c604a985fee79f77e9d55ea2f953 100644
 --- a/chrome/browser/ui/views/frame/browser_native_widget_mac.h
@@ -28567,7 +29006,7 @@ index 06a40c2f8c06f2ac1b99cdf9c907d3914f942565..5576e7b1301b7b18c292512436eccb85
        "status_icon_button_linux.cc",
 diff --git a/chrome/browser/ui/views/status_icons/status_tray_aros.cc b/chrome/browser/ui/views/status_icons/status_tray_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..61d7f4bd54cf6e6d8d49e9f1c184323d1622c5bf
+index 0000000000000000000000000000000000000000..b182d22aece7c5a96e043903415812dd703f1f80
 --- /dev/null
 +++ b/chrome/browser/ui/views/status_icons/status_tray_aros.cc
 @@ -0,0 +1,12 @@
@@ -28577,10 +29016,10 @@ index 0000000000000000000000000000000000000000..61d7f4bd54cf6e6d8d49e9f1c184323d
 +
 +#include "chrome/browser/status_icons/status_tray.h"
 +
-+#include "base/notreached.h"
++#include "base/notimplemented.h"
 +
 +std::unique_ptr<StatusTray> StatusTray::Create() {
-+  NOTIMPLEMENTED_LOG_ONCE();
++  NOTIMPLEMENTED();
 +  return nullptr;
 +}
 diff --git a/chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc b/chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc
@@ -29051,6 +29490,32 @@ index a79fa5e2fecd78e4e3439543bb810cb7e1c965ed..9c9ad251632ca8b62d965b986079e4cf
  
  mojom("mojo_bindings") {
    sources = [ "app_home.mojom" ]
+diff --git a/chrome/browser/ui/webui/app_home/app_home_page_handler.cc b/chrome/browser/ui/webui/app_home/app_home_page_handler.cc
+index ad3c81cd42bdc092bd84ea8f18705f983e8c37da..512627ea3ccc1fd37939f9484a11829e6c14dccb 100644
+--- a/chrome/browser/ui/webui/app_home/app_home_page_handler.cc
++++ b/chrome/browser/ui/webui/app_home/app_home_page_handler.cc
+@@ -65,7 +65,7 @@
+ #include "ui/base/window_open_disposition_utils.h"
+ #include "url/gurl.h"
+ 
+-static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX));
++static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS));
+ 
+ using content::WebUI;
+ using extensions::Extension;
+diff --git a/chrome/browser/ui/webui/app_home/app_home_page_handler.h b/chrome/browser/ui/webui/app_home/app_home_page_handler.h
+index 82d873fc66e8a84ede03ceb3a86a146ab7cf9287..f8e523641d12e13da1ff18c0d9cea41dd2e14a97 100644
+--- a/chrome/browser/ui/webui/app_home/app_home_page_handler.h
++++ b/chrome/browser/ui/webui/app_home/app_home_page_handler.h
+@@ -23,7 +23,7 @@
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ 
+-static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX));
++static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS));
+ 
+ class BrowserWindowInterface;
+ class ExtensionEnableFlow;
 diff --git a/chrome/browser/ui/webui/app_management/BUILD.gn b/chrome/browser/ui/webui/app_management/BUILD.gn
 index 311e4339669bb42ec725b01f2c3df83472754f7a..dd2d3aa3b610cb705c315004d250d1b1e050b418 100644
 --- a/chrome/browser/ui/webui/app_management/BUILD.gn
@@ -29111,6 +29576,30 @@ index 2bfbf5ab97b33948f4cc5c7af46fa751d2eb3c40..9d7596d89466ac5cd0be8e3b3d395115
    }
    return &NewWebUI<DevToolsUI>;
  #else
+diff --git a/chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h b/chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h
+index 5ea0d8d9e51d5b495e88cd1e932af5e171690f4b..79897d1106ec17e57294b4f13d3036223f3c4fb0 100644
+--- a/chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h
++++ b/chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h
+@@ -59,6 +59,7 @@ class ComposeboxOmniboxClient : public ContextualOmniboxClient {
+ class ComposeboxHandler : public composebox::mojom::PageHandler,
+                           public ContextualSearchboxHandler {
+  public:
++  using GetSmartTabSharingActiveCallback = composebox::mojom::PageHandler::GetSmartTabSharingActiveCallback;
+   using ClearSessionHandleCallback = base::RepeatingClosure;
+ 
+   ComposeboxHandler(
+diff --git a/chrome/browser/ui/webui/cr_components/searchbox/contextual_searchbox_handler.h b/chrome/browser/ui/webui/cr_components/searchbox/contextual_searchbox_handler.h
+index 8dd17028055232f2a8a6b91bbc04cbd43167ed24..c0be555a206c6c17ec2ec0b27267e5e7366fe04f 100644
+--- a/chrome/browser/ui/webui/cr_components/searchbox/contextual_searchbox_handler.h
++++ b/chrome/browser/ui/webui/cr_components/searchbox/contextual_searchbox_handler.h
+@@ -144,6 +144,7 @@ class ContextualSearchboxHandler
+ #endif
+ {
+  public:
++  using AddFileContextCallback = searchbox::mojom::PageHandler::AddFileContextCallback;
+   using RecontextualizeTabCallback = base::OnceCallback<void(bool)>;
+ 
+   ContextualSearchboxHandler(
 diff --git a/chrome/browser/ui/webui/help/BUILD.gn b/chrome/browser/ui/webui/help/BUILD.gn
 index 17d8d3e2832c4d572054a7c866690703e9fe87a2..b8520eda5bdfdd2c5a9838ec44df7e4fc6e18ce7 100644
 --- a/chrome/browser/ui/webui/help/BUILD.gn
@@ -29206,7 +29695,7 @@ index 321973594dd22cb4ded84552c7e16167c2c36056..582f9ec2a4a3ec20dab3a8ec4fa8fda5
      deps += [
 diff --git a/chrome/browser/ui/webui/settings/settings_utils_aros.cc b/chrome/browser/ui/webui/settings/settings_utils_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..4a79c5c4311b80d97c1b9eff1a18d1e97f0df748
+index 0000000000000000000000000000000000000000..06847ef0daf7bc0a6ff7c9166520c7fa288db751
 --- /dev/null
 +++ b/chrome/browser/ui/webui/settings/settings_utils_aros.cc
 @@ -0,0 +1,15 @@
@@ -29216,12 +29705,12 @@ index 0000000000000000000000000000000000000000..4a79c5c4311b80d97c1b9eff1a18d1e9
 +
 +#include "chrome/browser/ui/webui/settings/settings_utils.h"
 +
-+#include "base/notreached.h"
++#include "base/notimplemented.h"
 +
 +namespace settings_utils {
 +
 +void ShowNetworkProxySettings(content::WebContents* web_contents) {
-+  NOTIMPLEMENTED_LOG_ONCE();
++  NOTIMPLEMENTED();
 +}
 +
 +}  // namespace settings_utils
@@ -29293,6 +29782,37 @@ index 9287297cb133a3846419f27a103f6b9eb3e9660f..fa5d9e002ae154d50afcf083ba4af9ec
  
    // Called to notify this instance that the dependency parser loader
    // is available for model requests or is invalidating existing requests
+diff --git a/chrome/browser/ui/webui/signin/BUILD.gn b/chrome/browser/ui/webui/signin/BUILD.gn
+index 7d98b4c5104d295298a6261d9aa4b1acba11a19f..b728c85c23c264bc376f3386c3d3b1b9f50c0817 100644
+--- a/chrome/browser/ui/webui/signin/BUILD.gn
++++ b/chrome/browser/ui/webui/signin/BUILD.gn
+@@ -148,7 +148,7 @@ source_set("signin") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "history_sync_optin/history_sync_optin_handler.h",
+       "history_sync_optin/history_sync_optin_ui.h",
+@@ -246,7 +246,7 @@ source_set("signin_impl") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "history_sync_optin/history_sync_optin_handler.cc",
+       "history_sync_optin/history_sync_optin_ui.cc",
+@@ -477,7 +477,7 @@ if (!is_chromeos) {
+       "//url",
+     ]
+ 
+-    if (is_win || is_mac || is_linux) {
++    if (is_win || is_mac || is_linux || is_aros) {
+       deps += [ "//chrome/browser/ui/views/profiles:profile_management_types" ]
+     }
+   }
 diff --git a/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom b/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom
 index 2409b138c639ece718b3687183f03e131a67f82c..03bff46ca6abc3d4d483f37e27d2bab61eea1e73 100644
 --- a/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom
@@ -29341,18 +29861,25 @@ index a9f7f6514c7015616a6ed2742f7c3e7d145abb3e..06c595dd5fff0d118cfb9134ced56ef5
  assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
  
  mojom("mojo_bindings") {
-diff --git a/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc b/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
-index bdc15de2863c73f32506c97ab0eec962d8c677d3..7989afd5dce9bf78ff5c9d98731eb91a2a570798 100644
---- a/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
-+++ b/chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.cc
-@@ -265,6 +265,7 @@ class WebUIContentsPreloadManager::PendingPreload
- using RequestResult = WebUIContentsPreloadManager::RequestResult;
+diff --git a/chrome/browser/ui/webui/user_education_internals/user_education_internals_ui.cc b/chrome/browser/ui/webui/user_education_internals/user_education_internals_ui.cc
+index 0fc1d913ebd4b1f9cea3ee133fdb3b924192a937..2bc739cb4df7fd69a0f032a75e28a50c6be3a85c 100644
+--- a/chrome/browser/ui/webui/user_education_internals/user_education_internals_ui.cc
++++ b/chrome/browser/ui/webui/user_education_internals/user_education_internals_ui.cc
+@@ -46,12 +46,12 @@ UserEducationInternalsUI::UserEducationInternalsUI(content::WebUI* web_ui)
+   content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
  
- RequestResult::RequestResult() = default;
-+MakeContentsResult::MakeContentsResult(MakeContentsResult&&) = default;
- RequestResult::~RequestResult() = default;
- RequestResult::RequestResult(RequestResult&&) = default;
- RequestResult& RequestResult::operator=(RequestResult&&) = default;
+   int32_t version_to_request = CHROME_VERSION_MAJOR;
+-#if !BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+   auto* registry = g_browser_process->GetFeatures()->whats_new_registry();
+   CHECK(registry);
+   version_to_request =
+       registry->version_override().value_or(version_to_request);
+-#endif  // !BUILDFLAG(IS_CHROMEOS)
++#endif
+   source->AddInteger("whatsNewVersionToRequest", version_to_request);
+   source->AddInteger("currentChromeVersion", CHROME_VERSION_MAJOR);
+ 
 diff --git a/chrome/browser/ui/webui/util/BUILD.gn b/chrome/browser/ui/webui/util/BUILD.gn
 index f27ff606ec900ce3a2c0e550bd3efae451b6e3fd..21779e03abb83f6f7e164bf35d9ff078c2f1c024 100644
 --- a/chrome/browser/ui/webui/util/BUILD.gn
@@ -30125,7 +30652,7 @@ index e7b9a848b308067a5fceb9b114a19f3827d7df55..3391e76c8cf61fe4d552d09e1e9b057e
      FILE_PATH_LITERAL("chrome_elf.dll");
  inline constexpr base::FilePath::CharType kRendererDll[] =
 diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
-index daa26a72e54198b662ade3eeb9a2f6995e1a790e..38a082af50aff71f11dcd86f525d0798ed24931a 100644
+index daa26a72e54198b662ade3eeb9a2f6995e1a790e..b2e779dd8480114ceeffeee3dd920d7d4380be9f 100644
 --- a/chrome/common/chrome_features.cc
 +++ b/chrome/common/chrome_features.cc
 @@ -60,7 +60,7 @@ BASE_FEATURE(kUseKeychainKeyProvider, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -30137,8 +30664,17 @@ index daa26a72e54198b662ade3eeb9a2f6995e1a790e..38a082af50aff71f11dcd86f525d0798
  // Enables or disables the Autofill survey triggered by opening a prompt to
  // save address info.
  BASE_FEATURE(kAutofillAddressSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -234,7 +234,7 @@ BASE_FEATURE(kEnableFullscreenToAnyScreenAndroid,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Controls whether Chrome Apps are supported. See https://crbug.com/40186761.
+ // If the feature is disabled, Chrome Apps continue to work. If enabled, Chrome
+ // Apps will not launch and will be marked in the UI as deprecated.
 diff --git a/chrome/common/chrome_features.h b/chrome/common/chrome_features.h
-index f84ad6089cdb067e1dcaa7c298c6efb0557b909a..b6c77a48178ee51511c07cf248ecbe8be325daea 100644
+index f84ad6089cdb067e1dcaa7c298c6efb0557b909a..972703c048a5698d5159daca960f8eef8b375471 100644
 --- a/chrome/common/chrome_features.h
 +++ b/chrome/common/chrome_features.h
 @@ -57,7 +57,7 @@ BASE_DECLARE_FEATURE(kUseKeychainKeyProvider);
@@ -30150,6 +30686,15 @@ index f84ad6089cdb067e1dcaa7c298c6efb0557b909a..b6c77a48178ee51511c07cf248ecbe8b
  COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillAddressSurvey);
  COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillCardSurvey);
  COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kAutofillPasswordSurvey);
+@@ -154,7 +154,7 @@ extern const base::FeatureParam<std::string> kRemoteActorOAuthClientId;
+ COMPONENT_EXPORT(CHROME_FEATURES)
+ bool RemoteActorCredentialSharingEnabled();
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ COMPONENT_EXPORT(CHROME_FEATURES) BASE_DECLARE_FEATURE(kChromeAppsDeprecation);
+ #endif
+ 
 diff --git a/chrome/common/chrome_paths.cc b/chrome/common/chrome_paths.cc
 index 32d01c008e1341eb8142cd80e1c91afe7928ed42..ca716bb120e3769043068b3e0594ea51caf31b1e 100644
 --- a/chrome/common/chrome_paths.cc
@@ -30442,6 +30987,53 @@ index a274b3e364084c90d2f4783bab576ac85af285ea..3d995cf6433991f6f8abe7cd2d4eac17
  // Sets the kNumSwitches key and the set of keys named using kSwitchFormat based
  // on the given `command_line`. For non-browser processes, allocates crash keys
  // from the switch value set by AppendStringAnnotationsCommandLineSwitch().
+diff --git a/chrome/common/extensions/api/api_sources.gni b/chrome/common/extensions/api/api_sources.gni
+index 3f933694eafda218d4637bd997ab130dca930e2c..804a7cad1de8192cd0acabc6604b2c7115ffb0eb 100644
+--- a/chrome/common/extensions/api/api_sources.gni
++++ b/chrome/common/extensions/api/api_sources.gni
+@@ -104,7 +104,7 @@ if (enable_extensions) {
+     schema_sources_ += [ "web_authentication_proxy.webidl" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     schema_sources_ += [ "contextual_tasks_private.webidl" ]
+   }
+ 
+diff --git a/chrome/common/extensions/extension_constants.h b/chrome/common/extensions/extension_constants.h
+index 6e342e2f5bb9e9b6e5756978eaf0d1d186c5331e..5e5a5c818e2b4494249049cd1bfee804e4aa9a1d 100644
+--- a/chrome/common/extensions/extension_constants.h
++++ b/chrome/common/extensions/extension_constants.h
+@@ -209,14 +209,14 @@ inline constexpr base::FilePath::CharType kAimEligibilityExtensionDirName[] =
+ inline constexpr base::FilePath::CharType
+     kReadingModeGDocsHelperManifestFilename[] =
+         FILE_PATH_LITERAL("reading_mode_gdocs_helper_manifest.json");
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_AROS)
+ // The extension id of the google tts engine extension to use on-device natural
+ // Google voices.
+ inline constexpr char kTTSEngineExtensionId[] =
+     "kfgdcmdikpmgdjhgfpbfgkomboamacbb";
+ inline constexpr char kComponentUpdaterTTSEngineExtensionId[] =
+     "gjjabgpgjpampikjhjpfhneeoapjbjaf";
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_AROS)
+ 
+ // The states that an app can be in, as reported by chrome.app.installState
+ // and chrome.app.runningState.
+@@ -260,10 +260,10 @@ inline constexpr auto kBuiltInFirstPartyExtensionIds =
+         kGoogleSpeechSynthesisExtensionId,
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+         kReadingModeGDocsHelperExtensionId,
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_AROS)
+         kTTSEngineExtensionId,
+         kComponentUpdaterTTSEngineExtensionId,
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_AROS)
+     });
+ 
+ }  // namespace extension_misc
 diff --git a/chrome/common/features.gni b/chrome/common/features.gni
 index 7c9f12727c07f399c8303c3b4cfc504eb9dc061a..63f9449bfc0cc06accb097120d0acc8b0087ae8b 100644
 --- a/chrome/common/features.gni
@@ -30729,7 +31321,7 @@ index 9ca40912a26851968cec444048f6c5f492f1c152..99c6828da254ea40bc2d98aef913af7f
  #endif
  #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
-index a462094cd3d23066539c26d202e2df0b6decf0f9..9bade6e90765926c207f80438f519bc87d079893 100644
+index a462094cd3d23066539c26d202e2df0b6decf0f9..06f29c406808334dbf45ae56026f6ab6272c2fd4 100644
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
 @@ -18,6 +18,7 @@
@@ -30781,6 +31373,15 @@ index a462094cd3d23066539c26d202e2df0b6decf0f9..9bade6e90765926c207f80438f519bc8
  #if BUILDFLAG(IS_WIN)
  inline constexpr char kChromeUIDefaultBrowserVisualGuidedSetterURL[] =
      "chrome://default-browser/";
+@@ -484,7 +492,7 @@ inline constexpr char kChromeUILinuxProxyConfigHost[] = "linux-proxy-config";
+ inline constexpr char kChromeUISandboxHost[] = "sandbox";
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ inline constexpr char kChromeUIBrowserSwitchHost[] = "browser-switch";
+ inline constexpr char kChromeUIBrowserSwitchURL[] = "chrome://browser-switch/";
+ inline constexpr char kChromeUIIntroDefaultBrowserSubPage[] = "default-browser";
 diff --git a/chrome/gpu/chrome_content_gpu_client.cc b/chrome/gpu/chrome_content_gpu_client.cc
 index cdb343224119e0edaca7ad29e7b7f1af23645751..ca85b4cc9b19dcaec2111407a840fe63b005af6c 100644
 --- a/chrome/gpu/chrome_content_gpu_client.cc
@@ -32086,6 +32687,26 @@ index d3fdd11fd118f36d89c77dc57847175ba1bd98be..0af03fd0dcb9d78fdb581ab3fa5a2a3e
    } else {
      include_dirs = [ "//third_party/breakpad/breakpad/src" ]
  
+diff --git a/components/crash/core/common/crash_key.h b/components/crash/core/common/crash_key.h
+index 98a794e971901a87133812f10854ee9712347dce..1e8fc97361007e2e76d2556279eff100289cdbb1 100644
+--- a/components/crash/core/common/crash_key.h
++++ b/components/crash/core/common/crash_key.h
+@@ -232,7 +232,6 @@ void SetCrashKeyStringToStackTrace(CrashKeyString<Size>* key,
+ // crash keys set prior to the last initialization.
+ CRASH_KEY_EXPORT void InitializeCrashKeys();
+ 
+-#if defined(UNIT_TEST) || defined(CRASH_CORE_COMMON_IMPLEMENTATION)
+ // Returns a value for the crash key named |key_name|. For Crashpad-based
+ // clients, this returns the first instance found of the name. On Breakpad
+ // clients, oversized crash key values (those longer than
+@@ -242,6 +241,7 @@ CRASH_KEY_EXPORT void InitializeCrashKeys();
+ // current component.
+ CRASH_KEY_EXPORT std::string GetCrashKeyValue(const std::string& key_name);
+ 
++#if defined(UNIT_TEST) || defined(CRASH_CORE_COMMON_IMPLEMENTATION)
+ // Initializes the crash key subsystem with testing configuration if it is
+ // required.
+ CRASH_KEY_EXPORT void InitializeCrashKeysForTesting();
 diff --git a/components/crash/core/common/crash_key_aros.cc b/components/crash/core/common/crash_key_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..e293a2982d7f54e0815d45a4981f9d705db2ceaf
@@ -33316,6 +33937,41 @@ index 99fdfff75fd2e790faf56606df36171a47b2e9d2..c825d57877615d5123f2225dbd18e9c4
   private:
    friend class PersistentSystemProfileTest;
  
+diff --git a/components/ntp_tiles/BUILD.gn b/components/ntp_tiles/BUILD.gn
+index 124effeea68e982544e441b0a313e120bad67eae..5c8c0d7274590dba7ffc76495e78ed0f783058c3 100644
+--- a/components/ntp_tiles/BUILD.gn
++++ b/components/ntp_tiles/BUILD.gn
+@@ -103,7 +103,7 @@ static_library("ntp_tiles") {
+     deps += [ "//components/supervised_user/core/browser" ]
+   }
+ 
+-  if (is_linux || is_win || is_mac || is_chromeos) {
++  if (is_linux || is_win || is_mac || is_chromeos || is_aros) {
+     sources += [
+       "enterprise/enterprise_shortcuts_manager_impl.cc",
+       "enterprise/enterprise_shortcuts_manager_impl.h",
+@@ -164,7 +164,7 @@ source_set("unit_tests") {
+     deps += [ "//components/supervised_user/core/browser" ]
+   }
+ 
+-  if (is_linux || is_win || is_mac || is_chromeos) {
++  if (is_linux || is_win || is_mac || is_chromeos || is_aros) {
+     sources += [
+       "enterprise/enterprise_shortcuts_manager_impl_unittest.cc",
+       "enterprise/enterprise_shortcuts_store_unittest.cc",
+diff --git a/components/ntp_tiles/pref_names.h b/components/ntp_tiles/pref_names.h
+index 65e4c8b8c487b311b99377fb15590126265c1df7..cc10f35b9776e1a88088771cbfe923b0ec7061e3 100644
+--- a/components/ntp_tiles/pref_names.h
++++ b/components/ntp_tiles/pref_names.h
+@@ -49,7 +49,7 @@ inline constexpr char kCustomLinksInitializedMobile[] =
+ 
+ // Prefs used to cache enterprise shortcuts.
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ inline constexpr char kEnterpriseShortcutsPolicyList[] =
+     "enterprise_shortcuts.policy_list";
+ inline constexpr char kEnterpriseShortcutsUserList[] =
 diff --git a/components/omnibox/browser/shortcuts_database.cc b/components/omnibox/browser/shortcuts_database.cc
 index 0a7d2e95b0576e897489020feb2249181de7dfdf..4c0341a98a08f11ef40ab61d6632e6a167ab53fc 100644
 --- a/components/omnibox/browser/shortcuts_database.cc
@@ -33558,6 +34214,31 @@ index 2843b412db73a8b04ae4908e6797a8ab2be1d2a0..18462014069ddc15c799c5c41552338c
    // Emit a trigger to allow trace collection tied to navigations. For
    // simplicity, this signal happens during `WillStartRequest`, which is a bit
    // later than the `navigation_start` timestamp used in
+diff --git a/components/password_manager/core/browser/import/password_importer.cc b/components/password_manager/core/browser/import/password_importer.cc
+index b3faebd4e426556182f7714fbb52cd36032b3619..595ed4184dc2efa0695def8d81bcd44a431cb962 100644
+--- a/components/password_manager/core/browser/import/password_importer.cc
++++ b/components/password_manager/core/browser/import/password_importer.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "components/password_manager/core/browser/import/password_importer.h"
++#include "components/password_manager/core/browser/passkey_credential.h"
+ 
+ #include <optional>
+ #include <string>
+diff --git a/components/password_manager/core/browser/password_manager_client.h b/components/password_manager/core/browser/password_manager_client.h
+index ec07dabaa3d5f631e5961b050297e7317963439e..84cf4505501c4aeefa675feebcaf378a2be718dc 100644
+--- a/components/password_manager/core/browser/password_manager_client.h
++++ b/components/password_manager/core/browser/password_manager_client.h
+@@ -585,7 +585,7 @@ class PasswordManagerClient {
+   virtual void TriggerSignIn(signin_metrics::AccessPoint access_point) const;
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   // Shows the bubble with the details of the `form`.
+   virtual void OpenPasswordDetailsBubble(
+       const password_manager::PasswordForm& form) = 0;
 diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
 index f331f4df78737cdef2b06fb5807ac3b4d59302b1..5184975559d6ea7a2d0406b7e4d0ee31e01f2d76 100644
 --- a/components/permissions/permission_request_manager.cc
@@ -33790,6 +34471,50 @@ index 3e6b1e8dc96970f05737ac30eff0c53a78c510d9..bcfa380a0c04984cb1b8faa49b15d03f
  
  static_library("renderer") {
    sources = [
+diff --git a/components/regional_capabilities/regional_capabilities_service.cc b/components/regional_capabilities/regional_capabilities_service.cc
+index e02ff4617c00f4f4951cfe462867dcdf3addd4c7..d5dc28309a9dd61a5e9a038ad8a80b9b4c836657 100644
+--- a/components/regional_capabilities/regional_capabilities_service.cc
++++ b/components/regional_capabilities/regional_capabilities_service.cc
+@@ -445,7 +445,7 @@ bool RegionalCapabilitiesService::IsInAnySearchEngineChoiceScreenRegion(
+       .choice_screen_eligibility_config.has_value();
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // static
+ bool RegionalCapabilitiesService::IsInAnySearchEngineChoiceScreenRegion(
+     Client& client) {
+@@ -454,7 +454,7 @@ bool RegionalCapabilitiesService::IsInAnySearchEngineChoiceScreenRegion(
+   return GetSettingsForProgram(CountryIdToProgram(country_id_result.country_id))
+       .choice_screen_eligibility_config.has_value();
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ RegionalCapabilitiesService::LocationCompatibility
+ RegionalCapabilitiesService::IsChoiceScreenCompatibleWithCurrentLocation() {
+diff --git a/components/regional_capabilities/regional_capabilities_service.h b/components/regional_capabilities/regional_capabilities_service.h
+index d54677487e322c1641865c595486c9fbd80cc5f9..193ec0316e0e9d39b4b5226ed179b4cf8d018836 100644
+--- a/components/regional_capabilities/regional_capabilities_service.h
++++ b/components/regional_capabilities/regional_capabilities_service.h
+@@ -132,7 +132,7 @@ class RegionalCapabilitiesService : public KeyedService {
+   static bool IsInAnySearchEngineChoiceScreenRegion(
+       const country_codes::CountryId& tested_country_id);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Returns whether the country obtained from the client is associated with
+   // a region in which we can show a search engine choice screen.
+   //
+@@ -141,7 +141,7 @@ class RegionalCapabilitiesService : public KeyedService {
+   // available). Most clients should use
+   // `IsInCurrentSearchEngineChoiceScreenRegion()` instead.
+   static bool IsInAnySearchEngineChoiceScreenRegion(Client& client);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+   enum class LocationCompatibility {
+     kCompatible,
 diff --git a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm
 index 6f02db406326ba00fec8007b19a638b6c3354a55..452fdf6986c0ada065fc85bca384511de1c489b6 100644
 --- a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm
@@ -34259,6 +34984,524 @@ index 0c26172d8a43472387c40719a72f9b53bc48dda6..a91920ee81040f44aa74ecde5918e462
  #include "components/signin/public/base/device_id_helper.h"
  #include "components/signin/public/base/signin_client.h"
  #include "components/signin/public/base/signin_switches.h"
+diff --git a/components/signin/public/base/signin_switches.cc b/components/signin/public/base/signin_switches.cc
+index e2d674d22c1211b6531c2c50c0929d163e22cec3..d10f3e86e382390021cfa56b5507d54771f3d26f 100644
+--- a/components/signin/public/base/signin_switches.cc
++++ b/components/signin/public/base/signin_switches.cc
+@@ -39,7 +39,7 @@ const char kForceFreFeatureShowcaseSteps[] = "force-fre-feature-showcase-steps";
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+ // Feature param to pass probability for identity surveys.
+ constexpr char kHatsSurveyProbabilityName[] = "probability";
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+@@ -61,10 +61,10 @@ BASE_FEATURE(kAccountRetrievalWaitsForRestoration,
+ BASE_FEATURE(kAvoidAutoTriggerListAccountsOnStale,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kBeforeFirstRunDesktopRefreshSurvey,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+ // Allows to disable the bound session credentials code in case of emergency.
+@@ -132,7 +132,7 @@ BASE_FEATURE_PARAM(double,
+                    1.0);
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ constexpr double kMediumSurveyProbability = 0.08;
+ constexpr double kLowSurveyProbability = 0.008;
+ BASE_FEATURE(kChromeIdentitySurveyAddressBubbleSignin,
+@@ -222,9 +222,9 @@ BASE_FEATURE_PARAM(
+     &kChromeIdentitySurveySwitchProfileFromProfilePicker,
+     kHatsSurveyProbabilityName,
+     kMediumSurveyProbability);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kChromeIdentitySurveyLaunchWithDelay,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE_PARAM(base::TimeDelta,
+@@ -232,7 +232,7 @@ BASE_FEATURE_PARAM(base::TimeDelta,
+                    &kChromeIdentitySurveyLaunchWithDelay,
+                    "launch_delay_duration",
+                    base::Milliseconds(3000));
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+ BASE_FEATURE(kChromeOsUseConsentLevelSigninForNewUsers,
+@@ -249,14 +249,14 @@ const base::FeatureParam<std::string> kCrossDeviceSigninUrl{
+ BASE_FEATURE(kCrossDeviceSigninDismissModals, base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_IOS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kCrossDeviceSigninFromDesktop, base::FEATURE_DISABLED_BY_DEFAULT);
+ const base::FeatureParam<std::string> kCrossDeviceSigninFromDesktopUrl{
+     &kCrossDeviceSigninFromDesktop, "url",
+     "https://www.google.com/chrome/go-mobile?entry_point_id=1&email=$1"};
+ const base::FeatureParam<bool> kCrossDeviceSigninFromDesktopNewBadge{
+     &kCrossDeviceSigninFromDesktop, "show_new_badge", true};
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+ BASE_FEATURE(kDiceHeaderVersion2, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -266,10 +266,10 @@ BASE_FEATURE(kDiceHeaderVersion2, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kDiceLinkedAccounts, base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kDisableFirstRunAnimationsForTesting,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_IOS)
+ BASE_FEATURE(kDontIncludeSIDUnsecureCookiesInGaiaAuthFetcher,
+@@ -606,7 +606,7 @@ const base::FeatureParam<base::TimeDelta>
+         base::Hours(8)};
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kEnterpriseSigninDialogsRefresh,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ bool IsEnterpriseSigninDialogsRefreshEnabled(
+@@ -614,7 +614,7 @@ bool IsEnterpriseSigninDialogsRefreshEnabled(
+   return IsFirstRunDesktopRefreshEnabled(is_in_search_engine_choice_region) &&
+          base::FeatureList::IsEnabled(kEnterpriseSigninDialogsRefresh);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ BASE_FEATURE(kExtensionWebAuthFlowInitiatorOrigin,
+@@ -624,12 +624,12 @@ BASE_FEATURE(kExtensionWebAuthFlowInitiatorOrigin,
+ BASE_FEATURE(kFetchAccountCapabilitiesOnRestart,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopChoiceScreenRefresh,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ #if BUILDFLAG(IS_WIN)
+ BASE_FEATURE(kFirstRunDesktopRefresh, base::FEATURE_ENABLED_BY_DEFAULT);
+ #else
+@@ -642,37 +642,37 @@ bool IsFirstRunDesktopRefreshEnabled(bool is_in_search_engine_choice_region) {
+   }
+   return base::FeatureList::IsEnabled(kFirstRunDesktopRefresh);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopRefreshSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopRevamp, base::FEATURE_DISABLED_BY_DEFAULT);
+ bool IsFirstRunDesktopRevampEnabled(bool is_in_search_engine_choice_region) {
+   return IsFirstRunDesktopRefreshEnabled(is_in_search_engine_choice_region) &&
+          base::FeatureList::IsEnabled(kFirstRunDesktopRevamp);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopRevampNoFeatureShowcaseSurvey,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopRevampSound, base::FEATURE_ENABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunDesktopRevampSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kFirstRunFeatureShowcaseGeminiStep,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kForceHistoryOptInScreen, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -764,7 +764,7 @@ BASE_FEATURE(kOpenSystemAccountSettingsDirectly,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kPreFirstRunDesktopRefresh, base::FEATURE_DISABLED_BY_DEFAULT);
+ bool IsPreFirstRunDesktopRefreshEnabled() {
+   return base::FeatureList::IsEnabled(kFirstRunDesktopRefresh) &&
+@@ -772,22 +772,22 @@ bool IsPreFirstRunDesktopRefreshEnabled() {
+          base::FeatureList::IsEnabled(kFirstRunDesktopRevamp) &&
+          base::FeatureList::IsEnabled(kPreFirstRunDesktopRefresh);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kPreFirstRunDesktopRefreshNoFeatureShowcaseSurvey,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kPreFirstRunDesktopRefreshSurvey,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kProfileCreationDeclineSigninCTAExperiment,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kProfileDiscOnAllPages, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -833,9 +833,9 @@ const base::FeatureParam<int> kContextualSigninPromoDismissedThreshold(
+     "contextual_signin_promo_dismissed_threshold",
+     2);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kSignInPromoMaterialNextUI, base::FEATURE_ENABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ BASE_FEATURE(kSigninWindows10DepreciationStateBypassForTesting,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -897,10 +897,10 @@ BASE_FEATURE(kStableDeviceId, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kSupportAddSessionEmailPrefill, base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Kill switch for displaying sign-in errors in the profile picker.
+ BASE_FEATURE(kSupportErrorsInProfilePicker, base::FEATURE_ENABLED_BY_DEFAULT);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kSupportForcedSigninPolicy, base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/components/signin/public/base/signin_switches.h b/components/signin/public/base/signin_switches.h
+index b0043a5c1974d176ca0bc197f7d93dd2614537c8..9e0df1ea6f3bfe08c036d042fb84b9591067feb6 100644
+--- a/components/signin/public/base/signin_switches.h
++++ b/components/signin/public/base/signin_switches.h
+@@ -58,7 +58,7 @@ BASE_DECLARE_FEATURE(kAccountRetrievalWaitsForRestoration);
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kAvoidAutoTriggerListAccountsOnStale);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback before any changes
+ // to the FRE as part of Chrome Desktop FRE Refresh project.
+ //
+@@ -66,7 +66,7 @@ BASE_DECLARE_FEATURE(kAvoidAutoTriggerListAccountsOnStale);
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kBeforeFirstRunDesktopRefreshSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+@@ -126,7 +126,7 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE_PARAM(double, kChromeAndroidIdentitySurveyWebProbability);
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Enables surveys to measure the effectiveness of the identity model.
+ // These surveys would be displayed after interactions such as signin, profile
+ // switching, etc. Please keep sorted alphabetically.
+@@ -201,16 +201,16 @@ BASE_DECLARE_FEATURE_PARAM(
+     double,
+     kChromeIdentitySurveySwitchProfileFromProfilePickerProbability);
+ // LINT.ThenChange(//chrome/browser/signin/signin_hats_util.cc)
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Controls the duration for which the launch of an identity survey is delayed.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kChromeIdentitySurveyLaunchWithDelay);
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
+                            kChromeIdentitySurveyLaunchWithDelayDuration);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+ // If enabled, the primary account consent level on ChromeOS is set to kSignin
+@@ -235,7 +235,7 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kCrossDeviceSigninDismissModals);
+ #endif  // BUILDFLAG(IS_IOS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Feature flag to enable cross-device sign-in promo.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kCrossDeviceSigninFromDesktop);
+@@ -245,7 +245,7 @@ extern const base::FeatureParam<std::string> kCrossDeviceSigninFromDesktopUrl;
+ // Param to control if the "New" badge should be shown.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ extern const base::FeatureParam<bool> kCrossDeviceSigninFromDesktopNewBadge;
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+ // Feature flag to send `version=2` in the `X-Chrome-ID-Consistency-Request`
+@@ -261,7 +261,7 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kDiceLinkedAccounts);
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Controls whether the First Run animations are disabled or not. If the feature
+ // is enabled, animations in the First Run are disabled, otherwise they're
+ // enabled. It should be only used for the testing purposes (e.g. pixel tests)
+@@ -271,7 +271,7 @@ BASE_DECLARE_FEATURE(kDiceLinkedAccounts);
+ // starts, otherwise the animations will start.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kDisableFirstRunAnimationsForTesting);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_IOS)
+ // Feature flag controlling whether Chrome should avoid adding SID/LSID cookies
+@@ -484,7 +484,7 @@ extern const base::FeatureParam<base::TimeDelta>
+     kPolicyDisclaimerRegistrationRetryDelay;
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // This feature controls showing the visually refreshed enterprise signin
+ // dialogs, i.e. all the screens served by `ManagedUserProfileNoticeUI`
+ // (enterprise profile welcome/creation, OIDC and the device signals
+@@ -506,7 +506,7 @@ BASE_DECLARE_FEATURE(kEnterpriseSigninDialogsRefresh);
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ bool IsEnterpriseSigninDialogsRefreshEnabled(
+     bool is_in_search_engine_choice_region);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ // Controls whether the navigation performed by
+@@ -521,7 +521,7 @@ BASE_DECLARE_FEATURE(kExtensionWebAuthFlowInitiatorOrigin);
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFetchAccountCapabilitiesOnRestart);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // This feature controls running visually refreshed first run and profile
+ // creation flows, including the choice screen, for users in search engine
+ // choice screen regions. This feature is no-op if `kFirstRunDesktopRefresh` is
+@@ -532,9 +532,9 @@ BASE_DECLARE_FEATURE(kFetchAccountCapabilitiesOnRestart);
+ // instead.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunDesktopChoiceScreenRefresh);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // This feature controls running visually refreshed first run and profile
+ // creation flows for users outside of the search engine choice regions. To
+ // enable the refresh in search engine choice screen regions,
+@@ -550,9 +550,9 @@ BASE_DECLARE_FEATURE(kFirstRunDesktopRefresh);
+ // flags).
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ bool IsFirstRunDesktopRefreshEnabled(bool is_in_search_engine_choice_region);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback after the changes
+ // introduced with `kFirstRunDesktopRefresh`.
+ //
+@@ -560,9 +560,9 @@ bool IsFirstRunDesktopRefreshEnabled(bool is_in_search_engine_choice_region);
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunDesktopRefreshSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // It enables the first run revamp (introduce new UIs and additional effects).
+ // This feature is no-op if `kFirstRunDesktopRefresh` is disabled.
+ //
+@@ -576,9 +576,9 @@ BASE_DECLARE_FEATURE(kFirstRunDesktopRevamp);
+ // `kFirstRunDesktopChoiceScreenRefresh` flags).
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ bool IsFirstRunDesktopRevampEnabled(bool is_in_search_engine_choice_region);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback after the changes
+ // introduced with `kFirstRunDesktopRevamp` for users who are not eligible for
+ // the Feature Showcase.
+@@ -587,16 +587,16 @@ bool IsFirstRunDesktopRevampEnabled(bool is_in_search_engine_choice_region);
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunDesktopRevampNoFeatureShowcaseSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Killswitch for the sound experience in the first run desktop revamp.
+ // This feature is no-op if `kFirstRunDesktopRevamp` is disabled.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunDesktopRevampSound);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback after the changes
+ // introduced with `kFirstRunDesktopRevamp` for users who are eligible for the
+ // Feature Showcase.
+@@ -605,9 +605,9 @@ BASE_DECLARE_FEATURE(kFirstRunDesktopRevampSound);
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunDesktopRevampSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // This feature controls whether Gemini step can be shown in the feature
+ // showcase. This feature is no-op if IsFirstRunDesktopRevamp() equals false.
+ //
+@@ -615,7 +615,7 @@ BASE_DECLARE_FEATURE(kFirstRunDesktopRevampSurvey);
+ // --force-fre-feature-showcase-steps (which should be used only for testing).
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kFirstRunFeatureShowcaseGeminiStep);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+@@ -723,7 +723,7 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kOpenSystemAccountSettingsDirectly);
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // It enables the pre first run desktop refresh (changes to the onboarding flow
+ // prior to the core first run).
+ //
+@@ -740,9 +740,9 @@ BASE_DECLARE_FEATURE(kPreFirstRunDesktopRefresh);
+ // `kFirstRunDesktopRefresh` and `kFirstRunDesktopChoiceScreenRefresh` flags).
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ bool IsPreFirstRunDesktopRefreshEnabled();
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback after the changes
+ // introduced with `kPreFirstRunDesktopRefresh` for users who are not eligible
+ // for the Feature Showcase.
+@@ -751,9 +751,9 @@ bool IsPreFirstRunDesktopRefreshEnabled();
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kPreFirstRunDesktopRefreshNoFeatureShowcaseSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // A HaTS survey flag for the survey to gather user feedback after the changes
+ // introduced with `kPreFirstRunDesktopRefresh` for users who are eligible for
+ // the Feature Showcase.
+@@ -762,14 +762,14 @@ BASE_DECLARE_FEATURE(kPreFirstRunDesktopRefreshNoFeatureShowcaseSurvey);
+ // survey.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kPreFirstRunDesktopRefreshSurvey);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Experimenting with changing the secondary CTA for FRE and new profile
+ // creation.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kProfileCreationDeclineSigninCTAExperiment);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ // Shows the Signin Button Profile Disc in the toolbar on all pages, rather than
+@@ -836,11 +836,11 @@ extern const base::FeatureParam<int> kContextualSigninPromoShownThreshold;
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ extern const base::FeatureParam<int> kContextualSigninPromoDismissedThreshold;
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Uses the Material Next theme for the signin promo.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kSignInPromoMaterialNextUI);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ // Feature flag used for testing purposes only:
+ //
+@@ -891,11 +891,11 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kSupportAddSessionEmailPrefill);
+ #endif
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Kill switch for displaying sign-in errors in the profile picker.
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
+ BASE_DECLARE_FEATURE(kSupportErrorsInProfilePicker);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 diff --git a/components/signin/public/identity_manager/accounts_cookie_mutator.cc b/components/signin/public/identity_manager/accounts_cookie_mutator.cc
 index f6c3475d9516ec78285fc7dfa2178e78ddec106f..1bfa9c4780c0c1a181734373ab21a1a5a47e6f83 100644
 --- a/components/signin/public/identity_manager/accounts_cookie_mutator.cc
@@ -34312,6 +35555,32 @@ index 7bb1f5758b0a31fb5ad3e7620d5910e67088bf95..90a32bb4d2dc8b49697c0a46109e05df
 +      is_android || is_chromeos || is_ios || is_linux || is_mac || is_win ||
 +      is_aros
  }
+diff --git a/components/supervised_user/core/common/features.cc b/components/supervised_user/core/common/features.cc
+index e4c1bf8e034c70608ecdadfe8990f34900bd7217..e5228923b735cc2ccd26ad104bc8a04138f880e4 100644
+--- a/components/supervised_user/core/common/features.cc
++++ b/components/supervised_user/core/common/features.cc
+@@ -69,7 +69,7 @@ BASE_FEATURE(kSupervisedUserVerificationPageOnAndroid,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kEnableSupervisedUserVersionSignOutDialog,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif
+diff --git a/components/supervised_user/core/common/features.h b/components/supervised_user/core/common/features.h
+index 5e00b161119fcbfb641db35f5f45eff965f34c6f..6c149efe442ce3dbd5f708b4db6d01a0ca10a14d 100644
+--- a/components/supervised_user/core/common/features.h
++++ b/components/supervised_user/core/common/features.h
+@@ -31,7 +31,7 @@ extern const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs;
+ BASE_DECLARE_FEATURE(kSupervisedUserVerificationPageOnAndroid);
+ #endif
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ // Uses supervised user strings on the signout dialog.
+ BASE_DECLARE_FEATURE(kEnableSupervisedUserVersionSignOutDialog);
+ #endif
 diff --git a/components/sync/service/device_statistics_tracker.h b/components/sync/service/device_statistics_tracker.h
 index 55904524dc929823d291cde108208d56781474e8..411d6d4fbb305aba826e2ccf644b0b36a6319652 100644
 --- a/components/sync/service/device_statistics_tracker.h
@@ -34412,6 +35681,151 @@ index b865f09a022cc39019911f56e4de0c04e5b6c35a..b064a004351cc868c17030d80962ce60
  #elif BUILDFLAG(IS_LINUX)
      "linux";
  #elif BUILDFLAG(IS_FUCHSIA)
+diff --git a/components/user_data_importer/utility/BUILD.gn b/components/user_data_importer/utility/BUILD.gn
+index 911f642f0bbd8bd59f95197c5c4382b4e5a8ad07..a9db9988cc44fdf2ddfd1fdf5b70be842edc9ca5 100644
+--- a/components/user_data_importer/utility/BUILD.gn
++++ b/components/user_data_importer/utility/BUILD.gn
+@@ -65,6 +65,7 @@ rust_static_library("zip_ffi_glue") {
+   allow_unsafe = true
+   crate_root = "parsing_ffi/lib.rs"
+   sources = [
++    "parsing_ffi/aros_owned_fd.rs",
+     "parsing_ffi/history.rs",
+     "parsing_ffi/json.rs",
+     "parsing_ffi/lib.rs",
+diff --git a/components/user_data_importer/utility/parsing_ffi/aros_owned_fd.rs b/components/user_data_importer/utility/parsing_ffi/aros_owned_fd.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..d082838a5cb5db98117dfe1a9101321bd298e85f
+--- /dev/null
++++ b/components/user_data_importer/utility/parsing_ffi/aros_owned_fd.rs
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++use std::io::{self, Read};
++
++unsafe extern "C" {
++    fn read(fd: i32, data: *mut std::ffi::c_void, size: usize) -> isize;
++    fn close(fd: i32) -> i32;
++}
++
++/// Owns the native descriptor transferred by base::File::TakePlatformFile.
++/// AROS std has no std::os::unix module; keep this adapter local to the importer.
++pub(crate) struct OwnedFdReader(i32);
++impl OwnedFdReader {
++    /// The descriptor must be valid, owned, and no longer used by the caller.
++    pub(crate) unsafe fn from_raw_fd(fd: i32) -> Self { Self(fd) }
++}
++impl Read for OwnedFdReader {
++    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
++        let length = buffer.len().min(isize::MAX as usize);
++        // SAFETY: the slice is writable for length bytes and this object owns fd.
++        let count = unsafe { read(self.0, buffer.as_mut_ptr().cast(), length) };
++        if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
++    }
++}
++impl Drop for OwnedFdReader {
++    fn drop(&mut self) {
++        // SAFETY: ownership is unique; close exactly once, including parse errors.
++        unsafe { close(self.0); }
++    }
++}
+diff --git a/components/user_data_importer/utility/parsing_ffi/history.rs b/components/user_data_importer/utility/parsing_ffi/history.rs
+index f9b6cd470df492b29fad381e023a7ec5706f1ecb..19276ba7e7c1867406acc03669b886af14f35430 100644
+--- a/components/user_data_importer/utility/parsing_ffi/history.rs
++++ b/components/user_data_importer/utility/parsing_ffi/history.rs
+@@ -11,13 +11,11 @@ use std::io::Read;
+ use std::mem;
+ use std::pin::Pin;
+ 
+-#[cfg(target_family = "unix")]
++#[cfg(any(unix, target_os = "aros"))]
+ use crate::json::STREAM_BUFFER_SIZE;
+-#[cfg(target_family = "unix")]
++#[cfg(any(unix, target_os = "aros"))]
+ use crate::models::StablePortabilityHistoryJSONEntry;
+-#[cfg(target_family = "unix")]
+-use std::fs;
+-#[cfg(target_family = "unix")]
++#[cfg(any(unix, target_os = "aros"))]
+ use std::io::BufReader;
+ 
+ // A trait for history callbacks to allow for generic implementation of
+@@ -140,16 +138,16 @@ pub fn parse_safari_history(
+ 
+ // Attempts to parse a file in the stable portability history format. Returns
+ // whether parsing was successful.
+-#[cfg(target_family = "unix")]
+-pub fn parse_stable_portability_history(
+-    file: fs::File,
++#[cfg(any(unix, target_os = "aros"))]
++pub fn parse_stable_portability_history<R: Read>(
++    file: R,
+     mut history_callback: UniquePtr<ffi::StablePortabilityHistoryCallbackFromRust>,
+     history_size_threshold: usize,
+ ) {
+     let mut history = CxxVector::<ffi::StablePortabilityHistoryEntry>::new();
+     let result = {
+         let stream_reader = BufReader::with_capacity(STREAM_BUFFER_SIZE, file);
+-        json::deserialize_top_level::<StablePortabilityHistoryJSONEntry, std::fs::File>(
++        json::deserialize_top_level::<StablePortabilityHistoryJSONEntry, R>(
+             stream_reader,
+             ffi::FileType::StablePortabilityHistory,
+             |history_item| {
+diff --git a/components/user_data_importer/utility/parsing_ffi/lib.rs b/components/user_data_importer/utility/parsing_ffi/lib.rs
+index 5e483809e9838e0c1bc7f55e9820575191c9a648..a01b071ad3586366aebeadb709a3695f613f849f 100644
+--- a/components/user_data_importer/utility/parsing_ffi/lib.rs
++++ b/components/user_data_importer/utility/parsing_ffi/lib.rs
+@@ -2,6 +2,8 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#[cfg(target_os = "aros")]
++mod aros_owned_fd;
+ mod history;
+ mod json;
+ mod models;
+@@ -10,9 +12,9 @@ mod zip_archive;
+ 
+ use crate::zip_archive::{ResultOfZipFileArchive, ZipFileArchive};
+ 
+-#[cfg(target_family = "unix")]
++#[cfg(unix)]
+ use std::fs;
+-#[cfg(target_family = "unix")]
++#[cfg(unix)]
+ use std::os::unix::io::FromRawFd;
+ 
+ #[cxx::bridge(namespace = "user_data_importer")]
+@@ -107,7 +109,7 @@ mod ffi {
+         ///
+         /// Caller needs to guarantee that `owned_fd` is an owned file descriptor.
+         /// See <https://doc.rust-lang.org/beta/std/io/index.html#io-safety> for more details.
+-        #[cfg(target_family = "unix")]
++        #[cfg(not(target_os = "windows"))]
+         unsafe fn parse_stable_portability_history(
+             owned_fd: i32,
+             history_callback: UniquePtr<StablePortabilityHistoryCallbackFromRust>,
+@@ -123,14 +125,17 @@ mod ffi {
+ ///
+ /// Caller needs to guarantee that `owned_fd` is an owned file descriptor.
+ /// See <https://doc.rust-lang.org/beta/std/io/index.html#io-safety> for more details.
+-#[cfg(target_family = "unix")]
++#[cfg(any(unix, target_os = "aros"))]
+ unsafe fn parse_stable_portability_history(
+     owned_fd: i32,
+     history_callback: cxx::UniquePtr<ffi::StablePortabilityHistoryCallbackFromRust>,
+     history_size_threshold: usize,
+ ) {
+     // SAFETY: Safety requirements are propagated from our caller.
++    #[cfg(unix)]
+     let file = unsafe { fs::File::from_raw_fd(owned_fd) };
++    #[cfg(target_os = "aros")]
++    let file = unsafe { aros_owned_fd::OwnedFdReader::from_raw_fd(owned_fd) };
+     history::parse_stable_portability_history(file, history_callback, history_size_threshold)
+ }
+ 
 diff --git a/components/variations/BUILD.gn b/components/variations/BUILD.gn
 index a7acb2b272a3352e3a30471bf10b7e91a6ef61f9..79e3f7aa95da69826af9786997e31561a8535b83 100644
 --- a/components/variations/BUILD.gn
@@ -48018,6 +49432,27 @@ index 29c0520cc3651e2a6e1f512f559e1f144e7e8d38..e9ff0b1a31fe22c77651d1cd8fbcc031
  
    # DBSC is only supported on Windows, Linux and Mac for now.
    enable_device_bound_sessions = is_win || is_linux || is_mac
+diff --git a/net/http/http_transaction_test_util.cc b/net/http/http_transaction_test_util.cc
+index 88a416c616322129f8c6f2d6eb796390478d33c1..50b7560a82410c01ea55b8942506a94d80b40cde 100644
+--- a/net/http/http_transaction_test_util.cc
++++ b/net/http/http_transaction_test_util.cc
+@@ -499,13 +499,13 @@ void MockNetworkTransaction::SetWebSocketHandshakeStreamCreateHelper(
+ }
+ 
+ // static
+-const auto MockNetworkTransaction::kTotalReceivedBytes = base::ByteSize(1000);
++const base::ByteSize MockNetworkTransaction::kTotalReceivedBytes = base::ByteSize(1000);
+ 
+ // static
+-const auto MockNetworkTransaction::kTotalSentBytes = base::ByteSize(100);
++const base::ByteSize MockNetworkTransaction::kTotalSentBytes = base::ByteSize(100);
+ 
+ // static
+-const auto MockNetworkTransaction::kReceivedBodyBytes = base::ByteSize(500);
++const base::ByteSize MockNetworkTransaction::kReceivedBodyBytes = base::ByteSize(500);
+ 
+ int MockNetworkTransaction::StartInternal(HttpRequestInfo request,
+                                           CompletionOnceCallback callback) {
 diff --git a/net/ntlm/ntlm_buffer_writer.cc b/net/ntlm/ntlm_buffer_writer.cc
 index 784772a7d66b0cab3efd9dcee7f2498f06e10e40..51e9d5a11553766d8feb3ff5a1766631effb6385 100644
 --- a/net/ntlm/ntlm_buffer_writer.cc
@@ -49201,6 +50636,21 @@ index 2bfd0d94732691d262d3c377b57e2cd1935ba283..e967e03a45b34bebb9c709af1ddfe7ed
      sources += [
        "printing_context_no_system_dialog.cc",
        "printing_context_no_system_dialog.h",
+diff --git a/printing/buildflags/buildflags.gni b/printing/buildflags/buildflags.gni
+index 8194f3f242c802aa43760b7694daa2b6d4aa7978..e335a5bd9a1c56c212fa68e773d40a50d1317678 100644
+--- a/printing/buildflags/buildflags.gni
++++ b/printing/buildflags/buildflags.gni
+@@ -45,7 +45,9 @@ declare_args() {
+   # Enables out-of-process printing.  Do not have this definition just be
+   # based on `enable_print_preview`; this feature could still be appropriate
+   # for some build configurations which explicitly disable print preview.
+-  enable_oop_printing = enable_printing && !is_android
++  # AROS uses its native in-process printer backend; a sandboxed printing
++  # service is not implemented on this platform.
++  enable_oop_printing = enable_printing && !is_android && !is_aros
+ }
+ 
+ declare_args() {
 diff --git a/printing/printing_context.h b/printing/printing_context.h
 index 9371b96cdd377501de91a7e201430065b813cc04..8868bcbea4fb52098c5a48f5d59d67791d2ebd9b 100644
 --- a/printing/printing_context.h
@@ -49982,16 +51432,17 @@ index 19d129eb8f81dc5512c37f4b4d064cf8a8050c06..fd2fc3c3d4eff4397a411fa3a89d6059
  #elif BUILDFLAG(IS_WIN)
    EXPECT_GT(dump.platform_private_footprint->private_bytes, 0u);
 diff --git a/services/screen_ai/buildflags/features.gni b/services/screen_ai/buildflags/features.gni
-index 86d9949cd8eddd4c3988cf894618cf017cb8a75b..6619cb78eb518279d6e8023ff25be52dc68e7274 100644
+index 86d9949cd8eddd4c3988cf894618cf017cb8a75b..375bedb5b4a4d23d3ad373ee9b8459a494328572 100644
 --- a/services/screen_ai/buildflags/features.gni
 +++ b/services/screen_ai/buildflags/features.gni
-@@ -6,7 +6,9 @@ import("//build/config/sanitizers/sanitizers.gni")
+@@ -5,8 +5,9 @@
+ import("//build/config/sanitizers/sanitizers.gni")
  
  declare_args() {
-   # Screen AI service is only supported on desktop platforms.
+-  # Screen AI service is only supported on desktop platforms.
 -  enable_screen_ai_service = is_linux || is_mac || is_chromeos || is_win
-+  # Build desktop service plumbing on AROS as well. Component availability
-+  # remains a runtime check; this does not provide a native Screen AI binary.
++  # AROS builds the desktop protocol/plumbing used by reading mode. Native
++  # ScreenAI execution remains unavailable until a compatible binary exists.
 +  enable_screen_ai_service = is_linux || is_mac || is_chromeos || is_win || is_aros
  
    # Screen AI library is not available for browser tests on ChromeOS. Tast tests
@@ -55239,6 +56690,56 @@ index 0000000000000000000000000000000000000000..3dd62bca24ef7919360834091d420a09
 +#define HAVE_UNISTD_H 1
 +
 +#define TRIM_DSP_FUNCTIONS 1
+diff --git a/third_party/federated_compute/third_party/protodatastore-cpp/src/protostore/file-storage.cc b/third_party/federated_compute/third_party/protodatastore-cpp/src/protostore/file-storage.cc
+index 7ffe8244ec6d7db6d6fab0505769a20ffeea6d52..16be9df11ba159673846f0b71eb7cca62e3e9332 100644
+--- a/third_party/federated_compute/third_party/protodatastore-cpp/src/protostore/file-storage.cc
++++ b/third_party/federated_compute/third_party/protodatastore-cpp/src/protostore/file-storage.cc
+@@ -77,7 +77,9 @@ absl::Status IOError(absl::string_view context) {
+     case ENOTCONN:    // The socket is not connected
+     case EPIPE:       // Broken pipe
+ #if !defined(_WIN32)
++#ifdef ESHUTDOWN
+     case ESHUTDOWN:   // Cannot send after transport endpoint shutdown
++#endif
+ #endif
+     case ETXTBSY:     // Text file busy
+       return absl::FailedPreconditionError(message);
+@@ -107,11 +109,15 @@ absl::Status IOError(absl::string_view context) {
+     case ENOTSUP:          // Operation not supported
+     case EAFNOSUPPORT:     // Address family not supported
+ #if !defined(_WIN32)
++#ifdef EPFNOSUPPORT
+     case EPFNOSUPPORT:     // Protocol family not supported
++#endif
+ #endif
+     case EPROTONOSUPPORT:  // Protocol not supported
+ #if !defined(_WIN32)
++#ifdef ESOCKTNOSUPPORT
+     case ESOCKTNOSUPPORT:  // Socket type not supported
++#endif
+ #endif
+     case EXDEV:            // Improper link
+       return absl::UnimplementedError(message);
+@@ -122,7 +128,9 @@ absl::Status IOError(absl::string_view context) {
+     case ECONNRESET:    // Connection reset
+     case EINTR:         // Interrupted function call
+ #if !defined(_WIN32)
++#ifdef EHOSTDOWN
+     case EHOSTDOWN:     // Host is down
++#endif
+ #endif
+     case EHOSTUNREACH:  // Host is unreachable
+     case ENETDOWN:      // Network is down
+@@ -131,7 +139,9 @@ absl::Status IOError(absl::string_view context) {
+     case ENOLCK:        // No locks available
+     case ENOLINK:       // Link has been severed
+ #if !(defined(__APPLE__) || defined(__FreeBSD__) || defined(_WIN32))
++#ifdef ENONET
+     case ENONET:  // Machine is not on the network
++#endif
+ #endif
+       return absl::UnavailableError(message);
+       break;
 diff --git a/third_party/freetype/BUILD.gn b/third_party/freetype/BUILD.gn
 index e0b25f8b933cf541cbae0feb84bc79c450d83737..bd1fefb3bb913bd2df31c401d6e0dfdebeeed4d4 100644
 --- a/third_party/freetype/BUILD.gn
@@ -55834,6 +57335,97 @@ index 41a331f461555f668361cb3e90f6122fe156d6d7..b59092ceba1d22bb288ffde08dca935d
              pub use std::ffi::{OsStr, OsString};
              #[cfg(feature = "std")]
              pub use std::hash::{BuildHasher, Hash};
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/non_utf8/path.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/non_utf8/path.rs
+index 53f8b16d05d2f0d608cba9270c3373950df9e2b8..70028263b20fc189e8dd536155ec61863eef9a39 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/non_utf8/path.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/non_utf8/path.rs
+@@ -651,7 +651,7 @@ where
+     /// let path = cwd.join(Path::new("a/b/../c/./d"));
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join(Path::new("a/c/d")));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> std::io::Result<PathBuf<T>> {
+         if self.is_absolute() {
+             Ok(self.normalize())
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/utf8/path.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/utf8/path.rs
+index 77aba65eb9b20ccfca26e3d274492a39333fff7c..69ae39ef556dfb98ae7b887c021b10d8d1de16f7 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/utf8/path.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/common/utf8/path.rs
+@@ -601,7 +601,7 @@ where
+     /// let path = cwd.join(Utf8Path::new("a/b/../c/./d"));
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join(Utf8Path::new("a/c/d")));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> std::io::Result<Utf8PathBuf<T>> {
+         if self.is_absolute() {
+             Ok(self.normalize())
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/lib.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/lib.rs
+index 4ddda571036777dd0df5342cd112420fffe82e64..f812e5e8f3ebfaea8e34cd0a7e0f513d6b3da074 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/lib.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/lib.rs
+@@ -26,7 +26,7 @@ mod native;
+ mod platform;
+ mod typed;
+ mod unix;
+-#[cfg(all(feature = "std", not(target_family = "wasm")))]
++#[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+ pub mod utils;
+ mod windows;
+ 
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/path.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/path.rs
+index 09cba928a02508fe1a09e691db01d75037b27e70..2952f9bdaf885ed7d70c1542c5b91d618e4db45d 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/path.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/path.rs
+@@ -532,7 +532,7 @@ impl<'a> TypedPath<'a> {
+     /// let path = cwd.join("a/b/../c/./d");
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join("a/c/d"));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> io::Result<TypedPathBuf> {
+         Ok(match self {
+             Self::Unix(path) => TypedPathBuf::Unix(path.absolutize()?),
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/pathbuf.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/pathbuf.rs
+index 9fad919e8cfa2d5a985975eeac1284968c5d78bc..f8fdc440a1f05d4c56427da3c63a206364f4ded7 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/pathbuf.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/non_utf8/pathbuf.rs
+@@ -830,7 +830,7 @@ impl TypedPathBuf {
+     /// let path = cwd.join("a/b/../c/./d");
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join("a/c/d"));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> io::Result<TypedPathBuf> {
+         self.to_path().absolutize()
+     }
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/path.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/path.rs
+index f5afa5cd1017bb81d53a473c8bcd0924ae2c262f..89f84a21783cd287d8ffd3cbc3d35dc97521bd88 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/path.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/path.rs
+@@ -489,7 +489,7 @@ impl<'a> Utf8TypedPath<'a> {
+     /// let path = cwd.join("a/b/../c/./d");
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join("a/c/d"));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> std::io::Result<Utf8TypedPathBuf> {
+         Ok(match self {
+             Self::Unix(path) => Utf8TypedPathBuf::Unix(path.absolutize()?),
+diff --git a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/pathbuf.rs b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/pathbuf.rs
+index 825402b175a9190dd38946f4a878bd461e8e032b..0d43c5f0270b5fe24c463dbbdaf9a529854d6c8a 100644
+--- a/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/pathbuf.rs
++++ b/third_party/rust/chromium_crates_io/vendor/typed-path-v0_12/src/typed/utf8/pathbuf.rs
+@@ -790,7 +790,7 @@ impl Utf8TypedPathBuf {
+     /// let path = cwd.join("a/b/../c/./d");
+     /// assert_eq!(path.absolutize().unwrap(), cwd.join("a/c/d"));
+     /// ```
+-    #[cfg(all(feature = "std", not(target_family = "wasm")))]
++    #[cfg(all(feature = "std", not(target_family = "wasm"), any(windows, unix)))]
+     pub fn absolutize(&self) -> std::io::Result<Utf8TypedPathBuf> {
+         self.to_path().absolutize()
+     }
 diff --git a/third_party/snappy/BUILD.gn b/third_party/snappy/BUILD.gn
 index 6f87d4f904e998e433241befad07cd8031a0fc71..cc7ed09ae5f73b9e5cfd60669a0e99c9e4473166 100644
 --- a/third_party/snappy/BUILD.gn
@@ -56420,6 +58012,45 @@ index f5ae8253a4c84c9b6dfb11d9527779b9ae7fef04..66783addfb2b34a4862b255482412c3d
      data_deps += [
        # This is defined for Windows, but is unused by Telemetry on
        # Windows, and including it can have issues when cross-compiling
+diff --git a/ui/accessibility/accessibility_features.cc b/ui/accessibility/accessibility_features.cc
+index 4100c31293a0f5e96c5795cc2e574a0a35fcd374..0d047e4a7919af4fc85c6281be255ddfc853d6e2 100644
+--- a/ui/accessibility/accessibility_features.cc
++++ b/ui/accessibility/accessibility_features.cc
+@@ -493,13 +493,13 @@ bool IsMacAccessibilityTextOperationEnabled() {
+ }
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ BASE_FEATURE(kWasmTtsEngineAutoInstallDisabled,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ bool IsWasmTtsEngineAutoInstallDisabled() {
+   return base::FeatureList::IsEnabled(
+       ::features::kWasmTtsEngineAutoInstallDisabled);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ }  // namespace features
+diff --git a/ui/accessibility/accessibility_features.h b/ui/accessibility/accessibility_features.h
+index 3f8f02ebeb151b8bbf44d08b281e209569520393..bc402c3cb336dbeeda081e5dd1a1f4e28cb6e668 100644
+--- a/ui/accessibility/accessibility_features.h
++++ b/ui/accessibility/accessibility_features.h
+@@ -399,12 +399,12 @@ AX_BASE_EXPORT BASE_DECLARE_FEATURE(kMacAccessibilityTextOperation);
+ AX_BASE_EXPORT bool IsMacAccessibilityTextOperationEnabled();
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // Disable the wasm tts engine component to use dev version local extension
+ // files.
+ AX_BASE_EXPORT BASE_DECLARE_FEATURE(kWasmTtsEngineAutoInstallDisabled);
+ AX_BASE_EXPORT bool IsWasmTtsEngineAutoInstallDisabled();
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ }  // namespace features
+ 
 diff --git a/ui/accessibility/platform/BUILD.gn b/ui/accessibility/platform/BUILD.gn
 index eadb44ecc00a1ac4f5c442eafe9ceb53279a36b1..41df3858aaa4416bcffdc74adab274c7a806d78a 100644
 --- a/ui/accessibility/platform/BUILD.gn
