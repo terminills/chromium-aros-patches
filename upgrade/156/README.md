@@ -98,3 +98,17 @@ pinned AROS master baseline, build LLVM, then build lavapipe with
 `make -j8 OPT_LLVM=20.1.0 hidd-lavapipe` and the test with
 `make -j8 OPT_LLVM=20.1.0 test-vulkan-torusknot`. This is software Vulkan
 rendering in native AROS, not a Chromium/CEF window or hardware GPU test.
+
+## AArch64 / Raspberry Pi work in progress
+
+Native AArch64 is now in the delivery scope alongside x86-64. The private
+Chromium 156 build graph generates 35,074 targets for `target_cpu="arm64"`.
+The Rust standard library builds successfully through that GN graph using
+`rust/aarch64-unknown-aros.json`; an extracted object is verified as ELF64,
+little-endian, AArch64 (see `evidence/arm64-rust-std-object.txt`).
+
+This is compile evidence only. The separate GCC 15.2.0 toolchain and
+`raspi-aarch64-smp` SDK build are in progress. CEF linking, Raspberry Pi boot,
+application isolation, graphics and media runtime remain unverified.
+The full Chromium 156 patch queues are still being migrated; the root queues
+remain the older baseline and must not be mistaken for a completed 156 port.
