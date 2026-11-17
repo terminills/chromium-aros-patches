@@ -1,5 +1,10 @@
 # Chromium for AROS — patch queues
 
+**This branch is the ongoing Chromium 156 / CEF 8078 migration.** See
+[upgrade/156](upgrade/156/README.md) for pins, reproducible prerequisites and
+validation limits. The root export below remains the retained Chromium 124
+baseline until the complete replacement queue passes its checks.
+
 This repository carries the AROS port of **Chromium 124.0.6367.0** as ordered
 Git patches for Chromium, V8, CEF and their dependencies. It contains the port,
 not a complete Chromium checkout or a browser binary.

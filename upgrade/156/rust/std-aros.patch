@@ -1,0 +1,2917 @@
+--- a/library/std/build.rs
++++ b/library/std/build.rs
+@@ -58,6 +58,7 @@
+         || target_os == "nuttx"
+         || target_os == "cygwin"
+         || target_os == "vexos"
++        || target_os == "aros"
+ 
+         // See src/bootstrap/src/core/build_steps/synthetic_targets.rs
+         || env::var("RUSTC_BOOTSTRAP_SYNTHETIC_TARGET").is_ok()
+--- /dev/null
++++ b/library/std/src/sys/alloc/aros.rs
+@@ -0,0 +1,64 @@
++//! System allocator for AROS.
++//!
++//! A thin wrapper over `posixc` `malloc`/`calloc`/`realloc`/`free`/
++//! `posix_memalign`, declared directly here so `std` needs no `libc`-crate AROS
++//! support yet. Mirrors `sys/alloc/unix.rs` (the MIN_ALIGN fast path + a
++//! `posix_memalign` slow path for over-aligned requests).
++use super::{MIN_ALIGN, realloc_fallback};
++use crate::alloc::Layout;
++use crate::ptr;
++
++mod c {
++    unsafe extern "C" {
++        pub fn malloc(size: usize) -> *mut u8;
++        pub fn calloc(nmemb: usize, size: usize) -> *mut u8;
++        pub fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
++        pub fn free(ptr: *mut u8);
++        pub fn posix_memalign(memptr: *mut *mut u8, align: usize, size: usize) -> i32;
++    }
++}
++
++    #[inline]
++pub unsafe fn alloc(layout: Layout) -> *mut u8 {
++        if layout.align() <= MIN_ALIGN && layout.align() <= layout.size() {
++            unsafe { c::malloc(layout.size()) }
++        } else {
++            unsafe { aligned_malloc(&layout) }
++        }
++    }
++
++    #[inline]
++pub unsafe fn alloc_zeroed(layout: Layout) -> *mut u8 {
++        if layout.align() <= MIN_ALIGN && layout.align() <= layout.size() {
++            unsafe { c::calloc(layout.size(), 1) }
++        } else {
++            let ptr = unsafe { alloc(layout) };
++            if !ptr.is_null() {
++                unsafe { ptr::write_bytes(ptr, 0, layout.size()) };
++            }
++            ptr
++        }
++    }
++
++    #[inline]
++pub unsafe fn dealloc(ptr: *mut u8, _layout: Layout) {
++        unsafe { c::free(ptr) }
++    }
++
++    #[inline]
++pub unsafe fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++        if layout.align() <= MIN_ALIGN && layout.align() <= new_size {
++            unsafe { c::realloc(ptr, new_size) }
++        } else {
++            unsafe { realloc_fallback(ptr, layout, new_size) }
++        }
++    }
++
++#[inline]
++unsafe fn aligned_malloc(layout: &Layout) -> *mut u8 {
++    // posix_memalign requires the alignment be a multiple of sizeof(void*).
++    let mut out: *mut u8 = ptr::null_mut();
++    let align = layout.align().max(size_of::<usize>());
++    let ret = unsafe { c::posix_memalign(&mut out, align, layout.size()) };
++    if ret != 0 { ptr::null_mut() } else { out }
++}
+--- a/library/std/src/sys/alloc/mod.rs
++++ b/library/std/src/sys/alloc/mod.rs
+@@ -64,6 +64,10 @@
+ }
+ 
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        use aros as imp;
++    }
+     any(target_family = "unix", target_os = "wasi", target_os = "teeos", target_os = "trusty") => {
+         mod unix;
+         use unix as imp;
+--- /dev/null
++++ b/library/std/src/sys/args/aros.rs
+@@ -0,0 +1,65 @@
++//! Command-line args for AROS.
++//!
++//! A `C:` command reaches Rust through a C `main(argc, argv)` (the harness), not
++//! Rust's `lang_start`, so there's no automatic capture. The harness stashes them
++//! in two C globals and this reads them. OsStr on AROS is raw bytes, so argv round-
++//! trips exactly.
++use crate::ffi::{CStr, OsString, c_char, c_int};
++use crate::fmt;
++use crate::vec;
++
++unsafe extern "C" {
++    static aros_argc: c_int;
++    static aros_argv: *const *const c_char;
++}
++
++pub struct Args {
++    iter: vec::IntoIter<OsString>,
++}
++
++pub fn args() -> Args {
++    let mut v: Vec<OsString> = Vec::new();
++    unsafe {
++        if !aros_argv.is_null() {
++            let mut i = 0isize;
++            while i < aros_argc as isize {
++                let p = *aros_argv.offset(i);
++                if p.is_null() {
++                    break;
++                }
++                let bytes = CStr::from_ptr(p).to_bytes().to_vec();
++                v.push(OsString::from_encoded_bytes_unchecked(bytes));
++                i += 1;
++            }
++        }
++    }
++    Args { iter: v.into_iter() }
++}
++
++impl fmt::Debug for Args {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_list().entries(self.iter.as_slice()).finish()
++    }
++}
++
++impl Iterator for Args {
++    type Item = OsString;
++    fn next(&mut self) -> Option<OsString> {
++        self.iter.next()
++    }
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        self.iter.size_hint()
++    }
++}
++
++impl DoubleEndedIterator for Args {
++    fn next_back(&mut self) -> Option<OsString> {
++        self.iter.next_back()
++    }
++}
++
++impl ExactSizeIterator for Args {
++    fn len(&self) -> usize {
++        self.iter.len()
++    }
++}
+--- a/library/std/src/sys/args/mod.rs
++++ b/library/std/src/sys/args/mod.rs
+@@ -14,6 +14,10 @@
+ mod common;
+ 
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        pub use aros::*;
++    }
+     any(
+         all(
+             target_family = "unix",
+--- /dev/null
++++ b/library/std/src/sys/env/aros.rs
+@@ -0,0 +1,89 @@
++//! env for AROS, over posixc `getenv`/`setenv`/`unsetenv`.
++//!
++//! AROS has no POSIX `environ` array: env vars are the process's local variables
++//! (`pr_LocalVars`, `LV_VAR` nodes) that `setenv`/`getenv` write and read. `env()`
++//! (the enumeration behind `std::env::vars`) walks that list via the `aros_env_enum`
++//! glue, so it returns exactly the local vars this process can see -- including
++//! whatever `set_var` wrote. Global `ENV:` file variables are out of scope (they are
++//! not part of this process's local set). `var`/`set_var`/`remove_var` work. OsStr on
++//! AROS is the raw-bytes representation, so `as_encoded_bytes` is the exact byte
++//! round-trip.
++pub use super::common::Env;
++use crate::ffi::{CStr, CString, OsStr, OsString, c_char, c_void};
++use crate::io;
++
++mod c {
++    use super::{c_char, c_void};
++    pub type EnvCb = extern "C" fn(
++        ctx: *mut c_void,
++        name: *const u8,
++        name_len: usize,
++        val: *const u8,
++        val_len: usize,
++    );
++    unsafe extern "C" {
++        pub fn getenv(name: *const c_char) -> *mut c_char;
++        pub fn setenv(name: *const c_char, value: *const c_char, overwrite: i32) -> i32;
++        pub fn unsetenv(name: *const c_char) -> i32;
++        // walks pr_LocalVars, calling `cb(ctx, ...)` once per LV_VAR (aros_env_glue.c)
++        pub fn aros_env_enum(cb: EnvCb, ctx: *mut c_void);
++    }
++}
++
++fn cstr(s: &OsStr) -> io::Result<CString> {
++    CString::new(s.as_encoded_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
++}
++
++/// Enumerate the process's local environment variables (`std::env::vars`).
++pub fn env() -> Env {
++    extern "C" fn push(
++        ctx: *mut c_void,
++        name: *const u8,
++        name_len: usize,
++        val: *const u8,
++        val_len: usize,
++    ) {
++        // SAFETY: `ctx` is the `&mut Vec` we pass below; the slices are the glue's
++        // LocalVar name/value, valid for the duration of this call.
++        let vars = unsafe { &mut *(ctx as *mut Vec<(OsString, OsString)>) };
++        let name = unsafe { crate::slice::from_raw_parts(name, name_len) };
++        let val = if val.is_null() { &[][..] } else { unsafe { crate::slice::from_raw_parts(val, val_len) } };
++        let key = unsafe { OsString::from_encoded_bytes_unchecked(name.to_vec()) };
++        let value = unsafe { OsString::from_encoded_bytes_unchecked(val.to_vec()) };
++        vars.push((key, value));
++    }
++
++    let mut vars: Vec<(OsString, OsString)> = Vec::new();
++    unsafe { c::aros_env_enum(push, (&raw mut vars).cast::<c_void>()) };
++    Env::new(vars)
++}
++
++pub fn getenv(k: &OsStr) -> Option<OsString> {
++    let key = cstr(k).ok()?;
++    let v = unsafe { c::getenv(key.as_ptr()) };
++    if v.is_null() {
++        None
++    } else {
++        let bytes = unsafe { CStr::from_ptr(v) }.to_bytes().to_vec();
++        Some(unsafe { OsString::from_encoded_bytes_unchecked(bytes) })
++    }
++}
++
++pub unsafe fn setenv(k: &OsStr, v: &OsStr) -> io::Result<()> {
++    let key = cstr(k)?;
++    let val = cstr(v)?;
++    if unsafe { c::setenv(key.as_ptr(), val.as_ptr(), 1) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++
++pub unsafe fn unsetenv(n: &OsStr) -> io::Result<()> {
++    let key = cstr(n)?;
++    if unsafe { c::unsetenv(key.as_ptr()) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
+--- a/library/std/src/sys/env/mod.rs
++++ b/library/std/src/sys/env/mod.rs
+@@ -11,10 +11,15 @@
+     target_os = "uefi",
+     target_os = "wasi",
+     target_os = "xous",
++    target_os = "aros",
+ ))]
+ mod common;
+ 
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        pub use aros::*;
++    }
+     target_family = "unix" => {
+         mod unix;
+         pub use unix::*;
+--- /dev/null
++++ b/library/std/src/sys/fs/aros.rs
+@@ -0,0 +1,592 @@
++//! fs for AROS, over posixc `open`/`read`/`write`/`lseek`/`close` (+ `unlink`/
++//! `mkdir`/`rename`/`chmod`/`symlink`/`readlink`/`utimes`) plus the `aros_*` stat/
++//! dir glue. `File`, metadata, directory listing, permissions (`chmod`/`fchmod`),
++//! symlinks (`symlink`/`readlink`), and path `set_times` (`utimes`) are real. The
++//! fd-based `File::set_times` and the nofollow `set_times` variant stay `Unsupported`
++//! because posixc has no `futimes`/`lutimes`; `link`/`copy`/`canonicalize`/
++//! `remove_dir_all`/`truncate`/`duplicate` remain stubs. Based on
++//! `sys/fs/unsupported.rs`.
++//!
++//! `off_t` is 64-bit on aarch64 (`__WORDSIZE==64`), `mode_t` is 16-bit, and AROS
++//! `open` is variadic. The access-mode flags are AROS-specific and do **not** follow
++//! NetBSD: `O_RDONLY=0x1`, `O_WRONLY=0x2`, `O_RDWR=0x3` (`O_ACCMODE=0x3`), from
++//! `compiler/crt/posixc/include/fcntl.h`. `O_RDONLY` is **not** 0 here, so a
++//! read-only open must set bit 0 or AROS `open` rejects the (zero) access mode with
++//! EINVAL. The create/misc flags (`O_CREAT=0x40`, `O_TRUNC=0x200`, `O_APPEND=0x400`)
++//! do match.
++use crate::ffi::{CString, OsString};
++use crate::fmt;
++use crate::fs::TryLockError;
++use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
++use crate::path::{Path, PathBuf};
++pub use crate::sys::fs::common::Dir;
++use crate::sys::time::SystemTime;
++use crate::sys::unsupported;
++
++mod c {
++    use crate::ffi::{c_char, c_int, c_void};
++    pub type mode_t = u16;
++    pub type off_t = i64;
++    unsafe extern "C" {
++        pub fn open(path: *const c_char, flags: c_int, ...) -> c_int;
++        pub fn read(fd: c_int, buf: *mut u8, count: usize) -> isize;
++        pub fn write(fd: c_int, buf: *const u8, count: usize) -> isize;
++        pub fn lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t;
++        pub fn close(fd: c_int) -> c_int;
++        pub fn unlink(path: *const c_char) -> c_int;
++        pub fn rename(old: *const c_char, new: *const c_char) -> c_int;
++        pub fn mkdir(path: *const c_char, mode: mode_t) -> c_int;
++        pub fn rmdir(path: *const c_char) -> c_int;
++        // directory listing (aros_fs_glue.c, over posixc opendir/readdir/closedir)
++        pub fn aros_opendir(path: *const c_char) -> *mut c_void;
++        pub fn aros_readdir(dir: *mut c_void, namebuf: *mut c_char, buflen: usize, type_out: *mut u32) -> c_int;
++        pub fn aros_closedir(dir: *mut c_void);
++    }
++    // d_type values from AROS posixc <dirent.h>
++    pub const DT_DIR: u32 = 4;
++    pub const DT_REG: u32 = 8;
++    pub const DT_LNK: u32 = 10;
++    pub const O_RDONLY: c_int = 0x0001;
++    pub const O_WRONLY: c_int = 0x0002;
++    pub const O_RDWR: c_int = 0x0003;
++    pub const O_CREAT: c_int = 0x0040;
++    pub const O_EXCL: c_int = 0x0080;
++    pub const O_TRUNC: c_int = 0x0200;
++    pub const O_APPEND: c_int = 0x0400;
++    pub const SEEK_SET: c_int = 0;
++    pub const SEEK_CUR: c_int = 1;
++    pub const SEEK_END: c_int = 2;
++
++    // file-type bits of st_mode (octal, standard values; AROS posixc <sys/stat.h>)
++    pub const S_IFMT: u32 = 0o170000;
++    pub const S_IFREG: u32 = 0o100000;
++    pub const S_IFDIR: u32 = 0o040000;
++    pub const S_IFLNK: u32 = 0o120000;
++
++    /// Mirror of `struct aros_fileattr` in `hosted/rust/aros_fs_glue.c`.
++    #[repr(C)]
++    #[derive(Clone, Copy)]
++    pub struct Attr {
++        pub size: u64,
++        pub mode: u32,
++        pub nlink: u32,
++        pub ino: u64,
++        pub mtime_sec: i64,
++        pub mtime_nsec: i64,
++        pub atime_sec: i64,
++        pub atime_nsec: i64,
++        pub ctime_sec: i64,
++        pub ctime_nsec: i64,
++    }
++
++    unsafe extern "C" {
++        pub fn aros_stat(path: *const c_char, out: *mut Attr) -> c_int;
++        pub fn aros_lstat(path: *const c_char, out: *mut Attr) -> c_int;
++        pub fn aros_fstat(fd: c_int, out: *mut Attr) -> c_int;
++        // permissions + symlinks come straight from posixc (weak wrappers in
++        // libposixc.a: chmod->SetProtection, symlink->MakeLink, readlink->ReadLink).
++        pub fn chmod(path: *const c_char, mode: mode_t) -> c_int;
++        pub fn fchmod(fd: c_int, mode: mode_t) -> c_int;
++        pub fn symlink(target: *const c_char, linkpath: *const c_char) -> c_int;
++        pub fn readlink(path: *const c_char, buf: *mut c_char, bufsiz: usize) -> isize;
++        // set_times: aros_fs_glue.c builds the timeval[2] (posixc has utimes only).
++        pub fn aros_utimes(
++            path: *const c_char,
++            atime_sec: i64,
++            atime_nsec: i64,
++            mtime_sec: i64,
++            mtime_nsec: i64,
++        ) -> c_int;
++    }
++}
++
++/// Convert a path for the posixc syscall boundary, translating the
++/// unix-join artifacts Rust callers produce into AROS device syntax:
++///
++/// - `SYS:/C` (what `PathBuf::join("SYS:", "C")` yields) -> `SYS:C` —
++///   on AROS a slash right after the device colon means the device
++///   root's *parent*, which no unix-minded caller ever intends.
++/// - runs of `/` collapse to one — `//` means grandparent on AROS.
++/// - a trailing `/` is stripped (`SYS:C/` locks the *parent* of C) —
++///   except on a bare device root (`SYS:`) or the lone `/`.
++///
++/// Paths with no device colon pass through untouched.
++fn cstr(p: &Path) -> io::Result<CString> {
++    let bytes = p.as_os_str().as_encoded_bytes();
++    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
++    let mut seen_colon = false;
++    let mut i = 0;
++    while i < bytes.len() {
++        let b = bytes[i];
++        if b == b':' && !seen_colon {
++            seen_colon = true;
++            out.push(b);
++            // Skip the single slash a unix-style join puts after the
++            // device colon.
++            if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
++                i += 1;
++            }
++        } else if b == b'/' {
++            out.push(b);
++            while i + 1 < bytes.len() && bytes[i + 1] == b'/' {
++                i += 1;
++            }
++        } else {
++            out.push(b);
++        }
++        i += 1;
++    }
++    if seen_colon && out.len() > 1 && out.ends_with(b"/") && !out.ends_with(b":/") {
++        out.pop();
++    }
++    CString::new(out).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
++}
++
++pub struct File {
++    fd: i32,
++}
++
++#[derive(Clone)]
++pub struct FileAttr {
++    size: u64,
++    mode: u32,
++    mtime: (i64, i64),
++    atime: (i64, i64),
++}
++pub struct ReadDir {
++    dir: *mut crate::ffi::c_void,
++    root: PathBuf,
++}
++// The DIR* is owned solely by this ReadDir; safe to move/observe across threads.
++unsafe impl Send for ReadDir {}
++unsafe impl Sync for ReadDir {}
++
++pub struct DirEntry {
++    name: OsString,
++    dtype: u32,
++    root: PathBuf,
++}
++
++impl FileAttr {
++    fn from_raw(a: &c::Attr) -> FileAttr {
++        FileAttr {
++            size: a.size,
++            mode: a.mode,
++            mtime: (a.mtime_sec, a.mtime_nsec),
++            atime: (a.atime_sec, a.atime_nsec),
++        }
++    }
++}
++
++#[derive(Clone, Debug)]
++pub struct OpenOptions {
++    read: bool,
++    write: bool,
++    append: bool,
++    truncate: bool,
++    create: bool,
++    create_new: bool,
++}
++
++#[derive(Copy, Clone, Debug, Default)]
++pub struct FileTimes {
++    accessed: Option<SystemTime>,
++    modified: Option<SystemTime>,
++}
++#[derive(Clone, PartialEq, Eq, Debug)]
++pub struct FilePermissions {
++    mode: u32,
++}
++#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
++pub struct FileType {
++    mode: u32,
++}
++#[derive(Debug)]
++pub struct DirBuilder {}
++
++impl FileAttr {
++    pub fn size(&self) -> u64 { self.size }
++    pub fn perm(&self) -> FilePermissions { FilePermissions { mode: self.mode } }
++    pub fn file_type(&self) -> FileType { FileType { mode: self.mode } }
++    pub fn modified(&self) -> io::Result<SystemTime> { SystemTime::new(self.mtime.0, self.mtime.1) }
++    pub fn accessed(&self) -> io::Result<SystemTime> { SystemTime::new(self.atime.0, self.atime.1) }
++    pub fn created(&self) -> io::Result<SystemTime> {
++        Err(io::const_error!(io::ErrorKind::Unsupported, "birth time is not available on AROS"))
++    }
++}
++
++impl FilePermissions {
++    pub fn readonly(&self) -> bool { self.mode & 0o222 == 0 }
++    pub fn set_readonly(&mut self, readonly: bool) {
++        if readonly { self.mode &= !0o222; } else { self.mode |= 0o222; }
++    }
++}
++
++impl FileTimes {
++    pub fn set_accessed(&mut self, t: SystemTime) { self.accessed = Some(t); }
++    pub fn set_modified(&mut self, t: SystemTime) { self.modified = Some(t); }
++}
++
++impl FileType {
++    pub fn is_dir(&self) -> bool { self.mode & c::S_IFMT == c::S_IFDIR }
++    pub fn is_file(&self) -> bool { self.mode & c::S_IFMT == c::S_IFREG }
++    pub fn is_symlink(&self) -> bool { self.mode & c::S_IFMT == c::S_IFLNK }
++}
++
++impl fmt::Debug for ReadDir {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("ReadDir").field("root", &self.root).finish()
++    }
++}
++impl Iterator for ReadDir {
++    type Item = io::Result<DirEntry>;
++    fn next(&mut self) -> Option<io::Result<DirEntry>> {
++        let mut buf = [0u8; 1024];
++        let mut dtype: u32 = 0;
++        let r = unsafe {
++            c::aros_readdir(self.dir, buf.as_mut_ptr() as *mut crate::ffi::c_char, buf.len(), &mut dtype)
++        };
++        match r {
++            1 => {
++                let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
++                let name = unsafe { OsString::from_encoded_bytes_unchecked(buf[..len].to_vec()) };
++                Some(Ok(DirEntry { name, dtype, root: self.root.clone() }))
++            }
++            0 => None,
++            _ => Some(Err(io::Error::last_os_error())),
++        }
++    }
++}
++impl Drop for ReadDir {
++    fn drop(&mut self) {
++        unsafe { c::aros_closedir(self.dir) };
++    }
++}
++impl DirEntry {
++    pub fn path(&self) -> PathBuf { self.root.join(&self.name) }
++    pub fn file_name(&self) -> OsString { self.name.clone() }
++    pub fn metadata(&self) -> io::Result<FileAttr> { stat(&self.path()) }
++    pub fn file_type(&self) -> io::Result<FileType> {
++        let mode = match self.dtype {
++            c::DT_DIR => c::S_IFDIR,
++            c::DT_REG => c::S_IFREG,
++            c::DT_LNK => c::S_IFLNK,
++            // DT_UNKNOWN or anything else: fall back to a stat
++            _ => return self.metadata().map(|a| a.file_type()),
++        };
++        Ok(FileType { mode })
++    }
++}
++
++impl OpenOptions {
++    pub fn new() -> OpenOptions {
++        OpenOptions {
++            read: false,
++            write: false,
++            append: false,
++            truncate: false,
++            create: false,
++            create_new: false,
++        }
++    }
++    pub fn read(&mut self, read: bool) { self.read = read; }
++    pub fn write(&mut self, write: bool) { self.write = write; }
++    pub fn append(&mut self, append: bool) { self.append = append; }
++    pub fn truncate(&mut self, truncate: bool) { self.truncate = truncate; }
++    pub fn create(&mut self, create: bool) { self.create = create; }
++    pub fn create_new(&mut self, create_new: bool) { self.create_new = create_new; }
++
++    // Same access/creation-mode rules as std's unix pal: append implies write
++    // (read+append must be O_RDWR, not O_WRONLY), create/create_new/truncate
++    // require write or append, and truncate+append is invalid. EINVAL is 22 in
++    // AROS's NetBSD errno numbering (see ../io/error/aros.rs).
++    fn flags(&self) -> io::Result<i32> {
++        const EINVAL: i32 = 22;
++        let access = match (self.read, self.write, self.append) {
++            (true, false, false) => c::O_RDONLY,
++            (false, true, false) => c::O_WRONLY,
++            (true, true, false) => c::O_RDWR,
++            (false, _, true) => c::O_WRONLY | c::O_APPEND,
++            (true, _, true) => c::O_RDWR | c::O_APPEND,
++            (false, false, false) => return Err(io::Error::from_raw_os_error(EINVAL)),
++        };
++        let creation = match (self.write, self.append) {
++            (true, false) => 0,
++            (false, false) => {
++                if self.truncate || self.create || self.create_new {
++                    return Err(io::Error::from_raw_os_error(EINVAL));
++                }
++                0
++            }
++            (_, true) => {
++                if self.truncate && !self.create_new {
++                    return Err(io::Error::from_raw_os_error(EINVAL));
++                }
++                0
++            }
++        };
++        let mut f = access | creation;
++        if self.create_new {
++            f |= c::O_CREAT | c::O_EXCL;
++        } else {
++            if self.create {
++                f |= c::O_CREAT;
++            }
++            if self.truncate {
++                f |= c::O_TRUNC;
++            }
++        }
++        Ok(f)
++    }
++}
++
++impl File {
++    pub fn open(path: &Path, opts: &OpenOptions) -> io::Result<File> {
++        let p = cstr(path)?;
++        // AROS `open` is variadic and reads the `mode` va_arg unconditionally, so
++        // always pass it (ignored unless O_CREAT).
++        let fd = unsafe { c::open(p.as_ptr(), opts.flags()?, 0o666 as crate::ffi::c_int) };
++        if fd < 0 { Err(io::Error::last_os_error()) } else { Ok(File { fd }) }
++    }
++
++    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
++        let n = unsafe { c::read(self.fd, buf.as_mut_ptr(), buf.len()) };
++        if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
++    }
++    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
++        match bufs.iter_mut().find(|b| !b.is_empty()) {
++            Some(b) => self.read(b),
++            None => Ok(0),
++        }
++    }
++    pub fn is_read_vectored(&self) -> bool { false }
++    pub fn read_buf(&self, mut cursor: BorrowedCursor<'_, u8>) -> io::Result<()> {
++        let mut tmp = [0u8; 512];
++        let cap = cursor.capacity().min(tmp.len());
++        let n = self.read(&mut tmp[..cap])?;
++        cursor.append(&tmp[..n]);
++        Ok(())
++    }
++
++    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
++        let n = unsafe { c::write(self.fd, buf.as_ptr(), buf.len()) };
++        if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
++    }
++    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
++        match bufs.iter().find(|b| !b.is_empty()) {
++            Some(b) => self.write(b),
++            None => Ok(0),
++        }
++    }
++    pub fn is_write_vectored(&self) -> bool { false }
++
++    pub fn flush(&self) -> io::Result<()> { Ok(()) }
++
++    pub fn seek(&self, pos: SeekFrom) -> io::Result<u64> {
++        let (whence, off) = match pos {
++            SeekFrom::Start(n) => (c::SEEK_SET, n as i64),
++            SeekFrom::Current(n) => (c::SEEK_CUR, n),
++            SeekFrom::End(n) => (c::SEEK_END, n),
++        };
++        let r = unsafe { c::lseek(self.fd, off, whence) };
++        if r < 0 { Err(io::Error::last_os_error()) } else { Ok(r as u64) }
++    }
++    pub fn tell(&self) -> io::Result<u64> {
++        let r = unsafe { c::lseek(self.fd, 0, c::SEEK_CUR) };
++        if r < 0 { Err(io::Error::last_os_error()) } else { Ok(r as u64) }
++    }
++    pub fn size(&self) -> Option<io::Result<u64>> { None }
++
++    pub fn file_attr(&self) -> io::Result<FileAttr> {
++        let mut a: c::Attr = unsafe { crate::mem::zeroed() };
++        if unsafe { c::aros_fstat(self.fd, &mut a) } == 0 {
++            Ok(FileAttr::from_raw(&a))
++        } else {
++            Err(io::Error::last_os_error())
++        }
++    }
++    pub fn fsync(&self) -> io::Result<()> { Ok(()) }
++    pub fn datasync(&self) -> io::Result<()> { Ok(()) }
++    pub fn lock(&self) -> io::Result<()> { Ok(()) }
++    pub fn lock_shared(&self) -> io::Result<()> { Ok(()) }
++    pub fn try_lock(&self) -> Result<(), TryLockError> { Ok(()) }
++    pub fn try_lock_shared(&self) -> Result<(), TryLockError> { Ok(()) }
++    pub fn unlock(&self) -> io::Result<()> { Ok(()) }
++    pub fn truncate(&self, _size: u64) -> io::Result<()> { unsupported() }
++    pub fn duplicate(&self) -> io::Result<File> { unsupported() }
++    pub fn set_permissions(&self, perm: FilePermissions) -> io::Result<()> {
++        if unsafe { c::fchmod(self.fd, (perm.mode & 0o7777) as c::mode_t) } == 0 {
++            Ok(())
++        } else {
++            Err(io::Error::last_os_error())
++        }
++    }
++    // posixc has no futimes(), so times cannot be set through an open fd.
++    pub fn set_times(&self, _times: FileTimes) -> io::Result<()> {
++        Err(io::const_error!(
++            io::ErrorKind::Unsupported,
++            "setting file times through an open handle is not available on AROS (no futimes)"
++        ))
++    }
++}
++
++impl Drop for File {
++    fn drop(&mut self) {
++        unsafe { c::close(self.fd) };
++    }
++}
++
++impl fmt::Debug for File {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("File").field("fd", &self.fd).finish()
++    }
++}
++
++impl DirBuilder {
++    pub fn new() -> DirBuilder { DirBuilder {} }
++    pub fn mkdir(&self, p: &Path) -> io::Result<()> {
++        let c = cstr(p)?;
++        if unsafe { c::mkdir(c.as_ptr(), 0o777) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
++    }
++}
++
++pub fn readdir(p: &Path) -> io::Result<ReadDir> {
++    let path = cstr(p)?;
++    let dir = unsafe { c::aros_opendir(path.as_ptr()) };
++    if dir.is_null() {
++        Err(io::Error::last_os_error())
++    } else {
++        Ok(ReadDir { dir, root: p.to_path_buf() })
++    }
++}
++
++pub fn unlink(p: &Path) -> io::Result<()> {
++    let c = cstr(p)?;
++    if unsafe { c::unlink(c.as_ptr()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
++}
++
++pub fn rename(old: &Path, new: &Path) -> io::Result<()> {
++    let a = cstr(old)?;
++    let b = cstr(new)?;
++    if unsafe { c::rename(a.as_ptr(), b.as_ptr()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
++}
++
++pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
++    let path = cstr(p)?;
++    if unsafe { c::chmod(path.as_ptr(), (perm.mode & 0o7777) as c::mode_t) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++
++/// `filetime` for a `set_times` call. When a caller sets only one of atime/mtime,
++/// std still hands us both fields; a `None` field means "leave unchanged", which
++/// posixc `utimes` can't express (it rewrites both), so we fill the gap from the
++/// current on-disk value via `stat` — matching what the unix pal does with
++/// `UTIME_OMIT` when the platform lacks it.
++fn set_times_common(p: &Path, times: FileTimes) -> io::Result<()> {
++    let (at, mt) = match (times.accessed, times.modified) {
++        (Some(a), Some(m)) => (a, m),
++        _ => {
++            let cur = stat(p)?;
++            let a = times.accessed.map_or_else(|| cur.accessed(), Ok)?;
++            let m = times.modified.map_or_else(|| cur.modified(), Ok)?;
++            (a, m)
++        }
++    };
++    let (as_, an) = at.to_secs_nanos();
++    let (ms, mn) = mt.to_secs_nanos();
++    let path = cstr(p)?;
++    if unsafe { c::aros_utimes(path.as_ptr(), as_, an, ms, mn) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++
++pub fn set_times(p: &Path, times: FileTimes) -> io::Result<()> {
++    set_times_common(p, times)
++}
++
++// posixc has no lutimes(), so a symlink's own times can't be set without following.
++pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
++    Err(io::const_error!(
++        io::ErrorKind::Unsupported,
++        "setting a symlink's own times is not available on AROS (no lutimes)"
++    ))
++}
++
++pub fn rmdir(p: &Path) -> io::Result<()> {
++    let c = cstr(p)?;
++    if unsafe { c::rmdir(c.as_ptr()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
++}
++
++pub fn remove_dir_all(_path: &Path) -> io::Result<()> { unsupported() }
++pub fn exists(path: &Path) -> io::Result<bool> {
++    match stat(path) {
++        Ok(_) => Ok(true),
++        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
++        Err(e) => Err(e),
++    }
++}
++pub fn readlink(p: &Path) -> io::Result<PathBuf> {
++    let path = cstr(p)?;
++    // readlink doesn't NUL-terminate and gives no size hint; grow until it fits.
++    let mut cap = 256usize;
++    loop {
++        let mut buf: Vec<u8> = vec![0; cap];
++        let n = unsafe {
++            c::readlink(path.as_ptr(), buf.as_mut_ptr() as *mut crate::ffi::c_char, buf.len())
++        };
++        if n < 0 {
++            return Err(io::Error::last_os_error());
++        }
++        let n = n as usize;
++        if n < buf.len() {
++            buf.truncate(n);
++            let os = unsafe { OsString::from_encoded_bytes_unchecked(buf) };
++            return Ok(PathBuf::from(os));
++        }
++        cap *= 2; // filled the buffer: the target may be longer, retry bigger
++    }
++}
++
++pub fn symlink(original: &Path, link: &Path) -> io::Result<()> {
++    // posixc symlink(oldpath, newpath): oldpath is the link target, newpath the link.
++    let target = cstr(original)?;
++    let linkpath = cstr(link)?;
++    if unsafe { c::symlink(target.as_ptr(), linkpath.as_ptr()) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++
++pub fn link(_src: &Path, _dst: &Path) -> io::Result<()> { unsupported() }
++pub fn stat(p: &Path) -> io::Result<FileAttr> {
++    let path = cstr(p)?;
++    let mut a: c::Attr = unsafe { crate::mem::zeroed() };
++    if unsafe { c::aros_stat(path.as_ptr(), &mut a) } == 0 {
++        Ok(FileAttr::from_raw(&a))
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++pub fn lstat(p: &Path) -> io::Result<FileAttr> {
++    let path = cstr(p)?;
++    let mut a: c::Attr = unsafe { crate::mem::zeroed() };
++    if unsafe { c::aros_lstat(path.as_ptr(), &mut a) } == 0 {
++        Ok(FileAttr::from_raw(&a))
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++pub fn canonicalize(_p: &Path) -> io::Result<PathBuf> { unsupported() }
++pub fn copy(_from: &Path, _to: &Path) -> io::Result<u64> { unsupported() }
++
++// posixc does not provide a no-follow chmod operation. Do not silently change
++// the link target when the caller explicitly requested no-follow semantics.
++pub fn set_perm_nofollow(_p: &Path, _perm: FilePermissions) -> io::Result<()> {
++    Err(io::Error::new(io::ErrorKind::Unsupported, "no-follow permissions are not supported"))
++}
+--- a/library/std/src/sys/fs/mod.rs
++++ b/library/std/src/sys/fs/mod.rs
+@@ -6,6 +6,10 @@
+ pub mod common;
+ 
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        use aros as imp;
++    }
+     any(target_family = "unix", target_os = "wasi") => {
+         mod unix;
+         use unix as imp;
+--- /dev/null
++++ b/library/std/src/sys/io/error/aros.rs
+@@ -0,0 +1,61 @@
++//! Real errno for AROS, over posixc.
++//!
++//! errno is `*__stdc_geterrnoptr()` (a pointer into the task's StdCBase); messages
++//! come from posixc `strerror`. AROS uses **NetBSD errno numbering** (the errno.h
++//! comment says so, and the bsdsocket bridge confirmed it: a refused connect gave
++//! errno 61 = ECONNREFUSED), so the ErrorKind map below uses NetBSD values.
++use crate::io::ErrorKind;
++
++unsafe extern "C" {
++    fn __stdc_geterrnoptr() -> *mut i32;
++    fn strerror(errnum: i32) -> *const u8;
++}
++
++pub fn errno() -> i32 {
++    unsafe { *__stdc_geterrnoptr() }
++}
++
++#[allow(dead_code)]
++pub fn set_errno(e: i32) {
++    unsafe { *__stdc_geterrnoptr() = e };
++}
++
++pub fn format_error(errno: i32, f: &mut crate::fmt::Formatter<'_>) -> crate::fmt::Result {
++    // strerror returns a NUL-terminated string owned by the C runtime.
++    let p = unsafe { strerror(errno) };
++    if p.is_null() {
++        return write!(f, "unknown error (errno {errno})");
++    }
++    let message = unsafe { crate::ffi::CStr::from_ptr(p.cast()) };
++    f.write_str(&message.to_string_lossy())
++}
++
++pub fn is_interrupted(code: i32) -> bool {
++    code == 4 // EINTR
++}
++
++pub fn decode_error_kind(code: i32) -> ErrorKind {
++    use ErrorKind::*;
++    match code {
++        1 => PermissionDenied,    // EPERM
++        2 => NotFound,            // ENOENT
++        4 => Interrupted,         // EINTR
++        13 => PermissionDenied,   // EACCES
++        17 => AlreadyExists,      // EEXIST
++        20 => NotADirectory,      // ENOTDIR
++        21 => IsADirectory,       // EISDIR
++        22 => InvalidInput,       // EINVAL
++        28 => StorageFull,        // ENOSPC
++        30 => ReadOnlyFilesystem, // EROFS
++        32 => BrokenPipe,         // EPIPE
++        35 => WouldBlock,         // EAGAIN / EWOULDBLOCK
++        48 => AddrInUse,          // EADDRINUSE
++        49 => AddrNotAvailable,   // EADDRNOTAVAIL
++        53 => ConnectionAborted,  // ECONNABORTED
++        54 => ConnectionReset,    // ECONNRESET
++        57 => NotConnected,       // ENOTCONN
++        60 => TimedOut,           // ETIMEDOUT
++        61 => ConnectionRefused,  // ECONNREFUSED
++        _ => Uncategorized,
++    }
++}
+--- a/library/std/src/sys/io/error/mod.rs
++++ b/library/std/src/sys/io/error/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        pub use aros::*;
++    }
+     target_os = "hermit" => {
+         mod hermit;
+         pub use hermit::*;
+--- /dev/null
++++ b/library/std/src/sys/net/connection/aros.rs
+@@ -0,0 +1,698 @@
++//! TCP/UDP for AROS, over the host-passthrough `bsdsocket.library`.
++//!
++//! AROS sockets live in their own descriptor space (closed with `CloseSocket`,
++//! not `close`; polled with `WaitSelect`, not `poll`), so the shared Berkeley
++//! `socket/` backend — which is built on posixc `FileDesc`/`fcntl`/`poll` — does
++//! not fit. This is a self-contained backend (like `motor`/`xous`) that drives the
++//! library's LVOs through a thin C glue (`aros_net_glue.c`, the `aros_np_*`
++//! functions), because the LVO stubs dispatch through `SocketBase` in a register
++//! and can't be called from Rust directly.
++//!
++//! IPv4 only for now: the bridge is host-passthrough and BSD-identical to the Mac
++//! for `AF_INET` plus the common socket options, but `AF_INET6` numbering differs,
++//! so IPv6 requests return `Unsupported` rather than silently talking to the wrong
++//! address family.
++//!
++//! Blocking is solid, and `try_clone`/`duplicate` work (BSD `Dup2Socket`). Two knobs
++//! are wired but **not yet effective** because the AROS library keeps host sockets
++//! `O_NONBLOCK` and emulates blocking with a timer-poll park: `set_nonblocking(true)`
++//! (the library treats `FIONBIO` as a no-op) and read/write timeouts (we return
++//! `Unsupported` for a requested timeout rather than lie). Making those effective needs
++//! a `WaitSelect`-gated recv/send in the glue whose `fd_set` ABI must match the
++//! host-passthrough library exactly; that is a disclosed tier-3 gap, not a pal bug.
++//! Both are noted for upstream (UPSTREAM-NOTES #37).
++
++#![allow(dead_code)]
++
++use crate::ffi::{CStr, c_char, c_int, c_void};
++use crate::io::{self, BorrowedCursor, ErrorKind, IoSlice, IoSliceMut};
++use crate::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, ToSocketAddrs};
++use crate::sys::helpers::run_with_cstr;
++use crate::time::Duration;
++use crate::{fmt, mem};
++
++// -- the C glue (aros_net_glue.c), linked into the final AROS program ----------
++unsafe extern "C" {
++    fn aros_net_open() -> c_int;
++    fn aros_sock_errno() -> c_int;
++    fn aros_closesocket(s: c_int);
++    fn aros_np_socket(domain: c_int, ty: c_int, proto: c_int) -> c_int;
++    fn aros_np_connect(s: c_int, addr_net: u32, port_net: u16) -> c_int;
++    fn aros_np_bind(s: c_int, addr_net: u32, port_net: u16) -> c_int;
++    fn aros_np_listen(s: c_int, backlog: c_int) -> c_int;
++    fn aros_np_accept(s: c_int, addr_net: *mut u32, port_net: *mut u16) -> c_int;
++    fn aros_np_send(s: c_int, buf: *const c_void, len: usize, flags: c_int) -> isize;
++    fn aros_np_recv(s: c_int, buf: *mut c_void, len: usize, flags: c_int) -> isize;
++    fn aros_np_sendto(
++        s: c_int,
++        buf: *const c_void,
++        len: usize,
++        flags: c_int,
++        addr_net: u32,
++        port_net: u16,
++    ) -> isize;
++    fn aros_np_recvfrom(
++        s: c_int,
++        buf: *mut c_void,
++        len: usize,
++        flags: c_int,
++        addr_net: *mut u32,
++        port_net: *mut u16,
++    ) -> isize;
++    fn aros_np_getsockname(s: c_int, addr_net: *mut u32, port_net: *mut u16) -> c_int;
++    fn aros_np_getpeername(s: c_int, addr_net: *mut u32, port_net: *mut u16) -> c_int;
++    fn aros_np_shutdown(s: c_int, how: c_int) -> c_int;
++    fn aros_np_setsockopt(s: c_int, level: c_int, name: c_int, val: *const c_void, len: u32)
++    -> c_int;
++    fn aros_np_getsockopt(s: c_int, level: c_int, name: c_int, val: *mut c_void, len: *mut u32)
++    -> c_int;
++    fn aros_np_set_nonblock(s: c_int, nonblock: c_int) -> c_int;
++    fn aros_np_dup(s: c_int) -> c_int;
++    fn aros_np_resolve4(name: *const c_char, out: *mut u32, max: c_int) -> c_int;
++}
++
++// -- BSD constants (host-identical for AF_INET + the common options) -----------
++const AF_INET: c_int = 2;
++const SOCK_STREAM: c_int = 1;
++const SOCK_DGRAM: c_int = 2;
++const MSG_PEEK: c_int = 0x2;
++
++const SOL_SOCKET: c_int = 0xffff;
++const SO_ERROR: c_int = 0x1007;
++const SO_REUSEADDR: c_int = 0x0004;
++const SO_BROADCAST: c_int = 0x0020;
++const SO_KEEPALIVE: c_int = 0x0008;
++const SO_LINGER: c_int = 0x0080;
++
++const IPPROTO_IP: c_int = 0;
++const IP_TTL: c_int = 4;
++const IP_MULTICAST_TTL: c_int = 10;
++const IP_MULTICAST_LOOP: c_int = 11;
++const IP_ADD_MEMBERSHIP: c_int = 12;
++const IP_DROP_MEMBERSHIP: c_int = 13;
++
++const IPPROTO_TCP: c_int = 6;
++const TCP_NODELAY: c_int = 1;
++
++const SHUT_RD: c_int = 0;
++const SHUT_WR: c_int = 1;
++const SHUT_RDWR: c_int = 2;
++
++// -- helpers -------------------------------------------------------------------
++
++/// The bsdsocket per-task errno (AmiTCP numbering), mapped by `sys/io/error`.
++fn last_error() -> io::Error {
++    io::Error::from_raw_os_error(unsafe { aros_sock_errno() })
++}
++
++fn unsupported_v6<T>() -> io::Result<T> {
++    Err(io::const_error!(ErrorKind::Unsupported, "IPv6 is not supported by the AROS bsdsocket bridge yet"))
++}
++
++/// Open `bsdsocket.library` once for the process (idempotent in the glue).
++fn ensure_lib() -> io::Result<()> {
++    if unsafe { aros_net_open() } != 0 {
++        return Err(io::const_error!(ErrorKind::Uncategorized, "cannot open bsdsocket.library"));
++    }
++    Ok(())
++}
++
++/// `SocketAddrV4` -> the (network-order u32, network-order u16) the glue takes.
++fn v4_to_raw(a: &SocketAddrV4) -> (u32, u16) {
++    (u32::from_ne_bytes(a.ip().octets()), a.port().to_be())
++}
++
++fn raw_to_v4(addr_net: u32, port_net: u16) -> SocketAddrV4 {
++    SocketAddrV4::new(Ipv4Addr::from(addr_net.to_ne_bytes()), u16::from_be(port_net))
++}
++
++fn addr_to_raw(addr: &SocketAddr) -> io::Result<(u32, u16)> {
++    match addr {
++        SocketAddr::V4(a) => Ok(v4_to_raw(a)),
++        SocketAddr::V6(_) => unsupported_v6(),
++    }
++}
++
++// -- Socket: the owned descriptor ----------------------------------------------
++
++struct Socket(c_int);
++
++impl Socket {
++    fn new(ty: c_int) -> io::Result<Socket> {
++        ensure_lib()?;
++        let fd = unsafe { aros_np_socket(AF_INET, ty, 0) };
++        if fd < 0 { Err(last_error()) } else { Ok(Socket(fd)) }
++    }
++
++    fn from_raw(fd: c_int) -> Socket {
++        Socket(fd)
++    }
++
++    fn fd(&self) -> c_int {
++        self.0
++    }
++
++    fn setsockopt<T>(&self, level: c_int, name: c_int, val: T) -> io::Result<()> {
++        let r = unsafe {
++            aros_np_setsockopt(
++                self.0,
++                level,
++                name,
++                (&raw const val).cast::<c_void>(),
++                mem::size_of::<T>() as u32,
++            )
++        };
++        if r < 0 { Err(last_error()) } else { Ok(()) }
++    }
++
++    fn getsockopt<T: Copy>(&self, level: c_int, name: c_int) -> io::Result<T> {
++        unsafe {
++            let mut val: T = mem::zeroed();
++            let mut len = mem::size_of::<T>() as u32;
++            let r = aros_np_getsockopt(self.0, level, name, (&raw mut val).cast::<c_void>(), &mut len);
++            if r < 0 { Err(last_error()) } else { Ok(val) }
++        }
++    }
++
++    fn recv_with_flags(&self, buf: &mut [u8], flags: c_int) -> io::Result<usize> {
++        let n = unsafe {
++            aros_np_recv(self.0, buf.as_mut_ptr().cast::<c_void>(), buf.len(), flags)
++        };
++        if n < 0 { Err(last_error()) } else { Ok(n as usize) }
++    }
++
++    fn send_with_flags(&self, buf: &[u8], flags: c_int) -> io::Result<usize> {
++        let n = unsafe {
++            aros_np_send(self.0, buf.as_ptr().cast::<c_void>(), buf.len(), flags)
++        };
++        if n < 0 { Err(last_error()) } else { Ok(n as usize) }
++    }
++
++    fn local_addr(&self) -> io::Result<SocketAddr> {
++        let (mut a, mut p) = (0u32, 0u16);
++        let r = unsafe { aros_np_getsockname(self.0, &mut a, &mut p) };
++        if r < 0 { Err(last_error()) } else { Ok(SocketAddr::V4(raw_to_v4(a, p))) }
++    }
++
++    fn peer_addr(&self) -> io::Result<SocketAddr> {
++        let (mut a, mut p) = (0u32, 0u16);
++        let r = unsafe { aros_np_getpeername(self.0, &mut a, &mut p) };
++        if r < 0 { Err(last_error()) } else { Ok(SocketAddr::V4(raw_to_v4(a, p))) }
++    }
++
++    fn take_error(&self) -> io::Result<Option<io::Error>> {
++        let err: c_int = self.getsockopt(SOL_SOCKET, SO_ERROR)?;
++        Ok(if err == 0 { None } else { Some(io::Error::from_raw_os_error(err)) })
++    }
++
++    fn set_nonblocking(&self, nb: bool) -> io::Result<()> {
++        let r = unsafe { aros_np_set_nonblock(self.0, nb as c_int) };
++        if r < 0 { Err(last_error()) } else { Ok(()) }
++    }
++
++    fn try_clone(&self) -> io::Result<Socket> {
++        let fd = unsafe { aros_np_dup(self.0) };
++        if fd < 0 { Err(last_error()) } else { Ok(Socket(fd)) }
++    }
++
++    fn shutdown(&self, how: Shutdown) -> io::Result<()> {
++        let how = match how {
++            Shutdown::Read => SHUT_RD,
++            Shutdown::Write => SHUT_WR,
++            Shutdown::Both => SHUT_RDWR,
++        };
++        let r = unsafe { aros_np_shutdown(self.0, how) };
++        if r < 0 { Err(last_error()) } else { Ok(()) }
++    }
++}
++
++impl Drop for Socket {
++    fn drop(&mut self) {
++        unsafe { aros_closesocket(self.0) };
++    }
++}
++
++/// Requested socket timeouts can't be honoured yet (the library's blocking
++/// emulation ignores them), so accept clearing (`None`) and reject a real value
++/// instead of silently dropping it.
++fn set_timeout(dur: Option<Duration>) -> io::Result<()> {
++    match dur {
++        None => Ok(()),
++        Some(_) => Err(io::const_error!(
++            ErrorKind::Unsupported,
++            "socket timeouts are not yet supported on AROS (bsdsocket blocking is emulated)"
++        )),
++    }
++}
++
++// -- TcpStream -----------------------------------------------------------------
++
++pub struct TcpStream(Socket);
++
++impl TcpStream {
++    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
++        super::each_addr(addr, TcpStream::connect_to)
++    }
++
++    fn connect_to(addr: &SocketAddr) -> io::Result<TcpStream> {
++        let (a, p) = addr_to_raw(addr)?;
++        let sock = Socket::new(SOCK_STREAM)?;
++        let r = unsafe { aros_np_connect(sock.fd(), a, p) };
++        if r < 0 { Err(last_error()) } else { Ok(TcpStream(sock)) }
++    }
++
++    /// The requested timeout can't be enforced by the library's blocking
++    /// emulation, so this is a blocking connect (the host TCP connect timeout
++    /// still bounds it); see the module note.
++    pub fn connect_timeout(addr: &SocketAddr, _: Duration) -> io::Result<TcpStream> {
++        TcpStream::connect_to(addr)
++    }
++
++    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
++        set_timeout(dur)
++    }
++
++    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
++        set_timeout(dur)
++    }
++
++    pub fn read_timeout(&self) -> io::Result<Option<Duration>> {
++        Ok(None)
++    }
++
++    pub fn write_timeout(&self) -> io::Result<Option<Duration>> {
++        Ok(None)
++    }
++
++    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.0.recv_with_flags(buf, MSG_PEEK)
++    }
++
++    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.0.recv_with_flags(buf, 0)
++    }
++
++    pub fn read_buf(&self, cursor: BorrowedCursor<'_, u8>) -> io::Result<()> {
++        io::default_read_buf(|b| self.read(b), cursor)
++    }
++
++    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
++        match bufs.iter_mut().find(|b| !b.is_empty()) {
++            Some(b) => self.read(b),
++            None => Ok(0),
++        }
++    }
++
++    pub fn is_read_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
++        self.0.send_with_flags(buf, 0)
++    }
++
++    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
++        match bufs.iter().find(|b| !b.is_empty()) {
++            Some(b) => self.write(b),
++            None => Ok(0),
++        }
++    }
++
++    pub fn is_write_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
++        self.0.peer_addr()
++    }
++
++    pub fn socket_addr(&self) -> io::Result<SocketAddr> {
++        self.0.local_addr()
++    }
++
++    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
++        self.0.shutdown(how)
++    }
++
++    pub fn duplicate(&self) -> io::Result<TcpStream> {
++        Ok(TcpStream(self.0.try_clone()?))
++    }
++
++    pub fn set_linger(&self, linger: Option<Duration>) -> io::Result<()> {
++        let l = Linger {
++            l_onoff: linger.is_some() as c_int,
++            l_linger: linger.map_or(0, |d| d.as_secs() as c_int),
++        };
++        self.0.setsockopt(SOL_SOCKET, SO_LINGER, l)
++    }
++
++    pub fn linger(&self) -> io::Result<Option<Duration>> {
++        let l: Linger = self.0.getsockopt(SOL_SOCKET, SO_LINGER)?;
++        Ok((l.l_onoff != 0).then(|| Duration::from_secs(l.l_linger as u64)))
++    }
++
++    pub fn set_keepalive(&self, keepalive: bool) -> io::Result<()> {
++        self.0.setsockopt(SOL_SOCKET, SO_KEEPALIVE, keepalive as c_int)
++    }
++
++    pub fn keepalive(&self) -> io::Result<bool> {
++        let v: c_int = self.0.getsockopt(SOL_SOCKET, SO_KEEPALIVE)?;
++        Ok(v != 0)
++    }
++
++    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_TCP, TCP_NODELAY, nodelay as c_int)
++    }
++
++    pub fn nodelay(&self) -> io::Result<bool> {
++        let v: c_int = self.0.getsockopt(IPPROTO_TCP, TCP_NODELAY)?;
++        Ok(v != 0)
++    }
++
++    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_IP, IP_TTL, ttl as c_int)
++    }
++
++    pub fn ttl(&self) -> io::Result<u32> {
++        let v: c_int = self.0.getsockopt(IPPROTO_IP, IP_TTL)?;
++        Ok(v as u32)
++    }
++
++    pub fn take_error(&self) -> io::Result<Option<io::Error>> {
++        self.0.take_error()
++    }
++
++    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
++        self.0.set_nonblocking(nonblocking)
++    }
++}
++
++impl fmt::Debug for TcpStream {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("TcpStream").field("fd", &self.0.fd()).finish()
++    }
++}
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++struct Linger {
++    l_onoff: c_int,
++    l_linger: c_int,
++}
++
++// -- TcpListener ---------------------------------------------------------------
++
++pub struct TcpListener(Socket);
++
++impl TcpListener {
++    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
++        super::each_addr(addr, TcpListener::bind_to)
++    }
++
++    fn bind_to(addr: &SocketAddr) -> io::Result<TcpListener> {
++        let (a, p) = addr_to_raw(addr)?;
++        let sock = Socket::new(SOCK_STREAM)?;
++        // best-effort SO_REUSEADDR, matching the Berkeley backend's bind()
++        let _ = sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1 as c_int);
++        if unsafe { aros_np_bind(sock.fd(), a, p) } < 0 {
++            return Err(last_error());
++        }
++        if unsafe { aros_np_listen(sock.fd(), 128) } < 0 {
++            return Err(last_error());
++        }
++        Ok(TcpListener(sock))
++    }
++
++    pub fn socket_addr(&self) -> io::Result<SocketAddr> {
++        self.0.local_addr()
++    }
++
++    pub fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
++        let (mut a, mut p) = (0u32, 0u16);
++        let fd = unsafe { aros_np_accept(self.0.fd(), &mut a, &mut p) };
++        if fd < 0 {
++            return Err(last_error());
++        }
++        Ok((TcpStream(Socket::from_raw(fd)), SocketAddr::V4(raw_to_v4(a, p))))
++    }
++
++    pub fn duplicate(&self) -> io::Result<TcpListener> {
++        Ok(TcpListener(self.0.try_clone()?))
++    }
++
++    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_IP, IP_TTL, ttl as c_int)
++    }
++
++    pub fn ttl(&self) -> io::Result<u32> {
++        let v: c_int = self.0.getsockopt(IPPROTO_IP, IP_TTL)?;
++        Ok(v as u32)
++    }
++
++    pub fn set_only_v6(&self, _: bool) -> io::Result<()> {
++        unsupported_v6()
++    }
++
++    pub fn only_v6(&self) -> io::Result<bool> {
++        // this is an IPv4 listener
++        Ok(false)
++    }
++
++    pub fn take_error(&self) -> io::Result<Option<io::Error>> {
++        self.0.take_error()
++    }
++
++    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
++        self.0.set_nonblocking(nonblocking)
++    }
++}
++
++impl fmt::Debug for TcpListener {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("TcpListener").field("fd", &self.0.fd()).finish()
++    }
++}
++
++// -- UdpSocket -----------------------------------------------------------------
++
++pub struct UdpSocket(Socket);
++
++impl UdpSocket {
++    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
++        super::each_addr(addr, UdpSocket::bind_to)
++    }
++
++    fn bind_to(addr: &SocketAddr) -> io::Result<UdpSocket> {
++        let (a, p) = addr_to_raw(addr)?;
++        let sock = Socket::new(SOCK_DGRAM)?;
++        if unsafe { aros_np_bind(sock.fd(), a, p) } < 0 {
++            return Err(last_error());
++        }
++        Ok(UdpSocket(sock))
++    }
++
++    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
++        self.0.peer_addr()
++    }
++
++    pub fn socket_addr(&self) -> io::Result<SocketAddr> {
++        self.0.local_addr()
++    }
++
++    pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
++        self.recvfrom_flags(buf, 0)
++    }
++
++    pub fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
++        self.recvfrom_flags(buf, MSG_PEEK)
++    }
++
++    fn recvfrom_flags(&self, buf: &mut [u8], flags: c_int) -> io::Result<(usize, SocketAddr)> {
++        let (mut a, mut p) = (0u32, 0u16);
++        let n = unsafe {
++            aros_np_recvfrom(self.0.fd(), buf.as_mut_ptr().cast::<c_void>(), buf.len(), flags, &mut a, &mut p)
++        };
++        if n < 0 {
++            return Err(last_error());
++        }
++        Ok((n as usize, SocketAddr::V4(raw_to_v4(a, p))))
++    }
++
++    pub fn send_to(&self, buf: &[u8], dst: &SocketAddr) -> io::Result<usize> {
++        let (a, p) = addr_to_raw(dst)?;
++        let n = unsafe {
++            aros_np_sendto(self.0.fd(), buf.as_ptr().cast::<c_void>(), buf.len(), 0, a, p)
++        };
++        if n < 0 { Err(last_error()) } else { Ok(n as usize) }
++    }
++
++    pub fn duplicate(&self) -> io::Result<UdpSocket> {
++        Ok(UdpSocket(self.0.try_clone()?))
++    }
++
++    pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
++        set_timeout(dur)
++    }
++
++    pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
++        set_timeout(dur)
++    }
++
++    pub fn read_timeout(&self) -> io::Result<Option<Duration>> {
++        Ok(None)
++    }
++
++    pub fn write_timeout(&self) -> io::Result<Option<Duration>> {
++        Ok(None)
++    }
++
++    pub fn set_broadcast(&self, broadcast: bool) -> io::Result<()> {
++        self.0.setsockopt(SOL_SOCKET, SO_BROADCAST, broadcast as c_int)
++    }
++
++    pub fn broadcast(&self) -> io::Result<bool> {
++        let v: c_int = self.0.getsockopt(SOL_SOCKET, SO_BROADCAST)?;
++        Ok(v != 0)
++    }
++
++    pub fn set_multicast_loop_v4(&self, on: bool) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_IP, IP_MULTICAST_LOOP, on as u8)
++    }
++
++    pub fn multicast_loop_v4(&self) -> io::Result<bool> {
++        let v: u8 = self.0.getsockopt(IPPROTO_IP, IP_MULTICAST_LOOP)?;
++        Ok(v != 0)
++    }
++
++    pub fn set_multicast_ttl_v4(&self, ttl: u32) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_IP, IP_MULTICAST_TTL, ttl as u8)
++    }
++
++    pub fn multicast_ttl_v4(&self) -> io::Result<u32> {
++        let v: u8 = self.0.getsockopt(IPPROTO_IP, IP_MULTICAST_TTL)?;
++        Ok(v as u32)
++    }
++
++    pub fn set_multicast_loop_v6(&self, _: bool) -> io::Result<()> {
++        unsupported_v6()
++    }
++
++    pub fn multicast_loop_v6(&self) -> io::Result<bool> {
++        unsupported_v6()
++    }
++
++    pub fn join_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> io::Result<()> {
++        let mreq = IpMreq {
++            imr_multiaddr: u32::from_ne_bytes(multiaddr.octets()),
++            imr_interface: u32::from_ne_bytes(interface.octets()),
++        };
++        self.0.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
++    }
++
++    pub fn join_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> io::Result<()> {
++        unsupported_v6()
++    }
++
++    pub fn leave_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> io::Result<()> {
++        let mreq = IpMreq {
++            imr_multiaddr: u32::from_ne_bytes(multiaddr.octets()),
++            imr_interface: u32::from_ne_bytes(interface.octets()),
++        };
++        self.0.setsockopt(IPPROTO_IP, IP_DROP_MEMBERSHIP, mreq)
++    }
++
++    pub fn leave_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> io::Result<()> {
++        unsupported_v6()
++    }
++
++    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
++        self.0.setsockopt(IPPROTO_IP, IP_TTL, ttl as c_int)
++    }
++
++    pub fn ttl(&self) -> io::Result<u32> {
++        let v: c_int = self.0.getsockopt(IPPROTO_IP, IP_TTL)?;
++        Ok(v as u32)
++    }
++
++    pub fn take_error(&self) -> io::Result<Option<io::Error>> {
++        self.0.take_error()
++    }
++
++    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
++        self.0.set_nonblocking(nonblocking)
++    }
++
++    pub fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.0.recv_with_flags(buf, 0)
++    }
++
++    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
++        self.0.recv_with_flags(buf, MSG_PEEK)
++    }
++
++    pub fn send(&self, buf: &[u8]) -> io::Result<usize> {
++        self.0.send_with_flags(buf, 0)
++    }
++
++    pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
++        super::each_addr(addr, |a| self.connect_to(a))
++    }
++
++    fn connect_to(&self, addr: &SocketAddr) -> io::Result<()> {
++        let (a, p) = addr_to_raw(addr)?;
++        if unsafe { aros_np_connect(self.0.fd(), a, p) } < 0 {
++            Err(last_error())
++        } else {
++            Ok(())
++        }
++    }
++}
++
++impl fmt::Debug for UdpSocket {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("UdpSocket").field("fd", &self.0.fd()).finish()
++    }
++}
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++struct IpMreq {
++    imr_multiaddr: u32,
++    imr_interface: u32,
++}
++
++// -- name resolution -----------------------------------------------------------
++
++pub struct LookupHost {
++    iter: crate::vec::IntoIter<SocketAddr>,
++}
++
++impl Iterator for LookupHost {
++    type Item = SocketAddr;
++    fn next(&mut self) -> Option<SocketAddr> {
++        self.iter.next()
++    }
++}
++
++pub fn lookup_host(host: &str, port: u16) -> io::Result<LookupHost> {
++    ensure_lib()?;
++
++    // An IPv4 literal needs no DNS.
++    if let Ok(ip) = host.parse::<Ipv4Addr>() {
++        let v = vec![SocketAddr::V4(SocketAddrV4::new(ip, port))];
++        return Ok(LookupHost { iter: v.into_iter() });
++    }
++
++    run_with_cstr(host.as_bytes(), &|c_host: &CStr| {
++        let mut raw = [0u32; 8];
++        let n = unsafe { aros_np_resolve4(c_host.as_ptr(), raw.as_mut_ptr(), raw.len() as c_int) };
++        if n < 0 {
++            return Err(io::const_error!(ErrorKind::Uncategorized, "host lookup failed"));
++        }
++        let addrs: Vec<SocketAddr> = raw[..n as usize]
++            .iter()
++            .map(|&a| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(a.to_ne_bytes()), port)))
++            .collect();
++        Ok(LookupHost { iter: addrs.into_iter() })
++    })
++}
+--- a/library/std/src/sys/net/connection/mod.rs
++++ b/library/std/src/sys/net/connection/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    all(target_os = "aros", not(target_arch = "m68k")) => {
++        mod aros;
++        pub use aros::*;
++    }
+     any(
+         target_family = "unix",
+         target_os = "windows",
+--- a/library/std/src/sys/pal/unsupported/mod.rs
++++ b/library/std/src/sys/pal/unsupported/mod.rs
+@@ -2,3 +2,6 @@
+ 
+ mod common;
+ pub use common::*;
++
++#[cfg(all(target_os = "aros", not(target_arch = "m68k")))]
++pub mod sync;
+--- /dev/null
++++ b/library/std/src/sys/pal/unsupported/sync/condvar.rs
+@@ -0,0 +1,92 @@
++//! AROS pal `Condvar`: a `pthread_cond_t` owned by C (`aros_sync_glue.c`), addressed
++//! through a C-allocated object. Mirrors `pal/unix/sync/condvar.rs` but calls
++//! the `aros_cond_*` glue. `PRECISE_TIMEOUT = false` so the layer-1 wrapper
++//! double-checks timeouts with `Instant` (the hosted RTC isn't host-synced, so the
++//! absolute deadline the timed-wait computes is only relatively accurate).
++#![forbid(unsafe_op_in_unsafe_fn)]
++
++use super::Mutex;
++use crate::cell::UnsafeCell;
++use crate::ffi::c_void;
++use crate::pin::Pin;
++use crate::time::Duration;
++
++// C allocates the opaque pthread object using the current SDK layout.
++// Keeping only a pointer avoids assuming hosted/UP and native SMP sizes match.
++unsafe extern "C" {
++    fn aros_cond_create(out: *mut *mut c_void) -> i32;
++    fn aros_cond_signal(c: *mut c_void) -> i32;
++    fn aros_cond_broadcast(c: *mut c_void) -> i32;
++    fn aros_cond_wait(c: *mut c_void, m: *mut c_void) -> i32;
++    fn aros_cond_timedwait(c: *mut c_void, m: *mut c_void, secs: u32, nsecs: u32) -> i32;
++    fn aros_cond_delete(c: *mut c_void) -> i32;
++}
++
++pub struct Condvar {
++    inner: UnsafeCell<*mut c_void>,
++}
++
++impl Condvar {
++    pub const PRECISE_TIMEOUT: bool = false;
++
++    pub fn new() -> Condvar {
++        Condvar { inner: UnsafeCell::new(crate::ptr::null_mut()) }
++    }
++
++    fn raw(&self) -> *mut c_void {
++        unsafe { *self.inner.get() }
++    }
++
++    /// # Safety
++    /// May only be called once per instance of `Self`.
++    pub unsafe fn init(self: Pin<&mut Self>) {
++        let r = unsafe { aros_cond_create(self.inner.get()) };
++        assert_eq!(r, 0, "pthread_cond_init failed");
++    }
++
++    /// # Safety
++    /// `init` must have been called.
++    #[inline]
++    pub unsafe fn notify_one(self: Pin<&Self>) {
++        let r = unsafe { aros_cond_signal(self.raw()) };
++        debug_assert_eq!(r, 0);
++    }
++
++    /// # Safety
++    /// `init` must have been called.
++    #[inline]
++    pub unsafe fn notify_all(self: Pin<&Self>) {
++        let r = unsafe { aros_cond_broadcast(self.raw()) };
++        debug_assert_eq!(r, 0);
++    }
++
++    /// # Safety
++    /// * `init` must have been called.
++    /// * `mutex` must be locked by the current thread, and only ever paired with this
++    ///   condvar.
++    pub unsafe fn wait(self: Pin<&Self>, mutex: Pin<&Mutex>) {
++        let r = unsafe { aros_cond_wait(self.raw(), mutex.raw()) };
++        debug_assert_eq!(r, 0);
++    }
++
++    /// # Safety
++    /// Same as `wait`. Returns `true` if notified, `false` on timeout.
++    pub unsafe fn wait_timeout(&self, mutex: Pin<&Mutex>, dur: Duration) -> bool {
++        let secs = dur.as_secs().min(u32::MAX as u64) as u32;
++        let r = unsafe { aros_cond_timedwait(self.raw(), mutex.raw(), secs, dur.subsec_nanos()) };
++        r == 0
++    }
++}
++
++impl !Unpin for Condvar {}
++
++unsafe impl Send for Condvar {}
++unsafe impl Sync for Condvar {}
++
++impl Drop for Condvar {
++    fn drop(&mut self) {
++        if !self.raw().is_null() {
++            let _ = unsafe { aros_cond_delete(self.raw()) };
++        }
++    }
++}
+--- /dev/null
++++ b/library/std/src/sys/pal/unsupported/sync/mod.rs
+@@ -0,0 +1,9 @@
++//! AROS pal sync primitives (pthread mutex/cond via `aros_sync_glue.c`), exposed as
++//! `sys::pal::sync` so the shared `pthread` `Mutex`/`Condvar`/`Parker` wrappers work.
++#![forbid(unsafe_op_in_unsafe_fn)]
++
++mod condvar;
++mod mutex;
++
++pub use condvar::Condvar;
++pub use mutex::Mutex;
+--- /dev/null
++++ b/library/std/src/sys/pal/unsupported/sync/mutex.rs
+@@ -0,0 +1,76 @@
++//! AROS pal `Mutex`: a `pthread_mutex_t` owned by C (`aros_sync_glue.c`), addressed
++//! through a C-allocated object. Mirrors `pal/unix/sync/mutex.rs` but calls
++//! the `aros_mtx_*` glue instead of `libc::pthread_*` (AROS has no `libc` crate yet).
++#![forbid(unsafe_op_in_unsafe_fn)]
++
++use crate::cell::UnsafeCell;
++use crate::ffi::c_void;
++use crate::io::Error;
++use crate::pin::Pin;
++
++// C allocates the opaque pthread object using the current SDK layout.
++// Keeping only a pointer avoids assuming hosted/UP and native SMP sizes match.
++unsafe extern "C" {
++    fn aros_mtx_create(out: *mut *mut c_void) -> i32;
++    fn aros_mtx_lock(m: *mut c_void) -> i32;
++    fn aros_mtx_trylock(m: *mut c_void) -> i32;
++    fn aros_mtx_unlock(m: *mut c_void) -> i32;
++    fn aros_mtx_delete(m: *mut c_void) -> i32;
++}
++
++pub struct Mutex {
++    inner: UnsafeCell<*mut c_void>,
++}
++
++impl Mutex {
++    pub fn new() -> Mutex {
++        Mutex { inner: UnsafeCell::new(crate::ptr::null_mut()) }
++    }
++
++    pub(super) fn raw(&self) -> *mut c_void {
++        unsafe { *self.inner.get() }
++    }
++
++    /// # Safety
++    /// May only be called once per instance of `Self`.
++    pub unsafe fn init(self: Pin<&mut Self>) {
++        let r = unsafe { aros_mtx_create(self.inner.get()) };
++        assert_eq!(r, 0, "pthread_mutex_init failed");
++    }
++
++    /// # Safety
++    /// * `init` must have been called.
++    /// * Destroying a locked mutex is UB.
++    pub unsafe fn lock(self: Pin<&Self>) {
++        let r = unsafe { aros_mtx_lock(self.raw()) };
++        if r != 0 {
++            panic!("failed to lock mutex: {}", Error::from_raw_os_error(r));
++        }
++    }
++
++    /// # Safety
++    /// `init` must have been called.
++    pub unsafe fn try_lock(self: Pin<&Self>) -> bool {
++        unsafe { aros_mtx_trylock(self.raw()) == 0 }
++    }
++
++    /// # Safety
++    /// The mutex must be locked by the current thread.
++    pub unsafe fn unlock(self: Pin<&Self>) {
++        let r = unsafe { aros_mtx_unlock(self.raw()) };
++        debug_assert_eq!(r, 0);
++    }
++}
++
++impl !Unpin for Mutex {}
++
++unsafe impl Send for Mutex {}
++unsafe impl Sync for Mutex {}
++
++impl Drop for Mutex {
++    fn drop(&mut self) {
++        if !self.raw().is_null() {
++            let _ = unsafe { aros_mtx_delete(self.raw()) };
++        }
++    }
++}
+--- /dev/null
++++ b/library/std/src/sys/paths/aros.rs
+@@ -0,0 +1,47 @@
++//! Path/cwd services for AROS, backed by posixc (`getcwd`/`chdir`).
++//!
++//! AROS is hosted here and has a real filesystem with a per-process current
++//! directory, so `current_dir()` and `set_current_dir()` work; the rest
++//! (PATH splitting, `current_exe`, `home_dir`) falls back to `unsupported`.
++
++use crate::ffi::CString;
++use crate::io;
++use crate::path::{Path, PathBuf};
++
++unsafe extern "C" {
++    #[link_name = "getcwd"]
++    fn c_getcwd(buf: *mut u8, size: usize) -> *mut u8;
++    #[link_name = "chdir"]
++    fn c_chdir(path: *const u8) -> i32;
++}
++
++pub fn getcwd() -> io::Result<PathBuf> {
++    let mut buf = vec![0u8; 512];
++    loop {
++        let p = unsafe { c_getcwd(buf.as_mut_ptr(), buf.len()) };
++        if !p.is_null() {
++            let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
++            let s = String::from_utf8_lossy(&buf[..n]).into_owned();
++            return Ok(PathBuf::from(s));
++        }
++        // Grow and retry on ERANGE; give up if it never fits.
++        if buf.len() >= 16 * 1024 {
++            return Err(io::Error::last_os_error());
++        }
++        buf.resize(buf.len() * 2, 0);
++    }
++}
++
++pub fn chdir(p: &Path) -> io::Result<()> {
++    let s = CString::new(p.as_os_str().as_encoded_bytes())
++        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
++    if unsafe { c_chdir(s.as_ptr() as *const u8) } == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
++
++pub fn temp_dir() -> PathBuf {
++    PathBuf::from("T:")
++}
+--- a/library/std/src/sys/paths/mod.rs
++++ b/library/std/src/sys/paths/mod.rs
+@@ -1,4 +1,13 @@
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        #[expect(dead_code)]
++        mod unsupported;
++        mod imp {
++            pub use super::aros::{getcwd, chdir, temp_dir};
++            pub use super::unsupported::{current_exe, SplitPaths, split_paths, JoinPathsError, join_paths, home_dir};
++        }
++    }
+     target_os = "hermit" => {
+         mod hermit;
+         #[expect(dead_code)]
+--- /dev/null
++++ b/library/std/src/sys/process/aros.rs
+@@ -0,0 +1,477 @@
++//! Processes for AROS, over dos `SystemTagList` (via the `aros_system` glue).
++//!
++//! AROS has no fork/exec: the shell runs a command *line*. So `Command` is turned
++//! into a properly-quoted line and handed to `SystemTagList`, which runs it
++//! synchronously and returns the command's exit code.
++//!
++//! Scope (honest caveats): `output()` captures stdout/stderr by redirecting the
++//! child to `MacRW:` temp files and reading them back (uses the `fs` pal); `spawn()`
++//! runs synchronously with inherited stdio, so `status()` works but there are no live
++//! pipes and no true background child (a `spawn()`d process has already finished when
++//! the handle returns).
++//!
++//! **`cwd` and per-command `env` ARE honoured** (via a tiny injected shell script):
++//! AROS has no fork/exec and a `System` child inherits neither the caller's current
++//! directory *variables* nor its local environment variables, so when a `Command`
++//! carries a cwd or env override we emit a one-off script that `CD`s and `Set`s in the
++//! child shell, then runs the command, and invoke it with `Execute`. Non-resident
++//! commands run inside that shell's process and share its local vars, so the env
++//! reaches the real child.
++//!
++//! Still unsupported (documented tier-3 gaps): live bidirectional pipes and an async
++//! background child with a readable `Child.stdout`/writable `Child.stdin` -- these need
++//! a pipe handler the hosted boot does not mount (no `PIPE:`) and a real spawn model
++//! AROS's line-oriented `SystemTagList` does not provide. `env_clear()` cannot be fully
++//! honoured (the local-var set can't be enumerated to blank it), and `kill` is a no-op
++//! (the command has already finished on the synchronous path).
++
++use super::env::{CommandEnv, CommandEnvs, CommandResolvedEnvs};
++pub use crate::ffi::OsString as EnvKey;
++use crate::ffi::{CString, OsStr, OsString, c_char, c_long};
++use crate::num::NonZero;
++use crate::path::{Path, PathBuf};
++use crate::process::StdioPipes;
++use crate::sync::atomic::{AtomicU32, Ordering};
++use crate::sys::fs::File;
++use crate::sys::unsupported;
++use crate::{fmt, io};
++
++unsafe extern "C" {
++    fn aros_system(cmdline: *const c_char, out_path: *const c_char, err_path: *const c_char) -> c_long;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Command
++////////////////////////////////////////////////////////////////////////////////
++
++pub struct Command {
++    program: OsString,
++    args: Vec<OsString>,
++    env: CommandEnv,
++
++    cwd: Option<OsString>,
++    stdin: Option<Stdio>,
++    stdout: Option<Stdio>,
++    stderr: Option<Stdio>,
++}
++
++#[derive(Debug)]
++pub enum Stdio {
++    Inherit,
++    Null,
++    MakePipe,
++    ParentStdout,
++    ParentStderr,
++    #[allow(dead_code)] // This variant exists only for the Debug impl
++    InheritFile(File),
++}
++
++impl Command {
++    pub fn new(program: &OsStr) -> Command {
++        Command {
++            program: program.to_owned(),
++            args: vec![program.to_owned()],
++            env: Default::default(),
++            cwd: None,
++            stdin: None,
++            stdout: None,
++            stderr: None,
++        }
++    }
++
++    pub fn arg(&mut self, arg: &OsStr) {
++        self.args.push(arg.to_owned());
++    }
++
++    pub fn env_mut(&mut self) -> &mut CommandEnv {
++        &mut self.env
++    }
++
++    pub fn cwd(&mut self, dir: &OsStr) {
++        self.cwd = Some(dir.to_owned());
++    }
++
++    pub fn stdin(&mut self, stdin: Stdio) {
++        self.stdin = Some(stdin);
++    }
++
++    pub fn stdout(&mut self, stdout: Stdio) {
++        self.stdout = Some(stdout);
++    }
++
++    pub fn stderr(&mut self, stderr: Stdio) {
++        self.stderr = Some(stderr);
++    }
++
++    pub fn get_program(&self) -> &OsStr {
++        &self.program
++    }
++
++    pub fn get_args(&self) -> CommandArgs<'_> {
++        let mut iter = self.args.iter();
++        iter.next();
++        CommandArgs { iter }
++    }
++
++    pub fn get_envs(&self) -> CommandEnvs<'_> {
++        self.env.iter()
++    }
++
++    pub fn get_env_clear(&self) -> bool {
++        self.env.does_clear()
++    }
++
++    pub fn get_resolved_envs(&self) -> CommandResolvedEnvs {
++        CommandResolvedEnvs::new(self.env.capture())
++    }
++
++    pub fn get_current_dir(&self) -> Option<&Path> {
++        self.cwd.as_ref().map(|cwd| Path::new(cwd))
++    }
++
++    /// Build the shell command line: the program name followed by args[1..], each
++    /// quoted for the AROS shell (escape char `*`).
++    fn command_line(&self) -> String {
++        let mut line = String::new();
++        quote_into(&self.program, &mut line);
++        for arg in &self.args[1..] {
++            line.push(' ');
++            quote_into(arg, &mut line);
++        }
++        line
++    }
++
++    /// Resolve the command into the actual line to hand `SystemTagList`, applying
++    /// `cwd` and per-command `env`. With neither set, that's just the quoted command
++    /// line. With either set, AROS's no-fork `System` can't apply them (a child
++    /// inherits neither the caller's current dir vars nor its local variables), so we
++    /// write a one-off script that `CD`s / `Set`s in the child shell and then runs the
++    /// command, and return `Execute <script>` plus the temp script path to delete.
++    fn resolve_line(&self) -> io::Result<(String, Option<PathBuf>)> {
++        let has_env = self.env.iter().next().is_some();
++        if self.cwd.is_none() && !has_env {
++            return Ok((self.command_line(), None));
++        }
++        let mut script = String::new();
++        if let Some(dir) = &self.cwd {
++            script.push_str("CD ");
++            quote_into(dir, &mut script);
++            script.push('\n');
++        }
++        for (k, v) in self.env.iter() {
++            match v {
++                Some(val) => {
++                    script.push_str("Set ");
++                    quote_into(k, &mut script);
++                    script.push(' ');
++                    quote_into(val, &mut script);
++                }
++                None => {
++                    script.push_str("Unset ");
++                    quote_into(k, &mut script);
++                }
++            }
++            script.push('\n');
++        }
++        script.push_str(&self.command_line());
++        script.push('\n');
++
++        static SCRIPT_SEQ: AtomicU32 = AtomicU32::new(0);
++        let n = SCRIPT_SEQ.fetch_add(1, Ordering::Relaxed);
++        let path = format!("MacRW:rustcmd-{n}.aros");
++        write_script(&path, script.as_bytes())?;
++        Ok((format!("Execute {path}"), Some(PathBuf::from(path))))
++    }
++
++    pub fn spawn(
++        &mut self,
++        _default: Stdio,
++        _needs_stdin: bool,
++    ) -> io::Result<(Process, StdioPipes)> {
++        // synchronous, inherited stdio -> the command has finished when we return
++        let (line, script) = self.resolve_line()?;
++        let line_c = cstr(&line)?;
++        let rc = unsafe { aros_system(line_c.as_ptr(), core::ptr::null(), core::ptr::null()) };
++        if let Some(p) = script {
++            let _ = crate::sys::fs::remove_file(&p);
++        }
++        // SystemTagList's -1 means "the command line could not be run at all" (no
++        // shell, unloadable binary): that is spawn FAILURE, not an exit status.
++        if rc == -1 {
++            return Err(io::const_error!(io::ErrorKind::NotFound, "command could not be run"));
++        }
++        Ok((
++            Process { code: rc as i32 },
++            StdioPipes { stdin: None, stdout: None, stderr: None },
++        ))
++    }
++}
++
++/// Write a generated shell script through the fs pal (best path for `MacRW:`).
++fn write_script(path: &str, data: &[u8]) -> io::Result<()> {
++    let mut opts = crate::sys::fs::OpenOptions::new();
++    opts.write(true);
++    opts.create(true);
++    opts.truncate(true);
++    let f = File::open(Path::new(path), &opts)?;
++    let mut off = 0;
++    while off < data.len() {
++        match f.write(&data[off..])? {
++            0 => return Err(io::const_error!(io::ErrorKind::WriteZero, "short script write")),
++            n => off += n,
++        }
++    }
++    Ok(())
++}
++
++/// Append `arg` to `out`, quoting for the AROS shell when needed. The shell's escape
++/// char is `*`: inside double quotes `*"` is a literal quote, `**` a literal star,
++/// `*n` a newline.
++fn quote_into(arg: &OsStr, out: &mut String) {
++    let s = arg.to_string_lossy();
++    let needs = s.is_empty()
++        || s.chars().any(|c| c == ' ' || c == '"' || c == '*' || c == '\t' || c == '\n');
++    if !needs {
++        out.push_str(&s);
++        return;
++    }
++    out.push('"');
++    for c in s.chars() {
++        match c {
++            '"' => out.push_str("*\""),
++            '*' => out.push_str("**"),
++            '\n' => out.push_str("*n"),
++            _ => out.push(c),
++        }
++    }
++    out.push('"');
++}
++
++fn cstr(s: &str) -> io::Result<CString> {
++    CString::new(s).map_err(|_| io::const_error!(io::ErrorKind::InvalidInput, "command contains a NUL byte"))
++}
++
++/// Run `cmd`, capturing stdout+stderr via `T:` temp files (read back through the fs
++/// pal). This is `Command::output()`.
++pub fn output(cmd: &mut Command) -> io::Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
++    // Capture via temp files. `T:` isn't guaranteed assigned on a minimal boot (it
++    // pops a blocking volume requester), so use the host-backed `MacRW:` share, which
++    // exists whenever the emul-handler is up. The glue also suppresses requesters, so
++    // a missing volume fails fast instead of hanging.
++    static SEQ: AtomicU32 = AtomicU32::new(0);
++    let n = SEQ.fetch_add(1, Ordering::Relaxed);
++    let out_path = format!("MacRW:rustproc-{n}.out");
++    let err_path = format!("MacRW:rustproc-{n}.err");
++
++    let (line, script) = cmd.resolve_line()?;
++    let line_c = cstr(&line)?;
++    let out_c = cstr(&out_path)?;
++    let err_c = cstr(&err_path)?;
++
++    let rc = unsafe { aros_system(line_c.as_ptr(), out_c.as_ptr(), err_c.as_ptr()) };
++
++    let stdout = slurp(&out_path);
++    let stderr = slurp(&err_path);
++    let _ = crate::sys::fs::remove_file(Path::new(&out_path));
++    let _ = crate::sys::fs::remove_file(Path::new(&err_path));
++    if let Some(p) = script {
++        let _ = crate::sys::fs::remove_file(&p);
++    }
++
++    // Same contract as spawn: SystemTagList's -1 is "could not run", an Err.
++    if rc == -1 {
++        return Err(io::const_error!(io::ErrorKind::NotFound, "command could not be run"));
++    }
++    Ok((ExitStatus(rc as i32), stdout, stderr))
++}
++
++/// Read a whole file into a Vec via the fs pal (best-effort; empty on failure).
++fn slurp(path: &str) -> Vec<u8> {
++    let mut opts = crate::sys::fs::OpenOptions::new();
++    opts.read(true);
++    let mut out = Vec::new();
++    if let Ok(f) = File::open(Path::new(path), &opts) {
++        let mut buf = [0u8; 4096];
++        loop {
++            match f.read(&mut buf) {
++                Ok(0) => break,
++                Ok(n) => out.extend_from_slice(&buf[..n]),
++                Err(_) => break,
++            }
++        }
++    }
++    out
++}
++
++impl fmt::Debug for Command {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        if self.program != self.args[0] {
++            write!(f, "[{:?}] ", self.program)?;
++        }
++        write!(f, "{:?}", self.args[0])?;
++        for arg in &self.args[1..] {
++            write!(f, " {:?}", arg)?;
++        }
++        Ok(())
++    }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// ExitStatus / ExitStatusError / ExitCode
++////////////////////////////////////////////////////////////////////////////////
++
++#[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
++pub struct ExitStatus(i32);
++
++impl ExitStatus {
++    pub fn exit_ok(&self) -> Result<(), ExitStatusError> {
++        match NonZero::new(self.0) {
++            None => Ok(()),
++            Some(nz) => Err(ExitStatusError(nz)),
++        }
++    }
++
++    pub fn code(&self) -> Option<i32> {
++        Some(self.0)
++    }
++}
++
++impl fmt::Display for ExitStatus {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "exit code: {}", self.0)
++    }
++}
++
++#[derive(PartialEq, Eq, Clone, Copy, Debug)]
++pub struct ExitStatusError(NonZero<i32>);
++
++impl Into<ExitStatus> for ExitStatusError {
++    fn into(self) -> ExitStatus {
++        ExitStatus(self.0.get())
++    }
++}
++
++impl ExitStatusError {
++    pub fn code(self) -> Option<NonZero<i32>> {
++        Some(self.0)
++    }
++}
++
++#[derive(PartialEq, Eq, Clone, Copy, Debug)]
++pub struct ExitCode(u8);
++
++impl ExitCode {
++    pub const SUCCESS: ExitCode = ExitCode(0);
++    pub const FAILURE: ExitCode = ExitCode(1);
++
++    pub fn as_i32(&self) -> i32 {
++        self.0 as i32
++    }
++}
++
++impl From<u8> for ExitCode {
++    fn from(code: u8) -> Self {
++        Self(code)
++    }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Process
++////////////////////////////////////////////////////////////////////////////////
++
++pub struct Process {
++    code: i32,
++}
++
++impl Process {
++    pub fn id(&self) -> u32 {
++        // No pid model on the synchronous shell path.
++        0
++    }
++
++    pub fn kill(&mut self) -> io::Result<()> {
++        // The command already finished (synchronous spawn).
++        Ok(())
++    }
++
++    pub fn wait(&mut self) -> io::Result<ExitStatus> {
++        Ok(ExitStatus(self.code))
++    }
++
++    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
++        Ok(Some(ExitStatus(self.code)))
++    }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// misc
++////////////////////////////////////////////////////////////////////////////////
++
++impl From<File> for Stdio {
++    fn from(file: File) -> Stdio {
++        Stdio::InheritFile(file)
++    }
++}
++
++impl From<io::Stdout> for Stdio {
++    fn from(_: io::Stdout) -> Stdio {
++        Stdio::ParentStdout
++    }
++}
++
++impl From<io::Stderr> for Stdio {
++    fn from(_: io::Stderr) -> Stdio {
++        Stdio::ParentStderr
++    }
++}
++
++impl From<ChildPipe> for Stdio {
++    fn from(pipe: ChildPipe) -> Stdio {
++        pipe.diverge()
++    }
++}
++
++pub struct CommandArgs<'a> {
++    iter: crate::slice::Iter<'a, OsString>,
++}
++
++impl<'a> Iterator for CommandArgs<'a> {
++    type Item = &'a OsStr;
++    fn next(&mut self) -> Option<&'a OsStr> {
++        self.iter.next().map(|os| &**os)
++    }
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        self.iter.size_hint()
++    }
++}
++
++impl<'a> ExactSizeIterator for CommandArgs<'a> {
++    fn len(&self) -> usize {
++        self.iter.len()
++    }
++    fn is_empty(&self) -> bool {
++        self.iter.is_empty()
++    }
++}
++
++impl<'a> fmt::Debug for CommandArgs<'a> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_list().entries(self.iter.clone()).finish()
++    }
++}
++
++pub type ChildPipe = crate::sys::pipe::Pipe;
++
++pub fn read_output(
++    out: ChildPipe,
++    _stdout: &mut Vec<u8>,
++    _err: ChildPipe,
++    _stderr: &mut Vec<u8>,
++) -> io::Result<()> {
++    // We never hand back live pipes, so this is unreachable.
++    match out.diverge() {}
++}
++
++pub fn getpid() -> u32 {
++    1
++}
+--- a/library/std/src/sys/process/mod.rs
++++ b/library/std/src/sys/process/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    all(target_os = "aros", not(target_arch = "m68k")) => {
++        mod aros;
++        use aros as imp;
++    }
+     target_family = "unix" => {
+         mod unix;
+         use unix as imp;
+--- /dev/null
++++ b/library/std/src/sys/random/aros.rs
+@@ -0,0 +1,17 @@
++//! Randomness from native AROS posixc/entropy.resource.
++//! Fail closed if the OS cannot supply entropy; never substitute a clock PRNG.
++use crate::ffi::c_void;
++
++unsafe extern "C" {
++    fn getentropy(buf: *mut c_void, len: usize) -> i32;
++}
++
++pub fn fill_bytes(bytes: &mut [u8]) {
++    // POSIX getentropy accepts at most 256 bytes per request.
++    for chunk in bytes.chunks_mut(256) {
++        let result = unsafe { getentropy(chunk.as_mut_ptr().cast(), chunk.len()) };
++        if result != 0 {
++            panic!("AROS entropy unavailable: {}", crate::io::Error::last_os_error());
++        }
++    }
++}
+--- a/library/std/src/sys/random/mod.rs
++++ b/library/std/src/sys/random/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        pub use aros::fill_bytes;
++    }
+     // Tier 1
+     any(target_os = "linux", target_os = "android") => {
+         mod linux;
+--- /dev/null
++++ b/library/std/src/sys/stdio/aros.rs
+@@ -0,0 +1,83 @@
++//! Stdio for AROS.
++//!
++//! Writes fd 1/2 and reads fd 0 directly through `posixc` `write`/`read`,
++//! declared here so `std` needs no `libc`-crate AROS support yet. On hosted AROS
++//! these fds are the `dos` Output()/Input() the shell set up for the program.
++use crate::io;
++
++mod c {
++    use crate::ffi::c_void;
++    unsafe extern "C" {
++        pub fn write(fd: i32, buf: *const c_void, count: usize) -> isize;
++        pub fn read(fd: i32, buf: *mut c_void, count: usize) -> isize;
++    }
++}
++
++const STDIN_FILENO: i32 = 0;
++const STDOUT_FILENO: i32 = 1;
++const STDERR_FILENO: i32 = 2;
++const EBADF: i32 = 9;
++
++fn write_fd(fd: i32, buf: &[u8]) -> io::Result<usize> {
++    let ret = unsafe { c::write(fd, buf.as_ptr().cast(), buf.len()) };
++    if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(ret as usize) }
++}
++
++pub struct Stdin;
++pub struct Stdout;
++pub struct Stderr;
++
++impl Stdin {
++    pub const fn new() -> Stdin {
++        Stdin
++    }
++}
++
++impl io::Read for Stdin {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        let ret = unsafe { c::read(STDIN_FILENO, buf.as_mut_ptr().cast(), buf.len()) };
++        if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(ret as usize) }
++    }
++}
++
++impl Stdout {
++    pub const fn new() -> Stdout {
++        Stdout
++    }
++}
++
++impl io::Write for Stdout {
++    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++        write_fd(STDOUT_FILENO, buf)
++    }
++    #[inline]
++    fn flush(&mut self) -> io::Result<()> {
++        Ok(())
++    }
++}
++
++impl Stderr {
++    pub const fn new() -> Stderr {
++        Stderr
++    }
++}
++
++impl io::Write for Stderr {
++    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++        write_fd(STDERR_FILENO, buf)
++    }
++    #[inline]
++    fn flush(&mut self) -> io::Result<()> {
++        Ok(())
++    }
++}
++
++pub fn is_ebadf(err: &io::Error) -> bool {
++    err.raw_os_error() == Some(EBADF)
++}
++
++pub const STDIN_BUF_SIZE: usize = crate::sys::io::DEFAULT_BUF_SIZE;
++
++pub fn panic_output() -> Option<impl io::Write> {
++    Some(Stderr::new())
++}
+--- a/library/std/src/sys/stdio/mod.rs
++++ b/library/std/src/sys/stdio/mod.rs
+@@ -1,6 +1,10 @@
+ #![forbid(unsafe_op_in_unsafe_fn)]
+ 
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        pub use aros::*;
++    }
+     any(target_family = "unix", target_os = "hermit", target_os = "wasi") => {
+         mod unix;
+         pub use unix::*;
+--- a/library/std/src/sys/sync/condvar/mod.rs
++++ b/library/std/src/sys/sync/condvar/mod.rs
+@@ -15,7 +15,7 @@
+         mod futex;
+         pub use futex::Condvar;
+     }
+-    any(target_family = "unix", target_os = "teeos") => {
++    any(target_family = "unix", target_os = "teeos", all(target_os = "aros", not(target_arch = "m68k"))) => {
+         mod pthread;
+         pub use pthread::Condvar;
+     }
+--- a/library/std/src/sys/sync/mutex/mod.rs
++++ b/library/std/src/sys/sync/mutex/mod.rs
+@@ -18,7 +18,7 @@
+         mod fuchsia;
+         pub use fuchsia::Mutex;
+     }
+-    any(target_family = "unix", target_os = "teeos") => {
++    any(target_family = "unix", target_os = "teeos", all(target_os = "aros", not(target_arch = "m68k"))) => {
+         mod pthread;
+         pub use pthread::Mutex;
+     }
+--- a/library/std/src/sys/sync/once/mod.rs
++++ b/library/std/src/sys/sync/once/mod.rs
+@@ -30,6 +30,7 @@
+         all(target_vendor = "fortanix", target_env = "sgx"),
+         target_os = "solid_asp3",
+         target_os = "xous",
++        target_os = "aros",
+     ) => {
+         mod queue;
+         pub use queue::{Once, OnceState};
+--- a/library/std/src/sys/sync/rwlock/mod.rs
++++ b/library/std/src/sys/sync/rwlock/mod.rs
+@@ -21,6 +21,7 @@
+         all(target_vendor = "fortanix", target_env = "sgx"),
+         target_os = "xous",
+         target_os = "teeos",
++        target_os = "aros",
+     ) => {
+         mod queue;
+         pub use queue::RwLock;
+--- a/library/std/src/sys/sync/thread_parking/mod.rs
++++ b/library/std/src/sys/sync/thread_parking/mod.rs
+@@ -36,7 +36,7 @@
+         mod xous;
+         pub use xous::Parker;
+     }
+-    any(target_family = "unix", target_os = "teeos") => {
++    any(target_family = "unix", target_os = "teeos", all(target_os = "aros", not(target_arch = "m68k"))) => {
+         mod pthread;
+         pub use pthread::Parker;
+     }
+--- /dev/null
++++ b/library/std/src/sys/thread/aros.rs
+@@ -0,0 +1,108 @@
++//! Threads for AROS, over `pthread.library` (via the `aros_thr_*` C glue).
++//!
++//! `pthread_create` maps to an AROS process; the glue owns the opaque
++//! `pthread_attr_t` so we can honour the requested stack size. TLS for spawned
++//! threads is valid because the library registers each pthread in its thread table
++//! (see `sys/thread_local/key/aros.rs`).
++//!
++//! `sleep` uses dos `Delay` in the glue (20ms granularity). Like the rest of the
++//! hosted timer path, threading shares the OS-wide x18 exposure until the
++//! `-ffixed-x18` rebuild (NOTES.md); Rust code itself is already x18-safe
++//! (`+reserve-x18`).
++
++use crate::ffi::{CStr, c_int, c_uint, c_void};
++use crate::mem::ManuallyDrop;
++use crate::num::NonZero;
++use crate::thread::ThreadInit;
++use crate::time::Duration;
++use crate::{io, ptr};
++
++pub const DEFAULT_MIN_STACK_SIZE: usize = 256 * 1024;
++
++unsafe extern "C" {
++    fn aros_thr_spawn(
++        stacksize: usize,
++        start: extern "C" fn(*mut c_void) -> *mut c_void,
++        arg: *mut c_void,
++        out_tid: *mut c_uint,
++    ) -> c_int;
++    fn aros_thr_join(tid: c_uint) -> c_int;
++    fn aros_thr_detach(tid: c_uint) -> c_int;
++    fn aros_thr_yield();
++    fn aros_thr_sleep(secs: c_uint, nsecs: c_uint) -> c_int;
++}
++
++pub struct Thread {
++    id: c_uint,
++}
++
++// The id is a plain integer handle; a thread is safe to move across threads.
++unsafe impl Send for Thread {}
++unsafe impl Sync for Thread {}
++
++impl Thread {
++    // unsafe: see thread::Builder::spawn_unchecked for safety requirements
++    pub unsafe fn new(stack: usize, init: Box<ThreadInit>) -> io::Result<Thread> {
++        let data = Box::into_raw(init);
++        let mut tid: c_uint = 0;
++        let ret = unsafe { aros_thr_spawn(stack, thread_start, data as *mut c_void, &mut tid) };
++        return if ret == 0 {
++            Ok(Thread { id: tid })
++        } else {
++            // The thread failed to start, so `data` was not consumed; reclaim it.
++            drop(unsafe { Box::from_raw(data) });
++            Err(io::Error::from_raw_os_error(ret))
++        };
++
++        extern "C" fn thread_start(data: *mut c_void) -> *mut c_void {
++            unsafe {
++                // Recreate the box leaked above and run the thread body.
++                let init = Box::from_raw(data as *mut ThreadInit);
++                let rust_start = init.init();
++                rust_start();
++            }
++            ptr::null_mut()
++        }
++    }
++
++    pub fn join(self) {
++        let id = ManuallyDrop::new(self).id;
++        let ret = unsafe { aros_thr_join(id) };
++        assert!(ret == 0, "failed to join thread: {}", io::Error::from_raw_os_error(ret));
++    }
++}
++
++impl Drop for Thread {
++    fn drop(&mut self) {
++        // Detach so the library reclaims the thread once it finishes.
++        let _ = unsafe { aros_thr_detach(self.id) };
++    }
++}
++
++pub fn available_parallelism() -> io::Result<NonZero<usize>> {
++    // Hosted AROS schedules its tasks itself; report a single logical unit.
++    Ok(NonZero::new(1).unwrap())
++}
++
++pub fn current_os_id() -> Option<u64> {
++    None
++}
++
++pub fn yield_now() {
++    unsafe { aros_thr_yield() };
++}
++
++pub fn set_name(_name: &CStr) {
++    // AROS task names aren't wired to pthread here; leave the Rust-side name only.
++}
++
++pub fn sleep(dur: Duration) {
++    // Split into u32-second chunks so long sleeps don't overflow the glue's args.
++    let mut secs = dur.as_secs();
++    let nsecs = dur.subsec_nanos();
++    while secs > u32::MAX as u64 {
++        unsafe { aros_thr_sleep(u32::MAX, 0) };
++        secs -= u32::MAX as u64;
++    }
++    unsafe { aros_thr_sleep(secs as c_uint, nsecs as c_uint) };
++}
+--- a/library/std/src/sys/thread/mod.rs
++++ b/library/std/src/sys/thread/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    all(target_os = "aros", not(target_arch = "m68k")) => {
++        mod aros;
++        pub use aros::{Thread, available_parallelism, current_os_id, set_name, sleep, yield_now, DEFAULT_MIN_STACK_SIZE};
++    }
+     target_os = "hermit" => {
+         mod hermit;
+         pub use hermit::{DEFAULT_MIN_STACK_SIZE, Thread, available_parallelism, sleep, yield_now};
+--- /dev/null
++++ b/library/std/src/sys/thread_local/key/aros.rs
+@@ -0,0 +1,54 @@
++//! TLS keys for AROS, backed by `pthread.library` (the `-lpthread` linklib).
++//!
++//! Same shape as the `unix` key backend, but AROS has no `libc` crate binding yet,
++//! so the four `pthread_key_*` functions are declared here directly. `pthread_key_t`
++//! is `unsigned int` and the library reserves a slot for the main task at init
++//! (`ADD2INIT`), so keys work on the main thread too, not just pthread-spawned ones.
++
++use crate::ffi::{c_int, c_uint, c_void};
++use crate::mem;
++
++pub type Key = c_uint;
++
++unsafe extern "C" {
++    // Declared as Option<fn> (like the libc-crate binding) so that `None` is a VALID
++    // value of the parameter type: transmuting None into a bare `extern "C" fn` would
++    // materialize a null value of a non-nullable type, which is language-level UB
++    // even before the call. Option<extern fn> is guaranteed null-pointer-optimized.
++    fn pthread_key_create(
++        key: *mut Key,
++        destructor: Option<unsafe extern "C" fn(*mut c_void)>,
++    ) -> c_int;
++    fn pthread_getspecific(key: Key) -> *mut c_void;
++    fn pthread_setspecific(key: Key, value: *const c_void) -> c_int;
++    fn pthread_key_delete(key: Key) -> c_int;
++}
++
++#[inline]
++pub fn create(dtor: Option<unsafe extern "C" fn(*mut u8)>) -> Key {
++    let mut key = 0;
++    // SAFETY: `dtor` has the same ABI as pthread's `void (*)(void *)`; None means
++    // "no destructor" and stays None through the transmute of the Option.
++    if unsafe { pthread_key_create(&mut key, mem::transmute(dtor)) } != 0 {
++        rtabort!("out of TLS keys");
++    }
++    key
++}
++
++#[inline]
++pub unsafe fn set(key: Key, value: *mut u8) {
++    let r = unsafe { pthread_setspecific(key, value as *const c_void) };
++    debug_assert_eq!(r, 0);
++}
++
++#[inline]
++#[cfg(any(not(target_thread_local), test))]
++pub unsafe fn get(key: Key) -> *mut u8 {
++    unsafe { pthread_getspecific(key) as *mut u8 }
++}
++
++#[inline]
++pub unsafe fn destroy(key: Key) {
++    let r = unsafe { pthread_key_delete(key) };
++    debug_assert_eq!(r, 0);
++}
+--- a/library/std/src/sys/thread_local/mod.rs
++++ b/library/std/src/sys/thread_local/mod.rs
+@@ -150,6 +150,17 @@
+ /// with a pointer which we can get and set to store our data.
+ pub(crate) mod key {
+     cfg_select! {
++        all(target_os = "aros", not(target_arch = "m68k")) => {
++            mod racy;
++            mod aros;
++            #[cfg(test)]
++            mod tests;
++            pub(super) use racy::LazyKey;
++            pub(super) use aros::{Key, set};
++            #[cfg(any(not(target_thread_local), test))]
++            pub(super) use aros::get;
++            use aros::{create, destroy};
++        }
+         any(
+             all(not(target_vendor = "apple"), not(target_family = "wasm"), target_family = "unix"),
+             all(not(target_thread_local), target_vendor = "apple"),
+--- /dev/null
++++ b/library/std/src/sys/time/aros.rs
+@@ -0,0 +1,93 @@
++//! time for AROS, over posixc `clock_gettime`.
++//!
++//! `Instant` uses CLOCK_MONOTONIC (0), `SystemTime` uses CLOCK_REALTIME (2). AROS
++//! `struct timespec` is `{ time_t tv_sec; long tv_nsec; }` and `time_t` is 32-bit,
++//! so on LP64 it is `{ i32; i64 }` (4 bytes pad before tv_nsec). We carry the value
++//! as a `Duration` and let `Duration` do the arithmetic, so this file is small and
++//! the overflow/borrow logic is the library's, not ours.
++use crate::time::Duration;
++use crate::{fmt, io};
++
++mod c {
++    #[repr(C)]
++    pub struct timespec {
++        pub tv_sec: i32,
++        pub tv_nsec: i64,
++    }
++    unsafe extern "C" {
++        pub fn clock_gettime(clk: i32, tp: *mut timespec) -> i32;
++    }
++    pub const CLOCK_MONOTONIC: i32 = 0;
++    pub const CLOCK_REALTIME: i32 = 2;
++}
++
++fn now(clk: i32) -> Duration {
++    let mut ts = c::timespec { tv_sec: 0, tv_nsec: 0 };
++    let r = unsafe { c::clock_gettime(clk, &mut ts) };
++    if r != 0 || ts.tv_sec < 0 {
++        return Duration::ZERO;
++    }
++    let nsec = (ts.tv_nsec as u64 % 1_000_000_000) as u32;
++    Duration::new(ts.tv_sec as u64, nsec)
++}
++
++#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
++pub struct Instant(Duration);
++
++impl Instant {
++    pub fn now() -> Instant {
++        Instant(now(c::CLOCK_MONOTONIC))
++    }
++    pub fn checked_sub_instant(&self, other: &Instant) -> Option<Duration> {
++        self.0.checked_sub(other.0)
++    }
++    pub fn checked_add_duration(&self, other: &Duration) -> Option<Instant> {
++        Some(Instant(self.0.checked_add(*other)?))
++    }
++    pub fn checked_sub_duration(&self, other: &Duration) -> Option<Instant> {
++        Some(Instant(self.0.checked_sub(*other)?))
++    }
++}
++
++#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct SystemTime(Duration);
++
++pub const UNIX_EPOCH: SystemTime = SystemTime(Duration::ZERO);
++
++impl SystemTime {
++    pub const MAX: SystemTime = SystemTime(Duration::MAX);
++    pub const MIN: SystemTime = SystemTime(Duration::ZERO);
++
++    #[allow(dead_code)]
++    pub fn new(tv_sec: i64, tv_nsec: i64) -> Result<SystemTime, io::Error> {
++        let nsec = (tv_nsec.rem_euclid(1_000_000_000)) as u32;
++        Ok(SystemTime(Duration::new(tv_sec.max(0) as u64, nsec)))
++    }
++    pub fn now() -> SystemTime {
++        SystemTime(now(c::CLOCK_REALTIME))
++    }
++    pub fn sub_time(&self, other: &SystemTime) -> Result<Duration, Duration> {
++        if self.0 >= other.0 { Ok(self.0 - other.0) } else { Err(other.0 - self.0) }
++    }
++    pub fn checked_add_duration(&self, other: &Duration) -> Option<SystemTime> {
++        Some(SystemTime(self.0.checked_add(*other)?))
++    }
++    pub fn checked_sub_duration(&self, other: &Duration) -> Option<SystemTime> {
++        Some(SystemTime(self.0.checked_sub(*other)?))
++    }
++
++    /// Seconds + nanoseconds since the epoch, for the `fs` pal's `utimes` glue.
++    #[allow(dead_code)]
++    pub(crate) fn to_secs_nanos(&self) -> (i64, i64) {
++        (self.0.as_secs() as i64, self.0.subsec_nanos() as i64)
++    }
++}
++
++impl fmt::Debug for SystemTime {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("SystemTime")
++            .field("secs_since_epoch", &self.0.as_secs())
++            .field("nanos", &self.0.subsec_nanos())
++            .finish()
++    }
++}
+--- a/library/std/src/sys/time/mod.rs
++++ b/library/std/src/sys/time/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    target_os = "aros" => {
++        mod aros;
++        use aros as imp;
++    }
+     target_os = "motor" => {
+         use moto_rt::time as imp;
+     }
