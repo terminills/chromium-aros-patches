@@ -1,0 +1,146 @@
+diff --git a/scripts/dawn_features.gni b/scripts/dawn_features.gni
+index 9605846a7f07a2e29eb6ffe6504a8cf8d724d0e4..6730c742d8ffc0b92b610fa87d5288dfa34cb965 100644
+--- a/scripts/dawn_features.gni
++++ b/scripts/dawn_features.gni
+@@ -93,7 +93,7 @@ if (is_android || is_ios) {
+   declare_args() {
+     # Enables SwiftShader as the fallback adapter. Requires dawn_swiftshader_dir
+     # to be set to take effect.
+-    dawn_use_swiftshader = true
++    dawn_use_swiftshader = !is_aros
+   }
+ }
+ 
+diff --git a/src/dawn/common/BUILD.gn b/src/dawn/common/BUILD.gn
+index b940fb13adcddf2730ef5f6ea4c3ca6ced7b9d85..62b70a3eeb925c43e15f578932ab4ecd756a0bfd 100644
+--- a/src/dawn/common/BUILD.gn
++++ b/src/dawn/common/BUILD.gn
+@@ -153,7 +153,7 @@ dawn_generator("dawn_gpu_info_gen") {
+ # all of Chromium's OSes so we explicitly make the target visible only on
+ # systems we know Dawn is able to compile on.
+ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
+-    is_ios || is_wasm) {
++    is_ios || is_wasm || is_aros) {
+   static_library("common") {
+     sources = [
+       "Algebra.h",
+diff --git a/src/dawn/common/DynamicLib.cpp b/src/dawn/common/DynamicLib.cpp
+index d155e490debca52a1a676b9f3fdcda7678fe8de6..4c2eb5ba6b082e3c75d09aa01d495eecb84d8616 100644
+--- a/src/dawn/common/DynamicLib.cpp
++++ b/src/dawn/common/DynamicLib.cpp
+@@ -37,6 +37,8 @@
+ #if DAWN_PLATFORM_IS(WINUWP)
+ #include "src/dawn/common/WindowsUtils.h"
+ #endif
++#elif DAWN_PLATFORM_IS(AROS)
++// Native AROS libraries use vector tables, not dlfcn.
+ #elif DAWN_PLATFORM_IS(POSIX)
+ #include <dlfcn.h>
+ #else
+@@ -100,6 +102,10 @@ bool DynamicLib::Open(const std::string& filename, std::string* error) {
+         *error =
+             "DynamicLib.Open: " + filename + " Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic library loading is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     mHandle = dlopen(filename.c_str(), RTLD_NOW);
+ 
+@@ -124,6 +130,10 @@ bool DynamicLib::OpenLoaded(const std::string& filename, std::string* error) {
+         *error = "DynamicLib.OpenLoaded: " + filename +
+                  " Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic library loading is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     mHandle = dlopen(filename.c_str(), RTLD_NOW | RTLD_NOLOAD);
+ 
+@@ -165,6 +175,8 @@ void DynamicLib::Close() {
+         // In ASAN builds, we have to leak the DLL instead in case it gets loaded again later.
+         FreeLibrary(static_cast<HMODULE>(mHandle));
+ #endif
++#elif DAWN_PLATFORM_IS(AROS)
++        // Open and OpenLoaded cannot create a handle on this platform.
+ #elif DAWN_PLATFORM_IS(POSIX)
+         dlclose(mHandle);
+ #else
+@@ -185,6 +197,10 @@ void* DynamicLib::GetProc(const std::string& procName, std::string* error) const
+     if (proc == nullptr && error != nullptr) {
+         *error = "Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic symbol lookup is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     proc = reinterpret_cast<void*>(dlsym(mHandle, procName.c_str()));
+ 
+diff --git a/src/dawn/common/SystemUtils.cpp b/src/dawn/common/SystemUtils.cpp
+index 79b728d3df189103fd003a7a936d1d6c6ba866c3..5c094be0431644c20dec7b19209cf3630dc099b4 100644
+--- a/src/dawn/common/SystemUtils.cpp
++++ b/src/dawn/common/SystemUtils.cpp
+@@ -149,6 +149,10 @@ std::optional<std::string> GetExecutablePath() {
+     // UNIMPLEMENTED
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetExecutablePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetExecutablePath() {
+     return {};
+@@ -203,6 +207,10 @@ std::optional<std::string> GetModulePath() {
+ std::optional<std::string> GetModulePath() {
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetModulePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetModulePath() {
+     return {};
+diff --git a/src/dawn/tests/BUILD.gn b/src/dawn/tests/BUILD.gn
+index c4f53ac9678eefbb7c11076bddc35fb2714af832..fba00486350453cb2bf2e2d004d9f30caa83f583 100644
+--- a/src/dawn/tests/BUILD.gn
++++ b/src/dawn/tests/BUILD.gn
+@@ -104,7 +104,7 @@ if (!dawn_use_built_dxc && build_with_chromium && is_win) {
+   # end-to-end test in Chromium.
+   copy("copy_dxc_binary") {
+     sources = [
+-      "$windows_sdk_path/bin/$windows_sdk_version/$target_cpu/dxcompiler.dll",
++      "$windows_sdk_path/Redist/D3D/$target_cpu/dxcompiler.dll",
+     ]
+ 
+     outputs = [ "$root_out_dir/{{source_file_part}}" ]
+diff --git a/src/utils/platform.h b/src/utils/platform.h
+index 4dd58a4878e18ce1771c0f88017fa7aea901a190..fe3ba190590d59a0c452c30b1b4bb3dc645228c2 100644
+--- a/src/utils/platform.h
++++ b/src/utils/platform.h
+@@ -60,6 +60,10 @@
+ #error "Unsupported Windows platform."
+ #endif
+ 
++#elif defined(__AROS__)
++#define DAWN_PLATFORM_IS_AROS 1
++#define DAWN_PLATFORM_IS_POSIX 1
++
+ #elif defined(__linux__)
+ #define DAWN_PLATFORM_IS_LINUX 1
+ #define DAWN_PLATFORM_IS_POSIX 1
+@@ -212,6 +216,10 @@ static_assert(sizeof(sizeof(char)) == 4, "Expect sizeof(size_t) == 4");
+ #define DAWN_PLATFORM_IS_POSIX 0
+ #endif
+ 
++#if !defined(DAWN_PLATFORM_IS_AROS)
++#define DAWN_PLATFORM_IS_AROS 0
++#endif
++
+ #if !defined(DAWN_PLATFORM_IS_LINUX)
+ #define DAWN_PLATFORM_IS_LINUX 0
+ #endif

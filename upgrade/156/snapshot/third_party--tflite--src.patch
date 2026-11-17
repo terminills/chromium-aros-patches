@@ -1,0 +1,30 @@
+diff --git a/tensorflow/lite/shared_library.h b/tensorflow/lite/shared_library.h
+index 73886ccf216284161237e13244666f43a1fa4288..b3c7a7227cf9a3b21705b99b1b35c1c9e9108442 100644
+--- a/tensorflow/lite/shared_library.h
++++ b/tensorflow/lite/shared_library.h
+@@ -18,7 +18,7 @@ limitations under the License.
+ #if defined(_WIN32)
+ // Windows does not have dlfcn.h/dlsym, use GetProcAddress() instead.
+ #include <windows.h>
+-#else
++#elif !defined(__AROS__)
+ #include <dlfcn.h>
+ #endif  // defined(_WIN32)
+ 
+@@ -45,6 +45,16 @@ class SharedLibrary {
+     return FreeLibrary(static_cast<HMODULE>(handle));
+   }
+   static inline const char* GetError() { return "Unknown"; }
++#elif defined(__AROS__)
++  static inline void* LoadLibrary(const char* lib) { return nullptr; }
++  static inline void* GetLibrarySymbol(void* handle, const char* symbol) {
++    return nullptr;
++  }
++  static inline void* GetSymbol(const char* symbol) { return nullptr; }
++  static inline int UnLoadLibrary(void* handle) { return -1; }
++  static inline const char* GetError() {
++    return "dynamic delegates are not supported on AROS";
++  }
+ #else
+   static inline void* LoadLibrary(const char* lib) {
+     return dlopen(lib, RTLD_LAZY | RTLD_LOCAL);
