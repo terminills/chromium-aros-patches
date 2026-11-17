@@ -31509,6 +31509,30 @@ index 81645b3bb44e1ffd1e3bc14ec0546d7d8bf48079..d976f6a77f623f976275c7d3667f5a5c
  }
  }  // namespace
  
+diff --git a/components/crash/core/app/BUILD.gn b/components/crash/core/app/BUILD.gn
+index 9223352c9ec1450b45f7f0b7c1ceec7ceb1dcbec..1f688e35f75dd73c9ea1b73b1e1696d99059d86d 100644
+--- a/components/crash/core/app/BUILD.gn
++++ b/components/crash/core/app/BUILD.gn
+@@ -120,6 +120,19 @@ static_library("app") {
+     "//third_party/crashpad/crashpad/util",
+   ]
+ 
++  if (is_aros) {
++    # Native CrashReporter consumes base/aros/crash_annotations. Crashpad's
++    # POSIX process/mmap implementation is not an AROS SDK dependency.
++    sources -= [ "crashpad.cc" ]
++    sources += [ "crashpad_aros.cc" ]
++    deps -= [
++      "//third_party/crashpad/crashpad/client",
++      "//third_party/crashpad/crashpad/handler:common",
++      "//third_party/crashpad/crashpad/minidump",
++      "//third_party/crashpad/crashpad/util",
++    ]
++  }
++
+   if (is_linux || is_chromeos) {
+     sources += [ "crashpad_linux.cc" ]
+     data_deps = [ ":chrome_crashpad_handler" ]
 diff --git a/components/crash/core/app/crash_reporter_client.cc b/components/crash/core/app/crash_reporter_client.cc
 index 0941e78cef59417f8ded359c02d8e97477908ea9..5353b701011c526d7ad9b1b5aeb6c9ea3192ded2 100644
 --- a/components/crash/core/app/crash_reporter_client.cc
@@ -31576,6 +31600,34 @@ index db68eaa22030aca74f31a9d8612b4952a3b25642..e02625e502b73f10569ab54714ad4826
      crashpad::CrashpadInfo::GetCrashpadInfo()
          ->set_system_crash_reporter_forwarding(crashpad::TriState::kDisabled);
    }
+diff --git a/components/crash/core/app/crashpad_aros.cc b/components/crash/core/app/crashpad_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..e18a3f1b1f8c67cf6b41c5039661953f9fb24288
+--- /dev/null
++++ b/components/crash/core/app/crashpad_aros.cc
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/crash/core/app/crashpad.h"
++
++#include "base/debug/stack_trace.h"
++
++namespace crash_reporter {
++
++// Native AROS uses the system CrashReporter and the shared annotation block.
++// It has no Crashpad database or upload service. Report absence truthfully.
++bool InitializeCrashpad(bool, const std::string&) { return false; }
++void DestroyCrashpadClient() {}
++void SetUploadConsent(bool) {}
++void GetReports(std::vector<Report>* reports) { reports->clear(); }
++void RequestSingleCrashUpload(const std::string&) {}
++void DumpWithoutCrashing() { base::debug::StackTrace().Print(); }
++std::optional<base::FilePath> GetCrashpadDatabasePath() { return std::nullopt; }
++void ClearReportsBetween(const base::Time&, const base::Time&) {}
++
++}  // namespace crash_reporter
 diff --git a/components/crash/core/app/crashpad_linux.cc b/components/crash/core/app/crashpad_linux.cc
 index 879b0a5d1ebbb63499a5e0e57d38d5d26b862bbf..c21345f949579d39a059b53d35b548418fb1b034 100644
 --- a/components/crash/core/app/crashpad_linux.cc
@@ -35617,7 +35669,7 @@ index 3162721b67d5b744c2c1d7021656a862eea2c2c5..7378d27b244c480589d3aea1098984d6
      sources -=
          [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]
 diff --git a/content/browser/browser_child_process_host_impl.cc b/content/browser/browser_child_process_host_impl.cc
-index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..8e78602327f9eff783e58ef0f1997bf4f3298218 100644
+index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..569c816df0e3ba6a29166a5c0517f54cd6481f99 100644
 --- a/content/browser/browser_child_process_host_impl.cc
 +++ b/content/browser/browser_child_process_host_impl.cc
 @@ -81,6 +81,14 @@
@@ -35662,7 +35714,7 @@ index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..8e78602327f9eff783e58ef0f1997bf4
 +          base::TimeTicks::Now() + kArosChildRetirementGracePeriod;
 +      VLOG(1) << "[Chromium:AROS:ChildRetirement] IPC disconnected; "
 +                 "waiting for task retirement child_id="
-+              << data_.id << " process_type=" << data_.process_type;
++              << data_.GetChildProcessId().value() << " process_type=" << data_.process_type;
 +      ScheduleArosChildRetirementPoll(kArosChildRetirementPollInterval);
 +      return;
 +    }
@@ -35706,7 +35758,7 @@ index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..8e78602327f9eff783e58ef0f1997bf4
 +      GetTerminationInfo(false /* known_dead */);
 +  if (info.status != base::TERMINATION_STATUS_STILL_RUNNING) {
 +    VLOG(1) << "[Chromium:AROS:ChildRetirement] task retired child_id="
-+            << data_.id << " process_type=" << data_.process_type
++            << data_.GetChildProcessId().value() << " process_type=" << data_.process_type
 +            << " quarantined=" << aros_retirement_quarantined_;
 +    FinalizeChildDisconnected(false /* known_dead */);
 +    return;
@@ -35718,7 +35770,7 @@ index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..8e78602327f9eff783e58ef0f1997bf4
 +    LOG(ERROR) << "[Chromium:AROS:ChildRetirement] retirement exceeded "
 +                  "grace period; replacement suppressed until confirmed exit "
 +                  "child_id="
-+               << data_.id << " process_type=" << data_.process_type;
++               << data_.GetChildProcessId().value() << " process_type=" << data_.process_type;
 +  }
 +
 +  ScheduleArosChildRetirementPoll(aros_retirement_quarantined_
@@ -38015,7 +38067,7 @@ index f46af9f9483d06075e7d06939b20cf443543c777..11662fb83900b4c7297877d2143e5430
    LOG(ERROR) << label << " waiting for GDB.";
 diff --git a/content/common/font_list_aros.cc b/content/common/font_list_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..6697479f10e03b63698f352c8d4c6b45ed69812a
+index 0000000000000000000000000000000000000000..0f12a43485319715dc4b57e6d0475567a742a13a
 --- /dev/null
 +++ b/content/common/font_list_aros.cc
 @@ -0,0 +1,15 @@
@@ -38027,10 +38079,10 @@ index 0000000000000000000000000000000000000000..6697479f10e03b63698f352c8d4c6b45
 +
 +namespace content {
 +
-+base::Value::List GetFontList_SlowBlocking() {
++base::ListValue GetFontList_SlowBlocking() {
 +  // AROS exposes fonts through diskfont.library rather than Fontconfig. Until
 +  // that API has a task-safe Chromium bridge, report no enumerated families.
-+  return base::Value::List();
++  return base::ListValue();
 +}
 +
 +}  // namespace content
@@ -38282,6 +38334,19 @@ index 18af23b6aadfdd0cdacad9c3eecd768d2663a8af..57bfa2129f92b2896a3b72686e2d2595
    // Notifies that the manifest URL for the main frame changed to
    // |manifest_url|. This will be invoked when a document with a manifest loads
    // or when the manifest URL changes (possibly to nothing). It is not invoked
+diff --git a/content/public/browser/webid/identity_request_account.h b/content/public/browser/webid/identity_request_account.h
+index 3858624ba9a618e1c6bb9801bda91170de878e57..49fbe97432e191f637d2e1a00294af83a556d918 100644
+--- a/content/public/browser/webid/identity_request_account.h
++++ b/content/public/browser/webid/identity_request_account.h
+@@ -99,7 +99,7 @@ class CONTENT_EXPORT IdentityRequestAccount
+ 
+   // The identity provider to which the account belongs to. This is not set in
+   // the constructor but instead set later.
+-  scoped_refptr<IdentityProviderData> identity_provider = nullptr;
++  scoped_refptr<IdentityProviderData> identity_provider;
+ 
+   std::string id;
+   // E.g. email or phone number
 diff --git a/content/public/common/content_client.cc b/content/public/common/content_client.cc
 index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf3b6cfc04 100644
 --- a/content/public/common/content_client.cc
@@ -51322,7 +51387,7 @@ index 750f48d6e90605ee7c5bd7309a23a9cdd3b680cf..d8d326665ce3c5f76bb266896e255ed2
            locals.Set(name, variable_data);
            cq_dependent_locals.erase(name);
 diff --git a/third_party/blink/renderer/core/css/style_scope.cc b/third_party/blink/renderer/core/css/style_scope.cc
-index 65c73be5339131b213bb7ab20712e6b70757c9e8..e05e3a77510d361a6403836209517bca72013a17 100644
+index 65c73be5339131b213bb7ab20712e6b70757c9e8..2aaa95e7ca535cfa22bfc18a9764b90d67c63f9e 100644
 --- a/third_party/blink/renderer/core/css/style_scope.cc
 +++ b/third_party/blink/renderer/core/css/style_scope.cc
 @@ -18,7 +18,7 @@ StyleScope::StyleScope(StyleRule* from, CSSSelectorList* to)
@@ -51334,15 +51399,6 @@ index 65c73be5339131b213bb7ab20712e6b70757c9e8..e05e3a77510d361a6403836209517bca
                                /*new_parent=*/nullptr,
                                /*mixin_parameter_bindings=*/nullptr))
                          : nullptr),
-@@ -33,7 +33,7 @@ StyleScope* StyleScope::CopyWithParent(const StyleScope* parent) const {
- 
- const StyleScope* StyleScope::Clone(StyleRule* new_parent) const {
-   StyleRule* reparented_from =
--      from_ ? blink::To<StyleRule>(from_->Clone(
-+      from_ ? blink::blink::To<StyleRule>(from_->Clone(
-                   new_parent, /*mixin_parameter_bindings=*/nullptr))
-             : nullptr;
-   // Note that for the "to" selector, any '&' selectors must point
 diff --git a/third_party/blink/renderer/core/dom/node_rare_data.h b/third_party/blink/renderer/core/dom/node_rare_data.h
 index ee97bc28a0061959540f40926cf2b8e2bd49d4cf..7c5fb70d6074440230361d210c101cefa9043fef 100644
 --- a/third_party/blink/renderer/core/dom/node_rare_data.h

@@ -188,3 +188,15 @@ Both private toolchains now use the Binutils 2.47 AROS patch already carried by 
 The AROS event implementation uses one-shot shared state with a mutex and condition variable, without depending on POSIX pollable descriptors. Its tests pass both on the host and native x86-64 AROS: pre-signaling, zero/finite timeout, eight concurrent waiters, and 1,000 signal/wait races. This validates the event primitive, not a complete WebGPU or CEF runtime.
 
 ![Dawn event test on native AROS](evidence/dawn-events-native.png)
+
+## Credentials library on master
+
+`aros/credentials-library-master.patch` carries the native library port at
+`9b448f77`. It preserves existing login key encoding, separates named
+collections, rejects truncated names, respects read-only and explicit locks,
+and refuses to replace a corrupt or unreadable master seed. The native test
+uses only synthetic data in a disposable RAM directory and returns 0.
+See `evidence/credentials-validation.json` for scope and remaining work;
+Chromium 156's new key-provider integration is still pending.
+
+![Native credentials test](evidence/credentials-native.png)
