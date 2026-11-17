@@ -528,7 +528,7 @@ index 0000000000000000000000000000000000000000..699ab01fbe3b9335dae1c85a2c23807a
 +}  // namespace base
 +}  // namespace v8
 diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
-index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b24de2e92a 100644
+index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..f9d561bbe480871c2b78acb136392ce5e9b59a53 100644
 --- a/src/base/platform/platform-posix.cc
 +++ b/src/base/platform/platform-posix.cc
 @@ -9,6 +9,8 @@
@@ -594,7 +594,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
  #if V8_OS_FREEBSD || V8_OS_DARWIN || V8_OS_OPENBSD || V8_OS_SOLARIS
  #define MAP_ANONYMOUS MAP_ANON
  #endif
-@@ -98,11 +125,209 @@ extern int madvise(caddr_t, size_t, int);
+@@ -98,11 +125,213 @@ extern int madvise(caddr_t, size_t, int);
  extern "C" void* __libc_stack_end;
  #endif
  
@@ -628,7 +628,11 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
 +
 +void LockArosMappings() {
 +  while (__atomic_test_and_set(&g_aros_mappings_lock, __ATOMIC_ACQUIRE)) {
++#if defined(__aarch64__)
++    __asm__ __volatile__("yield");
++#elif defined(__x86_64__) || defined(__i386__)
 +    __asm__ __volatile__("pause");
++#endif
 +  }
 +}
 +
@@ -804,7 +808,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
  // 0 is never a valid thread id.
  #if V8_OS_ZOS
  const pthread_t kNoThread = {0};  // pthread_t is a struct on z/OS
-@@ -281,8 +506,8 @@ void OS::Initialize(const char* const gc_fake_mmap) {
+@@ -281,8 +510,8 @@ void OS::Initialize(const char* const gc_fake_mmap) {
  bool OS::IsHardwareEnforcedShadowStacksEnabled() { return false; }
  
  void OS::EnsureAlternativeSignalStackIsAvailableForCurrentThread() {
@@ -815,7 +819,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
    stack_t ss, old_ss;
    memset(&ss, 0, sizeof(stack_t));
    memset(&old_ss, 0, sizeof(stack_t));
-@@ -361,6 +586,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
+@@ -361,6 +590,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
  
  // static
  void* OS::GetRandomMmapAddr() {
@@ -825,7 +829,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
    uintptr_t raw_addr;
    {
      MutexGuard guard(rng_mutex.Pointer());
-@@ -456,6 +684,7 @@ void* OS::GetRandomMmapAddr() {
+@@ -456,6 +688,7 @@ void* OS::GetRandomMmapAddr() {
  #endif
  #endif
    return reinterpret_cast<void*>(raw_addr);
@@ -833,7 +837,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
  }
  
  // TODO(bbudge) Move Cygwin and Fuchsia stuff into platform-specific files.
-@@ -594,6 +823,11 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
+@@ -594,6 +827,11 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
  
  // static
  void OS::SetDataReadOnly(void* address, size_t size) {
@@ -845,7 +849,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
    CHECK_EQ(0, reinterpret_cast<uintptr_t>(address) % CommitPageSize());
    CHECK_EQ(0, size % CommitPageSize());
  
-@@ -601,6 +835,7 @@ void OS::SetDataReadOnly(void* address, size_t size) {
+@@ -601,6 +839,7 @@ void OS::SetDataReadOnly(void* address, size_t size) {
      FATAL("Failed to protect data memory at %p +%zu; error %d\n", address, size,
            errno);
    }
@@ -853,7 +857,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
  }
  
  // static
-@@ -929,6 +1164,8 @@ int OS::GetCurrentThreadIdInternal() {
+@@ -929,6 +1168,8 @@ int OS::GetCurrentThreadIdInternal() {
    return static_cast<int>(zx_thread_self());
  #elif V8_OS_SOLARIS
    return static_cast<int>(pthread_self());
@@ -862,7 +866,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
  #elif V8_OS_ZOS
    return __tcbtid();
  #else
-@@ -950,18 +1187,24 @@ void OS::ExitProcess(int exit_code) {
+@@ -950,18 +1191,24 @@ void OS::ExitProcess(int exit_code) {
  
  #if !defined(V8_OS_FUCHSIA)
  int OS::GetUserTime(uint32_t* secs, uint32_t* usecs) {
@@ -889,7 +893,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
    return -1;
  #elif defined(V8_OS_ZOS)
    // TODO(v8:342445981): zos - rusage struct doesn't yet include ru_maxrss
-@@ -1085,6 +1328,14 @@ void OS::VPrintError(const char* format, va_list args) {
+@@ -1085,6 +1332,14 @@ void OS::VPrintError(const char* format, va_list args) {
  #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
    __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
  #else
@@ -904,7 +908,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b2
    vfprintf(stderr, format, args);
  #endif
  }
-@@ -1539,5 +1790,22 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
+@@ -1539,5 +1794,22 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
  #undef MAP_ANONYMOUS
  #undef MADV_FREE
  
@@ -1651,6 +1655,61 @@ index 634c6dabe166578982b5e3734795da0aa0142279..8a33c8e9acbbb899f2df01ae291784be
  #if __clang__
  #pragma clang diagnostic pop
  #endif
+diff --git a/src/objects/simd.cc b/src/objects/simd.cc
+index 3ce30aa7fd79acf3f046dfe1c2e44c2e98021c55..fcdd555efde55be56e0388bfb68dab4876de0f34 100644
+--- a/src/objects/simd.cc
++++ b/src/objects/simd.cc
+@@ -1310,7 +1310,8 @@ bool Uint8ArrayFromHexWithNeon(const base::Vector<T>& input_vector,
+       uint8x16_t second_part_first_batch =
+           vld1q_u8(reinterpret_cast<const uint8_t*>(&input_vector[i + 8]));
+       first_batch =
+-          vmovn_high_u16(vmovn_u16(first_batch), second_part_first_batch);
++          vmovn_high_u16(vmovn_u16(vreinterpretq_u16_u8(first_batch)),
++                         vreinterpretq_u16_u8(second_part_first_batch));
+     }
+ 
+     // Load second batch of 16 hex characters into a Neon register
+@@ -1323,7 +1324,8 @@ bool Uint8ArrayFromHexWithNeon(const base::Vector<T>& input_vector,
+       uint8x16_t second_part_second_batch =
+           vld1q_u8(reinterpret_cast<const uint8_t*>(&input_vector[i + 24]));
+       second_batch =
+-          vmovn_high_u16(vmovn_u16(second_batch), second_part_second_batch);
++          vmovn_high_u16(vmovn_u16(vreinterpretq_u16_u8(second_batch)),
++                         vreinterpretq_u16_u8(second_part_second_batch));
+     }
+ 
+     // low nibbles are values with even indexes in fist_batch.
+@@ -1341,15 +1343,17 @@ bool Uint8ArrayFromHexWithNeon(const base::Vector<T>& input_vector,
+     // Append low nibbles of first batch and second batch and remove 0x00s.
+     // (0x36, 0x66, 0x46, 0x32, 0x31, 0x32, 0x31, 0x32, 0x36, 0x66, 0x66, 0x32,
+     // 0x31, 0x32, 0x31, 0x66)
+-    uint8x16_t lo_nibbles = vmovn_high_u16(vmovn_u16(first_batch_lo_nibbles),
+-                                           second_batch_lo_nibbles);
++    uint8x16_t lo_nibbles = vmovn_high_u16(
++        vmovn_u16(vreinterpretq_u16_u8(first_batch_lo_nibbles)),
++        vreinterpretq_u16_u8(second_batch_lo_nibbles));
+ 
+     // high nibbles are values with odd indexes in loaded batchs.
+     // vmovn_high_u16 and vmovn_u16 narrow input words by dropping most
+     // significant byte. (0x36, 0x36, 0x36, 0x36, 0x36, 0x37, 0x36, 0x37, 0x36,
+     // 0x36, 0x36, 0x36, 0x36, 0x37, 0x36, 0x66)
+     uint8x16_t hi_nibbles =
+-        vmovn_high_u16(vmovn_u16(first_batch), second_batch);
++        vmovn_high_u16(vmovn_u16(vreinterpretq_u16_u8(first_batch)),
++                       vreinterpretq_u16_u8(second_batch));
+ 
+     // mapping low nibbles to uint8_t values.
+     // (0x06, 0x0f, 0x0f, 0x02, 0x01, 0x02, 0x01, 0x02, 0x06, 0x0f, 0x0f, 0x02,
+@@ -1380,7 +1384,8 @@ bool Uint8ArrayFromHexWithNeon(const base::Vector<T>& input_vector,
+     // (0x60, 0x60, 0x60, 0x60, 0x60, 0x70, 0x60, 0x70, 0x60, 0x60, 0x60, 0x60,
+     // 0x60, 0x70, 0x60, 0xf0)
+     uint8x16_t uint8_shifted_high_nibbles =
+-        vshlq_n_u64(vreinterpretq_u64_u8(uint8_high_nibbles), 4);
++        vreinterpretq_u8_u64(
++            vshlq_n_u64(vreinterpretq_u64_u8(uint8_high_nibbles), 4));
+ 
+     // final result of combining pairs of uint8_t values of low and high
+     // nibbles.
 diff --git a/src/regexp/arm64/regexp-macro-assembler-arm64.cc b/src/regexp/arm64/regexp-macro-assembler-arm64.cc
 index be8451c3a1649292079cd11779b2510ab8bafc91..f3e315bf74638a23f0066f629e0e41a2e5eade5c 100644
 --- a/src/regexp/arm64/regexp-macro-assembler-arm64.cc

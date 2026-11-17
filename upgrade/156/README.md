@@ -203,3 +203,20 @@ See `evidence/credentials-validation.json` for scope and remaining work;
 Chromium 156's new key-provider integration is still pending.
 
 ![Native credentials test](evidence/credentials-native.png)
+
+## Full CEF build configurations in progress
+
+`build/cef-x64.args.gn` and `build/cef-arm64.args.gn` record the current full
+archive build settings. Replace the compiler and SDK paths with your own GCC
+16.2/native SDK installations. These are compilation baselines with the ANGLE
+null backend; they do not claim completed CEF rendering, Vulkan integration, or
+optimization qualification. Native standalone Vulkan rendering is covered by
+separate evidence above. Sign-in, extensions, PDF and Widevine build targets
+remain enabled. NSS client/server toggles are explicit so host helper builds
+and the aggregate NSS setting agree; the native AROS trust path uses the Chrome
+Root Store. User-installed trust roots still require separate integration.
+
+The PDFium read-only mapping consumer now uses an owned file snapshot on AROS.
+Enterprise scanning uses Chromium's existing native `MemoryMappedFile` backend.
+These changes do not add an SDK mmap API. Full consumer runtime tests remain
+pending.

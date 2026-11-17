@@ -20517,6 +20517,24 @@ index 0000000000000000000000000000000000000000..bdeb67819dae8137813fb20593227c89
 +  // Wanderer has no application-icon progress protocol. Chrome's in-window
 +  // download UI remains authoritative.
 +}
+diff --git a/chrome/browser/enterprise/connectors/reporting/BUILD.gn b/chrome/browser/enterprise/connectors/reporting/BUILD.gn
+index 89da84c976bbe37389c709797f70db1820a59c6e..f25e43ff9eeef3929077fdcae0d4ee38eaceb09e 100644
+--- a/chrome/browser/enterprise/connectors/reporting/BUILD.gn
++++ b/chrome/browser/enterprise/connectors/reporting/BUILD.gn
+@@ -50,9 +50,12 @@ source_set("reporting") {
+     "//components/enterprise",
+     "//components/policy/core/common",
+     "//components/safe_browsing/core/common/proto:csd_proto",
+-    "//third_party/crashpad/crashpad/client",
+   ]
+ 
++  if (!is_aros) {
++    deps += [ "//third_party/crashpad/crashpad/client" ]
++  }
++
+   if (enterprise_cloud_content_analysis && enable_extensions_core) {
+     public_deps += [
+       "//extensions/browser",
 diff --git a/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc b/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc
 index 8a75e504f706cec0681a51f305b09ce9cebc29d5..bc0e8fd6f536d1e068825753e63b413ede039bac 100644
 --- a/chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.cc
@@ -21348,10 +21366,10 @@ index 3be64b9683aa7f664e59a9f3574d429a1ee3cedd..ee84b9e4e4c7eb0b372ba044a9e2b757
  
 diff --git a/chrome/browser/media/router/discovery/discovery_network_list_aros.cc b/chrome/browser/media/router/discovery/discovery_network_list_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..584db7fecfab1cccc1525dd6aa07371d7cd212d1
+index 0000000000000000000000000000000000000000..1fdbe62d5dd93cd4d65074fd65d274703b44cf54
 --- /dev/null
 +++ b/chrome/browser/media/router/discovery/discovery_network_list_aros.cc
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,40 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21378,8 +21396,7 @@ index 0000000000000000000000000000000000000000..584db7fecfab1cccc1525dd6aa07371d
 +  for (const auto& interface : interfaces) {
 +    std::string network_id;
 +    if (interface.mac_address) {
-+      network_id = base::HexEncode(interface.mac_address->data(),
-+                                   interface.mac_address->size());
++      network_id = base::HexEncode(*interface.mac_address);
 +    } else {
 +      network_id = interface.address.ToString();
 +    }
@@ -23555,6 +23572,34 @@ index fc897d488cd06ee906873fdccbedc720e2d39a37..fba9da554244fafd9ae5c9e4c3b8ac2f
  assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
  
  build_webui("build") {
+diff --git a/chrome/browser/resources/certificate_manager/certificate_manager.html.ts b/chrome/browser/resources/certificate_manager/certificate_manager.html.ts
+index dc270e8654718e776e042fd6c5e611d8e25ccd71..f0fd60085df70bebb3e6ed9b0b5e173bab1c2d3e 100644
+--- a/chrome/browser/resources/certificate_manager/certificate_manager.html.ts
++++ b/chrome/browser/resources/certificate_manager/certificate_manager.html.ts
+@@ -5,7 +5,9 @@
+ import {html} from '//resources/lit/v3_0/lit.rollup.js';
+ 
+ import type {CertificateManagerElement} from './certificate_manager.js';
++// <if expr="is_win or is_macosx or is_linux or is_chromeos">
+ import {CertificateSource} from './certificate_manager.mojom-webui.js';
++// </if>
+ import {Page} from './navigation.js';
+ 
+ export function getHtml(this: CertificateManagerElement) {
+diff --git a/chrome/browser/resources/certificate_manager/certificate_manager.ts b/chrome/browser/resources/certificate_manager/certificate_manager.ts
+index ae4ab5203dc2d7f03a5affaabcda810bcea36d5b..6bd11cb5f81e77b19fcbce761fbeb416271333c5 100644
+--- a/chrome/browser/resources/certificate_manager/certificate_manager.ts
++++ b/chrome/browser/resources/certificate_manager/certificate_manager.ts
+@@ -40,7 +40,9 @@ import {PromiseResolver} from '//resources/js/promise_resolver.js';
+ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+ 
+ import type {CertificateConfirmationDialogElement} from './certificate_confirmation_dialog.js';
++// <if expr="is_win or is_macosx or is_linux or is_chromeos">
+ import type {CertificateListElement} from './certificate_list.js';
++// </if>
+ import {getCss} from './certificate_manager.css.js';
+ import {getHtml} from './certificate_manager.html.js';
+ import type {ActionResult, SummaryCertInfo} from './certificate_manager.mojom-webui.js';
 diff --git a/chrome/browser/resources/on_device_translation_internals/BUILD.gn b/chrome/browser/resources/on_device_translation_internals/BUILD.gn
 index 38c384ed53de8788dd644e0a23dd5a5849d08918..40a818da68170f4129cd86c800ac208330c85de0 100644
 --- a/chrome/browser/resources/on_device_translation_internals/BUILD.gn
@@ -23726,6 +23771,19 @@ index 0000000000000000000000000000000000000000..d0f2d74acb8c05da09fe4b5bab2501dd
 +
 +}  // namespace internal
 +}  // namespace shell_integration
+diff --git a/chrome/browser/shortcuts/icon_badging.cc b/chrome/browser/shortcuts/icon_badging.cc
+index 35cd2cb10bf55167b95372a08df6bf20f0f10fb2..2b7a0fb266d73785484d3f6f46d9fea6b4c7f212 100644
+--- a/chrome/browser/shortcuts/icon_badging.cc
++++ b/chrome/browser/shortcuts/icon_badging.cc
+@@ -58,7 +58,7 @@ enum class BadgeSize {
+ constexpr ShortcutSize kSizesNeededForShortcutCreation[] = {
+     ShortcutSize::k16, ShortcutSize::k32, ShortcutSize::k128,
+     ShortcutSize::k256, ShortcutSize::k512};
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ constexpr ShortcutSize kSizesNeededForShortcutCreation[] = {ShortcutSize::k32,
+                                                             ShortcutSize::k128};
+ #elif BUILDFLAG(IS_WIN)
 diff --git a/chrome/browser/shutdown_signal_handlers_posix.cc b/chrome/browser/shutdown_signal_handlers_posix.cc
 index c3094309b7ad7a05dc777707f4065e62a0fb2e5f..94a2fc31bb21dbc697ac5b13bb6328d47f72f14b 100644
 --- a/chrome/browser/shutdown_signal_handlers_posix.cc
@@ -29235,6 +29293,28 @@ index 9287297cb133a3846419f27a103f6b9eb3e9660f..fa5d9e002ae154d50afcf083ba4af9ec
  
    // Called to notify this instance that the dependency parser loader
    // is available for model requests or is invalidating existing requests
+diff --git a/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom b/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom
+index 2409b138c639ece718b3687183f03e131a67f82c..03bff46ca6abc3d4d483f37e27d2bab61eea1e73 100644
+--- a/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom
++++ b/chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble/cross_device_signin_qr_bubble.mojom
+@@ -15,7 +15,7 @@ struct CrossDeviceSigninQrBubbleData {
+ 
+ // Used by the WebUI page to bootstrap communication.
+ // Messages sent from WebUI to C++.
+-[EnableIf=is_linux|is_mac|is_win]
++[EnableIf=is_linux|is_mac|is_win|is_aros]
+ interface PageHandlerFactory {
+   // Creates a PageHandler to enable communication with the C++ backend.
+   // |handler|: A pending receiver that will be bound to the C++ implementation.
+@@ -24,7 +24,7 @@ interface PageHandlerFactory {
+ };
+ 
+ // Messages sent from WebUI to C++.
+-[EnableIf=is_linux|is_mac|is_win]
++[EnableIf=is_linux|is_mac|is_win|is_aros]
+ interface PageHandler {
+   // Fetches the user's current account information and a generated QR code.
+   // This is called once by the frontend to populate the UI when it loads.
 diff --git a/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn b/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn
 index 86cb680353af4edc5c77434c9bc36381fbf2a5f2..cdc912a5a576ca5ff116fd351150a5d93bdd9ed7 100644
 --- a/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn
@@ -29707,6 +29787,26 @@ index b0d7706507e21635e9ad3dfcc71df78740e390a8..b00c36ebcdef5d44dc4ae7e61843af82
  }
  
  void DeletePlatformShortcuts(const base::FilePath& web_app_path,
+diff --git a/chrome/browser/web_applications/web_app.cc b/chrome/browser/web_applications/web_app.cc
+index 4f0f504c66c93265cac0ee6cc446cf5f0655359f..a6a8e981a3319e9b2204b52a74955b18b95a8d5a 100644
+--- a/chrome/browser/web_applications/web_app.cc
++++ b/chrome/browser/web_applications/web_app.cc
+@@ -726,13 +726,12 @@ void WebApp::SetCurrentOsIntegrationStates(
+ }
+ 
+ void WebApp::SetIsolationData(IsolationData isolation_data) {
+-  CHECK(manifest_id_.is_valid()
++  CHECK(manifest_id_.is_valid());
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS)
+-        && manifest_id_.value().SchemeIs(webapps::kIsolatedAppScheme))
++  CHECK(manifest_id_.value().SchemeIs(webapps::kIsolatedAppScheme));
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS)
+-      ;
+   if (isolation_data.pending_update_info().has_value()) {
+     DCHECK_EQ(isolation_data.location().dev_mode(),
+               isolation_data.pending_update_info()->location.dev_mode())
 diff --git a/chrome/browser/web_applications/web_app_install_info.h b/chrome/browser/web_applications/web_app_install_info.h
 index 60cabf696e7c1512eacf65ae5cfadbeae4d6c177..75167f178c24b4244d5ebbe60e3407ac1a4924b9 100644
 --- a/chrome/browser/web_applications/web_app_install_info.h
@@ -30575,6 +30675,19 @@ index 5cffcdac812a0943143a7bc0943ef8a931af2302..4e4724963c537c6a37f2023fb4cae99d
  
  #if BUILDFLAG(CHROME_FOR_TESTING)
    // Chrome for Testing may store components in a directory other than the user
+diff --git a/chrome/common/media/component_widevine_cdm_hint_file_linux.h b/chrome/common/media/component_widevine_cdm_hint_file_linux.h
+index 989b675c23b79e7e1b2880cc1a34720e30bca9f4..664dc67f658b2ecf10fb68f0560ecbc14dad1cee 100644
+--- a/chrome/common/media/component_widevine_cdm_hint_file_linux.h
++++ b/chrome/common/media/component_widevine_cdm_hint_file_linux.h
+@@ -14,7 +14,7 @@
+ #error "This file only applies when Widevine used."
+ #endif
+ 
+-#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ #error "This file only applies to desktop Linux and ChromeOS."
+ #endif
+ 
 diff --git a/chrome/common/url_constants.h b/chrome/common/url_constants.h
 index 1bbf3afad91dd927bc7d9f1fe0d7ba69a507959b..074f4cd891b06ac08fa06577fab0781a46b0c44f 100644
 --- a/chrome/common/url_constants.h
@@ -30616,7 +30729,7 @@ index 9ca40912a26851968cec444048f6c5f492f1c152..99c6828da254ea40bc2d98aef913af7f
  #endif
  #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
-index a462094cd3d23066539c26d202e2df0b6decf0f9..52d0aa39e34fe3b0aeeea093099d6eeb3c51680f 100644
+index a462094cd3d23066539c26d202e2df0b6decf0f9..9bade6e90765926c207f80438f519bc87d079893 100644
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
 @@ -18,6 +18,7 @@
@@ -30638,7 +30751,7 @@ index a462094cd3d23066539c26d202e2df0b6decf0f9..52d0aa39e34fe3b0aeeea093099d6eeb
  inline constexpr char kChromeUILensOverlayHost[] = "lens-overlay";
  inline constexpr char kChromeUILensOverlayUntrustedURL[] =
      "chrome-untrusted://lens-overlay/";
-@@ -452,7 +457,7 @@ bool IsSystemWebUIHost(std::string_view host);
+@@ -452,22 +457,25 @@ bool IsSystemWebUIHost(std::string_view host);
  #endif  // BUILDFLAG(IS_CHROMEOS)
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -30647,7 +30760,10 @@ index a462094cd3d23066539c26d202e2df0b6decf0f9..52d0aa39e34fe3b0aeeea093099d6eeb
  inline constexpr char kChromeUIDiscardsHost[] = "discards";
  inline constexpr char kChromeUIDiscardsURL[] = "chrome://discards/";
  #endif
-@@ -462,12 +467,15 @@ inline constexpr char kChromeUIDefaultBrowserModalURL[] =
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ inline constexpr char kChromeUIDefaultBrowserModalURL[] =
      "chrome://default-browser-modal/";
  inline constexpr char kChromeUIDefaultBrowserModalHost[] =
      "default-browser-modal";
@@ -31029,6 +31145,21 @@ index 766668f7f3a204f5c068a8ef9d3a095edf47b935..ace9802b71c727cab3af452417610a28
  #include <sys/mman.h>
  #endif
  
+diff --git a/components/autofill/content/browser/content_autofill_driver.cc b/components/autofill/content/browser/content_autofill_driver.cc
+index 3fafa49b31258e680ab6e344d9d8f6d35ebeb737..2cad21498f435ace153af40d4120a410e4a81783 100644
+--- a/components/autofill/content/browser/content_autofill_driver.cc
++++ b/components/autofill/content/browser/content_autofill_driver.cc
+@@ -312,8 +312,8 @@ void RouteToManager(
+         AutofillDriverRouter::RoutedCallback<ManagerArgs...>,
+         autofill::AutofillDriver& source,
+         RouterArgs...),
+-    void (AutofillManager::*manager_fun)(ManagerArgs...,
+-                                         AutofillManager::RendererEventPassKey),
++    std::type_identity_t<void (AutofillManager::*)(
++        ManagerArgs..., AutofillManager::RendererEventPassKey)> manager_fun,
+     ActualArgs&&... args) {
+   if (!bad_message::CheckArgs(args...) ||
+       !bad_message::CheckFrameNotPrerendering(source.render_frame_host())) {
 diff --git a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h b/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
 index 493cbf8533604210b09f0f59da33481d76d2af91..a240f45dcfe776c27e3586b044299eca8607cfd1 100644
 --- a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
@@ -32122,6 +32253,36 @@ index 0000000000000000000000000000000000000000..e293a2982d7f54e0815d45a4981f9d70
 +}
 +
 +}  // namespace crash_reporter
+diff --git a/components/crash/core/common/crash_keys.cc b/components/crash/core/common/crash_keys.cc
+index aec0630e3805f136a1578af3272c9df59ae1b871..cc7f8bfb03b8d6422bcbe7e73295d24b9e236fbd 100644
+--- a/components/crash/core/common/crash_keys.cc
++++ b/components/crash/core/common/crash_keys.cc
+@@ -110,6 +110,12 @@ void SetSwitchesFromCommandLine(const base::CommandLine& command_line,
+ CrashKeyWithName::CrashKeyWithName(std::string name)
+     : name_(std::move(name)), crash_key_(name_.c_str()) {}
+ 
++#if !BUILDFLAG(USE_CRASHPAD_ANNOTATION)
++std::string CrashKeyWithName::Value() const {
++  return crash_reporter::GetCrashKeyValue(name_);
++}
++#endif
++
+ // --enable-features and --disable-features often contain a long list not
+ // fitting into 64 bytes, hiding important information when analysing crashes.
+ // Therefore they are separated out in a list of CrashKeys, one for each
+diff --git a/components/crash/core/common/crash_keys.h b/components/crash/core/common/crash_keys.h
+index ba80712294914eb1d6104030664377674f9949b1..14d3b14dabbd5b328609633b10098ca13d881bfa 100644
+--- a/components/crash/core/common/crash_keys.h
++++ b/components/crash/core/common/crash_keys.h
+@@ -37,6 +37,8 @@ class CRASH_KEY_EXPORT CrashKeyWithName {
+   std::string_view Name() const { return name_; }
+ #if BUILDFLAG(USE_CRASHPAD_ANNOTATION)
+   std::string_view Value() const { return crash_key_.value(); }
++#else
++  std::string Value() const;
+ #endif
+   void Clear() { crash_key_.Clear(); }
+   void Set(std::string_view value) { crash_key_.Set(value); }
 diff --git a/components/discardable_memory/common/discardable_shared_memory_heap.cc b/components/discardable_memory/common/discardable_shared_memory_heap.cc
 index 585d63942a72ff7bc8ad9c3eae6c01b64173404c..82ed1bfea8b4584567be9ea4f0929346eb96c188 100644
 --- a/components/discardable_memory/common/discardable_shared_memory_heap.cc
@@ -32331,6 +32492,70 @@ index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389
  
    # Indicates support for Enterprise Proxy policy and service.
    enterprise_proxy =
+diff --git a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc b/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc
+index d9c676f1b16d365c3d8da2304d20eefb652d1813..6f4f79fecf9ca2d0d630e1883feb46967d99842f 100644
+--- a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc
++++ b/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc
+@@ -18,7 +18,7 @@
+ #include "components/enterprise/connectors/core/features.h"
+ #include "net/base/net_errors.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include <sys/mman.h>
+ 
+ #include "base/threading/scoped_blocking_call.h"
+@@ -79,7 +79,7 @@ std::unique_ptr<ChunkedFileDataPipeProducer> CreateChunkedProducer(
+ 
+ }  // namespace
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ namespace {
+ void CloseFileAndMap(base::File file, uint8_t* data, size_t length) {
+   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+diff --git a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.h b/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.h
+index b680d57edc634e64c73b99104ec457451b2bd3d8..2c3b53ab440691f848f2f9b9c359b3511582b080 100644
+--- a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.h
++++ b/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.h
+@@ -43,7 +43,7 @@ class ChunkedFileDataPipeProducer;
+ // 2. Resumable request with a body that contains solely file or page data.
+ class ConnectorDataPipeGetter : public network::mojom::DataPipeGetter {
+  public:
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // Mimics base::MemoryMappedFile for READ_ONLY access.
+   // The only difference between this class and base::MemoryMappedFile is that
+   // if the mmap call fails using MAP_SHARED it will retry it with MAP_PRIVATE.
+@@ -67,7 +67,7 @@ class ConnectorDataPipeGetter : public network::mojom::DataPipeGetter {
+       // points to `length_` bytes of data.
+       // TODO(https://crbug.com/40284755): Consider somehow reusing
+       // `base::MemoryMappedFile::bytes` instead having to reimplement it
+-      // for the `#if BUILDFLAG(IS_POSIX)` fork of the class.
++      // for the `#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)` fork of the class.
+       return UNSAFE_BUFFERS(base::span(data_, length_));
+     }
+ 
+diff --git a/components/enterprise/connectors/core/cloud_content_scanning/files_request_handler_base.cc b/components/enterprise/connectors/core/cloud_content_scanning/files_request_handler_base.cc
+index 451adb54e0e7df9eaf55f6849dc5d38c54850acb..7c1c389cd749e99b21a69d645a72e66db981b5bf 100644
+--- a/components/enterprise/connectors/core/cloud_content_scanning/files_request_handler_base.cc
++++ b/components/enterprise/connectors/core/cloud_content_scanning/files_request_handler_base.cc
+@@ -39,6 +39,7 @@ AnalysisConnector AccessPointToEnterpriseConnector(
+     case DeepScanAccessPoint::COPY:
+     case DeepScanAccessPoint::PRINT:
+     case DeepScanAccessPoint::NETWORK_REQUEST:
++      break;
+   }
+   NOTREACHED();
+ }
+@@ -53,6 +54,7 @@ std::string AccessPointToUmaHistogramPrefix(DeepScanAccessPoint access_point) {
+     case enterprise_connectors::FILE_DOWNLOADED:
+       return "Enterprise.OnFileDownload";
+     default:
++      break;
+   }
+   NOTREACHED();
+ }
 diff --git a/components/eye_dropper/BUILD.gn b/components/eye_dropper/BUILD.gn
 index 5fa8421d77b659f3f7dc2b889354b84707b53388..0e2989ea75369b927e70d848f15dc071fdb3b406 100644
 --- a/components/eye_dropper/BUILD.gn
@@ -32670,6 +32895,19 @@ index 3078c85b22b75db459f9aa3fa911f553939c99d5..320258bf5078628740d66bddad0b5148
  
  #if BUILDFLAG(IS_CHROMEOS)
          VARIATION_ENTRY(kIPHGoogleOneOfferNotificationFeature),
+diff --git a/components/feedback/redaction_tool/ip_address.h b/components/feedback/redaction_tool/ip_address.h
+index 490ee1b10c7409891328778da3f2359ca0fcb11d..09d649d5e3916c89c2f4dd68ac731e5a6c9da37b 100644
+--- a/components/feedback/redaction_tool/ip_address.h
++++ b/components/feedback/redaction_tool/ip_address.h
+@@ -269,7 +269,7 @@ bool IPAddressStartsWith(const IPAddress& address, const uint8_t (&prefix)[N]) {
+   if (address.size() < N) {
+     return false;
+   }
+-  return base::span(prefix) == base::span(address.bytes()).first<N>();
++  return base::span(prefix) == base::span(address.bytes()).template first<N>();
+ }
+ 
+ // According to RFC6052 Section 2.2 IPv4-Embedded IPv6 Address Format.
 diff --git a/components/gcm_driver/gcm_client_impl.cc b/components/gcm_driver/gcm_client_impl.cc
 index 2bd1a15816d10213433ebd4d863accd669475279..fcdae6ccacb8b9f9e3107ab08111cb43415316dc 100644
 --- a/components/gcm_driver/gcm_client_impl.cc
@@ -33136,10 +33374,10 @@ index 2309659150f87cced2def4071588c60cdc9c591c..053257da09703822d99648f92230fb64
 +}
 diff --git a/components/os_crypt/async/browser/aros_key_provider.cc b/components/os_crypt/async/browser/aros_key_provider.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f82ddf63efc2d626744e189e3e6f681e8c643e60
+index 0000000000000000000000000000000000000000..50c534ba5eabf838e061424ba349950e3c8b4376
 --- /dev/null
 +++ b/components/os_crypt/async/browser/aros_key_provider.cc
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,114 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -33234,6 +33472,10 @@ index 0000000000000000000000000000000000000000..f82ddf63efc2d626744e189e3e6f681e
 +void ArosKeyProvider::GetKey(KeyCallback callback) {
 +  std::string application_namespace = local_state_->GetString(kNamespacePref);
 +  if (application_namespace.empty()) {
++    if (local_state_->ReadOnly()) {
++      std::move(callback).Run(kTag, base::unexpected(KeyError::kTemporarilyUnavailable));
++      return;
++    }
 +    // Keep the identity with Local State so moving a user-data directory does
 +    // not orphan its key. Persist it before creating/encrypting with that key.
 +    application_namespace = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -33299,6 +33541,49 @@ index 10db0687101b69542f9dd33592d0655c7343e3c8..941912695c5e00a31873ed456662f74c
      deps = [
        "//base",
        "//build:branding_buildflags",
+diff --git a/components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.cc b/components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.cc
+index 2843b412db73a8b04ae4908e6797a8ab2be1d2a0..18462014069ddc15c799c5c41552338c80d75594 100644
+--- a/components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.cc
++++ b/components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.cc
+@@ -360,9 +360,9 @@ const char kHistogramConnectTimingFirstRequestSslDelay[] =
+ UmaPageLoadMetricsObserver::UmaPageLoadMetricsObserver()
+     : transition_(ui::PAGE_TRANSITION_LINK),
+       was_no_store_main_resource_(false),
+-      cache_bytes_(0),
+-      network_bytes_(0),
+-      network_bytes_including_headers_(0) {
++      cache_bytes_(),
++      network_bytes_(),
++      network_bytes_including_headers_() {
+   // Emit a trigger to allow trace collection tied to navigations. For
+   // simplicity, this signal happens during `WillStartRequest`, which is a bit
+   // later than the `navigation_start` timestamp used in
+diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
+index f331f4df78737cdef2b06fb5807ac3b4d59302b1..5184975559d6ea7a2d0406b7e4d0ee31e01f2d76 100644
+--- a/components/permissions/permission_request_manager.cc
++++ b/components/permissions/permission_request_manager.cc
+@@ -451,7 +451,7 @@ bool PermissionRequestManager::ReprioritizeCurrentRequestIfNeeded() {
+ bool PermissionRequestManager::
+     HasActiveSourceFrameOrDisallowActivationOtherwise(
+         const PermissionRequest& request) const {
+-  const auto iter = request_sources_map_.find(request);
++  const auto iter = request_sources_map_.find(base::raw_ref(request));
+   if (iter != request_sources_map_.end()) {
+     return !iter->second.IsSourceFrameInactiveAndDisallowActivation();
+   }
+diff --git a/components/permissions/permission_request_manager.h b/components/permissions/permission_request_manager.h
+index 86dbfe3884b355f458943bd36a24b20de5d4053d..2cadad36eb9ba6cb33bab0128d182ee311fe8464 100644
+--- a/components/permissions/permission_request_manager.h
++++ b/components/permissions/permission_request_manager.h
+@@ -578,7 +578,7 @@ class PermissionRequestManager
+   // Maps each PermissionRequest currently in |requests_| or
+   // |pending_permission_requests_| to which RenderFrameHost it originated from.
+   // Note that no date is stored for |duplicate_requests_|.
+-  std::map<base::raw_ref<PermissionRequest>, PermissionRequestSource>
++  std::map<base::raw_ref<const PermissionRequest>, PermissionRequestSource>
+       request_sources_map_;
+ 
+   // Sequence of requests from pending queue will be marked as validated, when
 diff --git a/components/policy/BUILD.gn b/components/policy/BUILD.gn
 index f724bf914a934de95d71eda0c17cc475b51a2eae..8d9bee4da75693d32ca8c99b87690382d5e1acae 100644
 --- a/components/policy/BUILD.gn
@@ -39012,7 +39297,7 @@ index a63c3bea226425589ebb8b9b55b1bace381d3a96..9d77af3f935c880fbdd6dcc396789aa9
      sources += [
        "renderer_main_platform_delegate_mac.mm",
 diff --git a/content/renderer/media/batching_media_log.cc b/content/renderer/media/batching_media_log.cc
-index d657a3ee6a5f60b27a243a34d2796945fcd07b54..66ea56212e65106dcb53be93d8a19b441e42cbde 100644
+index d657a3ee6a5f60b27a243a34d2796945fcd07b54..9782e9cf2b3bf131c761ded013c5d0c5b0118387 100644
 --- a/content/renderer/media/batching_media_log.cc
 +++ b/content/renderer/media/batching_media_log.cc
 @@ -13,6 +13,7 @@
@@ -39023,7 +39308,7 @@ index d657a3ee6a5f60b27a243a34d2796945fcd07b54..66ea56212e65106dcb53be93d8a19b44
  #include "media/base/logging_override_if_enabled.h"
  
  namespace {
-@@ -56,11 +57,38 @@ BatchingMediaLog::BatchingMediaLog(
+@@ -56,11 +57,42 @@ BatchingMediaLog::BatchingMediaLog(
  }
  
  BatchingMediaLog::~BatchingMediaLog() {
@@ -39052,7 +39337,11 @@ index d657a3ee6a5f60b27a243a34d2796945fcd07b54..66ea56212e65106dcb53be93d8a19b44
 +    }
 +    event_handlers_.clear();
 +    last_duration_changed_event_.reset();
-+    last_buffering_state_event_.reset();
++    last_audio_buffering_state_.reset();
++    last_video_buffering_state_.reset();
++    last_pipeline_buffering_state_.reset();
++    last_play_event_.reset();
++    last_pause_event_.reset();
 +    weak_this_.reset();
 +    weak_factory_.DetachAndInvalidateOnCurrentSequence();
 +    return;
@@ -39823,6 +40112,27 @@ index 9a13ad94086fee48f0893efbc521fa00447b215e..68dee52472a9aea825237fa4d849afc1
    if (is_android) {
      sources += [
        "gamepad_platform_data_fetcher_android.cc",
+diff --git a/extensions/browser/api/extensions_api_client.cc b/extensions/browser/api/extensions_api_client.cc
+index 9521aa35ec642bdfcb3e8923cedc605278d966c8..5097770e5740e3d144fd3d2517d1b011ce2edd21 100644
+--- a/extensions/browser/api/extensions_api_client.cc
++++ b/extensions/browser/api/extensions_api_client.cc
+@@ -3,6 +3,16 @@
+ // found in the LICENSE file.
+ 
+ #include "extensions/browser/api/extensions_api_client.h"
++#include "extensions/browser/guest_view/app_view/app_view_guest_delegate.h"
++#include "extensions/browser/guest_view/extension_options/extension_options_guest_delegate.h"
++#include "components/guest_view/browser/guest_view_manager_delegate.h"
++#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h"
++#include "extensions/browser/guest_view/web_view/web_view_guest_delegate.h"
++#include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
++#include "extensions/browser/api/declarative_content/content_rules_registry.h"
++#include "extensions/browser/api/usb_device_permissions_prompt.h"
++#include "extensions/browser/supervised_user_extensions_delegate.h"
++
+ 
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
 diff --git a/extensions/browser/api/networking_private/BUILD.gn b/extensions/browser/api/networking_private/BUILD.gn
 index d4e1719a4e4a7e25ae38c40a63f1fbd12adf1795..cdedfeb0358f2a4d1cafbe25f5f461c1669b685e 100644
 --- a/extensions/browser/api/networking_private/BUILD.gn
@@ -39856,15 +40166,16 @@ index ca399b6a04e236bcf93f62e25d46d71259c25a78..74d2cbdec45a255d239bc1ec540a7650
    }
 diff --git a/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc b/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f48bc1cdef0a5b242c40da915690fa448605bae6
+index 0000000000000000000000000000000000000000..e13fa7d72f783e84a8be90b3f024212cdeff5c01
 --- /dev/null
 +++ b/extensions/browser/api/system_cpu/cpu_info_provider_aros.cc
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "extensions/browser/api/system_cpu/cpu_info_provider.h"
++#include "base/notimplemented.h"
 +
 +namespace extensions {
 +
@@ -39873,11 +40184,26 @@ index 0000000000000000000000000000000000000000..f48bc1cdef0a5b242c40da915690fa44
 +  DCHECK(infos);
 +  // AROS exposes processor identity but not cumulative per-core time through
 +  // a stable public API yet. task.resource accounting can supply this later.
-+  NOTIMPLEMENTED_LOG_ONCE();
++  NOTIMPLEMENTED();
 +  return false;
 +}
 +
 +}  // namespace extensions
+diff --git a/extensions/browser/extensions_browser_client.cc b/extensions/browser/extensions_browser_client.cc
+index d3fae1de434207e4ea185c70b35440d8e1ba7e8c..90b955586311e3991b5badaac40c193fd96c97d9 100644
+--- a/extensions/browser/extensions_browser_client.cc
++++ b/extensions/browser/extensions_browser_client.cc
+@@ -3,6 +3,10 @@
+ // found in the LICENSE file.
+ 
+ #include "extensions/browser/extensions_browser_client.h"
++#include "components/safe_browsing/core/browser/db/database_manager.h"
++#include "extensions/browser/crx_installer.h"
++#include "components/image_fetcher/core/image_decoder.h"
++
+ 
+ #include <memory>
+ #include <optional>
 diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc
 index 234fbf36362d3a3932ca397e6173cd16e2d3fb1e..c87885851c47eb3aaac233c2d44bf2730c6c95b4 100644
 --- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.cc
@@ -46984,6 +47310,19 @@ index ca6dd1f031375a9830c4d9af42531248d6836b5d..ff2cc24a5850c3ec004eea6f04995beb
  #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
  #include <netdb.h>
  #include <netinet/in.h>
+diff --git a/net/cert/cert_verify_proc.cc b/net/cert/cert_verify_proc.cc
+index 042b35bec90a22594852ae91d01c3097310df918..b21e8fb89b4c82547de0ed8b5695841dd8348eb8 100644
+--- a/net/cert/cert_verify_proc.cc
++++ b/net/cert/cert_verify_proc.cc
+@@ -419,7 +419,7 @@ scoped_refptr<CertVerifyProc> CertVerifyProc::CreateBuiltinWithChromeRootStore(
+   return CreateCertVerifyProcBuiltin(
+       std::move(cert_net_fetcher), std::move(crl_set), std::move(ct_verifier),
+       std::move(ct_policy_enforcer),
+-#if BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_CHROMEOS) || (BUILDFLAG(IS_LINUX) && !BUILDFLAG(USE_NSS_SERVER_CERTS))
+       CreateChromeOnlySystemTrustStore(std::move(chrome_root)),
+ #else
+       CreateSslSystemTrustStoreChromeRoot(std::move(chrome_root)),
 diff --git a/net/cert/ev_root_ca_metadata.cc b/net/cert/ev_root_ca_metadata.cc
 index c8c8b6cc150d8cced71b94c9b5a1a2529a796fd8..edfd5d0e49d47cce0a4be93cf08e3a74e8194d0a 100644
 --- a/net/cert/ev_root_ca_metadata.cc
@@ -52712,7 +53051,7 @@ index e85f9c75e8ed6961ef75c1899e93ce12a9af3521..380ec1a4b3cdd4e1e2fcb7824b6c566b
  
  std::unique_ptr<CrossThreadFetchClientSettingsObjectData>
 diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
-index b517e1c27d2076b8286bf5af2ae9e9ab940979bd..b4e2457c1811073b389ae18735ceb53440aa185a 100644
+index b517e1c27d2076b8286bf5af2ae9e9ab940979bd..d7a8d2d4dcd88bd2c249a8b8c0b5abf7ed5069a1 100644
 --- a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
 +++ b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
 @@ -39,11 +39,13 @@
@@ -52742,7 +53081,7 @@ index b517e1c27d2076b8286bf5af2ae9e9ab940979bd..b4e2457c1811073b389ae18735ceb534
    receiver_.Bind(std::move(receiver),
                   GetThread()->GetTaskRunner(TaskType::kInternalDefault));
 +#if BUILDFLAG(IS_AROS)
-+  receiver_.set_disconnect_handler(WTF::BindOnce([]() {
++  receiver_.set_disconnect_handler(BindOnce([]() {
 +    LOG(ERROR) << "[Chromium:AROS:ServiceWorkerReceiver] disconnect";
 +  }));
 +#endif
@@ -62123,7 +62462,7 @@ index b1ccc704de42f1acb2ad3cdcf8102f44a5fcc547..1d0dc681104c339a48da896b580b94b3
    std::unique_ptr<SelectionController> selection_controller_;
  
 diff --git a/ui/views/controls/menu/menu_controller.cc b/ui/views/controls/menu/menu_controller.cc
-index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..d174aa56bb229135dbf049ff220da367c83c0ea4 100644
+index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..2f15f3a23007071f872625d2363d6cec6e2631aa 100644
 --- a/ui/views/controls/menu/menu_controller.cc
 +++ b/ui/views/controls/menu/menu_controller.cc
 @@ -698,7 +698,8 @@ void MenuController::Run(Widget* parent,
@@ -62136,29 +62475,7 @@ index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..d174aa56bb229135dbf049ff220da367
    // Track stack depth to defer controller destruction during initial menu
    // display.
    ScopedDeletionGuard guard(AsWeakPtr());
-@@ -744,6 +745,21 @@ void MenuController::Run(Widget* parent,
-       }
-     }
-   }
-+#if BUILDFLAG(IS_AROS)
-+  // A web-content context menu is shown asynchronously (renderer round trip),
-+  // so the press that opened it is no longer the parent's current event and
-+  // the release-under-cursor guard in OnMouseReleased has no press location
-+  // to compare against.  Once the menu has capture, a release that lands
-+  // after the menu opened is rerouted to it; with the menu clamped to the
-+  // screen bottom (768px displays) that release sits on an item and executes
-+  // it.  Use the cursor position as the press location: the button is still
-+  // held and the pointer has not moved since the press.
-+  if (context_menu && menu_start_mouse_press_loc_ == gfx::Point()) {
-+    if (display::Screen* screen = display::Screen::GetScreen()) {
-+      menu_start_mouse_press_loc_ = screen->GetCursorScreenPoint();
-+    }
-+  }
-+#endif
- 
-   // If we are already showing, this new menu is being nested. Such as context
-   // menus on top of normal menus.
-@@ -770,6 +786,7 @@ void MenuController::Run(Widget* parent,
+@@ -770,6 +771,7 @@ void MenuController::Run(Widget* parent,
      SetShowing(true);
  
      native_view_for_gestures_ = native_view_for_gestures;
@@ -62166,7 +62483,7 @@ index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..d174aa56bb229135dbf049ff220da367
  
      // Only create a MenuPreTargetHandler for non-nested menus. Nested menus
      // will use the existing one.
-@@ -2770,6 +2787,7 @@ void MenuController::OpenMenuImpl(MenuItemView* item, bool show) {
+@@ -2770,6 +2772,7 @@ void MenuController::OpenMenuImpl(MenuItemView* item, bool show) {
      params.do_capture = do_capture;
      params.native_view_for_gestures = native_view_for_gestures_;
      params.owned_window_anchor = anchor;
@@ -62174,7 +62491,7 @@ index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..d174aa56bb229135dbf049ff220da367
      if (item->GetParentMenuItem()) {
        params.context = item->GetWidget();
        // (crbug.com/1414232) The item to be open is a submenu. Make sure
-@@ -3532,7 +3550,12 @@ void MenuController::OpenSubmenuChangeSelectionIfCan() {
+@@ -3532,7 +3535,12 @@ void MenuController::OpenSubmenuChangeSelectionIfCan() {
        item = button_submenu;
      }
    }
@@ -62188,7 +62505,7 @@ index 4f2d6c0dcece57ba983f932bb81a3816a9e3a102..d174aa56bb229135dbf049ff220da367
      return;
    }
  
-@@ -3563,6 +3586,7 @@ void MenuController::CloseSubmenu() {
+@@ -3563,6 +3571,7 @@ void MenuController::CloseSubmenu() {
    MenuItemView* item = state_.item;
    DCHECK(item);
    if (!item->GetParentMenuItem()) {
@@ -62726,6 +63043,19 @@ index db6385c2d4761aff2617004f589cd8d2fa3b3d9f..ca4596413082681894eb42da5fcd46b6
      }
  
      info_plist_target = ":views_examples_framework_plist"
+diff --git a/ui/views/metadata/view_factory.h b/ui/views/metadata/view_factory.h
+index 0f41fc15cd8b068d36ac3b64f277ad14d649d04e..9c64b51f951b94f128e2ef500ba17c36054e9e8f 100644
+--- a/ui/views/metadata/view_factory.h
++++ b/ui/views/metadata/view_factory.h
+@@ -400,7 +400,7 @@ using internal::Builder;
+ #define DEFINE_VIEW_BUILDER(export, view_class)                             \
+   namespace views {                                                         \
+   template <>                                                               \
+-  class export Builder<view_class>                                          \
++  class export internal::Builder<view_class>                                          \
+       : public view_class##BuilderT<Builder<view_class>> {                  \
+    private:                                                                 \
+     using ViewClass_ = view_class;                                          \
 diff --git a/ui/views/style/platform_style.h b/ui/views/style/platform_style.h
 index 1e9785672f767e32dc20af93036971afaaec3b63..21ff43539056293e170d306bac004e85b8841c84 100644
 --- a/ui/views/style/platform_style.h
@@ -63381,6 +63711,19 @@ index 54331d0064b9275c74b7971c11eac66390f74474..35a9be1f1564e0b9c299ae3e2d67cc61
  
    // Returns a mask specifying which of the available DialogButtons are visible
    // for the dialog.
+diff --git a/ui/webui/resources/mojo/BUILD.gn b/ui/webui/resources/mojo/BUILD.gn
+index a4c2582e9510ddf39657eec5b5d8e5c440779bf5..ed5ef02492960a46942e12dedadafb6e54fbb8d7 100644
+--- a/ui/webui/resources/mojo/BUILD.gn
++++ b/ui/webui/resources/mojo/BUILD.gn
+@@ -106,7 +106,7 @@ if ((!is_android && !is_ios) || is_desktop_android) {
+       [ "components/user_education/webui/user_education.mojom-webui.ts" ]
+ }
+ 
+-if (is_mac || is_win || is_linux || is_chromeos || is_android) {
++if (is_mac || is_win || is_linux || is_chromeos || is_android || is_aros) {
+   mojo_ts_files += [ "mojo/public/mojom/base/version.mojom-webui.ts" ]
+ }
+ 
 diff --git a/ui/webui/webui_features.gni b/ui/webui/webui_features.gni
 index 9d81e03508f635656c2003cfc7939ab0f31111d5..d3d76861459b998a1277395132cb6ad50cfa3289 100644
 --- a/ui/webui/webui_features.gni
