@@ -34,6 +34,13 @@ shared-memory adapter. Preserve the allocator's on-demand 2 MiB policy.
 This is a port constraint, not a request to add SDK headers, libc symbols or
 an SDK-wide mmap emulation layer.
 
+The TensorFlow Lite fallback passes a host regression harness selecting the
+AROS code path: injected short reads, EINTR and premature EOF; preserved file
+position; invalid offsets/descriptors; retry after failure; and rejection of
+resize/discard operations. Its source also cross-compiles with both native
+AROS GCC 16 toolchains. This is not native runtime validation of the fallback.
+The harness and retained output are in `evidence/tflite-aros-file-snapshot-test.*`.
+
 ## Native Rust prerequisite
 
 `rust/std-aros.patch` adapts the existing AROS standard library port to the

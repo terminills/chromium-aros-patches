@@ -1,5 +1,5 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..6f383e9f52fb03ebb5854140eb160c7560dd4d0c 100644
+index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b93e49254 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
 @@ -15,6 +15,7 @@ import("//build/config/mips.gni")
@@ -65,6 +65,15 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..6f383e9f52fb03ebb5854140eb160c75
    enabled_external_v8_defines += [ "V8_HAVE_TARGET_OS" ]
    enabled_external_v8_defines += [ "V8_TARGET_OS_ANDROID" ]
  } else if (target_os == "fuchsia") {
+@@ -3879,7 +3894,7 @@ v8_header_set("v8_headers") {
+   ]
+ }
+ 
+-if (v8_generate_external_defines_header) {
++if (v8_generate_external_defines_header || is_aros) {
+   action("gen_v8_gn") {
+     visibility = [ ":*" ]
+ 
 @@ -3923,8 +3938,10 @@ v8_header_set("v8_shared_internal_headers") {
    deps = [
      ":cppgc_headers",
@@ -151,7 +160,19 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..6f383e9f52fb03ebb5854140eb160c75
  
    if (current_os == "zos" && is_component_build) {
      deps += [ ":zoslib" ]
-@@ -8781,19 +8811,28 @@ if (is_component_build) {
+@@ -8253,6 +8283,11 @@ if (v8_monolithic) {
+       "//build/win:default_exe_manifest",
+     ]
+ 
++    if (is_aros) {
++      # Native resident-library wrappers consume the exact external ABI flags.
++      deps += [ ":gen_v8_gn" ]
++    }
++
+     configs = [ ":internal_config" ]
+   }
+ }
+@@ -8781,19 +8816,28 @@ if (is_component_build) {
    }
  } else {
    group("v8") {
@@ -440,10 +461,10 @@ index 32161ba81974022274cdec162d0608502ccacbb6..673b839e0892722477ca345b053b073c
  
 diff --git a/src/base/platform/platform-aros.cc b/src/base/platform/platform-aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..0f437cdb7828d554f413d9b4b9ea2f5733d45693
+index 0000000000000000000000000000000000000000..699ab01fbe3b9335dae1c85a2c23807abe75cd44
 --- /dev/null
 +++ b/src/base/platform/platform-aros.cc
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,27 @@
 +// Copyright 2026 the V8 project authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -468,16 +489,11 @@ index 0000000000000000000000000000000000000000..0f437cdb7828d554f413d9b4b9ea2f57
 +
 +void OS::AdjustSchedulingParams() {}
 +
-+std::vector<OS::MemoryRange> OS::GetFreeMemoryRangesWithin(
-+    OS::Address boundary_start, OS::Address boundary_end, size_t minimum_size,
-+    size_t alignment) {
-+  return {};
-+}
 +
 +}  // namespace base
 +}  // namespace v8
 diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
-index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..49fa03b6b1439ac90e4846f0bcfba7f6c7dc4f13 100644
+index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..38c5b1911724a484f894662beec2b1b24de2e92a 100644
 --- a/src/base/platform/platform-posix.cc
 +++ b/src/base/platform/platform-posix.cc
 @@ -9,6 +9,8 @@
@@ -753,6 +769,17 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..49fa03b6b1439ac90e4846f0bcfba7f6
  // 0 is never a valid thread id.
  #if V8_OS_ZOS
  const pthread_t kNoThread = {0};  // pthread_t is a struct on z/OS
+@@ -281,8 +506,8 @@ void OS::Initialize(const char* const gc_fake_mmap) {
+ bool OS::IsHardwareEnforcedShadowStacksEnabled() { return false; }
+ 
+ void OS::EnsureAlternativeSignalStackIsAvailableForCurrentThread() {
+-// sigaltstack() is forbidden on tvOS and its usage causes build errors.
+-#if !V8_OS_TVOS
++// tvOS forbids sigaltstack; native AROS does not provide POSIX signal stacks.
++#if !V8_OS_TVOS && !V8_OS_AROS
+   stack_t ss, old_ss;
+   memset(&ss, 0, sizeof(stack_t));
+   memset(&old_ss, 0, sizeof(stack_t));
 @@ -361,6 +586,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
  
  // static

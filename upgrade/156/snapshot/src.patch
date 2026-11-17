@@ -40345,10 +40345,10 @@ index 0000000000000000000000000000000000000000..2a3896b8980dc410df6fc4766bacd59c
 +#endif
 diff --git a/media/audio/aros/ahi_input_stream.cc b/media/audio/aros/ahi_input_stream.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec07e09ec5
+index 0000000000000000000000000000000000000000..2b84b8ac53bb9ca11a7a799aa138a9c07a612680
 --- /dev/null
 +++ b/media/audio/aros/ahi_input_stream.cc
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,288 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -40514,10 +40514,10 @@ index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec
 +AhiInputStream::~AhiInputStream() {
 +  Stop();
 +}
-+void AhiInputStream::GetDeviceNames(AudioDeviceNames* names) {
++bool AhiInputStream::GetDeviceNames(AudioDeviceNames* names) {
 +  AhiSession session;
 +  if (!session.Open()) {
-+    return;
++    return false;
 +  }
 +  const auto modes = session.Modes();
 +  if (!modes.empty()) {
@@ -40526,6 +40526,7 @@ index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec
 +  for (const auto& mode : modes) {
 +    names->emplace_back(mode.name, base::StringPrintf("ahi:%08x", mode.id));
 +  }
++  return true;
 +}
 +AudioInputStream::OpenOutcome AhiInputStream::Open() {
 +  if (opened_) {
@@ -40589,7 +40590,7 @@ index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec
 +  if (!session.Open() ||
 +      !session.Start(mode_id_, params_.sample_rate(), &hook)) {
 +    if (!stopped_.load(std::memory_order_relaxed)) {
-+      callback_->OnError();
++      callback_->OnError(AudioInputCallback::Error::kStartupFailed);
 +    }
 +    return;
 +  }
@@ -40605,12 +40606,12 @@ index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec
 +         now - last_data > (last_timestamp.is_null() ? base::Seconds(10)
 +                                                    : base::Seconds(3)))) {
 +      if (!stopped_.load(std::memory_order_relaxed)) {
-+        callback_->OnError();
++        callback_->OnError(AudioInputCallback::Error::kRuntimeError);
 +      }
 +      return;
 +    }
-+    if (state->buffer.Read(bus->channel(0),
-+                           params_.channels() == 2 ? bus->channel(1) : nullptr,
++    if (state->buffer.Read(bus->channel(0).data(),
++                           params_.channels() == 2 ? bus->channel(1).data() : nullptr,
 +                           params_.frames_per_buffer())) {
 +      auto timestamp =
 +          now - base::Seconds(double(available) / params_.sample_rate());
@@ -40638,7 +40639,7 @@ index 0000000000000000000000000000000000000000..226cc376b51d72b4ea6929f8ba97c9ec
 +}  // namespace media
 diff --git a/media/audio/aros/ahi_input_stream.h b/media/audio/aros/ahi_input_stream.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..bb03a200c45661e9b2f196ba225f835aeaccfe09
+index 0000000000000000000000000000000000000000..6e8c1d979a3b78d6470cbf194c271647384495ce
 --- /dev/null
 +++ b/media/audio/aros/ahi_input_stream.h
 @@ -0,0 +1,48 @@
@@ -40664,7 +40665,7 @@ index 0000000000000000000000000000000000000000..bb03a200c45661e9b2f196ba225f835a
 +                 const std::string& device_id,
 +                 AudioManagerBase* manager);
 +  ~AhiInputStream() override;
-+  static void GetDeviceNames(AudioDeviceNames* names);
++  static bool GetDeviceNames(AudioDeviceNames* names);
 +  OpenOutcome Open() override;
 +  void Start(AudioInputCallback* callback) override;
 +  void Stop() override;
@@ -40692,10 +40693,10 @@ index 0000000000000000000000000000000000000000..bb03a200c45661e9b2f196ba225f835a
 +#endif
 diff --git a/media/audio/aros/ahi_output_stream.cc b/media/audio/aros/ahi_output_stream.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..3938905524ba5ee5ca7f3092e415194fc478a936
+index 0000000000000000000000000000000000000000..4af9f1a1015a73af11156a2de60806bc08dcb592
 --- /dev/null
 +++ b/media/audio/aros/ahi_output_stream.cc
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,242 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -40891,7 +40892,8 @@ index 0000000000000000000000000000000000000000..3938905524ba5ee5ca7f3092e415194f
 +                                          AudioGlitchInfo(), bus_.get());
 +    if (got < frames)
 +      bus_->ZeroFramesPartial(std::max(got, 0), frames - std::max(got, 0));
-+    bus_->ToInterleaved<SignedInt16SampleTypeTraits>(frames, buf[cur]);
++    bus_->ToInterleaved<SignedInt16SampleTypeTraits>(
++        base::span(buf[cur], static_cast<size_t>(frames * channels)));
 +
 +    struct AHIRequest* r = req[cur];
 +    r->ahir_Std.io_Message.mn_Node.ln_Pri = 0;
@@ -41016,10 +41018,10 @@ index 0000000000000000000000000000000000000000..17d6daf5855a151076a194b037bd7828
 +#endif  // MEDIA_AUDIO_AROS_AHI_OUTPUT_STREAM_H_
 diff --git a/media/audio/aros/audio_manager_aros.cc b/media/audio/aros/audio_manager_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..6d582ba0968ff9159eb3863d2d5b46346d52b4aa
+index 0000000000000000000000000000000000000000..12b433dffacbcbe23c5bb23f0b2b0276603a7794
 --- /dev/null
 +++ b/media/audio/aros/audio_manager_aros.cc
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,152 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -41071,16 +41073,17 @@ index 0000000000000000000000000000000000000000..6d582ba0968ff9159eb3863d2d5b4634
 +  return !names.empty();
 +}
 +
-+void AudioManagerAros::GetAudioInputDeviceNames(AudioDeviceNames* names) {
++bool AudioManagerAros::GetAudioInputDeviceNames(AudioDeviceNames* names) {
 +  DCHECK(names->empty());
-+  AhiInputStream::GetDeviceNames(names);
++  return AhiInputStream::GetDeviceNames(names);
 +}
 +
-+void AudioManagerAros::GetAudioOutputDeviceNames(
++bool AudioManagerAros::GetAudioOutputDeviceNames(
 +    AudioDeviceNames* device_names) {
 +  DCHECK(device_names->empty());
 +  if (HasAudioOutputDevices())
 +    device_names->push_front(AudioDeviceName::CreateDefault());
++  return true;
 +}
 +
 +AudioParameters AudioManagerAros::GetInputStreamParameters(
@@ -41090,7 +41093,7 @@ index 0000000000000000000000000000000000000000..6d582ba0968ff9159eb3863d2d5b4634
 +                         kDefaultFramesPerBuffer);
 +}
 +
-+const char* AudioManagerAros::GetName() {
++const std::string_view AudioManagerAros::GetName() {
 +  return "AHI";
 +}
 +
@@ -41173,7 +41176,7 @@ index 0000000000000000000000000000000000000000..6d582ba0968ff9159eb3863d2d5b4634
 +}  // namespace media
 diff --git a/media/audio/aros/audio_manager_aros.h b/media/audio/aros/audio_manager_aros.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..316963a8da8c02e37b14cef0191feee508634487
+index 0000000000000000000000000000000000000000..88a0ad62b5ee291875256fdbbcba5ddc749e1643
 --- /dev/null
 +++ b/media/audio/aros/audio_manager_aros.h
 @@ -0,0 +1,58 @@
@@ -41203,11 +41206,11 @@ index 0000000000000000000000000000000000000000..316963a8da8c02e37b14cef0191feee5
 +  // AudioManager:
 +  bool HasAudioOutputDevices() override;
 +  bool HasAudioInputDevices() override;
-+  void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
-+  void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
++  bool GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
++  bool GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
 +  AudioParameters GetInputStreamParameters(
 +      const std::string& device_id) override;
-+  const char* GetName() override;
++  const std::string_view GetName() override;
 +
 +  // AudioManagerBase:
 +  AudioOutputStream* MakeLinearOutputStream(
@@ -41353,7 +41356,7 @@ index 31c10e8ef8e273e2e976f43e35c1a1388228c676..40e762df953b88f61410dc01beacb5a1
      "//base",
 diff --git a/media/capture/video/aros/video_capture_device_factory_aros.cc b/media/capture/video/aros/video_capture_device_factory_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..0820b57fb6c1f5146d99a099088eefac40eb54ea
+index 0000000000000000000000000000000000000000..f2deaad60c208247b94f3e97402ea0e491290f4b
 --- /dev/null
 +++ b/media/capture/video/aros/video_capture_device_factory_aros.cc
 @@ -0,0 +1,226 @@
@@ -41504,9 +41507,9 @@ index 0000000000000000000000000000000000000000..0820b57fb6c1f5146d99a099088eefac
 +      if (valid && !stopped_.load(std::memory_order_relaxed)) {
 +        const auto now = base::TimeTicks::Now();
 +        client_->OnIncomingCapturedData(
-+            static_cast<const uint8_t*>(frame->chunky),
-+            size.width() * size.height() * 3, format,
-+            gfx::ColorSpace::CreateSRGB(), 0, false, now, now - start, begin);
++            base::span(static_cast<const uint8_t*>(frame->chunky),
++                       static_cast<size_t>(size.width() * size.height() * 3)), format,
++            gfx::ColorSpace::CreateSRGB(), 0, false, now, now - start, begin, std::nullopt);
 +      }
 +      if (frame) {
 +        FreeVec(frame->chunky);
@@ -49219,6 +49222,20 @@ index 2f462f0deb5fc8a637457243fb5d5849fc214d14..695869b83cefaa24af93a2e11b39de05
 -  Draw() => ();
 +  Draw(gfx.mojom.Rect damage_rect) => ();
  };
+diff --git a/services/viz/public/mojom/BUILD.gn b/services/viz/public/mojom/BUILD.gn
+index d3cad9418e6d69366802491769275967463b027b..0f32bf8dbd836a59379d7747ea92544ae5ee7ca9 100644
+--- a/services/viz/public/mojom/BUILD.gn
++++ b/services/viz/public/mojom/BUILD.gn
+@@ -56,7 +56,8 @@ mojom("mojom") {
+ 
+   # Used in thread.mojom
+   enabled_features = []
+-  if (is_fuchsia || is_apple) {
++  if (is_fuchsia || is_apple ||
++      (is_aros && (current_cpu == "x64" || current_cpu == "arm64"))) {
+     enabled_features += [ "thread_id_is_64_bit" ]
+   } else {
+     enabled_features += [ "thread_id_is_32_bit" ]
 diff --git a/skia/BUILD.gn b/skia/BUILD.gn
 index ef4a697c98bc0291fd4fe5005807a3c3c057e8ea..946ffd2a509928374cdbb5a2c683e9d66c492483 100644
 --- a/skia/BUILD.gn
@@ -54936,6 +54953,19 @@ index c8161436a00e6d8820dbd099e183c7d42c0184db..78aece701355fd7f97b960ff106c1dff
    static_library("pixel_diff_test_support") {
      testonly = true
      sources = [
+diff --git a/ui/base/clipboard/clipboard_constants.h b/ui/base/clipboard/clipboard_constants.h
+index 7fe32486d7175793b268eee11bd76a319326ecc6..29d357727142d296e5442cf9b25629d216b69ea1 100644
+--- a/ui/base/clipboard/clipboard_constants.h
++++ b/ui/base/clipboard/clipboard_constants.h
+@@ -59,7 +59,7 @@ inline constexpr char kMimeTypePortalFiles[] = "application/vnd.portal.files";
+         // BUILDFLAG(IS_FUCHSIA)
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA) || \
+-    BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+ inline constexpr char kMimeTypeSourceUrl[] = "chromium/x-source-url";
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+         // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
 diff --git a/ui/base/clipboard/clipboard_non_backed.cc b/ui/base/clipboard/clipboard_non_backed.cc
 index 88f80571b00ce4367702c2577613869b585a5e53..0521dfed3668277cc4e6db26a0154f2c9a4a9f43 100644
 --- a/ui/base/clipboard/clipboard_non_backed.cc

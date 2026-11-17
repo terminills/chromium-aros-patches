@@ -1,5 +1,5 @@
 diff --git a/tensorflow/lite/delegates/xnnpack/mmap_handle.cc b/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
-index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467e3e03e75 100644
+index a310526e2975941c369d702ce70a17e459fabf61..b5bd2c83d31239a7ea7e8ca5eafd9f2a798e3837 100644
 --- a/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
 +++ b/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
 @@ -18,7 +18,9 @@ limitations under the License.
@@ -12,7 +12,24 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
  #include <unistd.h>
  #endif
  
-@@ -113,12 +115,16 @@ bool MMapHandle::Map(const FileDescriptorView& fd, const size_t offset,
+@@ -35,6 +37,7 @@ limitations under the License.
+ #include <cstdint>
+ #include <cstring>
+ #include <memory>
++#include <new>
+ 
+ #include "tensorflow/lite/delegates/xnnpack/file_util.h"
+ #include "tensorflow/lite/delegates/xnnpack/macros.h"
+@@ -96,7 +99,7 @@ bool MMapHandle::Map(const FileDescriptorView& fd, const size_t offset,
+ 
+   XNNPACK_RETURN_CHECK(fd.IsValid(),
+                        "cannot mmap invalid file descriptor %d ('%s').",
+-                       fd.Value(), path);
++                       fd.Value(), safe_path);
+ 
+ #if defined(_WIN32)
+   struct _stat64 file_stats;
+@@ -113,12 +116,32 @@ bool MMapHandle::Map(const FileDescriptorView& fd, const size_t offset,
  
    // This will reset data_ and size_ on return until it is deactivated.
    ScopeGuard unmap_on_error([this] { UnMap(); });
@@ -22,7 +39,23 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
    size_ = file_stats.st_size - offset;
    offset_ = offset;
 -#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
-+#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG) || defined(__AROS__)
++#if defined(__AROS__)
++  // Chromium-local fallback: the native SDK does not emulate mmap. Read an
++  // owned snapshot without leaving the caller's file cursor changed. Reject
++  // premature EOF rather than exposing uninitialized bytes after truncation.
++  data_ = new (std::nothrow) uint8_t[size_];
++  XNNPACK_RETURN_CHECK(data_ != nullptr, "cannot allocate file snapshot");
++  size_t done = 0;
++  while (done < size_) {
++    const size_t count = std::min(size_ - done, size_t{1024 * 1024});
++    const ssize_t read_count =
++        pread(fd.Value(), data_ + done, count, offset_ + done);
++    if (read_count < 0 && errno == EINTR) continue;
++    XNNPACK_RETURN_CHECK(read_count > 0,
++                         "incomplete file snapshot ('%s')", safe_path);
++    done += static_cast<size_t>(read_count);
++  }
++#elif defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
    // This allocation is freed in UnMap and in the destructor.
    data_ = new uint8_t[size_];
 -  fd.SetPos(offset);
@@ -31,7 +64,16 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
    XNNPACK_RETURN_CHECK(fd.Read(data_, size_), "could not read file ('%s'): %s.",
                         safe_path, strerror(errno));
  #elif defined(_WIN32)
-@@ -185,7 +191,7 @@ bool MMapHandle::Resize(size_t new_size) {
+@@ -164,7 +187,7 @@ bool MMapHandle::Map(const FileDescriptorView& fd, const size_t offset,
+ }
+ 
+ bool MMapHandle::Resize(size_t new_size) {
+-#if (defined(__linux__) || defined(__ANDROID__)) && \
++#if (defined(__linux__) || defined(__ANDROID__)) && !defined(__AROS__) && \
+     !defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
+   void* const remapped_data =
+       mremap(data_, size_ + offset_page_adjustment_,
+@@ -185,7 +208,7 @@ bool MMapHandle::Resize(size_t new_size) {
  
  void MMapHandle::UnMap() {
    if (data_) {
@@ -40,7 +82,7 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
      delete[] data_;
  #elif defined(_WIN32)
      UnmapViewOfFile(data_);
-@@ -201,7 +207,7 @@ void MMapHandle::UnMap() {
+@@ -201,7 +224,7 @@ void MMapHandle::UnMap() {
  }
  
  bool MMapHandle::LockMemory() {
@@ -49,7 +91,7 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
    return true;
  #elif defined(_WIN32)
    return VirtualLock(data_, size_) != 0;
-@@ -211,7 +217,7 @@ bool MMapHandle::LockMemory() {
+@@ -211,7 +234,7 @@ bool MMapHandle::LockMemory() {
  }
  
  bool MMapHandle::UnlockMemory() {
@@ -58,7 +100,7 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
    return true;
  #elif defined(_WIN32)
    return VirtualUnlock(data_, size_) != 0;
-@@ -221,6 +227,12 @@ bool MMapHandle::UnlockMemory() {
+@@ -221,6 +244,12 @@ bool MMapHandle::UnlockMemory() {
  }
  
  bool MarkMemoryNotNeeded(void* data, size_t size) {
@@ -71,7 +113,7 @@ index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467
  #if defined(_WIN32)
    SYSTEM_INFO sysInfo;
    GetSystemInfo(&sysInfo);
-@@ -251,6 +263,7 @@ bool MarkMemoryNotNeeded(void* data, size_t size) {
+@@ -251,6 +280,7 @@ bool MarkMemoryNotNeeded(void* data, size_t size) {
  #endif
    }
    return true;
