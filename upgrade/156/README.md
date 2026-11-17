@@ -48,8 +48,18 @@ a source-derived Cargo target directory because Cargo can otherwise reuse stale
 build-std artifacts after changes to the bundled standard-library sources.
 
 Validation so far: clean patch application reproduces all 36 source hashes;
-standard-library/probe cross-compilation and native SDK linking pass. Native
-execution remains pending. The probe exercises allocation, a worker thread,
-mutex sharing and current-directory lookup. It does not certify networking,
+standard-library/probe cross-compilation and native SDK linking pass. The
+probe also passed on a freshly built native AROS master x86-64 SMP image in
+QEMU/KVM (2 CPUs, 4 GiB RAM), returning 0 after allocation, worker-thread
+creation/join, mutex sharing and current-directory lookup. It does not certify networking,
 process spawning or full standard-library behavior; those inherited adapters
 still require native coverage and integration review before release.
+
+
+![Native AROS prerequisite results](evidence/native-rust-vulkan.png)
+
+The same run reports Vulkan loader API 1.0.0 and stops at the probe's 1.1
+requirement (return code 12). This GCC-built image has no selected Vulkan ICD;
+native LLVM/lavapipe prerequisites are being built. This is a recorded failure,
+not Vulkan rendering validation. The screenshot is a prerequisite test, not a
+Chromium window.
