@@ -1,5 +1,5 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b93e49254 100644
+index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..c70a72cbb47174a5f2eef32010a7bbaba6627eac 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
 @@ -15,6 +15,7 @@ import("//build/config/mips.gni")
@@ -65,7 +65,30 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
    enabled_external_v8_defines += [ "V8_HAVE_TARGET_OS" ]
    enabled_external_v8_defines += [ "V8_TARGET_OS_ANDROID" ]
  } else if (target_os == "fuchsia") {
-@@ -3879,7 +3894,7 @@ v8_header_set("v8_headers") {
+@@ -2594,6 +2609,22 @@ if (v8_use_metagen_instance_types) {
+       rebase_path(_metagen_clang_resource_dir, root_build_dir),
+     ]
+ 
++    if (is_aros) {
++      import("//build/config/aros/toolchain.gni")
++      _aros_triple = "x86_64-aros"
++      if (current_cpu == "arm64") {
++        _aros_triple = "aarch64-aros"
++      }
++      args += [
++        "--cross-cxx",
++        "$aros_toolchain_root/${_aros_triple}-g++",
++        "--cross-sysroot",
++        aros_sysroot,
++        "--extra-flag=--target=$_aros_triple",
++        "--extra-flag=-D__AROS__",
++      ]
++    }
++
+     if (v8_metagen_libclang_so != "") {
+       # No prebuilt llvm-libclang for this platform: point metagen at the
+       # system libclang and the separately-staged cindex bindings. The two
+@@ -3879,7 +3910,7 @@ v8_header_set("v8_headers") {
    ]
  }
  
@@ -74,7 +97,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
    action("gen_v8_gn") {
      visibility = [ ":*" ]
  
-@@ -3923,8 +3938,10 @@ v8_header_set("v8_shared_internal_headers") {
+@@ -3923,8 +3954,10 @@ v8_header_set("v8_shared_internal_headers") {
    deps = [
      ":cppgc_headers",
      ":v8_headers",
@@ -86,7 +109,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
  }
  
  v8_header_set("v8_flags") {
-@@ -3942,10 +3959,10 @@ v8_header_set("v8_flags") {
+@@ -3942,10 +3975,10 @@ v8_header_set("v8_flags") {
      "src/flags/flags.h",
    ]
  
@@ -101,7 +124,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
  }
  
  if (v8_enable_temporal_support) {
-@@ -5757,10 +5774,14 @@ v8_header_set("v8_internal_headers") {
+@@ -5757,10 +5790,14 @@ v8_header_set("v8_internal_headers") {
      ":generate_bytecode_builtins_list",
      ":run_torque",
      ":v8_abseil",
@@ -118,7 +141,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
    if (v8_enable_experimental_tq_to_tsa) {
      deps += [ ":run_torque_to_tsa" ]
    }
-@@ -7648,7 +7669,12 @@ v8_component("v8_libbase") {
+@@ -7648,7 +7685,12 @@ v8_component("v8_libbase") {
      }
    }
  
@@ -132,7 +155,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
      sources += [
        "src/base/debug/stack_trace_posix.cc",
        "src/base/platform/platform-linux.cc",
-@@ -7938,7 +7964,11 @@ v8_header_set("v8_heap_base_headers") {
+@@ -7938,7 +7980,11 @@ v8_header_set("v8_heap_base_headers") {
  
    configs = [ ":internal_config" ]
  
@@ -145,7 +168,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
  }
  
  v8_source_set("v8_heap_base") {
-@@ -8048,10 +8078,10 @@ v8_header_set("cppgc_headers") {
+@@ -8048,10 +8094,10 @@ v8_header_set("cppgc_headers") {
      sources += [ "include/cppgc/internal/caged-heap.h" ]
    }
  
@@ -160,7 +183,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
  
    if (current_os == "zos" && is_component_build) {
      deps += [ ":zoslib" ]
-@@ -8253,6 +8283,11 @@ if (v8_monolithic) {
+@@ -8253,6 +8299,11 @@ if (v8_monolithic) {
        "//build/win:default_exe_manifest",
      ]
  
@@ -172,7 +195,7 @@ index 1df3d4e31bcc427acc5c2fd705ede40018412d9e..4a12c2e9cbce70d04f0de94c9b9baf4b
      configs = [ ":internal_config" ]
    }
  }
-@@ -8781,19 +8816,28 @@ if (is_component_build) {
+@@ -8781,19 +8832,28 @@ if (is_component_build) {
    }
  } else {
    group("v8") {
@@ -441,6 +464,18 @@ index 5b1619f9ef0279182a61fda6c2856652fc7b1adb..fde59f2783f5a167faeef4d2ddb32ba7
  // No-op macro which is used to work around MSVC's funky VA_ARGS support.
  #define EXPAND(X) X
  
+diff --git a/src/base/memcopy.h b/src/base/memcopy.h
+index 4c2bea25979af9a0d1890b581bc0d50bd4cc3c51..cd33a46735f8627df0283c512d11420c4fa79a0e 100644
+--- a/src/base/memcopy.h
++++ b/src/base/memcopy.h
+@@ -8,6 +8,7 @@
+ #include <stdlib.h>
+ 
+ #include <algorithm>
++#include <climits>
+ #include <atomic>
+ #include <limits>
+ #include <type_traits>
 diff --git a/src/base/platform/memory.h b/src/base/platform/memory.h
 index 32161ba81974022274cdec162d0608502ccacbb6..673b839e0892722477ca345b053b073c3056d92f 100644
 --- a/src/base/platform/memory.h
@@ -1667,3 +1702,61 @@ index 9fe80b267d2cad1942daa0e2a3c2d21f6a24052a..f126296308160a38e61c3ff7df8a7158
  }
  
  void* AllocatePages(v8::PageAllocator* page_allocator, size_t size,
+diff --git a/tools/metagen/metagen.py b/tools/metagen/metagen.py
+index bfc590af9184f2d2743c1fb6e76a310f0f27000b..5efb1150d4f3173e923aa9558a6866fc53eaec93 100644
+--- a/tools/metagen/metagen.py
++++ b/tools/metagen/metagen.py
+@@ -176,6 +176,8 @@ def main() -> int:
+       help="File materializing the GN target flags, recorded in --depfile "
+       "so a flag change reruns metagen. Required with --build-dir when "
+       "--depfile is used.")
++  p.add_argument("--cross-cxx", help="Cross compiler whose system include paths to use")
++  p.add_argument("--cross-sysroot", default="")
+   p.add_argument(
+       "--extra-flag",
+       action="append",
+@@ -277,6 +279,32 @@ def main() -> int:
+         cc_json)
+     flags_source = f"compile_commands={cc_json}"
+ 
++  if args.cross_cxx:
++    # GN's tool command owns the cross compiler/sysroot; neither appears in
++    # target cflags. Query its real include order, retaining clang builtins
++    # instead of GCC intrinsic headers for this libclang-only parse.
++    import subprocess
++    command = [args.cross_cxx, "-E", "-x", "c++", "-v", "-"]
++    if args.cross_sysroot:
++      command.append("--sysroot=" + args.cross_sysroot)
++    result = subprocess.run(command, input="", text=True,
++                            capture_output=True, check=True)
++    paths = []
++    collecting = False
++    for line in result.stderr.splitlines():
++      if line == "#include <...> search starts here:":
++        collecting = True
++      elif collecting and line == "End of search list.":
++        break
++      elif collecting:
++        path = line.strip()
++        if "/lib/gcc/" in path and path.endswith("/include"):
++          continue
++        paths.extend(["-isystem", path])
++    if not paths:
++      raise RuntimeError("Cross compiler returned no system include paths")
++    raw_flags += ["-nostdlibinc", "-nostdinc++"] + paths
++
+   flags_dependency = None
+   if args.flags_dependency:
+     if not args.build_dir:
+@@ -373,6 +401,11 @@ def main() -> int:
+ 
+   # --extra-flag goes ahead of the queried flags, matching where the
+   # toolchain's command template puts them.
++  if args.cross_cxx:
++    # libclang's embedded driver does not discover resource headers for an
++    # unknown OS triple even with -resource-dir; provide the pinned path.
++    prefix += ["-isystem", os.path.join(resource_dir, "include")
++               if resource_dir else builtin_headers_dir]
+   flags = prefix + args.extra_flag + raw_flags + no_perfetto
+ 
+   # The builtin headers have to sit after libc++'s include dir and before

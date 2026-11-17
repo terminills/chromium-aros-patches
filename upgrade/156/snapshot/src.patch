@@ -15947,6 +15947,17 @@ index 0000000000000000000000000000000000000000..be797656a5cfc6d6ab2c8c4765b748e3
 +headless_use_policy = false
 +enable_chromium_prelude = false
 +enable_cef = false
+diff --git a/build/config/aros/toolchain.gni b/build/config/aros/toolchain.gni
+new file mode 100644
+index 0000000000000000000000000000000000000000..53a02758f6afef65a05f5dcc53a46c997d86d02c
+--- /dev/null
++++ b/build/config/aros/toolchain.gni
+@@ -0,0 +1,5 @@
++# Native AROS cross compiler and SDK selection.
++declare_args() {
++  aros_toolchain_root = ""
++  aros_sysroot = ""
++}
 diff --git a/build/config/aros/toolchain_smoke.cc b/build/config/aros/toolchain_smoke.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..6acabae06c0a272f2629a3ee2047721b1d483053
@@ -17476,10 +17487,10 @@ index 5bf12985967830b252e22c6d7ab4f8f8535f9bf6..e743bf4ef8126dc0a5a7e0e6e53dc983
      "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/../../backtrace/src/backtrace/mod.rs",
 diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
 new file mode 100644
-index 0000000000000000000000000000000000000000..7ff4eec570c53270c4b9de8a7eca0e17d7dbde22
+index 0000000000000000000000000000000000000000..18034a1038fe62dd0a309ad5fc483071f0cf31fd
 --- /dev/null
 +++ b/build/toolchain/aros/BUILD.gn
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,114 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -17487,10 +17498,7 @@ index 0000000000000000000000000000000000000000..7ff4eec570c53270c4b9de8a7eca0e17
 +import("//base/allocator/partition_allocator/partition_alloc.gni")
 +import("//build/toolchain/gcc_toolchain.gni")
 +
-+declare_args() {
-+  aros_toolchain_root = ""
-+  aros_sysroot = ""
-+}
++import("//build/config/aros/toolchain.gni")
 +
 +# The C++ allocation operators, in the order they appear in
 +# //base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_cpp_symbols.h.
@@ -30983,6 +30991,66 @@ index 766668f7f3a204f5c068a8ef9d3a095edf47b935..ace9802b71c727cab3af452417610a28
  #include <sys/mman.h>
  #endif
  
+diff --git a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h b/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
+index 493cbf8533604210b09f0f59da33481d76d2af91..a240f45dcfe776c27e3586b044299eca8607cfd1 100644
+--- a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
++++ b/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
+@@ -17,8 +17,8 @@ namespace autofill {
+ 
+ struct CreditCardSaveStrikeDatabaseTraits {
+   static constexpr std::string_view kName = "CreditCardSave";
+-  static constexpr std::optional<size_t> kMaxStrikeEntities;
+-  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup;
++  static constexpr std::optional<size_t> kMaxStrikeEntities = std::nullopt;
++  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup = std::nullopt;
+   static constexpr size_t kMaxStrikeLimit = 3;
+   static constexpr base::TimeDelta kExpiryTimeDelta = base::Days(183);
+   static constexpr bool kUniqueIdRequired = true;
+diff --git a/components/autofill/core/browser/strike_databases/payments/cvc_storage_strike_database.h b/components/autofill/core/browser/strike_databases/payments/cvc_storage_strike_database.h
+index 19bafb2c8f29ce3453439ffa458da787a5f37a63..85482d970b56b8d6623d9ccefea085ba5c1f486a 100644
+--- a/components/autofill/core/browser/strike_databases/payments/cvc_storage_strike_database.h
++++ b/components/autofill/core/browser/strike_databases/payments/cvc_storage_strike_database.h
+@@ -17,8 +17,8 @@ namespace autofill {
+ 
+ struct CvcStorageStrikeDatabaseTraits {
+   static constexpr std::string_view kName = "CvcStorage";
+-  static constexpr std::optional<size_t> kMaxStrikeEntities;
+-  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup;
++  static constexpr std::optional<size_t> kMaxStrikeEntities = std::nullopt;
++  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup = std::nullopt;
+   static constexpr size_t kMaxStrikeLimit = 3;
+   static constexpr base::TimeDelta kExpiryTimeDelta = base::Days(183);
+   static constexpr bool kUniqueIdRequired = true;
+diff --git a/components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h b/components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h
+index 2724ffc8b75a36e9f938cb1e5735f9865e1bcced..6cc049265b7da4c4c3409d44bab67c4a05c9a3ba 100644
+--- a/components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h
++++ b/components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h
+@@ -17,8 +17,8 @@ namespace autofill {
+ 
+ struct FidoAuthenticationStrikeDatabaseTraits {
+   static constexpr std::string_view kName = "FidoAuthentication";
+-  static constexpr std::optional<size_t> kMaxStrikeEntities;
+-  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup;
++  static constexpr std::optional<size_t> kMaxStrikeEntities = std::nullopt;
++  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup = std::nullopt;
+   static constexpr size_t kMaxStrikeLimit = 3;
+   static constexpr base::TimeDelta kExpiryTimeDelta = base::Days(183);
+   static constexpr bool kUniqueIdRequired = false;
+diff --git a/components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h b/components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h
+index ddf6cca8b75efd327250cc15fec0e21b7e418b46..80ec06ba50a627329a323eb13a3b108e6b2012ff 100644
+--- a/components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h
++++ b/components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h
+@@ -17,8 +17,8 @@ namespace autofill {
+ 
+ struct IbanSaveStrikeDatabaseTraits {
+   static constexpr std::string_view kName = "IBANSave";
+-  static constexpr std::optional<size_t> kMaxStrikeEntities;
+-  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup;
++  static constexpr std::optional<size_t> kMaxStrikeEntities = std::nullopt;
++  static constexpr std::optional<size_t> kMaxStrikeEntitiesAfterCleanup = std::nullopt;
+   static constexpr size_t kMaxStrikeLimit = 3;
+   static constexpr base::TimeDelta kExpiryTimeDelta = base::Days(183);
+   static constexpr bool kUniqueIdRequired = true;
 diff --git a/components/autofill/core/browser/suggestions/suggestion.h b/components/autofill/core/browser/suggestions/suggestion.h
 index 4a2668e446243d5e6d95623b36ff47d1f0df7836..573a3316c64250f1525dfea33c6fba1bad685a14 100644
 --- a/components/autofill/core/browser/suggestions/suggestion.h
@@ -31039,7 +31107,7 @@ index db84ba44db0b3f29a4e57b54e4f27d19ad760a84..4fadb99f9e1986d546c6d7363dfa8553
  }
  
 diff --git a/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc b/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
-index b3464477b3ab09538242067133ff12d3983f9ce8..db2490674d26f4a6a5be72552e9881ff64356ad7 100644
+index b3464477b3ab09538242067133ff12d3983f9ce8..c3491ceb5b49fd25b1ce60dd670085e7bca3fc9e 100644
 --- a/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
 +++ b/components/autofill/core/browser/webdata/payments/autofill_wallet_usage_data_sync_bridge.cc
 @@ -74,8 +74,11 @@ AutofillWalletUsageDataSyncBridge::AutofillWalletUsageDataSyncBridge(
@@ -31050,7 +31118,7 @@ index b3464477b3ab09538242067133ff12d3983f9ce8..db2490674d26f4a6a5be72552e9881ff
 -  DCHECK(GetAutofillTable());
 +  if (!web_data_backend_ || !GetAutofillTable() || !GetSyncMetadataStore()) {
 +    this->change_processor()->ReportError(
-+        {FROM_HERE, "Failed to load Autofill table."});
++        {FROM_HERE, syncer::ModelError::Type::kAutofillWalletUsageFailedToLoadAutofillTable});
 +    return;
 +  }
  
@@ -31139,7 +31207,7 @@ index 0bf18b6339c32388add1a9dfb91a114a6ba54328..d3269a0b7fea1ccc410c823aabee32e5
                              std::move(callback));
  }
 diff --git a/components/component_updater/component_updater_paths.cc b/components/component_updater/component_updater_paths.cc
-index 35c6251e8b5143612ffcbc819d5574525205904d..fe08ad41ba58827284ae6a2c409499603b3e0706 100644
+index 35c6251e8b5143612ffcbc819d5574525205904d..cc59407cd6a9cae2c6c4223b9c24f43f388a3bb0 100644
 --- a/components/component_updater/component_updater_paths.cc
 +++ b/components/component_updater/component_updater_paths.cc
 @@ -8,6 +8,7 @@
@@ -31150,7 +31218,7 @@ index 35c6251e8b5143612ffcbc819d5574525205904d..fe08ad41ba58827284ae6a2c40949960
  
  namespace component_updater {
  namespace {
-@@ -60,6 +61,21 @@ bool PathProvider(int key, base::FilePath* result) {
+@@ -60,6 +61,19 @@ bool PathProvider(int key, base::FilePath* result) {
  
  void RegisterPathProvider(int components_preinstalled_root_key,
                            int components_user_root_key) {
@@ -31163,8 +31231,6 @@ index 35c6251e8b5143612ffcbc819d5574525205904d..fe08ad41ba58827284ae6a2c40949960
 +  if (g_components_preinstalled_root_key != -1) {
 +    CHECK_EQ(g_components_preinstalled_root_key,
 +             components_preinstalled_root_key);
-+    CHECK_EQ(g_components_preinstalled_root_key_alt,
-+             components_preinstalled_root_key_alt);
 +    CHECK_EQ(g_components_user_root_key, components_user_root_key);
 +    return;
 +  }
@@ -31989,7 +32055,7 @@ index 585d63942a72ff7bc8ad9c3eae6c01b64173404c..82ed1bfea8b4584567be9ea4f0929346
  
  bool DiscardableSharedMemoryHeap::OnMemoryDump(
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc081538a5e34a6 100644
+index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..f9cd862488d21a8f9a9d5031063c23471c3354e2 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
 @@ -26,6 +26,7 @@
@@ -32015,7 +32081,49 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc08153
  namespace embedder_support {
  
  namespace {
-@@ -459,6 +468,13 @@ std::string BuildOSCpuInfo(
+@@ -279,7 +288,10 @@ blink::UserAgentBrandList ShuffleBrandList(
+ }
+ 
+ std::string GetUserAgentPlatform() {
+-#if BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_AROS)
++  return base::aros::GetSpoofedPlatform() == base::aros::SpoofedPlatform::kLinux
++             ? "X11; " : "";
++#elif BUILDFLAG(IS_WIN)
+   return "";
+ #elif BUILDFLAG(IS_MAC)
+   return "Macintosh; ";
+@@ -299,6 +311,20 @@ std::string GetUserAgentPlatform() {
+ }
+ 
+ std::string GetUnifiedPlatform() {
++#if BUILDFLAG(IS_AROS)
++  switch (base::aros::GetSpoofedPlatform()) {
++    case base::aros::SpoofedPlatform::kLinux:
++      return "X11; Linux x86_64";
++    case base::aros::SpoofedPlatform::kWindows:
++      return "Windows NT 10.0; Win64; x64";
++    case base::aros::SpoofedPlatform::kNone:
++#if defined(ARCH_CPU_ARM64)
++      return "AROS; aarch64";
++#else
++      return "AROS; x86_64";
++#endif
++  }
++#endif
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+   // This constant is only used on Android (desktop) and Linux.
+   constexpr char kUnifiedPlatformChromeOSX64[] = "X11; CrOS x86_64 14541.0.0";
+@@ -325,6 +351,8 @@ std::string GetUnifiedPlatform() {
+   return "Fuchsia";
+ #elif BUILDFLAG(IS_LINUX)
+   return "X11; Linux x86_64";
++#elif BUILDFLAG(IS_AROS)
++  NOTREACHED();
+ #elif BUILDFLAG(IS_IOS)
+   if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+     return "iPad; CPU iPad OS 14_0 like Mac OS X";
+@@ -459,6 +487,13 @@ std::string BuildOSCpuInfo(
  }  // namespace
  
  std::string GetProductAndVersion() {
@@ -32029,7 +32137,7 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc08153
    return base::FeatureList::IsEnabled(
               blink::features::kReduceUserAgentMinorVersion)
               ? version_info::GetProductNameAndVersionForReducedUserAgent()
-@@ -655,6 +671,16 @@ std::string GetPlatformForUAMetadata() {
+@@ -655,6 +690,16 @@ std::string GetPlatformForUAMetadata() {
  #else
    return "Chromium OS";
  #endif
@@ -32046,7 +32154,7 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc08153
  #else
    return std::string(version_info::GetOSType());
  #endif
-@@ -696,6 +722,12 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+@@ -696,6 +741,12 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
    metadata.bitness = GetCpuBitness();
    metadata.wow64 = IsWoW64();
    metadata.platform_version = GetPlatformVersion();
@@ -32059,6 +32167,23 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc08153
    return metadata;
  }
  
+@@ -799,6 +850,16 @@ std::string GetCpuBitness() {
+ std::string BuildOSCpuInfoFromOSVersionAndCpuType(const std::string& os_version,
+                                                   const std::string& cpu_type) {
+   std::string os_cpu;
++#if BUILDFLAG(IS_AROS)
++  switch (base::aros::GetSpoofedPlatform()) {
++    case base::aros::SpoofedPlatform::kLinux:
++      return "Linux " + cpu_type;
++    case base::aros::SpoofedPlatform::kWindows:
++      return "Windows NT 10.0; Win64; x64";
++    case base::aros::SpoofedPlatform::kNone:
++      return "AROS; " + cpu_type;
++  }
++#endif
+ 
+ #if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
+   // Should work on any Posix system.
 diff --git a/components/enterprise/BUILD.gn b/components/enterprise/BUILD.gn
 index 017c0cc8809f8f1b899124e21dd48acc34bcba09..58d04b784260e566dd13c922d814962d06da151c 100644
 --- a/components/enterprise/BUILD.gn
@@ -49027,10 +49152,10 @@ index 806b5433cd4bcf2ffff4a3d17105678ca7bcc6d9..a334b723c4de4c5f4a09f86665e52a7d
      MemoryInstrumentation::RequestGlobalDumpCallback callback,
 diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..15067dad34a9b1abf2e1e46f39e0d7b2b67a165f
+index 0000000000000000000000000000000000000000..1ba5f2e5ea411c3e47758e0c32aa06a7e094dfd7
 --- /dev/null
 +++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_aros.cc
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,49 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -49045,7 +49170,8 @@ index 0000000000000000000000000000000000000000..15067dad34a9b1abf2e1e46f39e0d7b2
 +namespace memory_instrumentation {
 +
 +// static
-+bool OSMetrics::FillOSMemoryDump(base::ProcessId,
++bool OSMetrics::FillOSMemoryDump(base::ProcessHandle,
++                                 const MemDumpFlagSet&,
 +                                 mojom::RawOSMemDump* dump) {
 +  if (!dump || !dump->platform_private_footprint)
 +    return false;
@@ -51182,6 +51308,19 @@ index 9f7f69c8bdbf456c9c3fe81a4cacb7ef6243740d..0863970fc46be25693ccec400a1b3031
      return ConvertShadow(state.CssToLengthConversionData(), &state, *item);
    });
  
+diff --git a/third_party/blink/renderer/core/css/rule_set.cc b/third_party/blink/renderer/core/css/rule_set.cc
+index 750f48d6e90605ee7c5bd7309a23a9cdd3b680cf..d8d326665ce3c5f76bb266896e255ed2075bd5e0 100644
+--- a/third_party/blink/renderer/core/css/rule_set.cc
++++ b/third_party/blink/renderer/core/css/rule_set.cc
+@@ -1180,7 +1180,7 @@ void RuleSet::FlattenMixinLocals(
+               });
+           inserted.erase(new_end, inserted.end());
+           inserted.push_back(MixinParameterBindings::CQDependentValue{
+-              variable_data, Member{container_queries}});
++              variable_data, Member<const ContainerQuerySet>{container_queries}});
+         } else {
+           locals.Set(name, variable_data);
+           cq_dependent_locals.erase(name);
 diff --git a/third_party/blink/renderer/core/css/style_scope.cc b/third_party/blink/renderer/core/css/style_scope.cc
 index 65c73be5339131b213bb7ab20712e6b70757c9e8..e05e3a77510d361a6403836209517bca72013a17 100644
 --- a/third_party/blink/renderer/core/css/style_scope.cc
@@ -51219,6 +51358,18 @@ index ee97bc28a0061959540f40926cf2b8e2bd49d4cf..7c5fb70d6074440230361d210c101cef
  
    void Trace(Visitor*) const;
  
+diff --git a/third_party/blink/renderer/core/execution_context/agent.cc b/third_party/blink/renderer/core/execution_context/agent.cc
+index 87d8ad6feaebe19c2741799e52a88e1de891f318..5596f5bd4cb105faa5b613e6ddb60a66111ec2f6 100644
+--- a/third_party/blink/renderer/core/execution_context/agent.cc
++++ b/third_party/blink/renderer/core/execution_context/agent.cc
+@@ -61,6 +61,7 @@ bool Agent::IsCrossOriginIsolated() const {
+     case AgentType::kCrossOriginIsolatedWorker:
+       return true;
+     default:
++      break;
+   }
+   NOTREACHED();
+ }
 diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
 index 124d82576b41e79c8a628dc1881ff8839a21bfc8..1d5482b8a043ec2f84fc8aa5059ed35d37ee3cce 100644
 --- a/third_party/blink/renderer/core/execution_context/execution_context.h
@@ -60957,10 +61108,10 @@ index 5b4ccd238c48b83d0233c5a07bfa97773844a738..593cbbb98983a26ad9c4c91c4372d8b8
  SelectFileDialog* CreateSelectFileDialog(
 diff --git a/ui/shell_dialogs/select_file_dialog_aros.cc b/ui/shell_dialogs/select_file_dialog_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214f0959eac
+index 0000000000000000000000000000000000000000..2bebff7b869eadd3b7dded53fb6d39281ff591ea
 --- /dev/null
 +++ b/ui/shell_dialogs/select_file_dialog_aros.cc
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,258 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -61145,7 +61296,6 @@ index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214
 +    int file_type_index,
 +    const base::FilePath::StringType& default_extension,
 +    gfx::NativeWindow owning_window,
-+    void* params,
 +    const GURL* caller) {
 +  has_multiple_file_type_choices_ =
 +      file_types ? file_types->extensions.size() > 1 : true;
@@ -61171,12 +61321,11 @@ index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(&SelectFileDialogAros::RunRequester, std::move(request)),
-+      base::BindOnce(&SelectFileDialogAros::OnRequesterFinished, this, params,
++      base::BindOnce(&SelectFileDialogAros::OnRequesterFinished, this,
 +                     file_type_index));
 +}
 +
-+void SelectFileDialogAros::OnRequesterFinished(void* params,
-+                                               int file_type_index,
++void SelectFileDialogAros::OnRequesterFinished(int file_type_index,
 +                                               Request request) {
 +  running_ = false;
 +
@@ -61185,7 +61334,7 @@ index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214
 +    return;
 +
 +  if (request.cancelled || request.files.empty()) {
-+    listener_->FileSelectionCanceled(params);
++    listener_->FileSelectionCanceled();
 +    return;
 +  }
 +
@@ -61194,12 +61343,12 @@ index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214
 +    selected.reserve(request.files.size());
 +    for (const base::FilePath& path : request.files)
 +      selected.emplace_back(path);
-+    listener_->MultiFilesSelected(selected, params);
++    listener_->MultiFilesSelected(selected);
 +    return;
 +  }
 +
 +  listener_->FileSelected(SelectedFileInfo(request.files.front()),
-+                          file_type_index, params);
++                          file_type_index);
 +}
 +
 +bool SelectFileDialogAros::HasMultipleFileTypeChoicesImpl() {
@@ -61223,10 +61372,10 @@ index 0000000000000000000000000000000000000000..af1d6a78b047043c881f27131c269214
 +}  // namespace ui
 diff --git a/ui/shell_dialogs/select_file_dialog_aros.h b/ui/shell_dialogs/select_file_dialog_aros.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..8fa2671d9a4e0440c7d57530472a43c4372d4e9d
+index 0000000000000000000000000000000000000000..97182c536b713f3abe17e68ee13ef4c794f4a819
 --- /dev/null
 +++ b/ui/shell_dialogs/select_file_dialog_aros.h
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,82 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -61265,7 +61414,6 @@ index 0000000000000000000000000000000000000000..8fa2671d9a4e0440c7d57530472a43c4
 +                      int file_type_index,
 +                      const base::FilePath::StringType& default_extension,
 +                      gfx::NativeWindow owning_window,
-+                      void* params,
 +                      const GURL* caller) override;
 +  bool HasMultipleFileTypeChoicesImpl() override;
 +  bool IsRunning(gfx::NativeWindow owning_window) const override;
@@ -61301,7 +61449,7 @@ index 0000000000000000000000000000000000000000..8fa2671d9a4e0440c7d57530472a43c4
 +  static Request RunRequester(Request request);
 +
 +  // Delivers the outcome to `listener_` on the calling sequence.
-+  void OnRequesterFinished(void* params, int file_type_index, Request request);
++  void OnRequesterFinished(int file_type_index, Request request);
 +
 +  bool has_multiple_file_type_choices_ = false;
 +  bool running_ = false;
