@@ -18431,6 +18431,29 @@ index 0000000000000000000000000000000000000000..6cd382986fc0a652b659b7655e491ebc
 +void ArosUnregisterHeapFromV8Library();
 +
 +#endif  // CHROME_APP_AROS_V8_HEAP_OWNER_H_
+diff --git a/chrome/app/certificate_manager.grdp b/chrome/app/certificate_manager.grdp
+index 080b180c42705f6b3fde62735c32e877f2f056e9..4c202488fa5d0184878bd68c653e0e186bb25885 100644
+--- a/chrome/app/certificate_manager.grdp
++++ b/chrome/app/certificate_manager.grdp
+@@ -48,6 +48,18 @@
+       </message>
+     </if>
+ 
++    <if expr="is_aros">
++      <message name="IDS_SETTINGS_CERTIFICATE_MANAGER_V2_PLATFORM" desc="Label for the OS platform.">
++        AROS
++      </message>
++      <message name="IDS_SETTINGS_CERTIFICATE_MANAGER_V2_PLATFORM_CERTS_TITLE" desc="Label for the title of the platform certs subpage.">
++        Imported from AROS
++      </message>
++      <message name="IDS_SETTINGS_CERTIFICATE_MANAGER_V2_PLATFORM_CERTS_VIEW_LINK" desc="Label for a link to view the imported platform certs.">
++        View imported certificates from AROS
++      </message>
++    </if>
++
+     <if expr="is_macosx">
+       <message name="IDS_SETTINGS_CERTIFICATE_MANAGER_V2_PLATFORM" desc="Label for the OS platform.">
+         macOS
 diff --git a/chrome/app/chrome_exe_main_aura.cc b/chrome/app/chrome_exe_main_aura.cc
 index 16f1d1fe087f5e60c36caf0d1b3053cf53170213..9b5a1f19d21d28b44c6691ae57f92d136d401525 100644
 --- a/chrome/app/chrome_exe_main_aura.cc
@@ -18890,7 +18913,7 @@ index 6ea55af3da1c521eae17d32456da7d103d770757..499988f0ef59742c317bade65e00ee8b
  #if !BUILDFLAG(IS_ANDROID)
    // The sampling profiler exists until the `ChromeContentBrowserClient` is
 diff --git a/chrome/app/chromium_strings.grd b/chrome/app/chromium_strings.grd
-index 3de8ca69c9248a9ebf408526ca9192d6ddd035f4..71a076ab576504f48aca23fe35050983fb6aeded 100644
+index 3de8ca69c9248a9ebf408526ca9192d6ddd035f4..3e178b16f02146bbe162f34f265f4f41811a84c5 100644
 --- a/chrome/app/chromium_strings.grd
 +++ b/chrome/app/chromium_strings.grd
 @@ -318,8 +318,8 @@ If you update this file, be sure also to update google_chrome_strings.grd. -->
@@ -18904,6 +18927,24 @@ index 3de8ca69c9248a9ebf408526ca9192d6ddd035f4..71a076ab576504f48aca23fe35050983
            Welcome to Chromium
          </message>
        </if>
+@@ -3244,7 +3244,7 @@ Chromium is unable to recover your settings.
+           Show Gemini in Chromium in Mac menu bar
+         </message>
+       </if>
+-      <if expr="is_win or is_linux or is_chromeos">
++      <if expr="is_win or is_linux or is_chromeos or is_aros">
+         <message name="IDS_SETTINGS_GLIC_OS_WIDGET_TOGGLE" desc="Name of the toggle that controls whether the Gemini icon is shown in the system tray (on ChromeOS, Windows and Linux).">
+           Show Gemini in Chromium in system tray and turn on keyboard shortcut
+         </message>
+@@ -3296,7 +3296,7 @@ Chromium is unable to recover your settings.
+           Show search with Chromium in Mac menu bar and turn on keyboard shortcut
+         </message>
+       </if>
+-      <if expr="is_win or is_linux or is_chromeos">
++      <if expr="is_win or is_linux or is_chromeos or is_aros">
+         <message name="IDS_SETTINGS_OMNIBOX_EVERYWHERE_TOGGLE" desc="Name of the toggle that controls whether Search with Chromium is shown in the system tray (on ChromeOS, Windows and Linux).">
+           Show search with Chromium in system tray and turn on keyboard shortcut
+         </message>
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
 index 21e5fd0d9256fde91f8b129224c2665edcda9e56..a9ce0fd813b35244a0b8427ee775c5ba563e383c 100644
 --- a/chrome/app/generated_resources.grd
@@ -18935,8 +18976,36 @@ index 21e5fd0d9256fde91f8b129224c2665edcda9e56..a9ce0fd813b35244a0b8427ee775c5ba
          <message name="IDS_DEVICE_SIGNALS_CONSENT_DIALOG_TITLE" desc="Title of the dialog shown when user consent is required to share device signals.">
            Share information about your device?
          </message>
+diff --git a/chrome/app/glic_strings.grdp b/chrome/app/glic_strings.grdp
+index d11ee3c5510ba98197486d462c86ed735d41aaf2..634307d6114c8ff68ecc449f8c85094d56395431 100644
+--- a/chrome/app/glic_strings.grdp
++++ b/chrome/app/glic_strings.grdp
+@@ -29,7 +29,7 @@
+   <message name="IDS_GLIC_PROMO_BODY" desc="Text for a promo pointing to the Gemini icon in Chrome.">
+     Chat with voice or text to get answers, key takeaways, and more as you browse
+   </message>
+-  <if expr="is_win or is_linux or is_chromeos or is_android">
++  <if expr="is_win or is_linux or is_chromeos or is_android or is_aros">
+     <message name="IDS_GLIC_STATUS_ICON_MENU_CUSTOMIZE_KEYBOARD_SHORTCUT" desc="Menu text for the Gemini icon on the system try to open Chrome settings and change the keyboard shortcut for opening Gemini in Chrome.">
+       Customize keyboard shortcut
+     </message>
+@@ -39,12 +39,12 @@
+       Customize Keyboard Shortcut...
+     </message>
+   </if>
+-  <if expr="is_win or is_linux or is_chromeos or is_android">
++  <if expr="is_win or is_linux or is_chromeos or is_android or is_aros">
+     <message name="IDS_GLIC_STATUS_ICON_MENU_EXIT" desc="This is the menu item for exiting Chrome.">
+       Exit
+     </message>
+   </if>
+-  <if expr="is_win or is_linux or is_chromeos or is_android">
++  <if expr="is_win or is_linux or is_chromeos or is_android or is_aros">
+     <message name="IDS_GLIC_STATUS_ICON_MENU_SETTINGS" desc="This is the menu item for opening the Gemini status icon settings.">
+       Settings
+     </message>
 diff --git a/chrome/app/google_chrome_strings.grd b/chrome/app/google_chrome_strings.grd
-index ef29337031157065efc16347a8d2519f5f85c3ef..e878ce99404b8e3b6f2adb2c106214563f55bd54 100644
+index ef29337031157065efc16347a8d2519f5f85c3ef..a80ceb3674755bf44dec34f91069c58236133d84 100644
 --- a/chrome/app/google_chrome_strings.grd
 +++ b/chrome/app/google_chrome_strings.grd
 @@ -306,8 +306,8 @@ chromium_strings.grd. -->
@@ -18950,6 +19019,24 @@ index ef29337031157065efc16347a8d2519f5f85c3ef..e878ce99404b8e3b6f2adb2c10621456
            Welcome to Google Chrome
          </message>
        </if>
+@@ -3286,7 +3286,7 @@ Google Chrome is unable to recover your settings.
+           Show Gemini in Chrome in Mac menu bar
+         </message>
+       </if>
+-      <if expr="is_win or is_linux or is_chromeos">
++      <if expr="is_win or is_linux or is_chromeos or is_aros">
+         <message name="IDS_SETTINGS_GLIC_OS_WIDGET_TOGGLE" desc="Name of the toggle that controls whether the Gemini icon is shown in the system tray (on ChromeOS, Windows and Linux).">
+           Show Gemini in Chrome in system tray and turn on keyboard shortcut
+         </message>
+@@ -3338,7 +3338,7 @@ Google Chrome is unable to recover your settings.
+           Show search with Chrome in Mac menu bar and turn on keyboard shortcut
+         </message>
+       </if>
+-      <if expr="is_win or is_linux or is_chromeos">
++      <if expr="is_win or is_linux or is_chromeos or is_aros">
+         <message name="IDS_SETTINGS_OMNIBOX_EVERYWHERE_TOGGLE" desc="Name of the toggle that controls whether Search with Chrome is shown in the system tray (on ChromeOS, Windows and Linux).">
+           Show search with Chrome in system tray and turn on keyboard shortcut
+         </message>
 diff --git a/chrome/app/theme/aros/Chromium.info.src b/chrome/app/theme/aros/Chromium.info.src
 new file mode 100644
 index 0000000000000000000000000000000000000000..1587cb0e9549e37e97339d35f5f6d8aa06610a19
@@ -19580,6 +19667,22 @@ index cefb95bba0f5462bc167052a96aa0e6101d6305d..4b8172cb0f01b339e08d2c2f4a2686df
  
  source_set("chooser_controller") {
    sources = [
+diff --git a/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc b/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
+index 378e1a6f0c8b438ea3fc754dc9614a68d77406aa..3fa6f2441820e6b3415da9123a71e91db51134ed 100644
+--- a/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
++++ b/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
+@@ -143,6 +143,11 @@
+ #include "ui/webui/resources/js/batch_upload_promo/batch_upload_promo.mojom.h"
+ #include "ui/webui/resources/js/browser_command/browser_command.mojom.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "chrome/browser/ui/webui/signin/profile_customization_ui.h"
++#include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+ #include "chrome/browser/ui/webui/app_home/app_home.mojom.h"
+ #include "chrome/browser/ui/webui/app_home/app_home_ui.h"
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
 index b2619baa8f61dfc4699a27f17e44fc4a94dd94f7..b136e16a8f167003d5dec97c7437b96f40ef600d 100644
 --- a/chrome/browser/chrome_browser_main.cc
@@ -22136,10 +22239,22 @@ index 41bb311b3399af2014bf416eb65e99cae9b8df6b..df1b1e2514990a5d5c091cae2bd9ab30
    }
  
 diff --git a/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc b/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
-index 36a251d5c7bdb8ab862eb70775f7fd4eca26a14d..848eed8d6e2041b33bf74daf0041982883cc8b0f 100644
+index 36a251d5c7bdb8ab862eb70775f7fd4eca26a14d..ae7c5a6402b564c9e84fe9b6bd51492d8ab6db2d 100644
 --- a/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
 +++ b/chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.cc
-@@ -69,6 +69,10 @@
+@@ -4,6 +4,11 @@
+ 
+ #include "chrome/browser/policy/chrome_browser_cloud_management_controller_desktop.h"
+ 
++#include "components/enterprise/browser/reporting/saas_usage/saas_usage_reporting_delegate_factory.h"
++#include "chrome/browser/enterprise/reporting/browser_launch/browser_launch_event_controller_factory_desktop.h"
++#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
++#include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
++
+ #include <stdint.h>
+ 
+ #include <memory>
+@@ -69,6 +74,10 @@
  #include "chrome/install_static/install_util.h"
  #endif  // BUILDFLAG(IS_WIN)
  
@@ -22150,7 +22265,7 @@ index 36a251d5c7bdb8ab862eb70775f7fd4eca26a14d..848eed8d6e2041b33bf74daf00419828
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
  #include "chrome/browser/enterprise/client_certificates/browser_context_delegate.h"
  #include "chrome/browser/enterprise/client_certificates/cert_utils.h"
-@@ -121,6 +125,8 @@ void ChromeBrowserCloudManagementControllerDesktop::
+@@ -121,6 +130,8 @@ void ChromeBrowserCloudManagementControllerDesktop::
    storage_delegate = std::make_unique<BrowserDMTokenStorageLinux>();
  #elif BUILDFLAG(IS_WIN)
    storage_delegate = std::make_unique<BrowserDMTokenStorageWin>();
@@ -22159,6 +22274,15 @@ index 36a251d5c7bdb8ab862eb70775f7fd4eca26a14d..848eed8d6e2041b33bf74daf00419828
  #else
    NOTREACHED();
  #endif
+@@ -265,7 +276,7 @@ ChromeBrowserCloudManagementControllerDesktop::GetReportingDelegateFactory() {
+ std::unique_ptr<enterprise_reporting::SaasUsageReportingDelegateFactory>
+ ChromeBrowserCloudManagementControllerDesktop::
+     GetSaasUsageReportingDelegateFactory() {
+-#if BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   return nullptr;
+ #else
+   return enterprise_reporting::SaasUsageReportingDelegateFactoryImpl::
 diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/browser/policy/chrome_browser_policy_connector.cc
 index 1761f93bfefa85685fe87f6ee2c8dcb3e54b9bf0..361b640b4b05b7c77cd73a60de007f1b0d7c09fd 100644
 --- a/chrome/browser/policy/chrome_browser_policy_connector.cc
@@ -22348,6 +22472,39 @@ index c6556171f4e2950b6818f80f7092777aa0a6e042..b68145aef9534b9e62b16fe509a1b0f6
    virtual base::flat_set<std::string> device_affiliation_ids() const;
    void SetDeviceAffiliatedIdsForTesting(
        const base::flat_set<std::string>& device_affiliation_ids);
+diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
+index e1258a0cf0197478e2347b47c11dec12e6ec81e1..418839fbe839fee612d20159d7c0e04960cb7d35 100644
+--- a/chrome/browser/policy/configuration_policy_handler_list_factory.cc
++++ b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/policy/configuration_policy_handler_list_factory.h"
+ 
++#include "chrome/browser/external_protocol/auto_launch_protocols_policy_handler.h"
++
+ #include <limits.h>
+ #include <stddef.h>
+ 
+@@ -277,7 +279,6 @@
+ #include "chrome/browser/browser_switcher/browser_switcher_prefs.h"
+ #include "chrome/browser/enterprise/idle/action.h"
+ #include "chrome/browser/enterprise/signin/enterprise_signin_prefs.h"
+-#include "chrome/browser/external_protocol/auto_launch_protocols_policy_handler.h"
+ #include "components/device_signals/core/browser/pref_names.h"  // nogncheck due to crbug.com/40147906
+ #include "components/proxy_config/proxy_config_pref_names.h"
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+@@ -616,9 +617,11 @@ const PolicyToPreferenceMapEntry kSimplePolicyMap[] = {
+   { key::kAutoOpenAllowedForURLs,
+     prefs::kDownloadAllowedURLsForOpenByPolicy,
+     base::Value::Type::LIST },
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   { key::kScreenCaptureWithoutGestureAllowedForOrigins,
+     prefs::kScreenCaptureWithoutGestureAllowedForOrigins,
+     base::Value::Type::LIST },
++#endif
+   { key::kFileOrDirectoryPickerWithoutGestureAllowedForOrigins,
+     prefs::kFileOrDirectoryPickerWithoutGestureAllowedForOrigins,
+     base::Value::Type::LIST },
 diff --git a/chrome/browser/policy/policy_path_parser_aros.cc b/chrome/browser/policy/policy_path_parser_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..902668ff82fc62b5231c7fd70086b5e9b2e16d3b
@@ -22746,10 +22903,10 @@ index 6f081c26ca4cffe76104eae5a4130a81a93a539d..aecf8ab0fb6af859aa04f55bdb1d4cb9
    // Assumes that the current pid is the root of all pids of the current
 diff --git a/chrome/browser/process_singleton_aros.cc b/chrome/browser/process_singleton_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..192e07917ff536f216203c93583fb05f3819a16e
+index 0000000000000000000000000000000000000000..95c1787b1a5ca00e7e206c9f0d7e4577b8c41b1e
 --- /dev/null
 +++ b/chrome/browser/process_singleton_aros.cc
-@@ -0,0 +1,520 @@
+@@ -0,0 +1,523 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22778,7 +22935,9 @@ index 0000000000000000000000000000000000000000..192e07917ff536f216203c93583fb05f
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/threading/platform_thread.h"
 +#include "chrome/browser/ui/browser.h"
-+#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "ui/base/base_window.h"
 +#include "chrome/browser/ui/browser_window.h"
 +#include "chrome/common/chrome_switches.h"
 +
@@ -22943,13 +23102,14 @@ index 0000000000000000000000000000000000000000..192e07917ff536f216203c93583fb05f
 +
 +  if (verb == "SHOW" || verb == "TOFRONT" || verb == "SCREENTOFRONT" ||
 +      verb == "ACTIVATE") {
-+    Browser* browser = chrome::FindLastActive();
-+    if (!browser || !browser->window()) {
++    BrowserWindowInterface* browser =
++        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
++    if (!browser || !browser->GetWindow()) {
 +      reply->Finish(kRcWarn);
 +      return;
 +    }
-+    browser->window()->Show();
-+    browser->window()->Activate();
++    browser->GetWindow()->Show();
++    browser->GetWindow()->Activate();
 +    reply->Finish(kRcOk);
 +    return;
 +  }
@@ -23889,12 +24049,25 @@ index 5c94fbb6d10456f8c573bd9b565be9f0f3ac948d..ae49e8a876ebb91bfc313316102b1606
  
  source_set("sharing_hub") {
    sources = [
+diff --git a/chrome/browser/shell_integration.h b/chrome/browser/shell_integration.h
+index 437f335e8a2048f1238344eb7b6e754570cbdb61..f9c9c6acfcc41d52915e35c4a025e6d6b9289533 100644
+--- a/chrome/browser/shell_integration.h
++++ b/chrome/browser/shell_integration.h
+@@ -188,7 +188,7 @@ std::u16string GetAppShortcutsSubdirName();
+ #endif
+ 
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ // Returns the URL scheme for google-chrome:// URLs.
+ // This varies based on channel, branding, and platform to ensure that
+ // different installations do not collide. For example:
 diff --git a/chrome/browser/shell_integration_aros.cc b/chrome/browser/shell_integration_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d0f2d74acb8c05da09fe4b5bab2501dd57171ec9
+index 0000000000000000000000000000000000000000..d8029161529aee1278f687cbd3559ffb1135010f
 --- /dev/null
 +++ b/chrome/browser/shell_integration_aros.cc
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,46 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23902,6 +24075,11 @@ index 0000000000000000000000000000000000000000..d0f2d74acb8c05da09fe4b5bab2501dd
 +#include "chrome/browser/shell_integration.h"
 +
 +namespace shell_integration {
++
++std::string GetDirectLaunchUrlScheme() {
++  // Native protocol registration is not implemented yet.
++  return {};
++}
 +
 +bool SetAsDefaultBrowser() {
 +  return false;
@@ -24165,11 +24343,15 @@ index 4624ffb7a55625936a6e8b5d47aae67783eea2ee..ff16bb3c4fe42520eea46903292ed46e
  // groups through the settings. The primary account must be set (this crashes
  // otherwise).
 diff --git a/chrome/browser/supervised_user/supervised_user_browser_utils.cc b/chrome/browser/supervised_user/supervised_user_browser_utils.cc
-index 8f6655459d0d7cf9f3972b618324f9262bfa7301..b40fe07355cd61d34e46839803420c5967debc78 100644
+index 8f6655459d0d7cf9f3972b618324f9262bfa7301..0a3c5d72bede3c46aae7f4bab47688a2369d844f 100644
 --- a/chrome/browser/supervised_user/supervised_user_browser_utils.cc
 +++ b/chrome/browser/supervised_user/supervised_user_browser_utils.cc
-@@ -42,7 +42,7 @@
-     BUILDFLAG(IS_ANDROID)
+@@ -39,10 +39,10 @@
+ #include "components/user_manager/user.h"
+ #include "components/user_manager/user_type.h"
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
  #include "chrome/browser/supervised_user/supervised_user_verification_controller_client.h"
  #include "chrome/browser/supervised_user/supervised_user_verification_page_blocked_sites.h"
 -#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
@@ -24768,7 +24950,7 @@ index 19d75a725dbcfaf100cfe2d1ec2fc551ffecde65..c325a7116c45ad68f9bd54d3e7760dd7
    }
    return profile_metrics::BrowserProfileType::kEnterpriseIsolated;
 diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
-index 07de580deb67c305fdbf25ddb9c168b3cc646a4f..46e6dc03eb079168d137d4a2678eb4d4d590d8fb 100644
+index 07de580deb67c305fdbf25ddb9c168b3cc646a4f..058c568524534d897d8425500876e7114da80382 100644
 --- a/chrome/browser/ui/browser.cc
 +++ b/chrome/browser/ui/browser.cc
 @@ -129,6 +129,9 @@
@@ -24836,7 +25018,7 @@ index 07de580deb67c305fdbf25ddb9c168b3cc646a4f..46e6dc03eb079168d137d4a2678eb4d4
  std::vector<tabs::TabInterface*> Browser::GetAllTabInterfaces() {
    std::vector<tabs::TabInterface*> results;
    results.reserve(tab_strip_model_->count());
-@@ -565,6 +583,20 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
+@@ -565,6 +583,23 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
                                       const TabStripSelectionChange& selection) {
    TRACE_EVENT2("ui", "Browser::OnTabStripModelChanged", "tab_strip_model",
                 tab_strip_model, "change", change);
@@ -24848,16 +25030,19 @@ index 07de580deb67c305fdbf25ddb9c168b3cc646a4f..46e6dc03eb079168d137d4a2678eb4d4
 +    static crash_reporter::CrashKeyString<8> num_windows_key("num-windows");
 +    static crash_reporter::CrashKeyString<8> num_tabs_key("num-tabs");
 +    int tabs = 0;
-+    for (Browser* browser : *BrowserList::GetInstance())
-+      tabs += browser->tab_strip_model()->count();
-+    num_windows_key.Set(base::NumberToString(BrowserList::GetInstance()->size()));
++    auto* browsers = GlobalBrowserCollection::GetInstance();
++    browsers->ForEach([&tabs](BrowserWindowInterface* browser) {
++      tabs += browser->GetTabStripModel()->count();
++      return true;
++    });
++    num_windows_key.Set(base::NumberToString(browsers->GetSize()));
 +    num_tabs_key.Set(base::NumberToString(tabs));
 +  }
 +#endif
    switch (change.type()) {
      case TabStripModelChange::kInserted: {
        // Initialize find bar when tab having active find session
-@@ -880,6 +912,12 @@ void Browser::OnTabReplacedAt(WebContents* old_contents,
+@@ -880,6 +915,12 @@ void Browser::OnTabReplacedAt(WebContents* old_contents,
  // Browser, Assorted utility functions (private):
  
  void Browser::SetAsDelegate(WebContents* web_contents, bool set_delegate) {
@@ -24945,7 +25130,7 @@ index 1c1beed970c04b404125f7bcad3170ebfec27735..127586d9fbc4078764a5f748d574a358
    bool is_tab_modal_popup_ = false;
  
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index 921461b9e9bd0423d6d180762d0a06d0a3cd9c94..06c7fb432c8da0ccf3b70806b568c776e222a90e 100644
+index 921461b9e9bd0423d6d180762d0a06d0a3cd9c94..466c7604d8678d32090551186c19c43f41773202 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -198,6 +198,10 @@
@@ -24994,6 +25179,21 @@ index 921461b9e9bd0423d6d180762d0a06d0a3cd9c94..06c7fb432c8da0ccf3b70806b568c776
    // The order of commands in this switch statement must match the function
    // declaration order in browser.h!
    switch (id) {
+@@ -1138,12 +1156,12 @@ void BrowserCommandController::HandleCommandWithDisposition(
+       break;
+     case IDC_CREATE_SHORTCUT:
+       base::RecordAction(base::UserMetricsAction("CreateShortcut"));
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+       chrome::CreateDesktopShortcutForActiveWebContents(browser_);
+ #else
+       web_app::CreateWebAppFromCurrentWebContents(
+           browser_, web_app::WebAppInstallFlow::kCreateShortcut);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+       break;
+     case IDC_INSTALL_PWA:
+       base::RecordAction(base::UserMetricsAction("InstallWebAppFromMenu"));
 @@ -1712,12 +1730,14 @@ void BrowserCommandController::TabRestoreServiceLoaded(
  
  bool BrowserCommandController::IsShowingMainUI() {
@@ -26300,6 +26500,37 @@ index 15ab75f2da7fc4b6e0ead5ea62aa4c1d1a03a1e7..bddac16ad6eefebbf9d39520f773e2f2
  
    // Shows the modal managed user notice dialog as a browser-modal dialog on
    // top of the `browser_`'s window. `domain_name` is the domain of the
+diff --git a/chrome/browser/ui/signin/signin_view_controller_delegate.h b/chrome/browser/ui/signin/signin_view_controller_delegate.h
+index d2379e41ee0b18d0d2592cd10daa620edc0fe09f..9316511b61a14bdfeecd70821ebe01de03e1a16c 100644
+--- a/chrome/browser/ui/signin/signin_view_controller_delegate.h
++++ b/chrome/browser/ui/signin/signin_view_controller_delegate.h
+@@ -50,7 +50,7 @@ class SigninViewControllerDelegate {
+       SyncConfirmationStyle style,
+       bool is_sync_promo);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Returns a platform-specific SigninViewControllerDelegate instance that
+   // displays the modal history sync opt in dialog. The returned object should
+   // delete itself when the window it's managing is closed.
+@@ -59,7 +59,7 @@ class SigninViewControllerDelegate {
+       bool should_close_modal_dialog,
+       HistorySyncOptinLaunchContext launch_context,
+       HistorySyncOptinHelper::FlowCompletedCallback callback);
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+   // Returns a platform-specific SigninViewControllerDelegate instance that
+   // displays the modal sign in error dialog. The returned object should delete
+@@ -93,7 +93,7 @@ class SigninViewControllerDelegate {
+       SignoutConfirmationCallback callback);
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Returns a platform-specific SigninViewContolllerDelegate instance that
+   // displays the managed user notice modal dialog. The returned object
+   // should delete itself when the window it's managing is closed.
 diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
 index f212d0761b76b01aac7d875d92013267b6500225..8361c4ac0e6fd09814ef1b71b3adcccdf17a814b 100644
 --- a/chrome/browser/ui/startup/bad_flags_prompt.cc
@@ -26677,6 +26908,37 @@ index 11709b87ed1ff33e35479d58960c9e7c5d20d3bc..918d269497d9101f3d315f54ade95253
  
  import("//chrome/common/features.gni")
  
+diff --git a/chrome/browser/ui/tabs/public/tab_features.h b/chrome/browser/ui/tabs/public/tab_features.h
+index 16d0fa2acbba929c79aea0ab7d37b0b63217c7e3..c2f9985f55fe4e28538a6f1f734afcfc2778604e 100644
+--- a/chrome/browser/ui/tabs/public/tab_features.h
++++ b/chrome/browser/ui/tabs/public/tab_features.h
+@@ -268,7 +268,7 @@ class DesktopSessionDurationObserver;
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ namespace wallet {
+ class ChromeWalletablePassClient;
+ }  // namespace wallet
+@@ -772,7 +772,7 @@ class TabFeatures {
+       page_context_eligibility_helper_;
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   std::unique_ptr<wallet::ChromeWalletablePassClient> walletable_pass_client_;
+ #endif
+ 
+@@ -789,7 +789,7 @@ class TabFeatures {
+ #endif
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   std::unique_ptr<enterprise_reporting::SaasUsageNavigationObserver>
+       saas_usage_navigation_observer_;
+   std::unique_ptr<HatsHelper> hats_helper_;
 diff --git a/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn b/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn
 index 9001766c347c78591a6409764e6e90835f7786ac..c7d95de2da699564a90e0957c265425550f1810a 100644
 --- a/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn
@@ -26690,6 +26952,64 @@ index 9001766c347c78591a6409764e6e90835f7786ac..c7d95de2da699564a90e0957c2654255
  
  import("//chrome/common/features.gni")
  
+diff --git a/chrome/browser/ui/tabs/tab_features.cc b/chrome/browser/ui/tabs/tab_features.cc
+index cdd4c62080fb19b145e427c1533ba082fc1cda8c..afaf95ef0d68a21bcfb6588bcd89b6b4164cb914 100644
+--- a/chrome/browser/ui/tabs/tab_features.cc
++++ b/chrome/browser/ui/tabs/tab_features.cc
+@@ -155,7 +155,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/contextual_tasks/contextual_tasks_tab_visit_tracker.h"
+ #include "chrome/browser/record_replay/chrome_record_replay_client.h"
+ #include "chrome/browser/ui/views/location_bar/record_replay_page_action_controller.h"
+@@ -215,7 +215,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/ui/hats/hats_helper.h"
+ #include "chrome/browser/ui/performance_controls/performance_controls_hats_service_factory.h"
+ #include "chrome/browser/ui/shared_highlighting/shared_highlighting_promo.h"
+@@ -673,7 +673,7 @@ void TabFeatures::Init(TabInterface& tab, Profile* profile) {
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   inactive_window_mouse_event_controller_ =
+       std::make_unique<InactiveWindowMouseEventController>();
+ 
+@@ -784,7 +784,7 @@ void TabFeatures::Init(TabInterface& tab, Profile* profile) {
+   }
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   if (base::FeatureList::IsEnabled(enterprise_reporting::kSaasUsageReporting)) {
+     saas_usage_navigation_observer_ =
+         std::make_unique<enterprise_reporting::SaasUsageNavigationObserver>(
+@@ -802,7 +802,7 @@ void TabFeatures::Init(TabInterface& tab, Profile* profile) {
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   if (base::FeatureList::IsEnabled(multistep_filter::kMultistepFilter)) {
+     filter_ui_controller_ =
+         GetUserDataFactory()
+@@ -1157,7 +1157,7 @@ void TabFeatures::WillDiscardContents(tabs::TabInterface* tab,
+           new_contents);
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   if (hats_helper_) {
+     hats_helper_ = std::make_unique<HatsHelper>(new_contents);
+   }
 diff --git a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tab_strip_model_adapter_impl.cc b/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tab_strip_model_adapter_impl.cc
 index 95823e23bd0aeb46ef96ba461c4164c7837b3694..a5599d095164c0ffa7f3f66570edcfb9e8f07d6c 100644
 --- a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tab_strip_model_adapter_impl.cc
@@ -26730,20 +27050,21 @@ index 9879f682e771b36bce60a0b92f7a7cbcbf109185..120fd556c64f46e639f662b93785e630
  import("//build/config/chrome_build.gni")
  import("//build/config/ui.gni")
 diff --git a/chrome/browser/ui/toolbar/app_menu_model.cc b/chrome/browser/ui/toolbar/app_menu_model.cc
-index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415d1352b3c 100644
+index faaded8ad5427c95787fde91961ae6d543902336..7d76317fd5ea127a1cecf8ff236d074d43ff022a 100644
 --- a/chrome/browser/ui/toolbar/app_menu_model.cc
 +++ b/chrome/browser/ui/toolbar/app_menu_model.cc
-@@ -3,6 +3,9 @@
+@@ -3,6 +3,10 @@
  // found in the LICENSE file.
  
  #include "chrome/browser/ui/toolbar/app_menu_model.h"
++#include "cef/libcef/features/features.h"
 +#if BUILDFLAG(ENABLE_CEF)
 +#include "cef/libcef/browser/chrome/browser_delegate.h"
 +#endif
  
  #include <algorithm>
  #include <cmath>
-@@ -778,18 +781,20 @@ FindAndEditSubMenuModel::FindAndEditSubMenuModel(
+@@ -778,18 +782,20 @@ FindAndEditSubMenuModel::FindAndEditSubMenuModel(
    AddItemWithStringIdAndVectorIcon(
        this, IDC_FIND, IDS_FIND,
        features::IsRoundedIconsEnabled() ? kFindInPageIcon : kSearchMenuOldIcon);
@@ -26776,7 +27097,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415
  }
  
  class SaveAndShareSubMenuModel : public ui::SimpleMenuModel {
-@@ -931,6 +936,56 @@ bool ArePromotionsEnabled() {
+@@ -931,6 +937,56 @@ bool ArePromotionsEnabled() {
    PrefService* local_state = g_browser_process->local_state();
    return local_state && local_state->GetBoolean(prefs::kPromotionsEnabled);
  }
@@ -26833,7 +27154,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415
  
  }  // namespace
  
-@@ -2019,7 +2074,7 @@ bool AppMenuModel::IsCommandIdChecked(int command_id) const {
+@@ -2019,7 +2075,7 @@ bool AppMenuModel::IsCommandIdChecked(int command_id) const {
    return false;
  }
  
@@ -26842,7 +27163,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415
    GlobalError* error =
        GlobalErrorServiceFactory::GetForProfile(browser_->GetProfile())
            ->GetGlobalErrorByMenuItemCommandID(command_id);
-@@ -2037,6 +2092,30 @@ bool AppMenuModel::IsCommandIdEnabled(int command_id) const {
+@@ -2037,6 +2093,30 @@ bool AppMenuModel::IsCommandIdEnabled(int command_id) const {
    }
  }
  
@@ -26873,7 +27194,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415
  bool AppMenuModel::IsCommandIdAlerted(int command_id) const {
    if (command_id == IDC_VIEW_PASSWORDS ||
        command_id == IDC_SHOW_PASSWORD_MANAGER) {
-@@ -2278,8 +2357,10 @@ void AppMenuModel::Build() {
+@@ -2278,8 +2358,10 @@ void AppMenuModel::Build() {
                           kClearBrowsingDataMenuItem);
  
    AddSeparator(ui::NORMAL_SEPARATOR);
@@ -26886,7 +27207,7 @@ index faaded8ad5427c95787fde91961ae6d543902336..c6d36abeb3e605a7a8f210670d896415
  
    AddItemWithStringIdAndVectorIcon(
        this, IDC_PRINT, IDS_PRINT,
-@@ -2431,6 +2512,11 @@ void AppMenuModel::Build() {
+@@ -2431,6 +2513,11 @@ void AppMenuModel::Build() {
    }
  #endif  // !BUILDFLAG(IS_CHROMEOS)
  
@@ -27237,10 +27558,10 @@ index d6e792f666f6e8991e084b7ba9ac618260c40dfe..0b49d420004ea1788d7705b4318bd66c
  #include "ui/base/metadata/metadata_impl_macros.h"
 diff --git a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_aros.cc b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..ecc0fc827ef1fac82e01ceb5a263da93ab4b2ef4
+index 0000000000000000000000000000000000000000..4ad212a6777ff0254eee515f01d6e581d0bc989f
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_aros.cc
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,45 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -27259,7 +27580,7 @@ index 0000000000000000000000000000000000000000..ecc0fc827ef1fac82e01ceb5a263da93
 +      views::internal::NativeWidgetDelegate* native_widget_delegate,
 +      views::DesktopNativeWidgetAura* desktop_native_widget_aura,
 +      BrowserView* browser_view,
-+      BrowserFrame* browser_frame)
++      BrowserWidget* browser_widget)
 +      : views::DesktopWindowTreeHostPlatform(native_widget_delegate,
 +                                             desktop_native_widget_aura) {}
 +  ~BrowserDesktopWindowTreeHostAROS() override = default;
@@ -27271,7 +27592,6 @@ index 0000000000000000000000000000000000000000..ecc0fc827ef1fac82e01ceb5a263da93
 +
 + private:
 +  DesktopWindowTreeHost* AsDesktopWindowTreeHost() override { return this; }
-+  int GetMinimizeButtonOffset() const override { return 0; }
 +  bool UsesNativeSystemMenu() const override { return false; }
 +};
 +
@@ -27282,10 +27602,10 @@ index 0000000000000000000000000000000000000000..ecc0fc827ef1fac82e01ceb5a263da93
 +    views::internal::NativeWidgetDelegate* native_widget_delegate,
 +    views::DesktopNativeWidgetAura* desktop_native_widget_aura,
 +    BrowserView* browser_view,
-+    BrowserFrame* browser_frame) {
++    BrowserWidget* browser_widget) {
 +  return new BrowserDesktopWindowTreeHostAROS(
 +      native_widget_delegate, desktop_native_widget_aura, browser_view,
-+      browser_frame);
++      browser_widget);
 +}
 diff --git a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
 index 32e5c1a27f7b00bff7f9259713708da237d337b0..5bc81d6ad264d4290e0136bcb6aae2882317677a 100644
@@ -28560,6 +28880,24 @@ index b694cb70ba68adc15d37c4e6cd0bb7e048a0846d..edc3c8c06d79e6daccac0bbe4d158943
   protected:
    // PictureInPictureBrowserFrameView:
    gfx::Insets ResizeBorderInsets() const override;
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index fdfdd93f076b3e42d0ff869963cfb61aa9d3ae82..2f580859f92a687941d5d190fe9a07520a42089e 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -511,10 +511,11 @@ gfx::Size VerticalTabStripRegionView::CalculatePreferredSize(
+   const double expand_percent =
+       *controller->GetCurrentValue(TabStripAnimations::kVerticalTabStrip,
+                                    TabStripAnimations::kTabStripWidth);
++  const double animated_width = expand_amount * expand_percent;
+   size.set_width(kCollapsedWidth +
+                  (motion == TabStripAnimations::kExpand
+-                      ? std::floor<double>
+-                      : std::ceil<double>)(expand_amount * expand_percent));
++                      ? std::floor(animated_width)
++                      : std::ceil(animated_width)));
+   return size;
+ }
+ 
 diff --git a/chrome/browser/ui/views/hats/BUILD.gn b/chrome/browser/ui/views/hats/BUILD.gn
 index 0e24e70ddae9e58d053c2645aaf96090af67ef3e..f2aff55d0152592d7400b6b5fb1454973f84f034 100644
 --- a/chrome/browser/ui/views/hats/BUILD.gn
@@ -28884,6 +29222,132 @@ index d283d4e9de666ff57794a420470f99a3fe077ffe..ea708d782231dba0fd5df6573bec40b5
    available_space =
        std::max(available_space, anchor_rect.y() - screen_space.y());
  #endif
+diff --git a/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.cc b/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.cc
+index 2e809043de198a347b5be0c012c037b0b8dfb795..427f2deac03d093046ad684472564b993b987321 100644
+--- a/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.cc
++++ b/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.cc
+@@ -63,15 +63,15 @@
+ #include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation_ui.h"
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
+ #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
+-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ 
+ namespace {
+ 
+ const int kModalDialogWidth = 448;
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ const int kManagedUserNoticeConfirmationDialogWidth = 780;
+ const int kManagedUserNoticeConfirmationDialogHeight = 560;
+ #endif
+@@ -142,7 +142,7 @@ SigninViewControllerDelegateViews::CreateSyncConfirmationWebView(
+       kSyncConfirmationDialogWidth, InitializeSigninWebDialogUI(true));
+ }
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ std::unique_ptr<views::WebView>
+ SigninViewControllerDelegateViews::CreateHistorySyncOptInWebView(
+     BrowserWindowInterface* browser,
+@@ -174,7 +174,7 @@ SigninViewControllerDelegateViews::CreateHistorySyncOptInWebView(
+   web_ui->Initialize(browser, should_close_modal_dialog, std::move(callback));
+   return web_view;
+ }
+-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ 
+ // static
+ std::unique_ptr<views::WebView>
+@@ -251,7 +251,7 @@ SigninViewControllerDelegateViews::CreateSignoutConfirmationWebView(
+ }
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // static
+ std::unique_ptr<views::WebView>
+ SigninViewControllerDelegateViews::CreateManagedUserNoticeConfirmationWebView(
+@@ -440,7 +440,7 @@ SigninViewControllerDelegateViews::SigninViewControllerDelegateViews(
+ 
+   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // On the local profile creation dialog, cancelling the dialog (for instance
+   // through the VKEY_ESCAPE accelerator) should delete the profile.
+   if (delete_profile_on_cancel) {
+@@ -559,7 +559,7 @@ void SigninViewControllerDelegateViews::DetachFromWebContents() {
+   }
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ void SigninViewControllerDelegateViews::DeleteProfileOnCancel() {
+   ProfileAttributesEntry* entry =
+       g_browser_process->profile_manager()
+@@ -597,7 +597,7 @@ SigninViewControllerDelegate::CreateSyncConfirmationDelegate(
+       /*animate_on_resize=*/true);
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // static
+ SigninViewControllerDelegate*
+ SigninViewControllerDelegate::CreateSyncHistoryOptInDelegate(
+@@ -615,7 +615,7 @@ SigninViewControllerDelegate::CreateSyncHistoryOptInDelegate(
+       /*wait_for_size=*/true, /*should_show_close_button=*/false,
+       /*animate_on_resize=*/true);
+ }
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ // static
+ SigninViewControllerDelegate*
+@@ -660,7 +660,7 @@ SigninViewControllerDelegate::CreateSignoutConfirmationDelegate(
+ }
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ // static
+ SigninViewControllerDelegate*
+ SigninViewControllerDelegate::CreateManagedUserNoticeDelegate(
+diff --git a/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h b/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h
+index 217aa948a78b3fe33cb8a1b975477258e766a7f9..516953589c2a04018c330736e08aa5d4c1638803 100644
+--- a/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h
++++ b/chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h
+@@ -59,7 +59,7 @@ class SigninViewControllerDelegateViews
+       SyncConfirmationStyle style,
+       bool is_sync_promo);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   static std::unique_ptr<views::WebView> CreateHistorySyncOptInWebView(
+       BrowserWindowInterface* browser,
+       bool should_close_modal_dialog,
+@@ -85,7 +85,7 @@ class SigninViewControllerDelegateViews
+       SignoutConfirmationCallback callback);
+ #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   static std::unique_ptr<views::WebView>
+   CreateManagedUserNoticeConfirmationWebView(
+       BrowserWindowInterface& browser,
+@@ -157,7 +157,7 @@ class SigninViewControllerDelegateViews
+       std::optional<int> dialog_width,
+       InitializeSigninWebDialogUI initialize_signin_web_dialog_ui);
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   // Deletes the ephemeral profile when cancelling the local profile creation
+   // dialog.
+   void DeleteProfileOnCancel();
 diff --git a/chrome/browser/ui/views/relaunch_notification/BUILD.gn b/chrome/browser/ui/views/relaunch_notification/BUILD.gn
 index ea6c7f41a8c37bfc583177fc2a5c710b9f617fa4..fbfccabf5371a7d4935f5b55359e47c38073e69a 100644
 --- a/chrome/browser/ui/views/relaunch_notification/BUILD.gn
@@ -29319,6 +29783,32 @@ index a854ba3c7443437268e33e4fb453798472f4ada9..9c2fce90a9bdc854750778b31911879f
  
  class BrowserWindowInterface;
  class GURL;
+diff --git a/chrome/browser/ui/web_applications/web_app_ui_manager_impl.cc b/chrome/browser/ui/web_applications/web_app_ui_manager_impl.cc
+index 24ad21c2899a531f470c2e8b9661b955c11e5959..ec92fffaff921c62c2e1da57b6dc76867745429f 100644
+--- a/chrome/browser/ui/web_applications/web_app_ui_manager_impl.cc
++++ b/chrome/browser/ui/web_applications/web_app_ui_manager_impl.cc
+@@ -1156,7 +1156,7 @@ void WebAppUiManagerImpl::ClearWebAppSiteDataIfNeeded(
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ 
+ const base::Feature& GetPromoFeatureEngagementFromBrowser(
+     const BrowserWindowInterface* browser) {
+diff --git a/chrome/browser/ui/web_applications/web_app_ui_manager_impl.h b/chrome/browser/ui/web_applications/web_app_ui_manager_impl.h
+index 0ca4d0320c4414820f59eacaac59985ea3806116..12dc05e42b28fa690ac7ed4400b6106e221fce1a 100644
+--- a/chrome/browser/ui/web_applications/web_app_ui_manager_impl.h
++++ b/chrome/browser/ui/web_applications/web_app_ui_manager_impl.h
+@@ -263,7 +263,7 @@ class WebAppUiManagerImpl : public BrowserCollectionObserver,
+       webapps::UninstallResultCode uninstall_code);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+   void ShowIPHPromoForAppsLaunchedViaLinkCapturing(
+       BrowserWindowInterface* browser,
+       const webapps::AppId& app_id,
 diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
 index 7341632b43d34d3862b87965d1ac315c274b5743..a1e4baf06fd9b412144ba5136bdc1705d2ce5cf6 100644
 --- a/chrome/browser/ui/webui/BUILD.gn
@@ -29714,6 +30204,30 @@ index 0000000000000000000000000000000000000000..06847ef0daf7bc0a6ff7c9166520c7fa
 +}
 +
 +}  // namespace settings_utils
+diff --git a/chrome/browser/ui/webui/settings/site_settings_handler.cc b/chrome/browser/ui/webui/settings/site_settings_handler.cc
+index 4af90360645556ce4e4a84a257f6adda80b23cf8..be900f72c4abcdef76a4b63e18cc93b7ca5f0d08 100644
+--- a/chrome/browser/ui/webui/settings/site_settings_handler.cc
++++ b/chrome/browser/ui/webui/settings/site_settings_handler.cc
+@@ -128,7 +128,7 @@
+ #include "url/url_constants.h"
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ #include "components/webapps/isolated_web_apps/scheme.h"
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS)
+@@ -2148,9 +2148,9 @@ void SiteSettingsHandler::SendZoomLevels() {
+                     *b.GetDict().FindString(site_settings::kDisplayName);
+                 return name_a < name_b;
+               });
++  }
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS)
+-  }
+ 
+   content::HostZoomMap* host_zoom_map =
+       content::HostZoomMap::GetDefaultForBrowserContext(profile_);
 diff --git a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc b/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc
 index f3717442861c3467c7b32121927800d135ec5c8d..bd37ec492deb54d6201bc984b3821e5f1d769132 100644
 --- a/chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.cc
@@ -33177,6 +33691,22 @@ index 451adb54e0e7df9eaf55f6849dc5d38c54850acb..7c1c389cd749e99b21a69d645a72e66d
    }
    NOTREACHED();
  }
+diff --git a/components/enterprise/net/core/features.h b/components/enterprise/net/core/features.h
+index aa8a0c285089a76a3c8b2b0ea64415771b3280cc..85b44bb4450b23a1a33bb22c7a32e80f57309bfc 100644
+--- a/components/enterprise/net/core/features.h
++++ b/components/enterprise/net/core/features.h
+@@ -59,6 +59,11 @@ size_t GetPvdConfigMaxSizeBytes();
+ 
+ }  // namespace enterprise_net
+ 
++#else
++namespace enterprise_net {
++inline bool IsDynamicRouteFetchingEnabled() { return false; }
++inline bool IsEnterpriseProxyErrorHandlingEnabled() { return false; }
++}  // namespace enterprise_net
+ #endif  // BUILDFLAG(ENTERPRISE_PROXY)
+ 
+ #endif  // COMPONENTS_ENTERPRISE_NET_CORE_FEATURES_H_
 diff --git a/components/eye_dropper/BUILD.gn b/components/eye_dropper/BUILD.gn
 index 5fa8421d77b659f3f7dc2b889354b84707b53388..0e2989ea75369b927e70d848f15dc071fdb3b406 100644
 --- a/components/eye_dropper/BUILD.gn
@@ -33326,7 +33856,7 @@ index b6633d0a921299a7a9415afd53dd8fac4ccc9536..97681ad4ee151536fc1088f8cceb485d
  }
  
 diff --git a/components/feature_engagement/public/feature_constants.cc b/components/feature_engagement/public/feature_constants.cc
-index 8a243a2d93ba80a09a8775da33b8a74db0f3fef8..04c0823c59c5b62e2b854e7960d684ab3e2267c3 100644
+index 8a243a2d93ba80a09a8775da33b8a74db0f3fef8..93e449c4b564ea228a07d65e8e0e000cac060fd5 100644
 --- a/components/feature_engagement/public/feature_constants.cc
 +++ b/components/feature_engagement/public/feature_constants.cc
 @@ -32,7 +32,7 @@ bool IsOnDeviceStorageEnabled() {
@@ -33368,8 +33898,17 @@ index 8a243a2d93ba80a09a8775da33b8a74db0f3fef8..04c0823c59c5b62e2b854e7960d684ab
  
  #if BUILDFLAG(IS_CHROMEOS)
  BASE_FEATURE(kIPHGrowthFramework,
+@@ -1056,7 +1059,7 @@ BASE_FEATURE(kIPHLauncherSearchHelpUiFeature,
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ // This can be enabled by default, as the DesktopPWAsLinkCapturing
+ // flag is needed for the IPH linked to this feature to work, and
+ // use-cases to show the IPH are guarded by that flag.
 diff --git a/components/feature_engagement/public/feature_constants.h b/components/feature_engagement/public/feature_constants.h
-index 4615ef244bceeb89e82e104074875d86bbf99004..a020e00efe0066003a543f0414f53e25bd04a610 100644
+index 4615ef244bceeb89e82e104074875d86bbf99004..0627dfcc9696b056bc2761f74d7c469d012d4f15 100644
 --- a/components/feature_engagement/public/feature_constants.h
 +++ b/components/feature_engagement/public/feature_constants.h
 @@ -32,7 +32,7 @@ FEATURE_CONSTANTS_DECLARE_FEATURE(kIPHDemoMode);
@@ -33410,6 +33949,15 @@ index 4615ef244bceeb89e82e104074875d86bbf99004..a020e00efe0066003a543f0414f53e25
  
  #if BUILDFLAG(IS_CHROMEOS)
  FEATURE_CONSTANTS_DECLARE_FEATURE(kIPHGrowthFramework);
+@@ -475,7 +477,7 @@ FEATURE_CONSTANTS_DECLARE_FEATURE(kIPHLauncherSearchHelpUiFeature);
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ FEATURE_CONSTANTS_DECLARE_FEATURE(kIPHDesktopPWAsLinkCapturingLaunch);
+ FEATURE_CONSTANTS_DECLARE_FEATURE(kIPHDesktopPWAsLinkCapturingLaunchAppInTab);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
 diff --git a/components/feature_engagement/public/feature_list.cc b/components/feature_engagement/public/feature_list.cc
 index f7caaa062b79e6e1d897a6ded4e92438c2f32990..cec92b029303b49a47b22cf89e3c94f4c99beb89 100644
 --- a/components/feature_engagement/public/feature_list.cc
@@ -34239,6 +34787,22 @@ index ec07dabaa3d5f631e5961b050297e7317963439e..84cf4505501c4aeefa675feebcaf378a
    // Shows the bubble with the details of the `form`.
    virtual void OpenPasswordDetailsBubble(
        const password_manager::PasswordForm& form) = 0;
+diff --git a/components/password_manager_strings.grdp b/components/password_manager_strings.grdp
+index 9e68561526825cef2670938bdf075be8cda47137..d7cc64a2910bf0fe900668754f55d44b57353ece 100644
+--- a/components/password_manager_strings.grdp
++++ b/components/password_manager_strings.grdp
+@@ -205,6 +205,11 @@
+       You can turn Windows Hello on or off in <ph name="SETTINGS">$1<ex>Settings</ex></ph>
+     </message>
+   </if>
++  <if expr="is_aros">
++    <message name="IDS_PASSWORD_MANAGER_FILLING_REAUTH" desc="Prompt asking the user to authenticate before filling a password.">
++      Authenticate to fill your password on <ph name="APP_NAME">$1<ex>google.com</ex></ph>.
++    </message>
++  </if>
+   <if expr="is_macosx">
+     <message name="IDS_PASSWORD_MANAGER_FILLING_REAUTH" desc="Shown after 'Google Chrome is trying to ' (or in some languages, 'Google Chrome wants to ') in a dialog message. Text appears in the password autofill reauthentication popup, asking user to authenticate using biometric before filling.">
+       fill your password on <ph name="APP_NAME">$1<ex>google.com</ex></ph>
 diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
 index f331f4df78737cdef2b06fb5807ac3b4d59302b1..5184975559d6ea7a2d0406b7e4d0ee31e01f2d76 100644
 --- a/components/permissions/permission_request_manager.cc
@@ -41509,6 +42073,32 @@ index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182
      return;
    }
  
+diff --git a/device/fido/public/features.cc b/device/fido/public/features.cc
+index af12ed7dc0aee908f5e514f8610602ad30b772c9..922717289db93a97e6006f496a40057ee4f3e644 100644
+--- a/device/fido/public/features.cc
++++ b/device/fido/public/features.cc
+@@ -34,7 +34,7 @@ namespace device {
+ // comment.
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ // Not yet enabled by default.
+ BASE_FEATURE(kPasskeyUnlockErrorUi, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+diff --git a/device/fido/public/features.h b/device/fido/public/features.h
+index da970af027f6befebd9f04554188fa00df215960..4e7babc492907231f42191513c140d5dfce3295b 100644
+--- a/device/fido/public/features.h
++++ b/device/fido/public/features.h
+@@ -14,7 +14,7 @@
+ namespace device {
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ // Allows the passkey unlock error UI to be shown.
+ COMPONENT_EXPORT(FIDO_PUBLIC)
+ BASE_DECLARE_FEATURE(kPasskeyUnlockErrorUi);
 diff --git a/device/gamepad/BUILD.gn b/device/gamepad/BUILD.gn
 index 9a13ad94086fee48f0893efbc521fa00447b215e..68dee52472a9aea825237fa4d849afc138f089f9 100644
 --- a/device/gamepad/BUILD.gn
@@ -57795,10 +58385,21 @@ index 17ad224cc5fc9142c4d464571500c1fd6fef3a2d..307f3f3becf8fbf1c2cf5fc79b68dc8f
  {
    CmdExtract::Cmd=Cmd;
 diff --git a/third_party/unrar/src/os.hpp b/third_party/unrar/src/os.hpp
-index 6c82949f7a53d8f657206792deca63ca92297f9d..4c8754f38533fad9b0d979606f8f9fcc51fdeac6 100644
+index 6c82949f7a53d8f657206792deca63ca92297f9d..f91b9668944fa24e33766bd9acc73348ab6d0024 100644
 --- a/third_party/unrar/src/os.hpp
 +++ b/third_party/unrar/src/os.hpp
-@@ -184,7 +184,7 @@
+@@ -170,7 +170,9 @@
+ #endif
+ #endif  // CHROMIUM_UNRAR
+ 
+-#if defined(__aarch64__) && (defined(__ARM_FEATURE_CRYPTO) || defined(__ARM_FEATURE_CRC32))
++// AROS has no Linux auxiliary vector; retain portable CRC/AES until native
++// runtime CPU feature discovery is wired here. Compiler flags are not a probe.
++#if defined(__aarch64__) && !defined(__AROS__) && (defined(__ARM_FEATURE_CRYPTO) || defined(__ARM_FEATURE_CRC32))
+ #include <arm_neon.h>
+ #ifndef _APPLE
+ #include <sys/auxv.h>
+@@ -184,7 +186,7 @@
  #endif
  #endif
  
@@ -57807,7 +58408,7 @@ index 6c82949f7a53d8f657206792deca63ca92297f9d..4c8754f38533fad9b0d979606f8f9fcc
  #define SAVE_LINKS
  #endif
  
-@@ -235,7 +235,8 @@
+@@ -235,7 +237,8 @@
  #endif
  
  // Unlike Apple x64, utimensat shall be available in all Apple M1 systems.

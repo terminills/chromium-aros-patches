@@ -1,0 +1,26 @@
+{
+  "relay_job": "JOB-0252",
+  "relay_version": 14,
+  "reviewed_commit": "95d6c3b3368c5561528c0c3132906ea550ca2723",
+  "matches": [
+    {
+      "our_capture": "native-task23",
+      "prior": "removal95 at 8 CPUs",
+      "mechanism": "Wait owns tc_SpinLock, contends on TaskWait lock, KrnSpinLock calls SetTaskPri and reacquires own tc_SpinLock"
+    }
+  ],
+  "distinct_failures": [
+    {
+      "our_capture": "native-task22",
+      "mechanism": "two-node TaskRunning cycle in APICHeartbeatServer",
+      "comparison": "prior removal18 was a one-node TaskReady cycle; shared root cause is not proven"
+    }
+  ],
+  "diagnostic": "native-task24 removed priority lowering/restoration in private kernel; 4-CPU lifecycle still stalled. Source restored; baseline kernel rebuilt. No production fix accepted.",
+  "passing_scope": "native-task25: original kernel, 2 CPUs, 10 cycles, 80 native workers, 10 cross-task joiners. Not higher-core qualification.",
+  "prior_limits": [
+    "Combined candidate installs passed through 128 CPUs but full-count wakeup stress failed at16/64/128.",
+    "Current-master LightWave captures demonstrate scheduler-lock recursion even at2 CPUs.",
+    "Relocated original JOB-0252 raw captures unavailable after storage incident; reconstructed report is not raw-capture recovery."
+  ]
+}
