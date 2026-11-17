@@ -53,13 +53,14 @@ and native Rust std glue. Its standalone archive disables the allocator shim
 so the existing library allocation-ownership interface remains authoritative.
 See `aros-web/build/v8-native156.args.gn` for the validated build configuration.
 
-The native x86-64 QEMU probe passes JavaScript evaluation, separate globals in
-two isolates, and continued evaluation after destroying the other isolate;
-return code is 0. This is one application process, not proof of concurrent
-application lifecycle or CEF profile isolation. Library hash and scope are
-recorded in `evidence/v8-native156-validation.json`.
+The native x86-64 QEMU probe passes with two overlapping application processes
+using one resident library. Each creates two isolates with independent globals,
+requests cleanup while isolates remain live, and continues evaluating JavaScript.
+Application A exits while B remains active; both return 0. This is bounded V8
+lifecycle evidence, not CEF rendering or persisted profile isolation proof.
+Library hash and scope are recorded in `evidence/v8-native156-validation.json`.
 
-![Native V8 156 isolation probe](evidence/v8-native156-first.png)
+![Two native applications sharing V8 156](evidence/v8-native156-two-apps.png)
 
 ## Native Rust prerequisite
 

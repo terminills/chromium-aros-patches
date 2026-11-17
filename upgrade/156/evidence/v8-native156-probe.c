@@ -1,4 +1,5 @@
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include <proto/v8.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,8 +13,9 @@ static int eval(APTR isolate, APTR context, const char *script, const char *want
     fflush(stdout);
     return rc == 0 && strcmp(result, want) == 0;
 }
-int main(void) {
+int main(int argc, char **argv) {
     puts("JOB-0254 native V8 156 engine/isolation probe"); fflush(stdout);
+    printf("Application: %s\n", argc > 1 ? argv[1] : "single"); fflush(stdout);
     V8Base = OpenLibrary("v8.library", 1);
     if (!V8Base) { puts("FAIL: OpenLibrary"); return 10; }
     puts("Library opened"); fflush(stdout);
@@ -23,6 +25,10 @@ int main(void) {
     if (!a || !b) { puts("FAIL: isolates"); return 12; }
     APTR ca = V8CreateContext(a), cb = V8CreateContext(b);
     if (!ca || !cb) { puts("FAIL: contexts"); return 13; }
+    // Deliberately overlap separate processes in the shared-library test.
+    if (argc > 1) Delay(argv[1][0] == 'B' ? 150 : 50);
+    V8Cleanup();
+    puts("Cleanup requested with live isolates; evaluation must remain valid");
     int ok = eval(a, ca, "globalThis.privateValue = 42; privateValue", "42");
     ok &= eval(b, cb, "typeof privateValue", "undefined");
     ok &= eval(b, cb, "globalThis.privateValue = 7; privateValue", "7");

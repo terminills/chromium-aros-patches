@@ -4891,6 +4891,71 @@ index 61c9dfe1e3c3813cf3e0ad8fd37044ca74cd5c5b..6a34eed9d09a7d92bce86b01142aea68
        }
      }
    }
+diff --git a/base/files/file_path.rs b/base/files/file_path.rs
+index 40e4fdcf47c74f032bc449098fd948036672e0f2..894310d0f71bae9753c21565ee08c48e08a570e3 100644
+--- a/base/files/file_path.rs
++++ b/base/files/file_path.rs
+@@ -15,14 +15,14 @@ pub mod ffi {
+         #[namespace = "base"]
+         pub type FilePath;
+ 
+-        #[cfg(target_family = "unix")]
++        #[cfg(not(target_os = "windows"))]
+         fn CreateFilePathFromBytes(bytes: &[u8]) -> UniquePtr<FilePath>;
+-        #[cfg(target_family = "unix")]
++        #[cfg(not(target_os = "windows"))]
+         fn FilePathToBytes(path: &FilePath) -> &[u8];
+ 
+-        #[cfg(target_family = "windows")]
++        #[cfg(target_os = "windows")]
+         fn CreateFilePathFromWide(wide: &[u16]) -> UniquePtr<FilePath>;
+-        #[cfg(target_family = "windows")]
++        #[cfg(target_os = "windows")]
+         fn FilePathToWide(path: &FilePath) -> &[u16];
+     }
+ }
+@@ -43,13 +43,18 @@ impl ffi::FilePath {
+             use std::os::unix::ffi::OsStrExt;
+             ffi::CreateFilePathFromBytes(path.as_os_str().as_bytes())
+         }
++        #[cfg(target_os = "aros")]
++        {
++            // The pinned AROS std uses sys::os_str::bytes (all byte values).
++            ffi::CreateFilePathFromBytes(path.as_os_str().as_encoded_bytes())
++        }
+         #[cfg(windows)]
+         {
+             use std::os::windows::ffi::OsStrExt;
+             let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+             ffi::CreateFilePathFromWide(&wide)
+         }
+-        #[cfg(not(any(unix, windows)))]
++        #[cfg(not(any(unix, windows, target_os = "aros")))]
+         compile_error!("Unsupported platform for base::FilePath FFI");
+     }
+ 
+@@ -60,13 +65,20 @@ impl ffi::FilePath {
+             let bytes = ffi::FilePathToBytes(self);
+             PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()))
+         }
++        #[cfg(target_os = "aros")]
++        {
++            let bytes = ffi::FilePathToBytes(self).to_vec();
++            // SAFETY: AROS std uses the byte OsString representation, so every
++            // byte sequence is valid, including non-UTF-8 native file names.
++            PathBuf::from(unsafe { std::ffi::OsString::from_encoded_bytes_unchecked(bytes) })
++        }
+         #[cfg(windows)]
+         {
+             use std::os::windows::ffi::OsStringExt;
+             let wide = ffi::FilePathToWide(self);
+             PathBuf::from(std::ffi::OsString::from_wide(wide))
+         }
+-        #[cfg(not(any(unix, windows)))]
++        #[cfg(not(any(unix, windows, target_os = "aros")))]
+         compile_error!("Unsupported platform for base::FilePath FFI");
+     }
+ 
 diff --git a/base/files/file_path_unittest.cc b/base/files/file_path_unittest.cc
 index 598e3f187c7f6c942d0ccba6753141a16c8cd369..9592a25c1b95e99599187a8b0700b59c6f9919ee 100644
 --- a/base/files/file_path_unittest.cc
@@ -19315,6 +19380,29 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
        "//chrome/browser/sharing_hub",
        "//chrome/browser/sharing_hub:impl",
        "//chrome/browser/smart_card",
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+index 3bd06fa95993f6060b6b1992c66bbed30cdc2f1b..1932a2df84c0fd32a623b4f981dc39eca38d5eb2 100644
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -421,6 +421,7 @@
+ using flags_ui::FeatureEntry;
+ using flags_ui::kDeprecated;
+ using flags_ui::kOsAndroid;
++using flags_ui::kOsAros;
+ using flags_ui::kOsCrOS;
+ using flags_ui::kOsCrOSOwnerOnly;
+ using flags_ui::kOsFuchsia;
+@@ -432,8 +433,8 @@ namespace about_flags {
+ 
+ namespace {
+ 
+-const unsigned kOsAll = kOsMac | kOsWin | kOsLinux | kOsCrOS | kOsAndroid;
+-const unsigned kOsDesktop = kOsMac | kOsWin | kOsLinux | kOsCrOS;
++const unsigned kOsAll = kOsMac | kOsWin | kOsLinux | kOsCrOS | kOsAndroid | kOsAros;
++const unsigned kOsDesktop = kOsMac | kOsWin | kOsLinux | kOsCrOS | kOsAros;
+ 
+ #if defined(USE_AURA)
+ const unsigned kOsAura = kOsWin | kOsLinux | kOsCrOS;
 diff --git a/chrome/browser/ai/BUILD.gn b/chrome/browser/ai/BUILD.gn
 index b3a94400247d854d5c8c6c8a552f7a20e07880c4..ba411947aee21ff8cb4c3eb117e7faeb39117d16 100644
 --- a/chrome/browser/ai/BUILD.gn
@@ -30895,6 +30983,19 @@ index 766668f7f3a204f5c068a8ef9d3a095edf47b935..ace9802b71c727cab3af452417610a28
  #include <sys/mman.h>
  #endif
  
+diff --git a/components/autofill/core/browser/suggestions/suggestion.h b/components/autofill/core/browser/suggestions/suggestion.h
+index 4a2668e446243d5e6d95623b36ff47d1f0df7836..573a3316c64250f1525dfea33c6fba1bad685a14 100644
+--- a/components/autofill/core/browser/suggestions/suggestion.h
++++ b/components/autofill/core/browser/suggestions/suggestion.h
+@@ -293,7 +293,7 @@ struct Suggestion {
+   using IsLoading = base::StrongAlias<class IsLoadingTag, bool>;
+   using InstrumentId = base::StrongAlias<class InstrumentIdTag, uint64_t>;
+   // TODO(crbug.com/477689220): Directly use BnplIssuer and remove the alias.
+-  using BnplIssuer = base::StrongAlias<class BnplIssuerTag, BnplIssuer>;
++  using BnplIssuer = base::StrongAlias<class BnplIssuerTag, autofill::BnplIssuer>;
+   using PromoCode = base::StrongAlias<class PromoCodeTag, std::string>;
+   using Payload = std::variant<Guid,
+                                InstrumentId,
 diff --git a/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc b/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc
 index 474e5c1fd663de0aa3e818678652a817675847fe..61aef71cb45a5f719862463e12cc17326e6e3c49 100644
 --- a/components/autofill/core/browser/webdata/addresses/address_autofill_table.cc
@@ -31958,6 +32059,21 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..ccfc464c2328bee86473e38dedc08153
    return metadata;
  }
  
+diff --git a/components/enterprise/BUILD.gn b/components/enterprise/BUILD.gn
+index 017c0cc8809f8f1b899124e21dd48acc34bcba09..58d04b784260e566dd13c922d814962d06da151c 100644
+--- a/components/enterprise/BUILD.gn
++++ b/components/enterprise/BUILD.gn
+@@ -5,7 +5,9 @@
+ import("//components/enterprise/buildflags/buildflags.gni")
+ 
+ config("extra_warnings") {
+-  cflags = [ "-Wshadow-field" ]
++  if (is_clang) {
++    cflags = [ "-Wshadow-field" ]
++  }
+ }
+ 
+ static_library("enterprise") {
 diff --git a/components/enterprise/buildflags/buildflags.gni b/components/enterprise/buildflags/buildflags.gni
 index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389695bcc3f 100644
 --- a/components/enterprise/buildflags/buildflags.gni
@@ -33483,6 +33599,20 @@ index 0c26172d8a43472387c40719a72f9b53bc48dda6..a91920ee81040f44aa74ecde5918e462
  #include "components/signin/public/base/device_id_helper.h"
  #include "components/signin/public/base/signin_client.h"
  #include "components/signin/public/base/signin_switches.h"
+diff --git a/components/signin/public/identity_manager/accounts_cookie_mutator.cc b/components/signin/public/identity_manager/accounts_cookie_mutator.cc
+index f6c3475d9516ec78285fc7dfa2178e78ddec106f..1bfa9c4780c0c1a181734373ab21a1a5a47e6f83 100644
+--- a/components/signin/public/identity_manager/accounts_cookie_mutator.cc
++++ b/components/signin/public/identity_manager/accounts_cookie_mutator.cc
+@@ -6,6 +6,9 @@
+ 
+ #include "build/build_config.h"
+ #include "components/signin/public/base/signin_buildflags.h"
++#if BUILDFLAG(ENABLE_DICE_SUPPORT)
++#include "components/signin/public/base/bound_session_oauth_multilogin_delegate.h"
++#endif
+ 
+ namespace signin {
+ 
 diff --git a/components/signin/public/webdata/token_service_table.cc b/components/signin/public/webdata/token_service_table.cc
 index b137139d3719cc4f257842883f310724ba073da9..2c9fa5c545ad93f830ef6dad051d144310822cd0 100644
 --- a/components/signin/public/webdata/token_service_table.cc
@@ -33522,6 +33652,19 @@ index 7bb1f5758b0a31fb5ad3e7620d5910e67088bf95..90a32bb4d2dc8b49697c0a46109e05df
 +      is_android || is_chromeos || is_ios || is_linux || is_mac || is_win ||
 +      is_aros
  }
+diff --git a/components/sync/service/device_statistics_tracker.h b/components/sync/service/device_statistics_tracker.h
+index 55904524dc929823d291cde108208d56781474e8..411d6d4fbb305aba826e2ccf644b0b36a6319652 100644
+--- a/components/sync/service/device_statistics_tracker.h
++++ b/components/sync/service/device_statistics_tracker.h
+@@ -290,7 +290,7 @@ class DeviceStatisticsTracker {
+   base::flat_map<GaiaId, std::unique_ptr<DeviceStatisticsRequest>> requests_;
+ 
+   class RequestFailed {};
+-  const RequestFailed kRequestFailed;
++  const RequestFailed kRequestFailed{};
+ 
+   // Results. This will have exactly one entry for every request that completed,
+   // successfully or not. On success, the value is the list of all valid other
 diff --git a/components/sync_device_info/BUILD.gn b/components/sync_device_info/BUILD.gn
 index 1f747b080e092acfff562dda62b1cfb3a2b06d76..dd270b12f480d7afa1016ab4c852d42d6c53d9c5 100644
 --- a/components/sync_device_info/BUILD.gn
@@ -33538,7 +33681,7 @@ index 1f747b080e092acfff562dda62b1cfb3a2b06d76..dd270b12f480d7afa1016ab4c852d42d
      sources += [ "local_device_info_util_fuchsia.cc" ]
    }
 diff --git a/components/sync_device_info/local_device_info_util.cc b/components/sync_device_info/local_device_info_util.cc
-index f57a6f5b1cae73ab8ddda2e998f08be7048a395e..b09bf56da45bbc12ccecbcbd101b29b171a0935f 100644
+index f57a6f5b1cae73ab8ddda2e998f08be7048a395e..d12fe84b9dba3cc7164166743d2663a4da3517d0 100644
 --- a/components/sync_device_info/local_device_info_util.cc
 +++ b/components/sync_device_info/local_device_info_util.cc
 @@ -93,6 +93,8 @@ DeviceInfo::DeviceType GetLocalDeviceType() {
@@ -33546,7 +33689,7 @@ index f57a6f5b1cae73ab8ddda2e998f08be7048a395e..b09bf56da45bbc12ccecbcbd101b29b1
  #elif BUILDFLAG(IS_LINUX)
    return DeviceInfo::DeviceType::kLinux;
 +#elif BUILDFLAG(IS_AROS)
-+  return sync_pb::SyncEnums_DeviceType_TYPE_OTHER;
++  return DeviceInfo::DeviceType::kOther;
  #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
    switch (ui::GetDeviceFormFactor()) {
      case ui::DEVICE_FORM_FACTOR_TABLET:
@@ -33580,6 +33723,22 @@ index 0000000000000000000000000000000000000000..7ff467caa9bc61499fa802fb098c33fe
 +}
 +
 +}  // namespace syncer
+diff --git a/components/trusted_vault/trusted_vault_connection_impl.cc b/components/trusted_vault/trusted_vault_connection_impl.cc
+index 24311816188aec2723499a227b0c91568ba4f3f5..518e6b78fe4fe8c3a9ee01c1dc2a6fcddf238b64 100644
+--- a/components/trusted_vault/trusted_vault_connection_impl.cc
++++ b/components/trusted_vault/trusted_vault_connection_impl.cc
+@@ -115,8 +115,9 @@ GetLocalPhysicalDeviceType() {
+   return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_MAC_OS;
+ #elif BUILDFLAG(IS_WIN)
+   return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_WINDOWS;
+-#elif BUILDFLAG(IS_FUCHSIA)
+-  // Not used in Fuchsia.
++#elif BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
++  // The server protocol has no AROS enum. Report unknown without disabling
++  // account authentication or trusted-vault operations.
+   return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_UNKNOWN;
+ #else
+ #error Please handle your new device OS here.
 diff --git a/components/update_client/update_query_params.cc b/components/update_client/update_query_params.cc
 index b865f09a022cc39019911f56e4de0c04e5b6c35a..b064a004351cc868c17030d80962ce6095869cae 100644
 --- a/components/update_client/update_query_params.cc
@@ -34633,6 +34792,39 @@ index 42ff3be6c35c192e1db119f695ae6ab89eb086f2..184f803ff50f187533ca6ba0a0cc4052
         "components/webapps/isolated_web_apps are no-op on Android or iOS.")
  
  source_set("test_support") {
+diff --git a/components/webui/flags/flags_state.cc b/components/webui/flags/flags_state.cc
+index 1d89b275465b8faf79aac2c087a00a84aa62c175..ff4bd21ac649612ab554fe90de1e7a591bfe82d0 100644
+--- a/components/webui/flags/flags_state.cc
++++ b/components/webui/flags/flags_state.cc
+@@ -79,6 +79,7 @@ const struct {
+     {kOsLinux, "Linux"},     {kOsCrOS, "ChromeOS"},
+     {kOsAndroid, "Android"}, {kOsCrOSOwnerOnly, "ChromeOS (owner only)"},
+     {kOsIos, "iOS"},         {kOsFuchsia, "Fuchsia"},
++    {kOsAros, "AROS"},
+ };
+ 
+ // Adds a |StringValue| to |list| for each platform where |bitmask| indicates
+@@ -799,6 +800,8 @@ unsigned short FlagsState::GetCurrentPlatform() {
+   return kOsAndroid;
+ #elif BUILDFLAG(IS_FUCHSIA)
+   return kOsFuchsia;
++#elif BUILDFLAG(IS_AROS)
++  return kOsAros;
+ #else
+ #error Unknown platform
+ #endif
+diff --git a/components/webui/flags/flags_state.h b/components/webui/flags/flags_state.h
+index e4affc527db60fbc42f383620de539301adb428c..f04d309f2cad8969c4ebba8dc633d84ea738cab0 100644
+--- a/components/webui/flags/flags_state.h
++++ b/components/webui/flags/flags_state.h
+@@ -49,6 +49,7 @@ enum {
+   kOsIos = 1 << 6,
+   kOsFuchsia = 1 << 7,
+   kOsWebView = 1 << 8,
++  kOsAros = 1 << 11,
+ 
+   kDeprecated = 1 << 9,
+ 
 diff --git a/components/webui/version/BUILD.gn b/components/webui/version/BUILD.gn
 index 2193019afd18eac09e7812737dc2de3533c2f404..42ec99b0a4673f9ba7c8bbd568a18fa888efe96e 100644
 --- a/components/webui/version/BUILD.gn
@@ -48229,6 +48421,19 @@ index b6eccdade4f4d6d72acc975b097843e7f64b003a..9826a8f27911145478357b9d366e23a0
    return g_broker_services->GetPolicyDiagnostics(std::move(receiver));
  }
  
+diff --git a/services/data_decoder/xml/dom_builder.h b/services/data_decoder/xml/dom_builder.h
+index 6271857b1ef617fce72a93a5ec18947aec67590d..56e0b125e77202ff4f16a862f11ce87364419dd6 100644
+--- a/services/data_decoder/xml/dom_builder.h
++++ b/services/data_decoder/xml/dom_builder.h
+@@ -5,6 +5,8 @@
+ #ifndef SERVICES_DATA_DECODER_XML_DOM_BUILDER_H_
+ #define SERVICES_DATA_DECODER_XML_DOM_BUILDER_H_
+ 
++#include <memory>
++
+ #include "third_party/rust/cxx/v1/cxx.h"
+ 
+ namespace data_decoder::xml {
 diff --git a/services/device/battery/battery_status_manager_default.cc b/services/device/battery/battery_status_manager_default.cc
 index 4133862debda69dbc080df73ae95ccd89e41739a..560d6fa90f4c86b4c13bfcc76543a5d8455e62e9 100644
 --- a/services/device/battery/battery_status_manager_default.cc
@@ -49700,6 +49905,35 @@ index 763ed71b7099a345c6342c6ac083f6f4e9bda4de..a180020fe4c008337077f545b29097ca
  }
  
  #endif  // !BUILDFLAG(IS_FUCHSIA)
+diff --git a/storage/browser/file_system/copy_or_move_hook_delegate_composite.cc b/storage/browser/file_system/copy_or_move_hook_delegate_composite.cc
+index b1bc0d672b686a94b1529dbbbf7b478a6d070ba4..cf7bd0ad62420eb29744e95a3b28f123c4ee53ab 100644
+--- a/storage/browser/file_system/copy_or_move_hook_delegate_composite.cc
++++ b/storage/browser/file_system/copy_or_move_hook_delegate_composite.cc
+@@ -86,7 +86,8 @@ CopyOrMoveHookDelegateComposite::CreateOrAdd(
+   DCHECK(parent != nullptr) << "parent must not be null";
+   DCHECK(child != nullptr) << "child must not be null";
+   auto composite =
+-      std::make_unique<CopyOrMoveHookDelegateComposite>(std::move(parent));
++      std::unique_ptr<CopyOrMoveHookDelegateComposite>(
++          new CopyOrMoveHookDelegateComposite(std::move(parent)));
+   composite->Add(std::move(child));
+   return std::move(composite);
+ }
+diff --git a/storage/browser/file_system/copy_or_move_hook_delegate_composite.h b/storage/browser/file_system/copy_or_move_hook_delegate_composite.h
+index 736ac5a05ca9cd7ba64e3a150d405efefb77ff94..f2b774a9f7b4edd369be3fdaeafe16e4d7d6756b 100644
+--- a/storage/browser/file_system/copy_or_move_hook_delegate_composite.h
++++ b/storage/browser/file_system/copy_or_move_hook_delegate_composite.h
+@@ -67,10 +67,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) CopyOrMoveHookDelegateComposite
+ 
+   void Add(std::unique_ptr<CopyOrMoveHookDelegate> delegate);
+ 
+-  friend std::unique_ptr<CopyOrMoveHookDelegateComposite>
+-  std::make_unique<CopyOrMoveHookDelegateComposite>(
+-      std::unique_ptr<CopyOrMoveHookDelegate>&&);
+-
+   std::vector<std::unique_ptr<CopyOrMoveHookDelegate>> delegates_;
+ };
+ 
 diff --git a/third_party/abseil-cpp/absl/base/BUILD.gn b/third_party/abseil-cpp/absl/base/BUILD.gn
 index 65447916b3762e3c2a032155d3f49574a2dbbac0..64c9b591f73e5b47b82e26584ab8281b08fb8d8b 100644
 --- a/third_party/abseil-cpp/absl/base/BUILD.gn
@@ -50884,6 +51118,119 @@ index 4efed3c45360ce84285711d4c6ee3042ab07116b..b63afe930c740b4daa062c91aed1e189
    } else {
      EnsureMutableInvalidationSet(
          invalidation_set->GetType(),
+diff --git a/third_party/blink/renderer/core/css/parser/css_parser_impl.cc b/third_party/blink/renderer/core/css/parser/css_parser_impl.cc
+index ddcaaa95027173113d9eb4d11fa7e6fff51476b5..6f3ca4bb18dd24f3c0b7f199ffce9aaf6ec1ea59 100644
+--- a/third_party/blink/renderer/core/css/parser/css_parser_impl.cc
++++ b/third_party/blink/renderer/core/css/parser/css_parser_impl.cc
+@@ -1279,8 +1279,8 @@ StyleRuleBase* CSSParserImpl::CreateDeclarationsRule(
+ 
+   // Create a nested declarations rule containing all declarations from
+   // start_index to the end.
+-  HeapVector<CSSPropertyValue, 64> declarations(
+-      base::span(parsed_properties_).subspan(start_index));
++  HeapVector<CSSPropertyValue, 64> declarations{
++      base::span(parsed_properties_).subspan(start_index)};
+ 
+   // Create the selector for StyleRuleNestedDeclarations's inner StyleRule.
+ 
+@@ -2590,7 +2590,7 @@ StyleRuleResult* CSSParserImpl::ConsumeResultRule(
+   // Clone(), which changes all the parent references to @apply's parent.
+   fake_parent_rule->EnsureChildRules();
+   return MakeGarbageCollected<StyleRuleResult>(
+-      HeapVector{std::move(*fake_parent_rule->ChildRules())});
++      HeapVector<Member<StyleRuleBase>>(std::move(*fake_parent_rule->ChildRules())));
+ }
+ 
+ // Parses one variable declared inside a @private block e.g. `--foo: 10px` or
+@@ -2792,7 +2792,7 @@ StyleRuleApplyMixin* CSSParserImpl::ConsumeApplyMixinRule(
+   fake_parent_rule->EnsureChildRules();
+   return MakeGarbageCollected<StyleRuleApplyMixin>(
+       name, std::move(arguments),
+-      HeapVector{std::move(*fake_parent_rule->ChildRules())});
++      HeapVector<Member<StyleRuleBase>>(std::move(*fake_parent_rule->ChildRules())));
+ }
+ 
+ StyleRuleContentsStatement* CSSParserImpl::ConsumeContentsRule(
+@@ -2829,7 +2829,7 @@ StyleRuleContentsStatement* CSSParserImpl::ConsumeContentsRule(
+   StyleRule* fake_parent_rule = ConsumeDeclarationListForMixins(stream);
+   fake_parent_rule->EnsureChildRules();
+   return MakeGarbageCollected<StyleRuleContentsStatement>(
+-      HeapVector{std::move(*fake_parent_rule->ChildRules())});
++      HeapVector<Member<StyleRuleBase>>(std::move(*fake_parent_rule->ChildRules())));
+ }
+ 
+ // Parse the parameters of a CSS function: Zero or more comma-separated
+diff --git a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
+index 9f7f69c8bdbf456c9c3fe81a4cacb7ef6243740d..0863970fc46be25693ccec400a1b30314d361ce5 100644
+--- a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
++++ b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
+@@ -2680,7 +2680,7 @@ GapDataList<T> ConvertGapDecorationDataList(const StyleResolverState& state,
+   }
+ 
+   typename GapDataList<T>::GapDataVector gap_data_list(
+-      base::span(values), [&](const CSSValue* curr_value) {
++      (base::span(values)), [&](const CSSValue* curr_value) {
+         if (auto* gap_repeat_value =
+                 DynamicTo<cssvalue::CSSRepeatValue>(curr_value)) {
+           typename ValueRepeater<T>::VectorType gap_values(
+@@ -2777,7 +2777,7 @@ ShadowList* StyleBuilderConverter::ConvertShadowList(StyleResolverState& state,
+   }
+ 
+   const auto& list = To<CSSValueList>(value);
+-  ShadowDataVector shadows(base::span(list), [&state](const CSSValue* item) {
++  ShadowDataVector shadows((base::span(list)), [&state](const CSSValue* item) {
+     return ConvertShadow(state.CssToLengthConversionData(), &state, *item);
+   });
+ 
+diff --git a/third_party/blink/renderer/core/css/style_scope.cc b/third_party/blink/renderer/core/css/style_scope.cc
+index 65c73be5339131b213bb7ab20712e6b70757c9e8..e05e3a77510d361a6403836209517bca72013a17 100644
+--- a/third_party/blink/renderer/core/css/style_scope.cc
++++ b/third_party/blink/renderer/core/css/style_scope.cc
+@@ -18,7 +18,7 @@ StyleScope::StyleScope(StyleRule* from, CSSSelectorList* to)
+     : from_(from), to_(to) {}
+ 
+ StyleScope::StyleScope(const StyleScope& other)
+-    : from_(other.from_ ? To<StyleRule>(other.from_->Clone(
++    : from_(other.from_ ? blink::To<StyleRule>(other.from_->Clone(
+                               /*new_parent=*/nullptr,
+                               /*mixin_parameter_bindings=*/nullptr))
+                         : nullptr),
+@@ -33,7 +33,7 @@ StyleScope* StyleScope::CopyWithParent(const StyleScope* parent) const {
+ 
+ const StyleScope* StyleScope::Clone(StyleRule* new_parent) const {
+   StyleRule* reparented_from =
+-      from_ ? blink::To<StyleRule>(from_->Clone(
++      from_ ? blink::blink::To<StyleRule>(from_->Clone(
+                   new_parent, /*mixin_parameter_bindings=*/nullptr))
+             : nullptr;
+   // Note that for the "to" selector, any '&' selectors must point
+diff --git a/third_party/blink/renderer/core/dom/node_rare_data.h b/third_party/blink/renderer/core/dom/node_rare_data.h
+index ee97bc28a0061959540f40926cf2b8e2bd49d4cf..7c5fb70d6074440230361d210c101cefa9043fef 100644
+--- a/third_party/blink/renderer/core/dom/node_rare_data.h
++++ b/third_party/blink/renderer/core/dom/node_rare_data.h
+@@ -534,8 +534,8 @@ class CORE_EXPORT NodeRareData final : public GarbageCollected<NodeRareData> {
+     flags_.was_last_focus_from_user_gesture = value;
+   }
+ 
+-  RareDataUpdate<OverscrollAreaTracker> EnsureOverscrollAreaTracker(Element*);
+-  OverscrollAreaTracker* OverscrollAreaTracker() const;
++  RareDataUpdate<blink::OverscrollAreaTracker> EnsureOverscrollAreaTracker(Element*);
++  blink::OverscrollAreaTracker* OverscrollAreaTracker() const;
+ 
+   void Trace(Visitor*) const;
+ 
+diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
+index 124d82576b41e79c8a628dc1881ff8839a21bfc8..1d5482b8a043ec2f84fc8aa5059ed35d37ee3cce 100644
+--- a/third_party/blink/renderer/core/execution_context/execution_context.h
++++ b/third_party/blink/renderer/core/execution_context/execution_context.h
+@@ -31,6 +31,7 @@
+ #include <memory>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/notreached.h"
+ #include "net/storage_access_api/status.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
 diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
 index 83f427c5ec9b75cbf41935af9935f9fa293ea11c..771c789a45cbdbc2623fae3966dba5f06e47ac8d 100644
 --- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
@@ -52921,6 +53268,31 @@ index 660e966c1d3db1f441d458b8961ff83072086d3b..59885ff3c18864cbc0221b6b58f3393d
  Thread* Thread::Current() {
    return current_thread;
  }
+diff --git a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
+index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..f8e5bb936a3cb93a314f50acb66b4b42e0677dbd 100644
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
+@@ -1018,6 +1018,7 @@ void MainThreadSchedulerImpl::WillBeginFrame(const viz::BeginFrameArgs& args) {
+                               time_now);
+       break;
+     default:
++      break;
+   }
+   // Calls ::ApplyPerformanceState if something's changed.
+   performance_helper_.Check(time_now);
+diff --git a/third_party/blink/renderer/platform/weborigin/kurl.cc b/third_party/blink/renderer/platform/weborigin/kurl.cc
+index ba55faf452c2620a5c86ab4b3b09b14ff981e881..9fd5a6173d59f8526f6549b064295fc34eeb175f 100644
+--- a/third_party/blink/renderer/platform/weborigin/kurl.cc
++++ b/third_party/blink/renderer/platform/weborigin/kurl.cc
+@@ -786,7 +786,7 @@ String DecodeUrlEscapeSequences(const StringView& string, DecodeUrlMode mode) {
+ String EncodeWithUrlEscapeSequences(const StringView& not_encoded_string) {
+   std::string utf8 =
+       Utf8Encoding().Encode(not_encoded_string, UnencodableHandling::kNone);
+-  String escaped(base::span(url::UriComponentEncoder(utf8).view()));
++  String escaped{base::span(url::UriComponentEncoder(utf8).view())};
+   // Unescape '/'; it's safe and much prettier.
+   escaped.Replace("%2F", "/");
+   return escaped;
 diff --git a/third_party/blink/renderer/platform/wtf/BUILD.gn b/third_party/blink/renderer/platform/wtf/BUILD.gn
 index f0b99b5e06376a511fa676dc3e6541561fe36e5b..f322cc9da37cbc6894a4600201693666e0008d94 100644
 --- a/third_party/blink/renderer/platform/wtf/BUILD.gn
