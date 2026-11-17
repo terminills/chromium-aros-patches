@@ -74,6 +74,13 @@ first application's exit, and measured incremental RAM for additional apps.
 Library packaging alone is insufficient. Native worker integration, direct
 Exec stack-bound queries and opt-in `AROS_V8_MEMORY_TRACE` allocation diagnostics
 are in the current snapshot; their full-engine runtime verification is pending.
+The AROS-only non-compressed V8 heap now holds a reference to a shared code
+arena instead of reserving one arena per isolate. Its page allocator is engine
+owned, and the last isolate releases the arena. The modified heap cross-compiles
+with actual GN flags on x86-64 and AArch64; the warmed-code multi-app runtime
+probe is prepared but has not yet passed. This is a candidate fix, not a measured
+memory improvement.
+
 Use two cores for current native qualification; higher-core AROS scheduler
 issues remain separate follow-up work.
 

@@ -1716,6 +1716,61 @@ index 941ae31148b4691d425870ec8a66b2cb8a560d5e..ee5fcd16285cc9437cc43d82a7405874
  
   private:
    FlagUpdater() = delete;
+diff --git a/src/heap/heap.cc b/src/heap/heap.cc
+index 420c631486d5cc82d991164b776d07265f1a01dc..a72fee746a79dcd52f299586b4a2a6eddcdf9e16 100644
+--- a/src/heap/heap.cc
++++ b/src/heap/heap.cc
+@@ -5779,7 +5779,7 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
+ 
+   v8::PageAllocator* code_page_allocator;
+   if (isolate_->RequiresCodeRange() || code_range_size_ != 0) {
+-    const size_t requested_size =
++    [[maybe_unused]] const size_t requested_size =
+         code_range_size_ == 0 ? kMaximalCodeRangeSize : code_range_size_;
+     // When a target requires the code range feature, we put all code objects in
+     // a contiguous range of virtual address space, so that they can call each
+@@ -5788,6 +5788,26 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
+     // When pointer compression is enabled, isolates in the same group share the
+     // same CodeRange, owned by the IsolateGroup.
+     code_range_ = isolate_->isolate_group()->EnsureCodeRange(requested_size);
++#elif V8_OS_AROS
++    // Without pointer compression upstream reserves a code arena per isolate.
++    // On native AROS those reservations consume physical RAM. Use one arena
++    // for the resident engine; allocations within it remain isolate-owned.
++    // BoundedPageAllocator already serializes allocation/free operations.
++    // Use the platform allocator, whose lifetime is independent of the first
++    // app's custom isolate allocator, and release the arena after its last user.
++    static base::Mutex shared_code_range_mutex;
++    static std::weak_ptr<CodeRange> shared_code_range;
++    base::MutexGuard shared_guard(&shared_code_range_mutex);
++    code_range_ = shared_code_range.lock();
++    if (!code_range_) {
++      code_range_ = std::make_shared<CodeRange>();
++      if (!code_range_->InitReservation(GetPlatformPageAllocator(),
++                                        kMaximalCodeRangeSize, false)) {
++        V8::FatalProcessOutOfMemory(
++            isolate_, "Failed to allocate shared AROS CodeRange");
++      }
++      shared_code_range = code_range_;
++    }
+ #else
+     // Otherwise, each isolate has its own CodeRange, owned by the heap.
+     code_range_ = std::make_unique<CodeRange>();
+diff --git a/src/heap/heap.h b/src/heap/heap.h
+index 39e2304d2a2e3004da60f7a9ca4a37bd70b65cca..21aeb5e01a198b846ff2bf6f44888d5d792d3dad 100644
+--- a/src/heap/heap.h
++++ b/src/heap/heap.h
+@@ -2307,6 +2307,10 @@ class Heap final {
+   // the heap.
+ #ifdef V8_COMPRESS_POINTERS
+   CodeRange* code_range_ = nullptr;
++#elif V8_OS_AROS
++  // Exec's shared address space lets independent isolates use one code arena.
++  // Reference ownership keeps it alive when the first application exits.
++  std::shared_ptr<CodeRange> code_range_;
+ #else
+   std::unique_ptr<CodeRange> code_range_;
+ #endif
 diff --git a/src/heap/mark-compact.cc b/src/heap/mark-compact.cc
 index 6712456d29aa5a7032bd7280b141853d476c6de3..d91e25b706d2893afcb29c04978bfcc13f7316bf 100644
 --- a/src/heap/mark-compact.cc
