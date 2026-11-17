@@ -21,6 +21,19 @@ Full engine builds, multiple-app/profile isolation, lifecycle, graphics and CDM
 runtime validation are still required. No performance or conformance claim is
 made by publishing these prerequisites.
 
+## Chromium-local memory mapping compatibility
+
+The AROS SDK must not implement `mmap` for this port. Keep compatibility in
+Chromium's AROS file/cache adapters and its bundled dependency patches, gated
+to AROS. XNNPACK selects its heap fallback and TensorFlow Lite uses explicit
+file reads. These fallbacks are not general POSIX shared mappings and must not
+advertise shared visibility, demand paging or page-discard support that they
+cannot provide. Shared-memory IPC continues to use the native Chromium AROS
+shared-memory adapter. Preserve the allocator's on-demand 2 MiB policy.
+
+This is a port constraint, not a request to add SDK headers, libc symbols or
+an SDK-wide mmap emulation layer.
+
 ## Native Rust prerequisite
 
 `rust/std-aros.patch` adapts the existing AROS standard library port to the
