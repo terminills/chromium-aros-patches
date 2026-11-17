@@ -1,0 +1,18 @@
+{
+  "status": "native x86-64 probe PASS, not CEF/profile conformance",
+  "library_sha256": "d580f85b9a345b881e8d956e1b7f04fec7ea20847ca655ceae54b899bd3a5fce",
+  "aros_web_commit": "b686f86",
+  "toolchain": "GCC 16.2.0 / Binutils 2.47",
+  "runtime": "AROS x86-64 SMP QEMU/KVM 2 CPUs 4 GiB",
+  "checks": [
+    "JavaScript evaluation",
+    "two isolates with separate globals",
+    "second-isolate teardown preserves first-isolate evaluation"
+  ],
+  "exit_code": 0,
+  "limitations": [
+    "One application process, not concurrent application lifecycle",
+    "No CEF rendering or profile persistence proof",
+    "AArch64 runtime untested"
+  ]
+}

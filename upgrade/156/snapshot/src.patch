@@ -15903,10 +15903,10 @@ index 0000000000000000000000000000000000000000..6acabae06c0a272f2629a3ee2047721b
 +}
 diff --git a/build/config/aros/v8_library/BUILD.gn b/build/config/aros/v8_library/BUILD.gn
 new file mode 100644
-index 0000000000000000000000000000000000000000..7978b07ee7235a692e996226da04f8deb045cc28
+index 0000000000000000000000000000000000000000..bc9f36b7602a9771fe1b5d3e72643610ab0d0639
 --- /dev/null
 +++ b/build/config/aros/v8_library/BUILD.gn
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,56 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -15922,6 +15922,8 @@ index 0000000000000000000000000000000000000000..7978b07ee7235a692e996226da04f8de
 +  outputs = [ _generated_imports ]
 +
 +  args = [
++    "--cpu",
++    current_cpu,
 +    "--manifest",
 +    rebase_path(inputs[0], root_build_dir),
 +    "--output",
@@ -15963,16 +15965,16 @@ index 0000000000000000000000000000000000000000..7978b07ee7235a692e996226da04f8de
 +}
 diff --git a/build/config/aros/v8_library/generate_v8_imports.py b/build/config/aros/v8_library/generate_v8_imports.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2f1e6e77a340f0faaafb59f0d80355cff0e549a6
+index 0000000000000000000000000000000000000000..211a5dfb231c5600ff0546ef7980e4cac5c3605f
 --- /dev/null
 +++ b/build/config/aros/v8_library/generate_v8_imports.py
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,259 @@
 +#!/usr/bin/env python3
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
 +
-+"""Generates the x86-64 AROS import trampolines for v8.library."""
++"""Generates the x86-64 and AArch64 AROS import trampolines for v8.library."""
 +
 +import argparse
 +import pathlib
@@ -16180,15 +16182,48 @@ index 0000000000000000000000000000000000000000..2f1e6e77a340f0faaafb59f0d80355cf
 +    return "\n".join(lines)
 +
 +
++def _emit_arm64(symbols: list[str]) -> str:
++    # AAPCS64: preserve x0-x7 arguments, x8 indirect-result address, LR and
++    # the full SIMD argument registers. The original stack arguments stay put.
++    lines = [".text", ".p2align 4", ".type ArosV8ImportSlowPath, %function",
++             "ArosV8ImportSlowPath:", "sub sp, sp, #208"]
++    for n in range(0, 8, 2):
++        lines.append(f"stp x{n}, x{n+1}, [sp, #{n*8}]")
++    lines += ["stp x8, x30, [sp, #64]"]
++    for n in range(0, 8, 2):
++        lines.append(f"stp q{n}, q{n+1}, [sp, #{80+n*16}]")
++    lines += ["mov x0, x17", "ldr x16, .Lresolver", "blr x16", "mov x16, x0"]
++    for n in range(0, 8, 2):
++        lines.append(f"ldp q{n}, q{n+1}, [sp, #{80+n*16}]")
++    lines += ["ldp x8, x30, [sp, #64]"]
++    for n in range(0, 8, 2):
++        lines.append(f"ldp x{n}, x{n+1}, [sp, #{n*8}]")
++    lines += ["add sp, sp, #208", "br x16", ".p2align 3",
++              ".Lresolver: .quad ArosResolveV8Import"]
++    for index, symbol in enumerate(symbols):
++        lines += [".p2align 4", f".globl {symbol}", f".type {symbol}, %function",
++                  f"{symbol}:", f"ldr x16, .Lslot_{index}", "ldr x16, [x16]",
++                  "br x16", f".size {symbol}, .-{symbol}", ".p2align 3",
++                  f".Lslot_{index}: .quad g_v8_import_slots+{index*8}",
++                  f".Lslow_{index}:", f"mov x17, #{index}",
++                  "b ArosV8ImportSlowPath"]
++    # Pointer tables and string/data exports have the same 64-bit layout.
++    data = _emit(symbols).split("        .section .rodata", 1)[1]
++    return "\n".join(lines) + "\n.section .rodata" + data.replace("@object", "%object").replace("@progbits", "%progbits")
++
++
 +def main() -> None:
 +    parser = argparse.ArgumentParser()
 +    parser.add_argument("--manifest", required=True, type=pathlib.Path)
 +    parser.add_argument("--output", required=True, type=pathlib.Path)
++    parser.add_argument("--cpu", choices=("x64", "arm64"), default="x64")
 +    args = parser.parse_args()
 +
 +    symbols = _read_manifest(args.manifest)
 +    args.output.parent.mkdir(parents=True, exist_ok=True)
-+    args.output.write_text(_emit(symbols), encoding="utf-8")
++    args.output.write_text(
++        _emit_arm64(symbols) if args.cpu == "arm64" else _emit(symbols),
++        encoding="utf-8")
 +
 +
 +if __name__ == "__main__":
@@ -17376,10 +17411,10 @@ index 5bf12985967830b252e22c6d7ab4f8f8535f9bf6..e743bf4ef8126dc0a5a7e0e6e53dc983
      "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/../../backtrace/src/backtrace/mod.rs",
 diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
 new file mode 100644
-index 0000000000000000000000000000000000000000..28af6965d2c7a05973a1e928cfe8fdd317c7bcfb
+index 0000000000000000000000000000000000000000..7ff4eec570c53270c4b9de8a7eca0e17d7dbde22
 --- /dev/null
 +++ b/build/toolchain/aros/BUILD.gn
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,117 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -17394,6 +17429,7 @@ index 0000000000000000000000000000000000000000..28af6965d2c7a05973a1e928cfe8fdd3
 +
 +# The C++ allocation operators, in the order they appear in
 +# //base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_override_cpp_symbols.h.
++if (use_allocator_shim) {
 +_cpp_allocation_operators = [
 +  "_Znwm",
 +  "_ZdlPv",
@@ -17416,6 +17452,7 @@ index 0000000000000000000000000000000000000000..28af6965d2c7a05973a1e928cfe8fdd3
 +  "_ZdaPvmSt11align_val_t",
 +  "_ZdaPvSt11align_val_tRKSt9nothrow_t",
 +]
++}
 +
 +assert(aros_toolchain_root != "",
 +       "Set aros_toolchain_root to the AROS cross-toolchain directory.")
@@ -17586,6 +17623,18 @@ index 8bcba3e3f871dfe90e4e98c8141349cea9bb3720..5bb3d746e005e2e674cf2655930a024b
      supported_versions = list(MSVS_VERSIONS.keys())
  
      # VS installed in depot_tools for Googlers
+diff --git a/cc/mojo_embedder/viz_layer_context.cc b/cc/mojo_embedder/viz_layer_context.cc
+index a01579c4776046c17b3c0e7059d19c99b35168df..d63446ffc2cf2ca2b944fac691b27980353897a8 100644
+--- a/cc/mojo_embedder/viz_layer_context.cc
++++ b/cc/mojo_embedder/viz_layer_context.cc
+@@ -1141,6 +1141,7 @@ void SerializeLayer(LayerImpl& layer,
+       }
+       default:
+         // TODO(zmo): handle other types of LayerImpl.
++        break;
+     }
+     wire.general_properties = std::move(general);
+   }
 diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
 index 25b03b8bdec8d36dcce9a7c36111b859f373b8e3..7eef7b632208d3fb3ca97e07132310bad9a7e1c7 100644
 --- a/cc/scheduler/scheduler_state_machine.cc
@@ -32533,6 +32582,18 @@ index 571b2bf8296a201e80efa496a34bee0e2984de08..3f7e3b870a54564ab1fd60c61ed3c2d8
  
    void SetForceEnableZoom(bool);
    void SetDeviceScaleFactor(float device_scale_factor);
+diff --git a/components/input/render_widget_host_view_input.cc b/components/input/render_widget_host_view_input.cc
+index 4ebd47831e743fce024ee76e68b1a0792a34f200..7475d03a53864d216b803616bd03635fa64c11b4 100644
+--- a/components/input/render_widget_host_view_input.cc
++++ b/components/input/render_widget_host_view_input.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "components/input/render_widget_host_view_input.h"
++#include "ui/events/gesture_detection/filtered_gesture_provider.h"
+ 
+ #include "base/notreached.h"
+ #include "components/input/render_widget_host_input_event_router.h"
 diff --git a/components/language/core/browser/locale_util.cc b/components/language/core/browser/locale_util.cc
 index aa43742055b04c70bcb60bd21f61897b3c6b79a6..e84f21ab963ccf6e54afcb659f5ceccdecbc9919 100644
 --- a/components/language/core/browser/locale_util.cc
@@ -39349,8 +39410,21 @@ index d86c7d7089483abbe19c88a81d8d40ef49cd4473..c44ec3cc4130ec1bf1fd16fcf286304b
  
    Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_texture;
  
+diff --git a/gpu/command_buffer/service/shared_image/shared_image_backing.h b/gpu/command_buffer/service/shared_image/shared_image_backing.h
+index 807038ad31429f2af0a52b634fb11373b1645fb8..651319688da9f81f05a7a2a575b4c57dd7048f1e 100644
+--- a/gpu/command_buffer/service/shared_image/shared_image_backing.h
++++ b/gpu/command_buffer/service/shared_image/shared_image_backing.h
+@@ -92,7 +92,7 @@ struct AccessParams {
+   AccessParams& operator=(const AccessParams&);
+   ~AccessParams();
+ 
+-  scoped_refptr<SharedContextState> context_state = nullptr;
++  scoped_refptr<SharedContextState> context_state;
+   wgpu::Device wgpu_device = nullptr;
+   // Other context types can be added here in the future.
+ };
 diff --git a/gpu/command_buffer/service/shared_image/shared_image_factory.cc b/gpu/command_buffer/service/shared_image/shared_image_factory.cc
-index 39c5e6b1fb3a51916c8e6d90e4db1abe1df87515..6de2d7425e99f6cf92d2f2dd6dfd6cd38f4fb01f 100644
+index 39c5e6b1fb3a51916c8e6d90e4db1abe1df87515..79cd710e40dd3afec77215d50f1b40ddb063a0a0 100644
 --- a/gpu/command_buffer/service/shared_image/shared_image_factory.cc
 +++ b/gpu/command_buffer/service/shared_image/shared_image_factory.cc
 @@ -69,7 +69,9 @@
@@ -39379,6 +39453,21 @@ index 39c5e6b1fb3a51916c8e6d90e4db1abe1df87515..6de2d7425e99f6cf92d2f2dd6dfd6cd3
  
  #if BUILDFLAG(ENABLE_VULKAN) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA))
    if (gr_context_type_ == GrContextType::kVulkan
+@@ -829,8 +833,14 @@ SharedImageFactory::CreateNativeGpuMemoryBufferHandle(
+   return IOSurfaceImageBackingFactory::CreateGpuMemoryBufferHandle(size,
+                                                                    format);
+ #elif BUILDFLAG(IS_OZONE)
++#if BUILDFLAG(IS_AROS)
++  // Native AROS currently presents through its Vulkan surface, without the
++  // native-pixmap allocation interface used by OzoneImageBackingFactory.
++  return {};
++#else
+   return OzoneImageBackingFactory::CreateGpuMemoryBufferHandle(
+       shared_image_manager_->vulkan_context_provider(), size, format, usage);
++#endif
+ #else
+   return D3DImageBackingFactory::CreateGpuMemoryBufferHandle(
+       shared_image_manager_->io_runner(), size, format, usage);
 diff --git a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc b/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
 index d98fbf736a363225a7f0a7d06d3727e0623efca7..3ba99ad405e1ba191996fa52fee5cea2f3f7230e 100644
 --- a/gpu/command_buffer/service/shared_image/shared_memory_image_backing.cc
@@ -39676,10 +39765,10 @@ index fafc2d9ec209882d20f6b2e849c7fc75cd9b9c37..968a496074bfa9c82ba00e0f86406294
    memory_tracker_ = CreateMemoryTracker();
 diff --git a/gpu/ipc/service/image_transport_surface_aros.cc b/gpu/ipc/service/image_transport_surface_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..ba878e62c2180347c4a557c6dfe0012ed0fe8be4
+index 0000000000000000000000000000000000000000..875b597fda4e86d9d069b165d8b51c09ed1028ed
 --- /dev/null
 +++ b/gpu/ipc/service/image_transport_surface_aros.cc
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,43 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -39687,6 +39776,7 @@ index 0000000000000000000000000000000000000000..ba878e62c2180347c4a557c6dfe0012e
 +#include "gpu/ipc/service/image_transport_surface.h"
 +
 +#include "build/build_config.h"
++#include "gpu/command_buffer/service/shared_context_state.h"
 +#include "ui/gl/gl_surface.h"
 +#include "ui/gl/gl_surface_stub.h"
 +#include "ui/gl/init/gl_factory.h"
@@ -39695,13 +39785,14 @@ index 0000000000000000000000000000000000000000..ba878e62c2180347c4a557c6dfe0012e
 +
 +// static
 +scoped_refptr<gl::Presenter> ImageTransportSurface::CreatePresenter(
-+    gl::GLDisplay* display,
++    scoped_refptr<SharedContextState> context_state,
 +    const GpuDriverBugWorkarounds& workarounds,
 +    const GpuFeatureInfo& gpu_feature_info,
 +    SurfaceHandle surface_handle) {
 +#if BUILDFLAG(IS_OZONE)
 +  if (surface_handle != kNullSurfaceHandle) {
-+    return gl::init::CreateSurfacelessViewGLSurface(display, surface_handle);
++    return gl::init::CreateSurfacelessViewGLSurface(context_state->display(),
++                                                 surface_handle);
 +  }
 +#endif
 +  return nullptr;
@@ -41356,10 +41447,10 @@ index 31c10e8ef8e273e2e976f43e35c1a1388228c676..40e762df953b88f61410dc01beacb5a1
      "//base",
 diff --git a/media/capture/video/aros/video_capture_device_factory_aros.cc b/media/capture/video/aros/video_capture_device_factory_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f2deaad60c208247b94f3e97402ea0e491290f4b
+index 0000000000000000000000000000000000000000..0d25d45d88ec7ecc9850fbd2d9c0586580f166ee
 --- /dev/null
 +++ b/media/capture/video/aros/video_capture_device_factory_aros.cc
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,233 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -41455,6 +41546,9 @@ index 0000000000000000000000000000000000000000..f2deaad60c208247b94f3e97402ea0e4
 +  VhiCaptureDevice(unsigned input, std::string name)
 +      : input_(input), name_(std::move(name)) {}
 +  ~VhiCaptureDevice() override { StopAndDeAllocate(); }
++  void InvalidateBuffers() override {
++    invalidate_buffers_.store(true, std::memory_order_relaxed);
++  }
 +  void AllocateAndStart(const VideoCaptureParams& params,
 +                        std::unique_ptr<Client> client) override {
 +    DCHECK(!thread_);
@@ -41505,6 +41599,9 @@ index 0000000000000000000000000000000000000000..f2deaad60c208247b94f3e97402ea0e4
 +                         frame->width == unsigned(size.width()) &&
 +                         frame->height == unsigned(size.height());
 +      if (valid && !stopped_.load(std::memory_order_relaxed)) {
++        // Serialize client invalidation with delivery on the capture thread.
++        if (invalidate_buffers_.exchange(false, std::memory_order_relaxed))
++          client_->InvalidateBuffers();
 +        const auto now = base::TimeTicks::Now();
 +        client_->OnIncomingCapturedData(
 +            base::span(static_cast<const uint8_t*>(frame->chunky),
@@ -41540,6 +41637,7 @@ index 0000000000000000000000000000000000000000..f2deaad60c208247b94f3e97402ea0e4
 +  const std::string name_;
 +  float fps_ = 30;
 +  std::atomic<bool> stopped_{false};
++  std::atomic<bool> invalidate_buffers_{false};
 +  std::unique_ptr<Client> client_;
 +  std::unique_ptr<base::DelegateSimpleThread> thread_;
 +};
@@ -45417,6 +45515,19 @@ index 72628416cf93fc80c36773ff51ecdf564586b170..52e19bf6dffb16405c64d176470fc341
  #elif BUILDFLAG(IS_ANDROID)
    if (num_platform_handles != 1) {
      return base::subtle::PlatformSharedMemoryRegion();
+diff --git a/mojo/public/tools/bindings/mojom.gni b/mojo/public/tools/bindings/mojom.gni
+index e5934d85804c0f166fb839718ee3f1d9d5427aea..2c87785cdb98727be0e887655a33c21ca2a31bd3 100644
+--- a/mojo/public/tools/bindings/mojom.gni
++++ b/mojo/public/tools/bindings/mojom.gni
+@@ -748,6 +748,8 @@ template("mojom") {
+     }
+     if (is_android) {
+       enabled_features += [ "is_android" ]
++    } else if (is_aros) {
++      enabled_features += [ "is_aros" ]
+     } else if (is_chromeos) {
+       enabled_features += [ "is_chromeos" ]
+     } else if (is_fuchsia) {
 diff --git a/net/BUILD.gn b/net/BUILD.gn
 index ba081007c657a63434ed1fefdfddcbb00b2b40e0..af6cbf6f924b2dc002545f7189bf68d65e1e76ed 100644
 --- a/net/BUILD.gn
@@ -50092,6 +50203,19 @@ index 0a10dd95413ad7fc333eec91c866d73339dd8c11..d1567ca02fe5583176669409f4c78b36
 +  bool resizable = true;
 +  bool transparent = false;
  };
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+index c147ff6f38d3bd2e5c39d8879f0288e98f47b688..e6a9acc588334ad13666a79c1459f0a094205ed7 100644
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -139,7 +139,7 @@ struct RendererPreferences {
+   // Whether or not caret browsing is enabled.
+   bool caret_browsing_enabled = false;
+ 
+-  [EnableIf=is_chromeos|is_linux]
++  [EnableIf=is_chromeos|is_linux|is_aros]
+   string system_font_family_name;
+ 
+   // The default system font settings for caption, small caption, menu and
 diff --git a/third_party/blink/public/mojom/webpreferences/web_preferences.mojom b/third_party/blink/public/mojom/webpreferences/web_preferences.mojom
 index 505832dd70e9089a98be31856e7a2bfb848aac17..26ef3a25c892051585e7cf998fcc6798211c17d9 100644
 --- a/third_party/blink/public/mojom/webpreferences/web_preferences.mojom
@@ -50132,10 +50256,19 @@ index 0000000000000000000000000000000000000000..99f7b56e9112fa5a9bee09395cd8f5e8
 +
 +#endif  // THIRD_PARTY_BLINK_PUBLIC_PLATFORM_COMPOSITOR_THREAD_LIFECYCLE_H_
 diff --git a/third_party/blink/public/platform/platform.h b/third_party/blink/public/platform/platform.h
-index 9ef66ec39e8cb8ef9a8753baf7bbddc227768d77..618bb9394719c4b2872395f1d8e7bad0c6294f0d 100644
+index 9ef66ec39e8cb8ef9a8753baf7bbddc227768d77..77f7dbee62878c5343b06fa1707a100190e6d929 100644
 --- a/third_party/blink/public/platform/platform.h
 +++ b/third_party/blink/public/platform/platform.h
-@@ -696,6 +696,7 @@ class BLINK_PLATFORM_EXPORT Platform {
+@@ -40,6 +40,8 @@
+ 
+ #include "base/functional/callback.h"
+ #include "base/memory/scoped_refptr.h"
++#include "base/memory/ref_counted_memory.h"
++#include "third_party/blink/public/platform/web_audio_bus.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/threading/platform_thread.h"
+ #include "base/time/time.h"
+@@ -696,6 +698,7 @@ class BLINK_PLATFORM_EXPORT Platform {
    virtual std::unique_ptr<WebDedicatedWorkerHostFactoryClient>
    CreateDedicatedWorkerHostFactoryClient(WebDedicatedWorker*,
                                           const BrowserInterfaceBrokerProxy&);
@@ -50143,7 +50276,7 @@ index 9ef66ec39e8cb8ef9a8753baf7bbddc227768d77..618bb9394719c4b2872395f1d8e7bad0
    virtual void DidStartWorkerThread() {}
    virtual void WillStopWorkerThread() {}
    virtual void WorkerContextCreated(const v8::Local<v8::Context>& worker) {}
-@@ -884,6 +885,11 @@ class BLINK_PLATFORM_EXPORT Platform {
+@@ -884,6 +887,11 @@ class BLINK_PLATFORM_EXPORT Platform {
    // calling an OOM.
    virtual void OnV8HeapLastResortGC() {}
  
@@ -52204,7 +52337,7 @@ index a1db0415e01f3e8939707417ad47198a03b9d9f6..744f7b597dc723f25b4ebffeea17f384
  
    // If `text-rendering: geometric-precision`, use subpixel positioning.
 diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
-index 31af2c1f7c1d702c1f86534b99abaed2d8ee1ec5..5583171f261914003ca0321767077ea66e9acd71 100644
+index 31af2c1f7c1d702c1f86534b99abaed2d8ee1ec5..260fe1d99ca34b252dd5f020f6e0cd6326843129 100644
 --- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 +++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 @@ -341,6 +341,18 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
@@ -52213,7 +52346,7 @@ index 31af2c1f7c1d702c1f86534b99abaed2d8ee1ec5..5583171f261914003ca0321767077ea6
  
 +#if BUILDFLAG(IS_AROS)
 +  if (!typeface && alternate_name == AlternateFontName::kLastResort) {
-+    auto font_manager = font_manager_ ? font_manager_ : skia::DefaultFontMgr();
++    auto font_manager = skia::DefaultFontMgr();
 +    typeface = font_manager->matchFamilyStyle(
 +        "Bitstream Vera Sans", font_description.SkiaFontStyle());
 +    if (!typeface) {
@@ -52468,6 +52601,20 @@ index e15da1e8912138c4b6708d6fc59914a4778af610..da78d26495c156f02e9de39303a66436
  
  // Custom allocation accounts for inlined storage of the actual elements of the
  // backing table.
+diff --git a/third_party/blink/renderer/platform/heap/collection_support/heap_vector.h b/third_party/blink/renderer/platform/heap/collection_support/heap_vector.h
+index 08790c4c0523e7925876aacb44ef3b7ed0540567..f37e51bd3655a9f92aaae238c1baa23213859fd8 100644
+--- a/third_party/blink/renderer/platform/heap/collection_support/heap_vector.h
++++ b/third_party/blink/renderer/platform/heap/collection_support/heap_vector.h
+@@ -31,6 +31,9 @@ class BasicHeapVector final
+   using BaseVector = Vector<T, inlineCapacity, HeapAllocator>;
+ 
+  public:
++  // Disambiguate the allocation policy from Vector's private buffer base.
++  using IsDisallowNewMarker = std::conditional_t<
++      CollectionType == internal::HeapCollectionType::kDisallowNew, int, void>;
+   BasicHeapVector() = default;
+ 
+   explicit BasicHeapVector(wtf_size_t size) : BaseVector(size) {}
 diff --git a/third_party/blink/renderer/platform/heap/heap_allocator_impl.h b/third_party/blink/renderer/platform/heap/heap_allocator_impl.h
 index c49040357e6c160655dea172dd0082a92814b0f0..ab96d59a2013526183ab2ecc3bdeb602ea4d532b 100644
 --- a/third_party/blink/renderer/platform/heap/heap_allocator_impl.h
@@ -52631,6 +52778,19 @@ index 8161352101158df0b747195af9f50017cc47badb..787a31c4ca89888179d7e4901972ab32
    bool released = scheduler_->Release(scheduler_client_id_, option, hints);
    DCHECK(released);
    scheduler_client_id_ = ResourceLoadScheduler::kInvalidClientId;
+diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_response.h b/third_party/blink/renderer/platform/loader/fetch/resource_response.h
+index 31b6c9ce4c5e3d06699ee3a8618770f755180651..9deaf0ebe072d889f99696bfbc3ca5e448d1cfc2 100644
+--- a/third_party/blink/renderer/platform/loader/fetch/resource_response.h
++++ b/third_party/blink/renderer/platform/loader/fetch/resource_response.h
+@@ -291,7 +291,7 @@ class PLATFORM_EXPORT ResourceResponse final {
+     cache_storage_cache_name_ = cache_storage_cache_name;
+   }
+ 
+-  const scoped_refptr<CacheStorageSideDataWriterHolder>&
++  const scoped_refptr<blink::CacheStorageSideDataWriterHolder>&
+   CacheStorageSideDataWriterHolder() const {
+     return cache_storage_side_data_writer_;
+   }
 diff --git a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc b/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
 index 4566a0ade61818f914b769be61e6dd2ad1265045..bf1ed43adff32ccab7dfcbedc96e689d4491788d 100644
 --- a/third_party/blink/renderer/platform/mediastream/webrtc_uma_histograms.cc
@@ -52924,6 +53084,20 @@ index 3a0d6482c11eea055c84c0cb6eb12d846a632e9f..f80b660425104902542062b890b1f4cd
  #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
  
  #if DCHECK_IS_ON()
+diff --git a/third_party/blink/renderer/platform/wtf/type_traits.h b/third_party/blink/renderer/platform/wtf/type_traits.h
+index b00d71494969a44318c4000e981857687c20a49d..cbece3fa40eb927e9c1dceb398f06447cb5531d0 100644
+--- a/third_party/blink/renderer/platform/wtf/type_traits.h
++++ b/third_party/blink/renderer/platform/wtf/type_traits.h
+@@ -173,7 +173,8 @@ inline constexpr WeakHandlingFlag kWeakHandlingTrait =
+ // This is used to check that DISALLOW_NEW objects are not
+ // stored in off-heap Vectors, HashTables etc.
+ template <typename T>
+-concept IsDisallowNew = requires { typename T::IsDisallowNewMarker; };
++concept IsDisallowNew = requires { typename T::IsDisallowNewMarker; } &&
++                       !std::is_void_v<typename T::IsDisallowNewMarker>;
+ 
+ template <>
+ class IsGarbageCollectedType<void> {
 diff --git a/third_party/blink/renderer/platform/wtf/wtf.cc b/third_party/blink/renderer/platform/wtf/wtf.cc
 index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4be9cace2 100644
 --- a/third_party/blink/renderer/platform/wtf/wtf.cc
@@ -54318,6 +54492,32 @@ index e8732af7a57aefd88122b005a593e34b115d92cf..c38e7862ccb59d960b1a558c909576a7
  uint8_t* EpsCopyOutputStream::WriteRawLittleEndian32(const void* data, int size,
                                                       uint8_t* ptr) {
    auto p = static_cast<const uint8_t*>(data);
+diff --git a/third_party/rust/chromium_crates_io/vendor/libc-v0_2/src/lib.rs b/third_party/rust/chromium_crates_io/vendor/libc-v0_2/src/lib.rs
+index a95a967e7362684483616a40f009abb682caf180..653fb911c62f263637c5dd34dc803d3c578a87bb 100644
+--- a/third_party/rust/chromium_crates_io/vendor/libc-v0_2/src/lib.rs
++++ b/third_party/rust/chromium_crates_io/vendor/libc-v0_2/src/lib.rs
+@@ -191,7 +191,20 @@ pub use core::ffi::c_void;
+ pub use new::*;
+ 
+ cfg_if! {
+-    if #[cfg(windows)] {
++    if #[cfg(target_os = "aros")] {
++        mod primitives;
++        pub use crate::primitives::*;
++
++        // Native AROS ABI, verified against the SDK's posixc errno.h.
++        // Keep this surface explicit; Linux/BSD structure layouts do not apply.
++        pub type size_t = usize;
++        pub const EPERM: c_int = 1;
++        pub const EAGAIN: c_int = 35;
++        extern "C" {
++            pub fn calloc(count: size_t, size: size_t) -> *mut c_void;
++            pub fn free(ptr: *mut c_void);
++        }
++    } else if #[cfg(windows)] {
+         mod primitives;
+         pub use crate::primitives::*;
+ 
 diff --git a/third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/crate_root.rs b/third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/crate_root.rs
 index 41a331f461555f668361cb3e90f6122fe156d6d7..b59092ceba1d22bb288ffde08dca935dd1582638 100644
 --- a/third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/crate_root.rs
@@ -54515,10 +54715,18 @@ index b2e9f96c9c962c1c4a62448aa4c5f3b053b7d3ac..0c8e4ac168cb1a40df7418adf8f3bd33
            [ "src/tensorflow/compiler/mlir/lite/mmap_allocation_disabled.cc" ]
      } else {
 diff --git a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
-index d63335875daea78655c372d65076419434c25de2..001bb70914d5180850cbcf01dc3c160b24abc52b 100644
+index d63335875daea78655c372d65076419434c25de2..038514b9146675e09f9b57dc762931b4d8f64470 100644
 --- a/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
 +++ b/third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/external_file_handler.cc
-@@ -90,8 +90,11 @@ int64_t GetPageSizeAlignedOffset(int64_t offset) {
+@@ -29,6 +29,7 @@ limitations under the License.
+ #include <io.h>
+ #else
+ #include <unistd.h>
++#include <sys/stat.h>
+ #endif
+ 
+ #include <cstdint>
+@@ -90,8 +91,11 @@ int64_t GetPageSizeAlignedOffset(int64_t offset) {
    _SYSTEM_INFO info = {};
    ::GetNativeSystemInfo(&info);
    int64_t allocation_granularity = info.dwAllocationGranularity;
@@ -54531,28 +54739,45 @@ index d63335875daea78655c372d65076419434c25de2..001bb70914d5180850cbcf01dc3c160b
  #endif
    int64_t aligned_offset = offset;
    if (offset % allocation_granularity != 0) {
-@@ -299,6 +302,20 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+@@ -220,7 +224,7 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+                         buffer_offset_, file_size),
+         TfLiteSupportStatus::kInvalidArgumentError);
+   }
+-  if (file_size < buffer_size_ + buffer_offset_) {
++  if (buffer_offset_ < 0 || buffer_size_ > file_size - buffer_offset_) {
+     return CreateStatusWithPayload(
+         StatusCode::kInvalidArgument,
+         absl::StrFormat("Provided file length + offset (%d) exceeds actual "
+@@ -299,15 +303,15 @@ absl::Status ExternalFileHandler::MapExternalFile() {
      buffer_offset_ = external_file_.file_descriptor_meta().offset();
      buffer_size_ = external_file_.file_descriptor_meta().length();
    }
-+#ifndef ABSL_HAVE_MMAP
-+  // Keep the caller's descriptor position unchanged while using read() as the
-+  // backing implementation.
-+  if (owned_fd_ < 0) {
-+    owned_fd_ = dup(fd);
-+    if (owned_fd_ < 0) {
-+      return CreateStatusWithPayload(
-+          StatusCode::kUnknown,
-+          absl::StrFormat("Unable to duplicate file descriptor, errno=%d",
-+                          errno),
-+          TfLiteSupportStatus::kFileReadError);
-+    }
-+    fd = owned_fd_;
-+  }
-   // Get actual file size. Always use 0 as offset to lseek(2) to get the actual
-   // file size, as SEEK_END returns the size of the file *plus* offset.
-   size_t file_size = lseek(fd, /*offset=*/0, SEEK_END);
-@@ -329,6 +346,7 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+-  // Get actual file size. Always use 0 as offset to lseek(2) to get the actual
+-  // file size, as SEEK_END returns the size of the file *plus* offset.
+-  size_t file_size = lseek(fd, /*offset=*/0, SEEK_END);
+-  if (file_size <= 0) {
++  // Query size without moving the caller's file cursor.
++  struct stat file_stat;
++  if (fstat(fd, &file_stat) != 0 || file_stat.st_size <= 0) {
+     return CreateStatusWithPayload(
+         StatusCode::kUnknown,
+         absl::StrFormat("Unable to get file size, errno=%d", errno),
+         TfLiteSupportStatus::kFileReadError);
+   }
++  const int64_t file_size = file_stat.st_size;
+   // Deduce buffer size if not explicitly provided through file descriptor.
+   if (buffer_size_ <= 0) {
+     buffer_size_ = file_size - buffer_offset_;
+@@ -321,7 +325,7 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+                         buffer_offset_, file_size),
+         TfLiteSupportStatus::kInvalidArgumentError);
+   }
+-  if (file_size < buffer_size_ + buffer_offset_) {
++  if (buffer_offset_ < 0 || buffer_size_ > file_size - buffer_offset_) {
+     return CreateStatusWithPayload(
+         StatusCode::kInvalidArgument,
+         absl::StrFormat("Provided file length + offset (%d) exceeds actual "
+@@ -329,6 +333,7 @@ absl::Status ExternalFileHandler::MapExternalFile() {
                          buffer_size_ + buffer_offset_, file_size),
          TfLiteSupportStatus::kInvalidArgumentError);
    }
@@ -54560,24 +54785,17 @@ index d63335875daea78655c372d65076419434c25de2..001bb70914d5180850cbcf01dc3c160b
    // If buffer_offset_ is not multiple of sysconf(_SC_PAGE_SIZE), align with
    // extra leading bytes and adjust buffer_size_ to account for the extra
    // leading bytes.
-@@ -343,6 +361,40 @@ absl::Status ExternalFileHandler::MapExternalFile() {
+@@ -343,6 +348,33 @@ absl::Status ExternalFileHandler::MapExternalFile() {
          absl::StrFormat("Unable to map file to memory buffer, errno=%d", errno),
          TfLiteSupportStatus::kFileMmapError);
    }
 +#else
-+  if (lseek(fd, buffer_offset_, SEEK_SET) < 0) {
-+    return CreateStatusWithPayload(
-+        StatusCode::kUnknown,
-+        absl::StrFormat("Unable to seek to file offset, errno=%d", errno),
-+        TfLiteSupportStatus::kFileReadError);
-+  }
-+
 +  file_buffer_.resize(static_cast<size_t>(buffer_size_));
 +  size_t bytes_read = 0;
 +  while (bytes_read < file_buffer_.size()) {
 +    const ssize_t result =
-+        read(fd, file_buffer_.data() + bytes_read,
-+             file_buffer_.size() - bytes_read);
++        pread(fd, file_buffer_.data() + bytes_read,
++              file_buffer_.size() - bytes_read, buffer_offset_ + bytes_read);
 +    if (result < 0) {
 +      if (errno == EINTR) {
 +        continue;
@@ -54601,7 +54819,7 @@ index d63335875daea78655c372d65076419434c25de2..001bb70914d5180850cbcf01dc3c160b
  #endif
    return absl::OkStatus();
  }
-@@ -366,9 +418,11 @@ ExternalFileHandler::~ExternalFileHandler() {
+@@ -366,9 +398,11 @@ ExternalFileHandler::~ExternalFileHandler() {
      ::CloseHandle(file_mapping_);
    }
  #else
@@ -54635,6 +54853,32 @@ index a0fc1030688cc8cdb7159f72c09c1be3df7b0c61..f9853b113525ae3d9967849d206fccce
    // The mapped memory buffer offset, if any.
    int64_t buffer_offset_{};
    // The size in bytes of the mapped memory buffer, if any.
+diff --git a/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_readonly_mem_file.cc b/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_readonly_mem_file.cc
+index 65a4638a868ad063346909759b312aeabf0e1f7b..460d57511e19e99ce78910f3406b455a30bbfda5 100644
+--- a/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_readonly_mem_file.cc
++++ b/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_readonly_mem_file.cc
+@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
++#include <cstring>
++
+ #include "tensorflow_lite_support/metadata/cc/utils/zip_readonly_mem_file.h"
+ 
+ #include <algorithm>
+diff --git a/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_writable_mem_file.cc b/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_writable_mem_file.cc
+index 73e42b8443cef6930503e726a3156bb9261082c7..07b18dc09d4505bc5ccef6b490318cf14cdb21cd 100644
+--- a/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_writable_mem_file.cc
++++ b/third_party/tflite_support/src/tensorflow_lite_support/metadata/cc/utils/zip_writable_mem_file.cc
+@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
++#include <cstring>
++
+ #include "tensorflow_lite_support/metadata/cc/utils/zip_writable_mem_file.h"
+ 
+ #include <algorithm>
 diff --git a/third_party/unrar/src/extract.cpp b/third_party/unrar/src/extract.cpp
 index 17ad224cc5fc9142c4d464571500c1fd6fef3a2d..307f3f3becf8fbf1c2cf5fc79b68dc8fe19d3128 100644
 --- a/third_party/unrar/src/extract.cpp
@@ -54902,6 +55146,32 @@ index a3a11340fac9aba6705ce9b779f66611afc1937d..4ec694c4764bc97ea4798b6c89b35f18
    gfx::Rect bounds = target->GetDelegate()->GetBoundsRect(
        AXCoordinateSystem::kScreenPhysicalPixels,
        AXClippingBehavior::kUnclipped);
+diff --git a/ui/accessibility/platform/browser_accessibility.cc b/ui/accessibility/platform/browser_accessibility.cc
+index 12c1f06bf0da638cdce6594cdb816659358f3d90..5c568d694b29a96e12b51be7cd77ac49236e97ce 100644
+--- a/ui/accessibility/platform/browser_accessibility.cc
++++ b/ui/accessibility/platform/browser_accessibility.cc
+@@ -1168,6 +1168,9 @@ BrowserAccessibility::PlatformChildIterator::PlatformChildIterator(
+     const PlatformChildIterator& it)
+     : parent_(it.parent_), platform_iterator(it.platform_iterator) {}
+ 
++BrowserAccessibility::PlatformChildIterator::PlatformChildIterator()
++    : parent_(nullptr), platform_iterator(nullptr, nullptr) {}
++
+ BrowserAccessibility::PlatformChildIterator::PlatformChildIterator(
+     const BrowserAccessibility* parent,
+     BrowserAccessibility* child)
+diff --git a/ui/accessibility/platform/browser_accessibility.h b/ui/accessibility/platform/browser_accessibility.h
+index 69c97a585bd10c92a17cf56d9f16658f32bbead1..b4c707cc712ec1460a6dc49aa0425f3f495fe161 100644
+--- a/ui/accessibility/platform/browser_accessibility.h
++++ b/ui/accessibility/platform/browser_accessibility.h
+@@ -137,6 +137,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
+     using pointer = BrowserAccessibility*;
+     using reference = BrowserAccessibility&;
+ 
++    PlatformChildIterator();
+     PlatformChildIterator(const BrowserAccessibility* parent,
+                           BrowserAccessibility* child);
+     PlatformChildIterator(const PlatformChildIterator& it);
 diff --git a/ui/aura/native_window_occlusion_tracker_win.cc b/ui/aura/native_window_occlusion_tracker_win.cc
 index 27cb7f79df34586b28fd53b5e8c1af993d73f421..bf85f189b7ca6f649366e608db82812d3a179dd5 100644
 --- a/ui/aura/native_window_occlusion_tracker_win.cc
@@ -56412,10 +56682,10 @@ index 0000000000000000000000000000000000000000..aacda62b680c2f9b3d2ffd58ba510994
 +}
 diff --git a/ui/ozone/platform/aros/aros_egl_library.cc b/ui/ozone/platform/aros/aros_egl_library.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..bad85fefca8adf17ea1d76e1f3ea983dc281cfd4
+index 0000000000000000000000000000000000000000..9e6b6c232c14959ad1ef221f60b6b79a30f027cc
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_egl_library.cc
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,187 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -56498,6 +56768,20 @@ index 0000000000000000000000000000000000000000..bad85fefca8adf17ea1d76e1f3ea983d
 +#define AROS_EGL_GET_PROC_ADDRESS_STUB __eglGetProcAddress_EGLBase_wrapper
 +#else
 +extern "C" void aros_eglGetProcAddress_stub();
++#if defined(__aarch64__)
++asm(".text\n"
++    ".globl aros_eglGetProcAddress_stub\n"
++    ".type aros_eglGetProcAddress_stub, %function\n"
++    "aros_eglGetProcAddress_stub:\n"
++    "  ldr x16, 1f\n"
++    "  ldr x16, [x16]\n"
++    "  sub x17, x16, #544\n"
++    "  ldr x17, [x17]\n"
++    "  br x17\n"
++    "  .p2align 3\n"
++    "1: .quad EGLBase\n"
++    ".size aros_eglGetProcAddress_stub, .-aros_eglGetProcAddress_stub\n");
++#elif defined(__x86_64__)
 +asm(".text\n"
 +    ".globl aros_eglGetProcAddress_stub\n"
 +    ".type aros_eglGetProcAddress_stub, @function\n"
@@ -56506,6 +56790,9 @@ index 0000000000000000000000000000000000000000..bad85fefca8adf17ea1d76e1f3ea983d
 +    "  movq (%r11), %r11\n"
 +    "  jmpq *-544(%r11)\n"  // -68 * sizeof(APTR)
 +    ".size aros_eglGetProcAddress_stub, .-aros_eglGetProcAddress_stub\n");
++#else
++#error Unsupported AROS EGL trampoline architecture
++#endif
 +#define AROS_EGL_GET_PROC_ADDRESS_STUB aros_eglGetProcAddress_stub
 +#endif
 +

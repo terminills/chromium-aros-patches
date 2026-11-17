@@ -45,6 +45,22 @@ The harness and retained output are in `evidence/tflite-aros-file-snapshot-test.
 
 ![Native Chromium-local file snapshot regression](evidence/file-snapshot-native.png)
 
+## Native V8 156 library
+
+The V8 archive and `aros-web` native `v8.library` build with GCC 16.2.0 and
+Binutils 2.47. The library links GN's Rust archive closure (including Temporal)
+and native Rust std glue. Its standalone archive disables the allocator shim
+so the existing library allocation-ownership interface remains authoritative.
+See `aros-web/build/v8-native156.args.gn` for the validated build configuration.
+
+The native x86-64 QEMU probe passes JavaScript evaluation, separate globals in
+two isolates, and continued evaluation after destroying the other isolate;
+return code is 0. This is one application process, not proof of concurrent
+application lifecycle or CEF profile isolation. Library hash and scope are
+recorded in `evidence/v8-native156-validation.json`.
+
+![Native V8 156 isolation probe](evidence/v8-native156-first.png)
+
 ## Native Rust prerequisite
 
 `rust/std-aros.patch` adapts the existing AROS standard library port to the
