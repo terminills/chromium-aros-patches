@@ -1,0 +1,48 @@
+From 3b715b9ceae2545133153462ca46229b8c7f594a Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 17 Nov 2026 09:44:59 -0600
+Subject: [PATCH] mesa: build LLVM draw and tessellator archives for explicit
+ GCC LLVM builds
+
+---
+ workbench/libs/mesa/libgalliumaux/mmakefile.src | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/workbench/libs/mesa/libgalliumaux/mmakefile.src b/workbench/libs/mesa/libgalliumaux/mmakefile.src
+index eaa8fa6f..02e8c1f4 100644
+--- a/workbench/libs/mesa/libgalliumaux/mmakefile.src
++++ b/workbench/libs/mesa/libgalliumaux/mmakefile.src
+@@ -59,8 +59,9 @@ GALLIUM_AUXILIARY_GENERATED_SOURCES := \
+             indices/u_unfilled_gen.c \
+             draw/draw_nir_lower_opcodes.c
+ # gallivm's no-integer NIR pass includes lp_bld_nir.h, which needs the LLVM
+-# headers, and only gallivm uses it: build it for llvmpipe's toolchain only.
+-ifeq ($(AROS_TOOLCHAIN),llvm)
++# headers, and only gallivm uses it. Include it when LLVM is selected by the
++# toolchain or explicitly requested for a GCC build.
++ifneq ($(strip $(filter llvm,$(AROS_TOOLCHAIN)) $(OPT_LLVM)),)
+ GALLIUM_AUXILIARY_GENERATED_SOURCES += \
+             gallivm/lp_bld_nir_no_integer_algebraic.c
+ endif
+@@ -213,7 +214,8 @@ mesa3d-linklib-galliumauxiliary_C_FILES := $(MESA3DGL_GALLIUM_AUXILIARY_SOURCES_
+ # A second copy of draw, built with DRAW_LLVM_AVAILABLE. The macro changes
+ # draw_vertex_shader and the gs/tess shader layouts, so it cannot be applied to
+ # a subset. llvmpipe links this ahead of libgalliumauxiliary.
+-ifeq ($(AROS_TOOLCHAIN),llvm)
++# An explicit target LLVM build also supplies these archives with GCC.
++ifneq ($(strip $(filter llvm,$(AROS_TOOLCHAIN)) $(OPT_LLVM)),)
+ GALLIUM_DRAW_LLVM_C := \
+             $(patsubst $(top_srcdir)/$(CUR_MESADIR)/%,%, \
+                 $(wildcard $(top_srcdir)/$(CUR_MESADIR)/draw/*.c)) \
+@@ -242,7 +244,7 @@ endif
+ # The tessellator, reached from draw_tess.c under DRAW_LLVM_AVAILABLE. Own
+ # linklib because %build_linklib resolves cxxfiles against $(SRCDIR)/$(CURDIR),
+ # ignoring its own srcdir= - only the C side honours that.
+-ifeq ($(AROS_TOOLCHAIN),llvm)
++ifneq ($(strip $(filter llvm,$(AROS_TOOLCHAIN)) $(OPT_LLVM)),)
+ GALLIUM_TESS_CXX := $(wildcard $(addprefix $(top_srcdir)/$(CUR_MESADIR)/tessellator/,p_tessellator.cpp tessellator.cpp))
+ 
+ #MM- mesa3dgl-linklibs : mesa3d-linklib-galliumtess-$(AROS_TOOLCHAIN)
+-- 
+2.53.0
+

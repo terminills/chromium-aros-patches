@@ -76,6 +76,25 @@ lookup of the native AROS surface entry point pass; probe return code is 0.
 ![Native Vulkan device capabilities](evidence/native-vulkan-capabilities.png)
 
 This verifies driver discovery and capability queries in native QEMU/KVM. It
-does not yet prove surface creation, rendering/presentation, hardware GPU
-acceleration, Chromium/CEF graphics integration or Vulkan conformance.
+does not by itself prove rendering. The presentation test below exercises
+the native surface and swapchain. Hardware GPU acceleration, Chromium/CEF
+graphics integration and Vulkan conformance remain unverified.
 The initial no-driver result above is retained as diagnostic evidence.
+
+## Native Vulkan rendering
+
+Master's `vktorusknot` test now runs with `SWAPCHAIN` on the same native
+QEMU/KVM system. Its first-frame readback check passes, a 384 x 384 swapchain
+with two images is created, and 300 frames are presented with return code 0.
+A longer 6000-frame run supplied the visible rendering capture below.
+
+![Native AROS Vulkan rendering](evidence/native-vulkan-render.png)
+
+![Rendering test result](evidence/native-vulkan-render-result.png)
+
+`aros/mesa-gcc-llvm-archives.patch` enables Mesa's LLVM draw and tessellator
+archives when a GCC build explicitly selects target LLVM. Apply against the
+pinned AROS master baseline, build LLVM, then build lavapipe with
+`make -j8 OPT_LLVM=20.1.0 hidd-lavapipe` and the test with
+`make -j8 OPT_LLVM=20.1.0 test-vulkan-torusknot`. This is software Vulkan
+rendering in native AROS, not a Chromium/CEF window or hardware GPU test.
