@@ -757,7 +757,7 @@ index 0000000000000000000000000000000000000000..3a1dcdb719f6900226d2547d5c28e341
 +}  // namespace base
 +}  // namespace v8
 diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
-index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6fb190da4 100644
+index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..000a4a5d119125a8e9fe3717930ee06d8ba22eac 100644
 --- a/src/base/platform/platform-posix.cc
 +++ b/src/base/platform/platform-posix.cc
 @@ -9,6 +9,8 @@
@@ -769,12 +769,13 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  
  #include "src/base/fpu.h"
  #include "src/base/logging.h"
-@@ -19,7 +21,18 @@
+@@ -19,7 +21,19 @@
  #include <sched.h>  // for sched_yield
  #include <signal.h>
  #include <stdio.h>
 +#if V8_OS_AROS
 +#include <exec/memory.h>
++extern "C" void ArosMemoryTrace(const char*) asm("KPutStr");
 +#include <exec/tasks.h>
 +#include <proto/arossupport.h>
 +#include <proto/exec.h>
@@ -788,7 +789,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  #include <sys/stat.h>
  #include <sys/time.h>
  #include <sys/types.h>
-@@ -60,7 +73,7 @@
+@@ -60,7 +74,7 @@
  #include <malloc/malloc.h>
  #elif V8_OS_OPENBSD
  #include <sys/malloc.h>
@@ -797,7 +798,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  #include <malloc.h>
  #endif
  
-@@ -74,10 +87,24 @@
+@@ -74,10 +88,24 @@
  #include <sys/resource.h>
  #endif
  
@@ -823,7 +824,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  #if V8_OS_FREEBSD || V8_OS_DARWIN || V8_OS_OPENBSD || V8_OS_SOLARIS
  #define MAP_ANONYMOUS MAP_ANON
  #endif
-@@ -98,11 +125,213 @@ extern int madvise(caddr_t, size_t, int);
+@@ -98,11 +126,220 @@ extern int madvise(caddr_t, size_t, int);
  extern "C" void* __libc_stack_end;
  #endif
  
@@ -927,6 +928,13 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
 +    return MAP_FAILED;
 +  }
 +  size_t raw_size = size + kPageSize - 1;
++  if (size >= 1024 * 1024 && ::getenv("AROS_V8_MEMORY_TRACE")) {
++    char trace[160];
++    snprintf(trace, sizeof(trace),
++             "[V8-MAPPING] task=%p bytes=%zu prot=%d flags=%d\n",
++             static_cast<void*>(FindTask(nullptr)), size, prot, flags);
++    ArosMemoryTrace(trace);
++  }
 +  void* raw = AllocMem(raw_size, MEMF_PUBLIC | MEMF_CLEAR);
 +  if (!raw) {
 +    errno = ENOMEM;
@@ -1037,7 +1045,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  // 0 is never a valid thread id.
  #if V8_OS_ZOS
  const pthread_t kNoThread = {0};  // pthread_t is a struct on z/OS
-@@ -281,8 +510,8 @@ void OS::Initialize(const char* const gc_fake_mmap) {
+@@ -281,8 +518,8 @@ void OS::Initialize(const char* const gc_fake_mmap) {
  bool OS::IsHardwareEnforcedShadowStacksEnabled() { return false; }
  
  void OS::EnsureAlternativeSignalStackIsAvailableForCurrentThread() {
@@ -1048,7 +1056,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
    stack_t ss, old_ss;
    memset(&ss, 0, sizeof(stack_t));
    memset(&old_ss, 0, sizeof(stack_t));
-@@ -361,6 +590,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
+@@ -361,6 +598,9 @@ void OS::SetRandomMmapSeed(int64_t seed) {
  
  // static
  void* OS::GetRandomMmapAddr() {
@@ -1058,7 +1066,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
    uintptr_t raw_addr;
    {
      MutexGuard guard(rng_mutex.Pointer());
-@@ -456,6 +688,7 @@ void* OS::GetRandomMmapAddr() {
+@@ -456,6 +696,7 @@ void* OS::GetRandomMmapAddr() {
  #endif
  #endif
    return reinterpret_cast<void*>(raw_addr);
@@ -1066,7 +1074,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  }
  
  // TODO(bbudge) Move Cygwin and Fuchsia stuff into platform-specific files.
-@@ -594,6 +827,11 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
+@@ -594,6 +835,11 @@ bool OS::SetPermissions(void* address, size_t size, MemoryPermission access) {
  
  // static
  void OS::SetDataReadOnly(void* address, size_t size) {
@@ -1078,7 +1086,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
    CHECK_EQ(0, reinterpret_cast<uintptr_t>(address) % CommitPageSize());
    CHECK_EQ(0, size % CommitPageSize());
  
-@@ -601,6 +839,7 @@ void OS::SetDataReadOnly(void* address, size_t size) {
+@@ -601,6 +847,7 @@ void OS::SetDataReadOnly(void* address, size_t size) {
      FATAL("Failed to protect data memory at %p +%zu; error %d\n", address, size,
            errno);
    }
@@ -1086,7 +1094,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  }
  
  // static
-@@ -929,6 +1168,8 @@ int OS::GetCurrentThreadIdInternal() {
+@@ -929,6 +1176,8 @@ int OS::GetCurrentThreadIdInternal() {
    return static_cast<int>(zx_thread_self());
  #elif V8_OS_SOLARIS
    return static_cast<int>(pthread_self());
@@ -1095,7 +1103,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  #elif V8_OS_ZOS
    return __tcbtid();
  #else
-@@ -950,18 +1191,24 @@ void OS::ExitProcess(int exit_code) {
+@@ -950,18 +1199,24 @@ void OS::ExitProcess(int exit_code) {
  
  #if !defined(V8_OS_FUCHSIA)
  int OS::GetUserTime(uint32_t* secs, uint32_t* usecs) {
@@ -1122,7 +1130,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
    return -1;
  #elif defined(V8_OS_ZOS)
    // TODO(v8:342445981): zos - rusage struct doesn't yet include ru_maxrss
-@@ -1085,6 +1332,14 @@ void OS::VPrintError(const char* format, va_list args) {
+@@ -1085,6 +1340,14 @@ void OS::VPrintError(const char* format, va_list args) {
  #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
    __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
  #else
@@ -1137,7 +1145,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
    vfprintf(stderr, format, args);
  #endif
  }
-@@ -1216,6 +1471,7 @@ bool AddressSpaceReservation::DecommitPages(void* address, size_t size) {
+@@ -1216,6 +1479,7 @@ bool AddressSpaceReservation::DecommitPages(void* address, size_t size) {
  // POSIX thread support.
  //
  
@@ -1145,7 +1153,7 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  class Thread::PlatformData {
   public:
    PlatformData() : thread_(kNoThread) {}
-@@ -1348,6 +1604,8 @@ bool Thread::Start() {
+@@ -1348,6 +1612,8 @@ bool Thread::Start() {
  
  void Thread::Join() { pthread_join(data_->thread_, nullptr); }
  
@@ -1154,7 +1162,31 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  static Thread::LocalStorageKey PthreadKeyToLocalKey(pthread_key_t pthread_key) {
  #if V8_OS_CYGWIN
    // We need to cast pthread_key_t to Thread::LocalStorageKey in two steps
-@@ -1539,5 +1797,22 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
+@@ -1442,7 +1708,11 @@ bool MainThreadIsCurrentThread() {
+ 
+ // static
+ Stack::StackSlot Stack::ObtainCurrentThreadStackStart() {
+-#if V8_OS_ZOS
++#if V8_OS_AROS
++  // Library clients and native Exec workers need their actual task bounds;
++  // a pthread registry entry can describe another library opener's stack.
++  return FindTask(nullptr)->tc_SPUpper;
++#elif V8_OS_ZOS
+   return __get_stack_start();
+ #elif V8_OS_OPENBSD
+   stack_t stack;
+@@ -1488,7 +1758,9 @@ Stack::StackSlot Stack::ObtainCurrentThreadStackStart() {
+ 
+ // static
+ Stack::StackSlot Stack::ObtainCurrentThreadStackReservedLimit() {
+-#if V8_OS_ZOS
++#if V8_OS_AROS
++  return FindTask(nullptr)->tc_SPLower;
++#elif V8_OS_ZOS
+   return nullptr;
+ #elif V8_OS_OPENBSD
+   stack_t stack;
+@@ -1539,5 +1811,22 @@ Stack::StackSlot Stack::GetCurrentStackPosition() {
  #undef MAP_ANONYMOUS
  #undef MADV_FREE
  
@@ -1178,10 +1210,10 @@ index 7add12aa4798b22051bbe3de3e0e7ebb1ea7a86e..cc02174c022c2ac3c468a272c47bd8d6
  }  // namespace base
  }  // namespace v8
 diff --git a/src/base/platform/platform.cc b/src/base/platform/platform.cc
-index a75d06dbeb02aaa6df841c00d9d4f461a8504d2f..46db9e6d47629998369215778d4ca1a228cfd06e 100644
+index a75d06dbeb02aaa6df841c00d9d4f461a8504d2f..271d6a46a606ea4d4a22d19c20e5284f126a5feb 100644
 --- a/src/base/platform/platform.cc
 +++ b/src/base/platform/platform.cc
-@@ -10,27 +10,44 @@ namespace base {
+@@ -10,27 +10,43 @@ namespace base {
  namespace {
  
  // A pointer to current thread's stack beginning.
@@ -1202,8 +1234,7 @@ index a75d06dbeb02aaa6df841c00d9d4f461a8504d2f..46db9e6d47629998369215778d4ca1a2
 +  // Hosted AROS Exec tasks are not in one-to-one correspondence with host
 +  // pthread TLS contexts. Caching this value in compiler-emulated TLS can
 +  // therefore return a different Exec task's stack bounds. The AROS
-+  // pthread_getattr_np interposer reads the current task directly, so query it
-+  // for every request.
++  // native task queries read Exec stack bounds directly for every request.
 +  return ObtainCurrentThreadStackStart();
 +#else
    if (!thread_stack_start) {
@@ -1226,7 +1257,7 @@ index a75d06dbeb02aaa6df841c00d9d4f461a8504d2f..46db9e6d47629998369215778d4ca1a2
  }
  
  // static
-@@ -38,8 +55,12 @@ Stack::StackSlot Stack::GetStackStart() { return GetStackStartUnchecked(); }
+@@ -38,8 +54,12 @@ Stack::StackSlot Stack::GetStackStart() { return GetStackStartUnchecked(); }
  
  // static
  int OS::GetCurrentThreadId() {

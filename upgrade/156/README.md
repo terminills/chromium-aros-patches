@@ -60,6 +60,23 @@ Application A exits while B remains active; both return 0. This is bounded V8
 lifecycle evidence, not CEF rendering or persisted profile isolation proof.
 Library hash and scope are recorded in `evidence/v8-native156-validation.json`.
 
+A stricter, synchronized memory/lifecycle test subsequently **failed** against
+that same library. Two additional isolates in app B reduced guest free RAM by
+1,666,875,072 bytes (about 1.55 GiB). App B then hit `IsOnCentralStack()` after
+app A closed. The earlier timing-based pass does not establish general multi-app
+lifetime correctness or acceptable memory use. See
+`evidence/v8-memory28-result.json` for measured phases and limitations, and
+`evidence/v8-memory156-probe.c` for the controlled reproducer.
+
+Completion requires one resident engine implementation and shared engine
+resources across apps, separate app/profile/isolate state, survival of the
+first application's exit, and measured incremental RAM for additional apps.
+Library packaging alone is insufficient. Native worker integration, direct
+Exec stack-bound queries and opt-in `AROS_V8_MEMORY_TRACE` allocation diagnostics
+are in the current snapshot; their full-engine runtime verification is pending.
+Use two cores for current native qualification; higher-core AROS scheduler
+issues remain separate follow-up work.
+
 ![Two native applications sharing V8 156](evidence/v8-native156-two-apps.png)
 
 ## Native Rust prerequisite

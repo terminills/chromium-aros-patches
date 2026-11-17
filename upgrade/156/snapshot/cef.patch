@@ -501,6 +501,18 @@ index 16b5c2f585ab85b02384505ca7b213e4508fd2be..01e775eb263236cf0b5988a8c686fd16
 +#endif  // defined(OS_LINUX) || defined(OS_AROS)
  
  #endif  // CEF_INCLUDE_INTERNAL_CEF_TYPES_LINUX_H_
+diff --git a/libcef/browser/browser_platform_delegate.cc b/libcef/browser/browser_platform_delegate.cc
+index 167b2af621dae069d49b76c9734100d60f95d331..f3b4718fcd74dfaf0dd3afa3cd8231b8ce615880 100644
+--- a/libcef/browser/browser_platform_delegate.cc
++++ b/libcef/browser/browser_platform_delegate.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "cef/libcef/browser/browser_platform_delegate.h"
++#include "cef/libcef/browser/menu_runner.h"
+ 
+ #include "base/command_line.h"
+ #include "base/logging.h"
 diff --git a/libcef/browser/browser_platform_delegate_create.cc b/libcef/browser/browser_platform_delegate_create.cc
 index b2f30ae0a0a23593f035ab5029bec530831553fc..8a9c81fe5b3470635a356849a32b3d2adff432a1 100644
 --- a/libcef/browser/browser_platform_delegate_create.cc
@@ -591,7 +603,7 @@ index a9637b8d795b8bc87ce125faaa4e6a4e8b6948f8..36743a54fa8649131c2568df5bea7f92
  
  content::RenderWidgetHostViewAura*
 diff --git a/libcef/browser/native/browser_platform_delegate_native_linux.cc b/libcef/browser/native/browser_platform_delegate_native_linux.cc
-index 44f230277c6e2fa2ea96af8e059475565ed3be25..1c6de62469cb299f0f2e1f6dd22733c641aff611 100644
+index 44f230277c6e2fa2ea96af8e059475565ed3be25..0f594e38fffd0c6a1a083dc95699c38ae06a8c07 100644
 --- a/libcef/browser/native/browser_platform_delegate_native_linux.cc
 +++ b/libcef/browser/native/browser_platform_delegate_native_linux.cc
 @@ -4,6 +4,7 @@
@@ -626,7 +638,7 @@ index 44f230277c6e2fa2ea96af8e059475565ed3be25..1c6de62469cb299f0f2e1f6dd22733c6
 +  host_window_created_ = true;
 +  browser_->AddRef();
 +
-+  CefWindowDelegateView* delegate_view = new CefWindowDelegateView(
++  CefNativeWidgetDelegate* delegate_view = new CefNativeWidgetDelegate(
 +      GetBackgroundColor(), false, GetBoundsChangedCallback(),
 +      GetWidgetDeleteCallback());
 +  delegate_view->SetTitle(
@@ -1166,7 +1178,7 @@ index 048402909952dc594b0ac36e1c55fe2d709c4901..80eaea882f2aa37abd0d57f0703ccee3
  #include "third_party/blink/public/platform/web_common.h"
  #include "v8/include/v8.h"
 diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
-index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..36460f732d486e5ed3757ff51201b7db41bd082d 100644
+index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..f70499cf8f5a2e38745e3d0d0c4bcda782642ecc 100644
 --- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
 +++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
 @@ -5,6 +5,9 @@
@@ -1198,7 +1210,7 @@ index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..36460f732d486e5ed3757ff51201b7db
 +  for (const CefSchemeInfo& info : *CefAppManager::Get()->GetCustomSchemes()) {
 +    if (info.is_service_worker_enabled) {
 +      blink::WebSecurityPolicy::RegisterURLSchemeAsAllowingServiceWorkers(
-+          blink::WebString::FromUTF8(info.scheme_name));
++          blink::WebString::FromUtf8(info.scheme_name));
 +    }
 +  }
  }

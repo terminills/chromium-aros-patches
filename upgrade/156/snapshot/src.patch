@@ -4126,7 +4126,7 @@ index 0000000000000000000000000000000000000000..478add49df099fcb833f3d2ba77ba6aa
 +
 +}  // namespace base
 diff --git a/base/base_switches.h b/base/base_switches.h
-index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..f299dcd530980e341181be04fde63ee75c8f2f93 100644
+index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9a9982451 100644
 --- a/base/base_switches.h
 +++ b/base/base_switches.h
 @@ -204,6 +204,14 @@ inline constexpr char kPackageVersionName[] = "package-version-name";
@@ -4134,11 +4134,11 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..f299dcd530980e341181be04fde63ee7
  #endif
  
 +#if BUILDFLAG(IS_AROS)
-+extern const char kArosCpuLimit[];
-+extern const char kArosPinWorkers[];
-+extern const char kArosNoPinCodecThreads[];
-+extern const char kArosNativeThreadPool[];
-+extern const char kArosMultiProcess[];
++inline constexpr char kArosCpuLimit[] = "aros-cpu-limit";
++inline constexpr char kArosPinWorkers[] = "aros-pin-workers";
++inline constexpr char kArosNoPinCodecThreads[] = "aros-no-pin-codec-threads";
++inline constexpr char kArosNativeThreadPool[] = "aros-native-thread-pool";
++inline constexpr char kArosMultiProcess[] = "aros-multi-process";
 +#endif
 +
  }  // namespace switches
@@ -19818,9 +19818,18 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
        "//chrome/browser/sharing_hub:impl",
        "//chrome/browser/smart_card",
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
-index 3bd06fa95993f6060b6b1992c66bbed30cdc2f1b..1932a2df84c0fd32a623b4f981dc39eca38d5eb2 100644
+index 3bd06fa95993f6060b6b1992c66bbed30cdc2f1b..830df141c5da80903c9f1cd7d4f6a86249f9bcbd 100644
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
+@@ -371,7 +371,7 @@
+         // BUILDFLAG(IS_WIN)
+ 
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+ #include "chrome/browser/glic/suggestions/contextual_cueing_features.h"  // nogncheck
+ #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"  // nogncheck
+ #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
 @@ -421,6 +421,7 @@
  using flags_ui::FeatureEntry;
  using flags_ui::kDeprecated;
@@ -19840,6 +19849,51 @@ index 3bd06fa95993f6060b6b1992c66bbed30cdc2f1b..1932a2df84c0fd32a623b4f981dc39ec
  
  #if defined(USE_AURA)
  const unsigned kOsAura = kOsWin | kOsLinux | kOsCrOS;
+@@ -1447,7 +1448,7 @@ const FeatureEntry::FeatureVariation
+          kContextManagementEnableFaviconSkeletonLoaderParams, nullptr}};
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ 
+ // A limited number of combinations of the rich autocompletion params.
+ const FeatureEntry::FeatureParam kOmniboxRichAutocompletionAggressive1[] = {
+@@ -1676,7 +1677,7 @@ const FeatureEntry::FeatureVariation
+         // BUILDFLAG(IS_WIN)
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+ 
+ const FeatureEntry::FeatureParam kNtpNextAllowDisablement[] = {
+     {"NtpNextDisablementContextMenuParam", "true"},
+@@ -3703,7 +3704,7 @@ const FeatureEntry::FeatureVariation kSensitiveContentVariations[] = {
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_AROS)
+ const FeatureEntry::FeatureParam kContextualCueingEnabledNoEngagementCap[] = {
+     {"BackoffTime", "0h"},
+     {"BackoffMultiplierBase", "0.0"},
+@@ -8572,7 +8573,7 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(features::kElasticOverscroll)},
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+     {"element-capture-cross-tab",
+      flag_descriptions::kCrossTabElementCaptureName,
+      flag_descriptions::kCrossTabElementCaptureDescription, kOsDesktop,
+@@ -9304,7 +9305,7 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(extensions_features::kExtensionTabContextMenu)},
+ #endif  // ENABLE_EXTENSIONS
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+     {"region-capture-cross-tab", flag_descriptions::kCrossTabRegionCaptureName,
+      flag_descriptions::kCrossTabRegionCaptureDescription, kOsDesktop,
+      FEATURE_VALUE_TYPE(features::kRegionCaptureOfOtherTabs)},
 diff --git a/chrome/browser/ai/BUILD.gn b/chrome/browser/ai/BUILD.gn
 index b3a94400247d854d5c8c6c8a552f7a20e07880c4..ba411947aee21ff8cb4c3eb117e7faeb39117d16 100644
 --- a/chrome/browser/ai/BUILD.gn
@@ -20233,7 +20287,7 @@ index 691b61da00a6fe1096b00a50136d9828e70c00f4..0753aa2743987fdbffe6898c31a7ca86
  }
 -
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c04f51fb1a 100644
+index aa8b16f4672e959e35facc0796b1502d7bc1536b..4a7cc190509d98fc2fd5bc480193d39780892964 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
 @@ -56,8 +56,10 @@
@@ -20247,7 +20301,24 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
  #include "chrome/browser/after_startup_task_utils.h"
  #include "chrome/browser/ai/ai_manager.h"
  #include "chrome/browser/app_mode/app_mode_utils.h"
-@@ -1562,6 +1564,8 @@ ChromeContentBrowserClient::GetPopupNavigationDelegateFactoryForTesting() {
+@@ -335,6 +337,7 @@
+ #include "components/site_isolation/features.h"
+ #include "components/site_isolation/pref_names.h"
+ #include "components/site_isolation/preloaded_isolated_origins.h"
++#include "components/webapps/isolated_web_apps/scheme.h"
+ #include "components/site_isolation/site_isolation_policy.h"
+ #include "components/site_token_provider/features.h"
+ #include "components/supervised_user/core/common/features.h"
+@@ -907,7 +910,7 @@ bool IsClipboardFocusExemptOrigin(const url::Origin& main_frame_origin) {
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ bool IsIsolatedWebAppUrl(const GURL& url) {
+   return url.SchemeIs(webapps::kIsolatedAppScheme);
+ }
+@@ -1562,6 +1565,8 @@ ChromeContentBrowserClient::GetPopupNavigationDelegateFactoryForTesting() {
  }
  
  ChromeContentBrowserClient::ChromeContentBrowserClient() {
@@ -20256,7 +20327,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
  #if BUILDFLAG(ENABLE_PLUGINS)
    extra_parts_.push_back(
        std::make_unique<ChromeContentBrowserClientPluginsPart>());
-@@ -1602,6 +1606,11 @@ ChromeContentBrowserClient::~ChromeContentBrowserClient() {
+@@ -1602,6 +1607,11 @@ ChromeContentBrowserClient::~ChromeContentBrowserClient() {
    }
  }
  
@@ -20268,7 +20339,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
  // static
  void ChromeContentBrowserClient::RegisterLocalStatePrefs(
      PrefRegistrySimple* registry) {
-@@ -2936,7 +2945,7 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2936,7 +2946,7 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
                                      client_info->client_id);
    }
  #elif BUILDFLAG(IS_POSIX)
@@ -20277,7 +20348,35 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
    pid_t pid;
    if (crash_reporter::GetHandlerSocket(nullptr, &pid)) {
      command_line->AppendSwitchASCII(
-@@ -5155,9 +5164,11 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+@@ -4928,9 +4938,11 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+ 
+   web_prefs->autoplay_policy = GetAutoplayPolicyForWebContents(web_contents);
+ #if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   web_prefs->require_transient_activation_for_get_display_media =
+       capture_policy::IsTransientActivationRequiredForGetDisplayMedia(
+           web_contents);
++#endif
+   web_prefs->require_transient_activation_for_show_file_or_directory_picker =
+       IsFileOrDirectoryPickerWithoutGestureAllowed(web_contents);
+ #endif  // !BUILDFLAG(IS_ANDROID)
+@@ -5025,6 +5037,7 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+   web_prefs->clipboard_focus_exempt = clipboard_focus_exempt;
+ 
+ #if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   const bool require_transient_activation_for_get_display_media =
+       capture_policy::IsTransientActivationRequiredForGetDisplayMedia(
+           web_contents);
+@@ -5033,6 +5046,7 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+        require_transient_activation_for_get_display_media);
+   web_prefs->require_transient_activation_for_get_display_media =
+       require_transient_activation_for_get_display_media;
++#endif
+ 
+   const bool require_transient_activation_for_show_file_or_directory_picker =
+       IsFileOrDirectoryPickerWithoutGestureAllowed(web_contents);
+@@ -5155,9 +5169,11 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
                            &search::HandleNewTabURLReverseRewrite);
  #endif  // BUILDFLAG(IS_ANDROID)
  
@@ -20289,7 +20388,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
  }
  
  base::FilePath ChromeContentBrowserClient::GetDefaultDownloadDirectory() {
-@@ -7091,7 +7102,7 @@ void ChromeContentBrowserClient::OnNetworkServiceCreated(
+@@ -7091,7 +7107,7 @@ void ChromeContentBrowserClient::OnNetworkServiceCreated(
                                                         local_state);
  }
  
@@ -20298,7 +20397,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
      content::BrowserContext* context,
      bool in_memory,
      const base::FilePath& relative_partition_path,
-@@ -7109,6 +7120,8 @@ void ChromeContentBrowserClient::ConfigureNetworkContextParams(
+@@ -7109,6 +7125,8 @@ void ChromeContentBrowserClient::ConfigureNetworkContextParams(
      network_context_params->user_agent = GetUserAgent();
      network_context_params->accept_language = GetApplicationLocale();
    }
@@ -20307,7 +20406,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
  }
  
  std::vector<base::FilePath>
-@@ -8442,11 +8455,11 @@ void ChromeContentBrowserClient::OnKeepaliveRequestStarted(
+@@ -8442,11 +8460,11 @@ void ChromeContentBrowserClient::OnKeepaliveRequestStarted(
    const auto now = base::TimeTicks::Now();
    const auto timeout = GetKeepaliveTimerTimeout(context);
    keepalive_deadline_ = std::max(keepalive_deadline_, now + timeout);
@@ -20321,7 +20420,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
            FROM_HERE, keepalive_deadline_ - now,
            base::BindOnce(
                &ChromeContentBrowserClient::OnKeepaliveTimerFired,
-@@ -8468,7 +8481,9 @@ void ChromeContentBrowserClient::OnKeepaliveRequestFinished() {
+@@ -8468,7 +8486,9 @@ void ChromeContentBrowserClient::OnKeepaliveRequestFinished() {
    --num_keepalive_requests_;
    if (num_keepalive_requests_ == 0) {
      DVLOG(1) << "Stopping the keepalive timer";
@@ -20332,7 +20431,7 @@ index aa8b16f4672e959e35facc0796b1502d7bc1536b..ab16ab154c408a3bb17db62048b730c0
      // This deletes the keep alive handle attached to the timer function and
      // unblock the shutdown sequence.
    }
-@@ -8690,7 +8705,7 @@ void ChromeContentBrowserClient::OnKeepaliveTimerFired(
+@@ -8690,7 +8710,7 @@ void ChromeContentBrowserClient::OnKeepaliveTimerFired(
    const auto now = base::TimeTicks::Now();
    const auto then = keepalive_deadline_;
    if (now < then) {
@@ -20373,10 +20472,18 @@ index 1c972e4e276b60cc4fb1501700725c99e45f2fe0..887f4f3095bf4abe14439ba4b9391813
  
    // Keeps the browser process and relevant profiles alive while browser-side
 diff --git a/chrome/browser/chrome_resource_bundle_helper.cc b/chrome/browser/chrome_resource_bundle_helper.cc
-index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..5397f0d12579bac34ce466d0b842bea92547282a 100644
+index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..70dd8d8ee43eb9f4fa0b4171a11397f10ce477f0 100644
 --- a/chrome/browser/chrome_resource_bundle_helper.cc
 +++ b/chrome/browser/chrome_resource_bundle_helper.cc
-@@ -20,6 +20,7 @@
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/chrome_resource_bundle_helper.h"
+ 
+ #include "base/command_line.h"
++#include "base/files/file_util.h"
+ #include "base/path_service.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/trace_event/trace_event.h"
+@@ -20,6 +21,7 @@
  #include "components/prefs/pref_service.h"
  #include "extensions/buildflags/buildflags.h"
  #include "ui/base/resource/resource_bundle.h"
@@ -20384,7 +20491,7 @@ index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..5397f0d12579bac34ce466d0b842bea9
  
  #if BUILDFLAG(IS_ANDROID)
  #include "ui/base/resource/resource_bundle_android.h"
-@@ -61,8 +62,10 @@ extern void InitializeLocalState(
+@@ -61,8 +63,10 @@ extern void InitializeLocalState(
  
  // Initializes the shared instance of ResourceBundle and returns the application
  // locale. An empty |actual_locale| value indicates failure.
@@ -20397,7 +20504,7 @@ index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..5397f0d12579bac34ce466d0b842bea9
  #if BUILDFLAG(IS_ANDROID)
    // In order for DetectAndSetLoadNonWebViewLocalePaks() to work ResourceBundle
    // must not have been created yet.
-@@ -70,23 +73,34 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
+@@ -70,23 +74,34 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
    ui::DetectAndSetLoadNonWebViewLocalePaks();
  #endif
  
@@ -20442,7 +20549,7 @@ index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..5397f0d12579bac34ce466d0b842bea9
    CHECK(!actual_locale.empty())
        << "Locale could not be found for " << preferred_locale;
  
-@@ -119,6 +133,7 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
+@@ -119,6 +134,7 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
  
  std::string LoadLocalState(
      ChromeFeatureListCreator* chrome_feature_list_creator,
@@ -20450,7 +20557,7 @@ index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..5397f0d12579bac34ce466d0b842bea9
      bool is_running_tests) {
    base::FilePath user_data_dir;
    if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))
-@@ -131,5 +146,6 @@ std::string LoadLocalState(
+@@ -131,5 +147,6 @@ std::string LoadLocalState(
            base::CommandLine::ForCurrentProcess()));
  
    return InitResourceBundleAndDetermineLocale(
@@ -25450,6 +25557,19 @@ index 1c1beed970c04b404125f7bcad3170ebfec27735..127586d9fbc4078764a5f748d574a358
    // If true, the browser window was created as a tab modal pop-up.
    bool is_tab_modal_popup_ = false;
  
+diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
+index 0f7a326019ebc61040883a103cb7ef26af1f309f..6b01874a92224561b4515d6e7b19786c4096f959 100644
+--- a/chrome/browser/ui/browser_actions.cc
++++ b/chrome/browser/ui/browser_actions.cc
+@@ -3862,7 +3862,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
+               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
+                  actions::ActionInvocationContext context) {
+                 base::RecordAction(base::UserMetricsAction("CreateShortcut"));
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+                 chrome::CreateDesktopShortcutForActiveWebContents(bwi);
+ #else
+                 web_app::CreateWebAppFromCurrentWebContents(
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
 index 921461b9e9bd0423d6d180762d0a06d0a3cd9c94..466c7604d8678d32090551186c19c43f41773202 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
@@ -31076,6 +31196,36 @@ index 0000000000000000000000000000000000000000..f7fa635564cd5c38ae2fcd2c9453ae9b
 +std::unique_ptr<InstalledVersionMonitor> InstalledVersionMonitor::Create() {
 +  return std::make_unique<ArosInstalledVersionMonitor>();
 +}
+diff --git a/chrome/browser/upgrade_detector/version_history_client.cc b/chrome/browser/upgrade_detector/version_history_client.cc
+index 309c0b3433dfce870dad81464e83004f27becf73..337c63db86213ae4fd890d6b8b82fa1c722a00cc 100644
+--- a/chrome/browser/upgrade_detector/version_history_client.cc
++++ b/chrome/browser/upgrade_detector/version_history_client.cc
+@@ -165,6 +165,10 @@ std::optional<base::Time> OnVersionReleasesFetched(
+ // and channel. The response contains the single release with the most recent
+ // `serving.endTime`.
+ GURL GetVersionReleasesUrl(base::Version version) {
++#if BUILDFLAG(IS_AROS)
++  // Google VersionHistory does not publish AROS builds.
++  return GURL();
++#else
+ // CURRENT_PLATFORM is the platform name, as ingested by the VersionHistory API.
+ // Use #define instead of a constant, so it concatenates at compile-time.
+ #if BUILDFLAG(IS_WIN)
+@@ -205,9 +209,14 @@ GURL GetVersionReleasesUrl(base::Version version) {
+       "/channels/%s/versions/%s/releases/?order_by=endtime%%20desc&page_size=1",
+       GetChannelString(), version.GetString()));
+ #undef CURRENT_PLATFORM
++#endif
+ }
+ 
+ void GetLastServedDate(base::Version version, LastServedDateCallback callback) {
++#if BUILDFLAG(IS_AROS)
++  std::move(callback).Run(std::nullopt);
++#else
+   FetchUrl(GetVersionReleasesUrl(std::move(version)),
+            base::BindOnce(&OnVersionReleasesFetched).Then(std::move(callback)));
++#endif
+ }
 diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
 index 467440fac1ff59f8de623e9b6875d6ad2c518b76..2d51ab259cefc3bc898acf5d0b2b1992dd67fe35 100644
 --- a/chrome/browser/web_applications/BUILD.gn
@@ -46054,10 +46204,10 @@ index 1d5987a4d2af6df976edc7bbe5c9b438e1147c18..78955f97e675d772d54e5163d70f4211
      sources = [
 diff --git a/mojo/core/channel_aros.cc b/mojo/core/channel_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..9b344c53ea3102675d91dbfd9b2213ed714bec9b
+index 0000000000000000000000000000000000000000..d230c7c630e5f7a3b51af2a6948ba4f9e9e449ec
 --- /dev/null
 +++ b/mojo/core/channel_aros.cc
-@@ -0,0 +1,299 @@
+@@ -0,0 +1,303 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -46073,6 +46223,7 @@ index 0000000000000000000000000000000000000000..9b344c53ea3102675d91dbfd9b2213ed
 +#include "base/functional/bind.h"
 +#include "base/location.h"
 +#include "base/task/single_thread_task_runner.h"
++#include "base/threading/aros_native_task.h"
 +#include "mojo/core/platform_handle_in_transit.h"
 +#include "mojo/public/cpp/platform/platform_channel_endpoint.h"
 +#include "mojo/public/cpp/platform/platform_handle.h"
@@ -46288,7 +46439,10 @@ index 0000000000000000000000000000000000000000..9b344c53ea3102675d91dbfd9b2213ed
 +    observing_io_loop_ = false;
 +  }
 +  if (!reader_thread_.is_null()) {
-+    CHECK_EQ(0, pthread_join(reader_thread_.platform_handle(), nullptr));
++    // Complete the existing native-reader shutdown barrier on the I/O task.
++    // The handle is an AROS worker control block, not a pthread identifier.
++    ArosPlatformTaskJoin(
++        static_cast<ArosPlatformTask*>(reader_thread_.platform_handle()));
 +    reader_thread_ = base::PlatformThreadHandle();
 +    MarkArosChannelReaderJoined(channel_);
 +  }
@@ -56562,6 +56716,34 @@ index 660e966c1d3db1f441d458b8961ff83072086d3b..59885ff3c18864cbc0221b6b58f3393d
  Thread* Thread::Current() {
    return current_thread;
  }
+diff --git a/third_party/blink/renderer/platform/scheduler/common/thread_cpu_throttler.cc b/third_party/blink/renderer/platform/scheduler/common/thread_cpu_throttler.cc
+index 3436a306e389556cf18339fd4145ec5cc3bd2903..8ca9375f636093e2520503cef7942e66dd0e42b7 100644
+--- a/third_party/blink/renderer/platform/scheduler/common/thread_cpu_throttler.cc
++++ b/third_party/blink/renderer/platform/scheduler/common/thread_cpu_throttler.cc
+@@ -14,7 +14,7 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include <signal.h>
+ #define USE_SIGNALS 1
+ #elif BUILDFLAG(IS_WIN)
+@@ -204,6 +204,14 @@ ThreadCPUThrottler::ThreadCPUThrottler() = default;
+ ThreadCPUThrottler::~ThreadCPUThrottler() = default;
+ 
+ void ThreadCPUThrottler::SetThrottlingRate(double rate) {
++#if BUILDFLAG(IS_AROS)
++  // Native Exec workers are not pthread IDs. DevTools CPU emulation needs
++  // a native scheduling mechanism before it can safely suspend these tasks.
++  // Keep the effective rate at 1 rather than claim throttling was applied.
++  if (rate > 1)
++    LOG(ERROR) << "DevTools CPU throttling is not supported on AROS.";
++  return;
++#endif
+   if (rate <= 1) {
+     if (throttling_thread_) {
+       throttling_thread_.reset();
 diff --git a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
 index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..f8e5bb936a3cb93a314f50acb66b4b42e0677dbd 100644
 --- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc

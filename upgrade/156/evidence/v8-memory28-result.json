@@ -1,0 +1,19 @@
+{
+  "status": "FAIL: high physical RAM use and post-first-app-close stack check",
+  "runtime": "native AROS QEMU KVM 2 CPUs, prior pthread-worker V8 library",
+  "library_sha256": "c288e7e604024c20d55d00084911842b87f8471d5ef840f3c91dee256c1d0265",
+  "guest_free_bytes": {
+    "baseline": 4266315440,
+    "app_A_two_isolates": 2346180128,
+    "apps_A_B_four_isolates": 679305056,
+    "A_closed_B_live": 2343682208
+  },
+  "second_app_delta_bytes": 1666875072,
+  "failure": "V8 Check failed: IsOnCentralStack() in app B after app A closed",
+  "limitations": [
+    "guest-wide deltas include test process and system activity",
+    "Full CEF not running",
+    "No successful end-to-end lifecycle result",
+    "Native-worker rebuild and native stack-bound fix not yet deployed"
+  ]
+}
