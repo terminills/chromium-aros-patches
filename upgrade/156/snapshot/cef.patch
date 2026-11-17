@@ -449,6 +449,21 @@ index 729150085bc0344598216c13465c953d1454b34b..b453024e8c5e0fc8ec54b53e8676c668
  ///
  /// All ref-counted framework classes must extend this class.
  ///
+diff --git a/include/internal/cef_thread_internal.h b/include/internal/cef_thread_internal.h
+index 3e9ac53812020fc125d2209680c4375857b984bc..12fa9e248ee25d1252534a2ea81ce02f2a0c4be6 100644
+--- a/include/internal/cef_thread_internal.h
++++ b/include/internal/cef_thread_internal.h
+@@ -62,6 +62,10 @@ CEF_EXPORT cef_platform_thread_id_t cef_get_current_platform_thread_id(void);
+ #if defined(OS_WIN)
+ typedef DWORD cef_platform_thread_handle_t;
+ #define kInvalidPlatformThreadHandle 0U
++#elif defined(OS_AROS)
++// Matches base::PlatformThreadHandle's opaque native Exec task handle.
++typedef void* cef_platform_thread_handle_t;
++#define kInvalidPlatformThreadHandle 0
+ #elif defined(OS_POSIX)
+ typedef pthread_t cef_platform_thread_handle_t;
+ #define kInvalidPlatformThreadHandle 0
 diff --git a/include/internal/cef_types.h b/include/internal/cef_types.h
 index 8c2c81fac3206952b1030ab03b86a936a16e8750..7d55fbe81cabf73f78632d98fa5e2e664327a1e1 100644
 --- a/include/internal/cef_types.h

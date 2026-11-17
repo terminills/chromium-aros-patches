@@ -1,0 +1,18 @@
+{
+  "status": "allocator audit; memory/lifetime acceptance still failing",
+  "old_policy": "124 patch 0674 allocates PartitionAlloc super-pages on demand at 2 MiB; retained in 156 partition_alloc.gni AROS has_64_bit_pointers=false with 64-bit address bitmap adaptations",
+  "native_iso": 29,
+  "guest_cpus": 2,
+  "free_bytes": {
+    "baseline": 4266077152,
+    "A_ready": 2896665152,
+    "A_and_B_ready": 2336037488,
+    "A_closed_B_live": 2893572864
+  },
+  "incremental_B_bytes": 560627664,
+  "mapping_trace": "Four requests of 268496896 bytes, one per isolate; shared code range request 536870912 once",
+  "identified_reservation": "JSDispatchTableReservationSize=256 MiB, SegmentedTableBase reserves contiguous backing, alignment request adds 61440 bytes",
+  "constraint": "Generated x64/arm64 code and C++ table access use base plus shifted handle; cannot replace reservation with scattered blocks without updating all access paths and snapshot ABI together",
+  "next_validation": "On-demand dispatch table design must retain handle capacity, code generation consistency, concurrency and isolate independence. Do not treat generic V8_LOWER_LIMITS_MODE as an equivalent fix: it lowers unrelated JavaScript limits.",
+  "runtime_result": "No completed PASS; exception handler overflow follows A-close. Screen captured by supervisor is black, not UI success."
+}
