@@ -192,7 +192,10 @@ The AROS event implementation uses one-shot shared state with a mutex and condit
 ## Credentials library on master
 
 `aros/credentials-library-master.patch` carries the native library port at
-`9b448f77`. It preserves existing login key encoding, separates named
+`9b448f77`; apply `aros/credentials-entropy-resource.patch` (`51de4166`)
+after it to use master's `entropy.resource` on both architectures. Both library
+cross-builds pass, and native x86-64 replay passes with that entropy source.
+The port preserves existing login key encoding, separates named
 collections, rejects truncated names, respects read-only and explicit locks,
 and refuses to replace a corrupt or unreadable master seed. The native test
 uses only synthetic data in a disposable RAM directory and returns 0.

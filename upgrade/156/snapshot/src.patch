@@ -19299,7 +19299,7 @@ index 2b3ed5cf2e01569c71e7dd6872b630983956f419..059ffb20f277f8d18b7706f0a71e9fb5
  
    // Initialize features and field trials, either from command line or from
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff131621c5 100644
+index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe592579687789dfcce4 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -527,7 +527,11 @@ if (!is_win && !is_android) {
@@ -19315,7 +19315,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
      deps = [
        ":process_singleton",
        ":process_singleton_internal",
-@@ -1608,6 +1612,17 @@ source_set("core") {
+@@ -1608,6 +1612,18 @@ source_set("core") {
      ]
    }
  
@@ -19327,13 +19327,14 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
 +      "platform_util_aros.cc",
 +      "shell_integration_aros.cc",
 +    ]
-+    deps += [ ":fullscreen" ]
++    deps += [ ":fullscreen", "//components/os_crypt/async/browser:aros_key_provider",
++              "//components/os_crypt/browser:posix_key_provider" ]
 +  }
 +
    if (is_linux || is_chromeos) {
      sources += [
        "chrome_browser_main_linux.cc",
-@@ -1848,7 +1863,6 @@ source_set("core") {
+@@ -1848,7 +1864,6 @@ source_set("core") {
      deps += [
        "//chrome/browser/screen_ai:screen_ai_downloader",
        "//chrome/browser/screen_ai:screen_ai_install_state",
@@ -19341,7 +19342,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
      ]
    }
  
-@@ -1892,6 +1906,10 @@ source_set("core") {
+@@ -1892,6 +1907,10 @@ source_set("core") {
      deps += [ "//chrome/browser/ui/webui/skills" ]
    }
  
@@ -19352,7 +19353,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
    if (enable_pdf) {
      deps += [
        "//chrome/browser/pdf",
-@@ -1989,7 +2007,7 @@ source_set("core") {
+@@ -1989,7 +2008,7 @@ source_set("core") {
      ]
    }
  
@@ -19361,7 +19362,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
      sources += [ "//chrome/app/chrome_crash_reporter_client.cc" ]
      deps += [
        "//chrome/app:chrome_crash_reporter_client",
-@@ -2078,6 +2096,7 @@ source_set("browser") {
+@@ -2078,6 +2097,7 @@ source_set("browser") {
      ":unexpire_flags",
      "//base",
      "//cc",
@@ -19369,7 +19370,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
      "//chrome:extra_resources",
      "//chrome/browser/accessibility:impl",
      "//chrome/browser/account_settings",
-@@ -2535,6 +2554,10 @@ source_set("browser") {
+@@ -2535,6 +2555,10 @@ source_set("browser") {
      ]
    }
  
@@ -19380,7 +19381,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..69ac8f3d9952ec128cf7860127f858ff
    if (is_android) {
      deps += [
        "//chrome/browser/android",
-@@ -2608,7 +2631,6 @@ source_set("browser") {
+@@ -2608,7 +2632,6 @@ source_set("browser") {
        "//chrome/browser/profile_resetter:impl",
        "//chrome/browser/record_replay",
        "//chrome/browser/record_replay:impl",
@@ -19483,6 +19484,43 @@ index 08949a69415dfa9f836e00929a34330a34546ce2..e417f50fa68e274b80c0d45bdaa45c7b
 +  }
    NOTREACHED();
  }
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+index bed9453f156ba5b94a8daa5261085045e288098e..d66f2259feaf4980947bdcefa5d4982700d266ed 100644
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -280,6 +280,9 @@ void OnLocalStatePrefsLoaded();
+ 
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ #include "components/os_crypt/async/browser/posix_key_provider.h"
++#if BUILDFLAG(IS_AROS)
++#include "components/os_crypt/async/browser/aros_key_provider.h"
++#endif
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -1330,6 +1333,9 @@ BuildState* BrowserProcessImpl::GetBuildState() {
+ // static
+ void BrowserProcessImpl::RegisterPrefs(PrefRegistrySimple* registry) {
+   registry->RegisterBooleanPref(prefs::kDefaultBrowserSettingEnabled, false);
++#if BUILDFLAG(IS_AROS)
++  os_crypt_async::ArosKeyProvider::RegisterLocalPrefs(registry);
++#endif
+ 
+   registry->RegisterBooleanPref(prefs::kAllowCrossOriginAuthPrompt, false);
+ 
+@@ -1655,6 +1661,12 @@ void BrowserProcessImpl::PreMainMessageLoopRun() {
+   }
+ #endif  // BUILDFLAG(IS_MAC)
+ 
++#if BUILDFLAG(IS_AROS)
++  providers.emplace_back(
++      /*precedence=*/20u,
++      std::make_unique<os_crypt_async::ArosKeyProvider>(local_state()));
++#endif
++
+   os_crypt_async_ =
+       std::make_unique<os_crypt_async::OSCryptAsync>(std::move(providers));
+ 
 diff --git a/chrome/browser/chooser_controller/BUILD.gn b/chrome/browser/chooser_controller/BUILD.gn
 index cefb95bba0f5462bc167052a96aa0e6101d6305d..4b8172cb0f01b339e08d2c2f4a2686dfec4bb54f 100644
 --- a/chrome/browser/chooser_controller/BUILD.gn
@@ -33080,6 +33118,166 @@ index ce4ecffcbf0014cf9e949de335d59bec42d5d594..1cc5ed53510251a1d79b3f4387550f56
 +  # Native component availability is checked separately at runtime.
 +  enable_on_device_translation = is_mac || is_win || is_linux || is_chromeos || is_aros
  }
+diff --git a/components/os_crypt/async/browser/BUILD.gn b/components/os_crypt/async/browser/BUILD.gn
+index 2309659150f87cced2def4071588c60cdc9c591c..053257da09703822d99648f92230fb6484cdb70c 100644
+--- a/components/os_crypt/async/browser/BUILD.gn
++++ b/components/os_crypt/async/browser/BUILD.gn
+@@ -212,3 +212,11 @@ source_set("unit_tests") {
+     ]
+   }
+ }
++
++if (is_aros) {
++  source_set("aros_key_provider") {
++    sources = [ "aros_key_provider.cc", "aros_key_provider.h" ]
++    deps = [ ":key_provider_interface", "//base", "//crypto", "//components/prefs",
++             "//third_party/boringssl", "//components/os_crypt/async/common" ]
++  }
++}
+diff --git a/components/os_crypt/async/browser/aros_key_provider.cc b/components/os_crypt/async/browser/aros_key_provider.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f82ddf63efc2d626744e189e3e6f681e8c643e60
+--- /dev/null
++++ b/components/os_crypt/async/browser/aros_key_provider.cc
+@@ -0,0 +1,110 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include "components/os_crypt/async/browser/aros_key_provider.h"
++#include <array>
++#include <cstring>
++#include <utility>
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "base/rand_util.h"
++#include "base/uuid.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/synchronization/lock.h"
++#include "base/task/thread_pool.h"
++#include "components/os_crypt/async/common/algorithm.mojom.h"
++#include "crypto/hash.h"
++#include "third_party/boringssl/src/include/openssl/mem.h"
++#include <proto/exec.h>
++#define __CREDENTIALS_NOLIBBASE__
++#define __CREDENTIALS_LIBBASE credentials_base
++#include <proto/credentials.h>
++#include <libraries/credentials.h>
++
++namespace os_crypt_async {
++namespace {
++constexpr char kTag[] = "a01";
++constexpr char kNamespacePref[] = "os_crypt.aros_key_namespace";
++using KeyResult = base::expected<Encryptor::Key, KeyProvider::KeyError>;
++struct NativeKeyring {
++  Library* credentials_base = OpenLibrary("credentials.library", 1);
++  APTR keyring = credentials_base ? CredOpenKeyring("login", CRKF_CREATE) : nullptr;
++  ~NativeKeyring() {
++    if (keyring) CredCloseKeyring(keyring);
++    if (credentials_base) CloseLibrary(credentials_base);
++  }
++};
++KeyResult LoadKey(const std::string& application_namespace) {
++  const auto unavailable = base::unexpected(KeyProvider::KeyError::kTemporarilyUnavailable);
++  if (application_namespace.empty()) return unavailable;
++  // One resident engine serves all application contexts. Serialize first-use
++  // lookup/create across those contexts; never cache an application's key here.
++  static base::NoDestructor<base::Lock> creation_lock;
++  base::AutoLock lock(*creation_lock);
++  NativeKeyring native;
++  if (!native.keyring) return unavailable;
++  Library* credentials_base = native.credentials_base;
++  const std::string account = base::HexEncode(crypto::hash::Sha256(application_namespace));
++  APTR stored = nullptr;
++  ULONG size = 0;
++  LONG rc = CredKeyringLookup(native.keyring, "Chromium.OSCrypt", account.c_str(), &stored, &size);
++  std::array<uint8_t, 32> bytes{};
++  if (rc == CRED_OK) {
++    if (size != bytes.size()) {
++      CredKeyringFree(stored, size);
++      return unavailable;
++    }
++    memcpy(bytes.data(), stored, bytes.size());
++    CredKeyringFree(stored, size);
++  } else if (rc == CRED_ERR_NOTFOUND) {
++    base::RandBytes(bytes);
++    rc = CredKeyringStore(native.keyring, "Chromium.OSCrypt", account.c_str(),
++                         bytes.data(), bytes.size(), "Chromium encryption key");
++    if (rc != CRED_OK) {
++      OPENSSL_cleanse(bytes.data(), bytes.size());
++      return unavailable;
++    }
++  } else {
++    // Locked, unreadable or corrupt storage must never create a replacement.
++    return unavailable;
++  }
++  Encryptor::Key key(bytes, mojom::Algorithm::kAES256GCM);
++  OPENSSL_cleanse(bytes.data(), bytes.size());
++  return key;
++}
++void PostKeyTask(std::string application_namespace, KeyProvider::KeyCallback callback) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&LoadKey, std::move(application_namespace)),
++      base::BindOnce([](KeyProvider::KeyCallback callback, KeyResult result) {
++        std::move(callback).Run(kTag, std::move(result));
++      }, std::move(callback)));
++}
++}  // namespace
++ArosKeyProvider::ArosKeyProvider(PrefService* local_state)
++    : local_state_(local_state) {}
++ArosKeyProvider::~ArosKeyProvider() = default;
++void ArosKeyProvider::RegisterLocalPrefs(PrefRegistrySimple* registry) {
++  registry->RegisterStringPref(kNamespacePref, "");
++}
++void ArosKeyProvider::GetKey(KeyCallback callback) {
++  std::string application_namespace = local_state_->GetString(kNamespacePref);
++  if (application_namespace.empty()) {
++    // Keep the identity with Local State so moving a user-data directory does
++    // not orphan its key. Persist it before creating/encrypting with that key.
++    application_namespace = base::Uuid::GenerateRandomV4().AsLowercaseString();
++    local_state_->SetString(kNamespacePref, application_namespace);
++    local_state_->CommitPendingWrite(base::BindOnce(
++        &PostKeyTask, std::move(application_namespace), std::move(callback)));
++    return;
++  }
++  if (!base::Uuid::ParseLowercase(application_namespace).is_valid()) {
++    std::move(callback).Run(kTag, base::unexpected(KeyError::kTemporarilyUnavailable));
++    return;
++  }
++  PostKeyTask(std::move(application_namespace), std::move(callback));
++}
++bool ArosKeyProvider::UseForEncryption() { return true; }
++}  // namespace os_crypt_async
+diff --git a/components/os_crypt/async/browser/aros_key_provider.h b/components/os_crypt/async/browser/aros_key_provider.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..9d8c8e026bbd1b48ccc8b9c1d37ca19c635d3085
+--- /dev/null
++++ b/components/os_crypt/async/browser/aros_key_provider.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef COMPONENTS_OS_CRYPT_ASYNC_BROWSER_AROS_KEY_PROVIDER_H_
++#define COMPONENTS_OS_CRYPT_ASYNC_BROWSER_AROS_KEY_PROVIDER_H_
++#include "base/memory/raw_ptr.h"
++class PrefService;
++class PrefRegistrySimple;
++#include "components/os_crypt/async/browser/key_provider.h"
++namespace os_crypt_async {
++class ArosKeyProvider : public KeyProvider {
++ public:
++  explicit ArosKeyProvider(PrefService* local_state);
++  static void RegisterLocalPrefs(PrefRegistrySimple* registry);
++  ~ArosKeyProvider() override;
++  void GetKey(KeyCallback callback) override;
++  bool UseForEncryption() override;
++ private:
++  const raw_ptr<PrefService> local_state_;
++};
++}  // namespace os_crypt_async
++#endif
 diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
 index 10db0687101b69542f9dd33592d0655c7343e3c8..941912695c5e00a31873ed456662f74c9121b8d4 100644
 --- a/components/os_crypt/common/BUILD.gn
@@ -36005,7 +36203,7 @@ index a6249f828d39b08e73ac1628eb77df72271aab2e..7bdb0a9be3799a15e6b790873b08c8e9
  #endif  // BUILDFLAG(USE_ZYGOTE)
 diff --git a/content/browser/child_process_launcher_helper_aros.cc b/content/browser/child_process_launcher_helper_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d9f086e582db1457048f505b58f5e5b87c48ea6b
+index 0000000000000000000000000000000000000000..49c53b8317b21c983fc186e669d102002da55eb7
 --- /dev/null
 +++ b/content/browser/child_process_launcher_helper_aros.cc
 @@ -0,0 +1,140 @@
@@ -36129,8 +36327,8 @@ index 0000000000000000000000000000000000000000..d9f086e582db1457048f505b58f5e5b8
 +  base::EnsureProcessTerminated(std::move(process.process));
 +}
 +
-+void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
-+    base::Process,
++void ChildProcessLauncherHelper::ApplyProcessPriorityOnLauncherThread(
++    base::Process&,
 +    base::Process::Priority) {
 +  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
 +}
@@ -36585,6 +36783,110 @@ index 09d80f2ba678df9ab1b9b2b74ad66d4546036fb2..5dbff44c280a145c65146279a971620f
   public:
    explicit SyntheticGestureTargetBase(RenderWidgetHostImpl* host);
  
+diff --git a/content/browser/renderer_host/media/media_devices_dispatcher_host.cc b/content/browser/renderer_host/media/media_devices_dispatcher_host.cc
+index 2a6842ec249b4f32712b7a2dfbf5bb80f30f326d..98a10a07819c4cbd12e2c5faa73a05b2e0aa8452 100644
+--- a/content/browser/renderer_host/media/media_devices_dispatcher_host.cc
++++ b/content/browser/renderer_host/media/media_devices_dispatcher_host.cc
+@@ -349,6 +349,15 @@ void MediaDevicesDispatcherHost::ProduceSubCaptureTargetId(
+           render_frame_host_id_, type),
+       std::move(callback));
+ }
++#else
++void MediaDevicesDispatcherHost::CloseFocusWindowOfOpportunity(
++    const std::string& label) {}
++
++void MediaDevicesDispatcherHost::ProduceSubCaptureTargetId(
++    media::mojom::SubCaptureTargetType type,
++    ProduceSubCaptureTargetIdCallback callback) {
++  std::move(callback).Run(std::string());
++}
+ #endif  // BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+ 
+ void MediaDevicesDispatcherHost::SetPreferredSinkId(
+diff --git a/content/browser/renderer_host/media/media_devices_dispatcher_host.h b/content/browser/renderer_host/media/media_devices_dispatcher_host.h
+index 0e75d66ad2ecb518235f91b2263ea9f41e371b03..ce3e47b0cb2cd9c25aaad6fb3740eeb91a6f0445 100644
+--- a/content/browser/renderer_host/media/media_devices_dispatcher_host.h
++++ b/content/browser/renderer_host/media/media_devices_dispatcher_host.h
+@@ -84,12 +84,11 @@ class CONTENT_EXPORT MediaDevicesDispatcherHost
+   void SetCaptureHandleConfig(
+       blink::mojom::CaptureHandleConfigPtr config) override;
+ 
+-#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   void CloseFocusWindowOfOpportunity(const std::string& label) override;
+   void ProduceSubCaptureTargetId(
+       media::mojom::SubCaptureTargetType type,
+       ProduceSubCaptureTargetIdCallback callback) override;
+-#endif  // BUILDFLAG(ENABLE_SCREEN_CAPTURE)
++
+ 
+   void SetPreferredSinkId(const std::string& hashed_sink_id,
+                           SetPreferredSinkIdCallback callback) override;
+diff --git a/content/browser/renderer_host/media/media_stream_dispatcher_host.cc b/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
+index a2600d2e48205c5ee12ee6af4054606088318c81..0c18655ec498d7d36f505accf1a2d9f31f182606 100644
+--- a/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
++++ b/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
+@@ -662,10 +662,12 @@ void MediaStreamDispatcherHost::FocusCapturedSurface(const std::string& label,
+                                                      bool focus) {
+   CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
+ 
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   media_stream_manager_->SetCapturedDisplaySurfaceFocus(
+       label, focus,
+       /*is_from_microtask=*/false,
+       /*is_from_timer=*/false);
++#endif
+ }
+ 
+ 
+@@ -721,6 +723,17 @@ void MediaStreamDispatcherHost::RequestCapturedSurfaceControlPermission(
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+ 
++#if !BUILDFLAG(ENABLE_SCREEN_CAPTURE)
++void MediaStreamDispatcherHost::ApplySubCaptureTarget(
++    const base::UnguessableToken&,
++    media::mojom::SubCaptureTargetType,
++    const base::Token&,
++    uint32_t,
++    ApplySubCaptureTargetCallback callback) {
++  std::move(callback).Run(media::mojom::ApplySubCaptureTargetResult::kNotImplemented);
++}
++#endif
++
+ #if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+ void MediaStreamDispatcherHost::ApplySubCaptureTarget(
+     const base::UnguessableToken& device_id,
+diff --git a/content/browser/renderer_host/media/media_stream_dispatcher_host.h b/content/browser/renderer_host/media/media_stream_dispatcher_host.h
+index 5961f20e2f12dbe5f169729c7f442df2e83affc9..1ddbcb5c95bcf6cc1075bece9c197cd75fc5b832 100644
+--- a/content/browser/renderer_host/media/media_stream_dispatcher_host.h
++++ b/content/browser/renderer_host/media/media_stream_dispatcher_host.h
+@@ -151,12 +151,12 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
+       RequestCapturedSurfaceControlPermissionCallback callback) override;
+ #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+ 
+-#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   void ApplySubCaptureTarget(const base::UnguessableToken& session_id,
+                              media::mojom::SubCaptureTargetType type,
+                              const base::Token& sub_capture_target,
+                              uint32_t sub_capture_target_version,
+                              ApplySubCaptureTargetCallback callback) override;
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   void OnSubCaptureTargetValidationComplete(
+       const base::UnguessableToken& session_id,
+       media::mojom::SubCaptureTargetType type,
+diff --git a/content/browser/renderer_host/media/media_stream_manager.cc b/content/browser/renderer_host/media/media_stream_manager.cc
+index 6a04197434daf35d022a9d340e3b8b334c85ce87..d3725ebae8ef47939e98ed9e0d09e00e7671703b 100644
+--- a/content/browser/renderer_host/media/media_stream_manager.cc
++++ b/content/browser/renderer_host/media/media_stream_manager.cc
+@@ -3252,7 +3252,7 @@ void MediaStreamManager::PanTiltZoomPermissionChecked(
+     return;
+   }
+ 
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
++#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+   // 1. Only the first call to SetCapturedDisplaySurfaceFocus() has an
+   //    effect, so a direct call to SetCapturedDisplaySurfaceFocus()
+   //    before the scheduled task is executed would render the scheduled
 diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
 index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f77327170bde744 100644
 --- a/content/browser/renderer_host/navigation_request.cc
@@ -36749,14 +37051,14 @@ index 410948963a049c056bc605867a9fa5866347c435..e80365c1b3cff6de0cd5dd0dd788b5f8
            GetProcess()->GetDeprecatedID(),
            browser_calc_origin_to_commit.value(),
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..5d4e887aa3f897337ee581607809a2c6136ba764 100644
+index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096abd1e62ed 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -59,6 +59,8 @@
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/stringprintf.h"
-+#include "base/strings/string_piece.h"
++#include <string_view>
 +#include "base/strings/string_split.h"
  #include "base/supports_user_data.h"
  #include "base/system/sys_info.h"
@@ -36799,9 +37101,9 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..5d4e887aa3f897337ee581607809a2c6
 +
 +  std::string js_flags =
 +      command_line->GetSwitchValueASCII(blink::switches::kJavaScriptFlags);
-+  std::vector<base::StringPiece> flag_list = base::SplitStringPiece(
++  std::vector<std::string_view> flag_list = base::SplitStringPiece(
 +      js_flags, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-+  for (base::StringPiece flag : flag_list) {
++  for (std::string_view flag : flag_list) {
 +    if (flag == kSingleThreadedGC || flag == kNoSingleThreadedGC) {
 +      return;
 +    }
@@ -37458,6 +37760,19 @@ index a0fd1878545f842d492d5103039fa9ca8ae5364f..950d006aa44b6b9b17aeee1dee41cee4
        }
  
        // Make an exception to allow most visited tiles to commit in third-party
+diff --git a/content/browser/security/cpsp/child_process_security_policy_impl.rs b/content/browser/security/cpsp/child_process_security_policy_impl.rs
+index fc8222b42f82110c274e5a774573ea114786d370..ddc8f52836ef223414fc5c4367471992cc9c8759 100644
+--- a/content/browser/security/cpsp/child_process_security_policy_impl.rs
++++ b/content/browser/security/cpsp/child_process_security_policy_impl.rs
+@@ -546,7 +546,7 @@ fn can_read_file_for_browser_upload(file: &FilePath) -> bool {
+         // underlying bytes in `FilePath`, avoiding a heap allocation.
+         cpsp.browser_granted_files.contains_key(file.as_path())
+     }
+-    #[cfg(windows)]
++    #[cfg(any(windows, target_os = "aros"))]
+     {
+         // Windows paths require converting UTF-16 to WTF-8, which allocates a
+         // `PathBuf`.
 diff --git a/content/browser/service_worker/service_worker_ping_controller.cc b/content/browser/service_worker/service_worker_ping_controller.cc
 index b47ee123f7a076d5f560bcb5b18435e8d73b7d5b..436351c62a675184d0d511ec040ecb58690bc6be 100644
 --- a/content/browser/service_worker/service_worker_ping_controller.cc
@@ -37698,6 +38013,18 @@ index 8efd6fe771b3922b76071aa9d97b42044ab72280..0256671730bfaaebd92a1cf24885fc21
    // Should be initialized with existing per-profile CORS access lists.
    DCHECK(context_params->cors_origin_access_list.empty())
        << "NetworkContextParams::cors_origin_access_list should be populated "
+diff --git a/content/browser/video_capture_service_impl.cc b/content/browser/video_capture_service_impl.cc
+index 2aad8b4ad44a191df69ba18893ded4f368bbca60..3e9250b886e3c32d903d56b51a77bf77581d6bfb 100644
+--- a/content/browser/video_capture_service_impl.cc
++++ b/content/browser/video_capture_service_impl.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "base/no_destructor.h"
++#include "gpu/ipc/client/gpu_channel_host.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/sequence_local_storage_slot.h"
+ #include "base/time/time.h"
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
 index 223c3492d16999d1cfbf1d459ceff0035200c26b..79c1675a257406fecaf260be0044687c86374294 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
@@ -38116,6 +38443,30 @@ index abbb4f4cccccff8e6fa2d8f1948fab4ef345c89f..c1fafecb9aab15352b8d2498703b87dc
  CONTENT_EXPORT int RunContentProcess(ContentMainParams params,
                                       ContentMainRunner* content_main_runner);
  
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 790d6657077abd23c475e8570668b24c5ca7729b..32186ed2e88c38639c4e541f373f422c684dd35a 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -630,6 +630,7 @@ source_set("browser_sources") {
+     "//ui/base/mojom:ui_base_types",
+   ]
+   deps = [
++    "//components/optimization_guide/core:ondevice",
+     "//cc",
+     "//components/input",
+     "//components/language_detection/content/browser",
+diff --git a/content/public/browser/bluetooth_delegate.cc b/content/public/browser/bluetooth_delegate.cc
+index 257b09d753beb75519299524c667f9a430e25dc6..5251c5533b061e53b5eeddb9002412a0ba4dabcc 100644
+--- a/content/public/browser/bluetooth_delegate.cc
++++ b/content/public/browser/bluetooth_delegate.cc
+@@ -5,6 +5,7 @@
+ #include "content/public/browser/bluetooth_delegate.h"
+ 
+ #include "third_party/blink/public/common/bluetooth/web_bluetooth_device_id.h"
++#include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
+ 
+ namespace content {
+ 
 diff --git a/content/public/browser/browser_child_process_host_delegate.h b/content/public/browser/browser_child_process_host_delegate.h
 index 84df106a425e7bc685cda8cd022485a47887a58e..a8f5678c8a7085a77a37c14697c7f21d853a5252 100644
 --- a/content/public/browser/browser_child_process_host_delegate.h
@@ -38133,10 +38484,18 @@ index 84df106a425e7bc685cda8cd022485a47887a58e..a8f5678c8a7085a77a37c14697c7f21d
    // process, if any.
    virtual std::optional<std::string> GetServiceName();
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
-index 9fdb8a4b7b54991e024a36338682c7129b59a7ad..03baa856aa733c065d09c2c585b820544bdb8266 100644
+index 9fdb8a4b7b54991e024a36338682c7129b59a7ad..88bd4660d03298907beeae1b20654165e55387ee 100644
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -1182,7 +1182,7 @@ ContentBrowserClient::URLLoaderRequestHandler ContentBrowserClient::
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "content/public/browser/content_browser_client.h"
++#include "components/optimization_guide/core/model_execution/model_broker_client.h"
+ 
+ #include <memory>
+ #include <optional>
+@@ -1182,7 +1183,7 @@ ContentBrowserClient::URLLoaderRequestHandler ContentBrowserClient::
  void ContentBrowserClient::OnNetworkServiceCreated(
      network::mojom::NetworkService* network_service) {}
  
@@ -38145,7 +38504,7 @@ index 9fdb8a4b7b54991e024a36338682c7129b59a7ad..03baa856aa733c065d09c2c585b82054
      BrowserContext* context,
      bool in_memory,
      const base::FilePath& relative_partition_path,
-@@ -1191,6 +1191,7 @@ void ContentBrowserClient::ConfigureNetworkContextParams(
+@@ -1191,6 +1192,7 @@ void ContentBrowserClient::ConfigureNetworkContextParams(
          cert_verifier_creation_params) {
    network_context_params->user_agent = GetUserAgent();
    network_context_params->accept_language = "en-us,en";
@@ -51884,7 +52243,7 @@ index 2a4949728745ed2e5e926676097d3c41f0c49ef3..c4d1db95c7276089409d2fbf40aed0df
  
  bool OffscreenCanvas::OriginClean() const {
 diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
-index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..816b946bdf7911e3661f310fc7b061885c0b28ce 100644
+index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..b825389dfd3b910e5245232c8dd45905142bd5a8 100644
 --- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
 +++ b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
 @@ -5,9 +5,12 @@
@@ -51909,7 +52268,7 @@ index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..816b946bdf7911e3661f310fc7b06188
 +    LOG(ERROR) << "[Chromium:AROS:WorkerShutdown] suppressing worker startup "
 +                  "after renderer shutdown began";
 +    asked_to_terminate_ = true;
-+    return;
++    return false;
 +  }
 +#endif
 +
@@ -52150,7 +52509,7 @@ index 2c8d5a8aada7230bc141feed9e1af2e6e95d3664..ee1829e828b30eb33e9f4834db7ed3f8
  
  #endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_INSPECTOR_TYPE_BUILDER_HELPER_H_
 diff --git a/third_party/blink/renderer/modules/cache_storage/cache.cc b/third_party/blink/renderer/modules/cache_storage/cache.cc
-index f28ab4ef2029cbef2888cdb1343b508db3d02672..fbafb22c17c1b1657d8bcfe3560cb0819352b7f1 100644
+index f28ab4ef2029cbef2888cdb1343b508db3d02672..55d4c9ff57cf3ab5b876a4cefed9e511a95dabc4 100644
 --- a/third_party/blink/renderer/modules/cache_storage/cache.cc
 +++ b/third_party/blink/renderer/modules/cache_storage/cache.cc
 @@ -11,6 +11,7 @@
@@ -52172,7 +52531,7 @@ index f28ab4ef2029cbef2888cdb1343b508db3d02672..fbafb22c17c1b1657d8bcfe3560cb081
 +      exception_state.ThrowDOMException(
 +          DOMExceptionCode::kAbortError,
 +          "Cache response body load aborted during shutdown.");
-+      barrier_callback_->OnError(exception_state);
++      barrier_callback_->AbortedResponse();
 +      return;
 +    }
 +#endif
@@ -52400,6 +52759,21 @@ index b517e1c27d2076b8286bf5af2ae9e9ab940979bd..b4e2457c1811073b389ae18735ceb534
    std::move(callback).Run();
  }
  
+diff --git a/third_party/blink/renderer/modules/speech/speech_recognition.cc b/third_party/blink/renderer/modules/speech/speech_recognition.cc
+index e2b9ab66ffcfbc73cdbec2ba8086148dba6fec5f..7851610ee7e07ddfc151ad7907b07edb02eba670 100644
+--- a/third_party/blink/renderer/modules/speech/speech_recognition.cc
++++ b/third_party/blink/renderer/modules/speech/speech_recognition.cc
+@@ -470,8 +470,8 @@ void SpeechRecognition::ResultRetrieved(
+ 
+   // |final_results_| = (1) + (2).
+   HeapVector<Member<SpeechRecognitionResult>> new_final_results(
+-      base::span(aggregated_results)
+-          .first(aggregated_results.size() - provisional_count));
++      (base::span(aggregated_results)
++          .first(aggregated_results.size() - provisional_count)));
+   final_results_ = std::move(new_final_results);
+ 
+   // The recognizer reports timestamps as offsets from the start of the audio
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_node.h b/third_party/blink/renderer/modules/webaudio/audio_node.h
 index 87708df18172458096920da594f2e542e8afdd55..10264bf58a21af04aabbb714f2f9ece17a978c6e 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_node.h
@@ -52417,6 +52791,18 @@ index 87708df18172458096920da594f2e542e8afdd55..10264bf58a21af04aabbb714f2f9ece1
  namespace blink {
  
  class BaseAudioContext;
+diff --git a/third_party/blink/renderer/modules/xr/xr_layer_client.h b/third_party/blink/renderer/modules/xr/xr_layer_client.h
+index dfead8eb783c99f8851f6083f1986460dd461376..e396752c811a863af5571429e0b16132bee58e52 100644
+--- a/third_party/blink/renderer/modules/xr/xr_layer_client.h
++++ b/third_party/blink/renderer/modules/xr/xr_layer_client.h
+@@ -6,6 +6,7 @@
+ #define THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_LAYER_CLIENT_H_
+ 
+ #include "base/memory/scoped_refptr.h"
++#include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_drawing_buffer.h"
+ 
+ namespace blink {
+ 
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
 index 6101076273a181fea07fe49ade81946eca6a9b69..04b8d186b1e8f926faff4b1fc315f4abfc7cb3d7 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn

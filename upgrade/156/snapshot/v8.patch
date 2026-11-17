@@ -1651,6 +1651,77 @@ index 634c6dabe166578982b5e3734795da0aa0142279..8a33c8e9acbbb899f2df01ae291784be
  #if __clang__
  #pragma clang diagnostic pop
  #endif
+diff --git a/src/regexp/arm64/regexp-macro-assembler-arm64.cc b/src/regexp/arm64/regexp-macro-assembler-arm64.cc
+index be8451c3a1649292079cd11779b2510ab8bafc91..f3e315bf74638a23f0066f629e0e41a2e5eade5c 100644
+--- a/src/regexp/arm64/regexp-macro-assembler-arm64.cc
++++ b/src/regexp/arm64/regexp-macro-assembler-arm64.cc
+@@ -158,7 +158,7 @@ void RegExpMacroAssemblerARM64::AdvanceRegister(int reg, int by) {
+   if (by != 0) {
+     RegisterState register_state = GetRegisterState(reg);
+     switch (register_state) {
+-      case STACKED:
++      case kStacked:
+         __ Ldr(w10, register_location(reg));
+         __ Add(w10, w10, by);
+         __ Str(w10, register_location(reg));
+@@ -1997,7 +1997,7 @@ void RegExpMacroAssemblerARM64::PushRegister(int register_index,
+ void RegExpMacroAssemblerARM64::ReadCurrentPositionFromRegister(int reg) {
+   RegisterState register_state = GetRegisterState(reg);
+   switch (register_state) {
+-    case STACKED:
++    case kStacked:
+       __ Ldr(current_input_offset(), register_location(reg));
+       break;
+     case CACHED_LSW:
+@@ -2369,7 +2369,7 @@ Register RegExpMacroAssemblerARM64::GetRegister(int register_index,
+   Register result = NoReg;
+   RegisterState register_state = GetRegisterState(register_index);
+   switch (register_state) {
+-    case STACKED:
++    case kStacked:
+       __ Ldr(maybe_result, register_location(register_index));
+       result = maybe_result;
+       break;
+@@ -2398,7 +2398,7 @@ void RegExpMacroAssemblerARM64::StoreRegister(int register_index,
+ 
+   RegisterState register_state = GetRegisterState(register_index);
+   switch (register_state) {
+-    case STACKED:
++    case kStacked:
+       __ Str(source, register_location(register_index));
+       break;
+     case CACHED_LSW: {
+diff --git a/src/regexp/arm64/regexp-macro-assembler-arm64.h b/src/regexp/arm64/regexp-macro-assembler-arm64.h
+index b62d736000f31b7b95ab876eed50b471fc82068f..e972dab2fece2b8387a7a3691a573bc63123c4ec 100644
+--- a/src/regexp/arm64/regexp-macro-assembler-arm64.h
++++ b/src/regexp/arm64/regexp-macro-assembler-arm64.h
+@@ -300,7 +300,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
+ 
+   // This state indicates where the register actually is.
+   enum RegisterState {
+-    STACKED,     // Resides in memory.
++    kStacked,     // Resides in memory.
+     CACHED_LSW,  // Least Significant Word of a 64 bit hardware register.
+     CACHED_MSW   // Most Significant Word of a 64 bit hardware register.
+   };
+@@ -308,7 +308,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
+   RegisterState GetRegisterState(int register_index) {
+     DCHECK_LE(0, register_index);
+     if (register_index >= kNumCachedRegisters) {
+-      return STACKED;
++      return kStacked;
+     } else {
+       if ((register_index % 2) == 0) {
+         return CACHED_LSW;
+@@ -333,7 +333,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
+ 
+   // Returns the harware register (x0-x7) holding the value of the capture
+   // register.
+-  // This assumes that the state of the register is not STACKED.
++  // This assumes that the state of the register is not kStacked.
+   inline Register GetCachedRegister(int register_index);
+ 
+   void LoadRegExpStackPointerFromMemory(Register dst);
 diff --git a/src/utils/allocation.cc b/src/utils/allocation.cc
 index 9fe80b267d2cad1942daa0e2a3c2d21f6a24052a..f126296308160a38e61c3ff7df8a7158629a4b4e 100644
 --- a/src/utils/allocation.cc
