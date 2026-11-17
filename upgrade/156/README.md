@@ -127,5 +127,7 @@ headers used for the initial migration.
 Both new toolchains pass compile and link probes covering `std::uint64_t`
 and `std::ranges::starts_with`. Both Chromium GN graphs now select GCC 16.2;
 the temporary Chromium-local `cstdint` overlay has been removed. The full
-x86-64 CEF rebuild is running. Native execution and full CEF linking remain
-unverified. See `evidence/toolchain-migration.json` for provenance.
+x86-64 CEF rebuild is running. The x86-64 C++23 probe also passes in native AROS under QEMU (exit 0);
+AArch64 execution and full CEF linking remain unverified.
+
+![GCC 16.2 native AROS probe](evidence/gcc16-native-runtime.png) See `evidence/toolchain-migration.json` for provenance.
