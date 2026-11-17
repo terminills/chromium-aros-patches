@@ -60,6 +60,22 @@ still require native coverage and integration review before release.
 
 The same run reports Vulkan loader API 1.0.0 and stops at the probe's 1.1
 requirement (return code 12). This GCC-built image has no selected Vulkan ICD;
-native LLVM/lavapipe prerequisites are being built. This is a recorded failure,
+the subsequent run below adds native LLVM/lavapipe. This is a recorded failure,
 not Vulkan rendering validation. The screenshot is a prerequisite test, not a
 Chromium window.
+
+## Native Vulkan capability result
+
+After building LLVM 20.1.0 and lavapipe against the same native master SDK,
+`vulkan.library` reports Vulkan **1.4.354**, one CPU device named
+`llvmpipe (LLVM 20.1.0, 256 bits)`, **165 device extensions**, and
+`VK_KHR_swapchain` revision 70. Physical-device queries report robust buffer
+access, geometry shaders and shaderInt64. Instance creation/destruction and
+lookup of the native AROS surface entry point pass; probe return code is 0.
+
+![Native Vulkan device capabilities](evidence/native-vulkan-capabilities.png)
+
+This verifies driver discovery and capability queries in native QEMU/KVM. It
+does not yet prove surface creation, rendering/presentation, hardware GPU
+acceleration, Chromium/CEF graphics integration or Vulkan conformance.
+The initial no-driver result above is retained as diagnostic evidence.
