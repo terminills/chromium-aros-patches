@@ -247,6 +247,16 @@ See `evidence/native-smp-relay-comparison.json` for scope and distinctions.
 
 ![Native adapter lifecycle on two CPUs](evidence/native-task25.png)
 
+Chromium's own `PlatformThread` creation, join, detach and handle comparison
+now have native AROS paths too. The backend passes a two-core probe with
+80 joined workers, ten cross-task joiners and 80 detached workers. The test
+waits for detached tasks to disappear from the native task list, and checks
+C++ allocations and compiler TLS. Integration files compile with the actual
+Chromium flags for both architectures. Full engine runtime remains pending;
+existing TLS/synchronization and third-party pthread adapters remain.
+
+![Native Chromium worker lifecycle](evidence/native-base-task26.png)
+
 The AArch64 standalone V8 archive and 124 MiB native `v8.library` now cross-link.
 `evidence/v8-arm64-build.json` records the exact library hash. AArch64 runtime and
 full CEF runtime remain pending; the built V8 artifact still uses the previous

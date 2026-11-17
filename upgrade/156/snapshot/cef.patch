@@ -937,11 +937,31 @@ index 4730d00e60ae17f549bd53b4842025b1977156c8..efa703a30eb6d3b881c2210709901a6c
  };
  
  #endif  // CEF_LIBCEF_COMMON_NET_SCHEME_INFO_H_
+diff --git a/libcef/common/resource_bundle_delegate.cc b/libcef/common/resource_bundle_delegate.cc
+index cb28da58e58fd7cdf71e83595cf6fbaae0ad9406..41a6265df56a708907951346ef4d1a972fe28c9a 100644
+--- a/libcef/common/resource_bundle_delegate.cc
++++ b/libcef/common/resource_bundle_delegate.cc
+@@ -1,5 +1,7 @@
+ #include "cef/libcef/common/resource_bundle_delegate.h"
+ 
++#include "base/memory/ref_counted_memory.h"
++
+ #include "cef/libcef/common/app_manager.h"
+ 
+ CefResourceBundleDelegate::CefResourceBundleDelegate() = default;
 diff --git a/libcef/common/resource_util.cc b/libcef/common/resource_util.cc
-index 22e667262a5d1a335f799437fde3d0a9787ed626..8145d1f4c3cb6f7e33112a6161cc3e7dfc54bb56 100644
+index 22e667262a5d1a335f799437fde3d0a9787ed626..a7eb2081c4060ab6ec849ed4bb0abcef95e90b36 100644
 --- a/libcef/common/resource_util.cc
 +++ b/libcef/common/resource_util.cc
-@@ -43,6 +43,12 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+@@ -14,6 +14,7 @@
+ #include "base/logging.h"
+ #include "base/path_service.h"
+ #include "chrome/common/chrome_paths.h"
++#include "chrome/common/chrome_paths_internal.h"
+ #include "chrome/common/chrome_switches.h"
+ 
+ #if BUILDFLAG(IS_LINUX)
+@@ -43,6 +44,12 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
    return true;
  }
  
@@ -954,7 +974,7 @@ index 22e667262a5d1a335f799437fde3d0a9787ed626..8145d1f4c3cb6f7e33112a6161cc3e7d
  #elif BUILDFLAG(IS_MAC)
  
  // Based on chrome/common/chrome_paths_mac.mm.
-@@ -127,6 +133,24 @@ void OverrideUserDataDir(CefSettings* settings,
+@@ -127,6 +134,24 @@ void OverrideUserDataDir(CefSettings* settings,
                           const base::CommandLine* command_line) {
    const base::FilePath& user_data_path =
        GetUserDataPath(settings, command_line);
@@ -979,7 +999,7 @@ index 22e667262a5d1a335f799437fde3d0a9787ed626..8145d1f4c3cb6f7e33112a6161cc3e7d
    base::PathService::Override(chrome::DIR_USER_DATA, user_data_path);
  
    // Path used for crash dumps.
-@@ -138,6 +162,7 @@ void OverrideUserDataDir(CefSettings* settings,
+@@ -138,6 +163,7 @@ void OverrideUserDataDir(CefSettings* settings,
        user_data_path.Append(FILE_PATH_LITERAL("Dictionaries")),
        false,  // May not be an absolute path.
        true);  // Create if necessary.

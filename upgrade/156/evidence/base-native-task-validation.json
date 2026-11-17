@@ -1,0 +1,23 @@
+{
+  "scope": "QEMU/KVM native AROS, 2 CPUs, original baseline kernel",
+  "result": "PASS return code0",
+  "joined_workers": 80,
+  "cross_task_joiners": 10,
+  "detached_workers": 80,
+  "checks": [
+    "C++ malloc/std::string",
+    "compiler thread_local isolation",
+    "cross-creator join",
+    "detached task absence from native task.resource list"
+  ],
+  "compile": "Native backend and Chromium platform_thread_posix/platform_thread_aros integration compile with actual GN flags for x86-64 and AArch64.",
+  "limitations": [
+    "Full engine integration and native runtime pending.",
+    "Four-core baseline failures remain unresolved.",
+    "Existing TLS/synchronization and third-party pthread adapters are not replaced by this worker-creation change."
+  ],
+  "sha256": {
+    "BaseNativeTaskAdapterTest": "75531e89292e3770b162b5fe245b4dacccdcb0e8498a5e896ad2c73ec7a8ef38",
+    "kernel.xz": "79f46fa4ce5a6d4c5d795db9d2ab04e1bc9b0d865f48b3317018c54ff67f3588"
+  }
+}
