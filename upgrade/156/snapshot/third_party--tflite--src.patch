@@ -1,3 +1,84 @@
+diff --git a/tensorflow/lite/delegates/xnnpack/mmap_handle.cc b/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
+index a310526e2975941c369d702ce70a17e459fabf61..0b650760899744771a26128a42c3f467e3e03e75 100644
+--- a/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
++++ b/tensorflow/lite/delegates/xnnpack/mmap_handle.cc
+@@ -18,7 +18,9 @@ limitations under the License.
+ #include <io.h>
+ #include <windows.h>
+ #else
++#if !defined(__AROS__)
+ #include <sys/mman.h>
++#endif
+ #include <unistd.h>
+ #endif
+ 
+@@ -113,12 +115,16 @@ bool MMapHandle::Map(const FileDescriptorView& fd, const size_t offset,
+ 
+   // This will reset data_ and size_ on return until it is deactivated.
+   ScopeGuard unmap_on_error([this] { UnMap(); });
++  XNNPACK_RETURN_CHECK(file_stats.st_size >= 0 &&
++                       offset <= static_cast<uint64_t>(file_stats.st_size),
++                       "invalid mapping offset for file (%s)", safe_path);
+   size_ = file_stats.st_size - offset;
+   offset_ = offset;
+-#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
++#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG) || defined(__AROS__)
+   // This allocation is freed in UnMap and in the destructor.
+   data_ = new uint8_t[size_];
+-  fd.SetPos(offset);
++  XNNPACK_RETURN_CHECK(fd.SetPos(offset) == static_cast<FileDescriptorView::Offset>(offset),
++                       "could not seek file (%s): %s", safe_path, strerror(errno));
+   XNNPACK_RETURN_CHECK(fd.Read(data_, size_), "could not read file ('%s'): %s.",
+                        safe_path, strerror(errno));
+ #elif defined(_WIN32)
+@@ -185,7 +191,7 @@ bool MMapHandle::Resize(size_t new_size) {
+ 
+ void MMapHandle::UnMap() {
+   if (data_) {
+-#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
++#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG) || defined(__AROS__)
+     delete[] data_;
+ #elif defined(_WIN32)
+     UnmapViewOfFile(data_);
+@@ -201,7 +207,7 @@ void MMapHandle::UnMap() {
+ }
+ 
+ bool MMapHandle::LockMemory() {
+-#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
++#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG) || defined(__AROS__)
+   return true;
+ #elif defined(_WIN32)
+   return VirtualLock(data_, size_) != 0;
+@@ -211,7 +217,7 @@ bool MMapHandle::LockMemory() {
+ }
+ 
+ bool MMapHandle::UnlockMemory() {
+-#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG)
++#if defined(XNNPACK_CACHE_NO_FILE_MAPPING_FOR_DEBUG) || defined(__AROS__)
+   return true;
+ #elif defined(_WIN32)
+   return VirtualUnlock(data_, size_) != 0;
+@@ -221,6 +227,12 @@ bool MMapHandle::UnlockMemory() {
+ }
+ 
+ bool MarkMemoryNotNeeded(void* data, size_t size) {
++#if defined(__AROS__)
++  // Heap-backed file data cannot be discarded and faulted back in.
++  (void)data;
++  (void)size;
++  return false;
++#else
+ #if defined(_WIN32)
+   SYSTEM_INFO sysInfo;
+   GetSystemInfo(&sysInfo);
+@@ -251,6 +263,7 @@ bool MarkMemoryNotNeeded(void* data, size_t size) {
+ #endif
+   }
+   return true;
++#endif
+ }
+ 
+ }  // namespace tflite::xnnpack
 diff --git a/tensorflow/lite/shared_library.h b/tensorflow/lite/shared_library.h
 index 73886ccf216284161237e13244666f43a1fa4288..b3c7a7227cf9a3b21705b99b1b35c1c9e9108442 100644
 --- a/tensorflow/lite/shared_library.h

@@ -140,3 +140,10 @@ Both private toolchains now use the Binutils 2.47 AROS patch already carried by 
 `aros/aarch64-gcc16-runtime-helpers.patch` adds GCC's standard `t-aarch64` runtime definitions to the existing AROS configuration. This supplies the ZA-state helper required by GCC 16's exception unwinder. The upstream detector defaults SME support to false when the OS has no detection API; this does not enable SME in AROS. Both architectures compile/link the C++23 runtime probe, and x86-64 runs it successfully on native AROS. See `evidence/binutils247-validation.json` for the warning-policy detail and artifact hashes.
 
 ![GCC 16 and Binutils 2.47 native runtime](evidence/gcc16-binutils247-native.png)
+
+
+## Native Dawn event wait validation
+
+The AROS event implementation uses one-shot shared state with a mutex and condition variable, without depending on POSIX pollable descriptors. Its tests pass both on the host and native x86-64 AROS: pre-signaling, zero/finite timeout, eight concurrent waiters, and 1,000 signal/wait races. This validates the event primitive, not a complete WebGPU or CEF runtime.
+
+![Dawn event test on native AROS](evidence/dawn-events-native.png)

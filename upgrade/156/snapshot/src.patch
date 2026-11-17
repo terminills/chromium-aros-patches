@@ -17376,10 +17376,10 @@ index 5bf12985967830b252e22c6d7ab4f8f8535f9bf6..e743bf4ef8126dc0a5a7e0e6e53dc983
      "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/../../backtrace/src/backtrace/mod.rs",
 diff --git a/build/toolchain/aros/BUILD.gn b/build/toolchain/aros/BUILD.gn
 new file mode 100644
-index 0000000000000000000000000000000000000000..fbfe346c0dc4ea4b4edc853949aa7bfdd51ef236
+index 0000000000000000000000000000000000000000..28af6965d2c7a05973a1e928cfe8fdd317c7bcfb
 --- /dev/null
 +++ b/build/toolchain/aros/BUILD.gn
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,115 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -17448,7 +17448,7 @@ index 0000000000000000000000000000000000000000..fbfe346c0dc4ea4b4edc853949aa7bfd
 +        ]) {
 +  if (_cpu == "arm64") {
 +    _toolprefix = "$aros_toolchain_root/aarch64-aros-"
-+    _arch_flags = "-march=armv8-a+crc+simd -mcmodel=large -fno-pic -fno-pie"
++    _arch_flags = "-mcmodel=large -fno-pic -fno-pie"
 +  } else {
 +    _toolprefix = "$aros_toolchain_root/x86_64-aros-"
 +    _arch_flags = "-m64 -mcmodel=large -mno-red-zone -mno-ms-bitfields"
@@ -17457,6 +17457,13 @@ index 0000000000000000000000000000000000000000..fbfe346c0dc4ea4b4edc853949aa7bfd
 +  gcc_toolchain(_cpu) {
 +    cc = "${_toolprefix}gcc"
 +    cxx = "${_toolprefix}g++"
++    if (_cpu == "arm64") {
++      # Keep the baseline before per-target flags: runtime-dispatched codec
++      # kernels must be able to select SVE/dot-product without changing the
++      # minimum CPU required by the rest of the engine.
++      cc += " -march=armv8-a+crc+simd"
++      cxx += " -march=armv8-a+crc+simd"
++    }
 +    ar = "${_toolprefix}ar"
 +    ld = cxx
 +    readelf = "${_toolprefix}readelf"
@@ -39546,7 +39553,7 @@ index 260d5fffba0ddb1699e05898221bb504374665e9..039777f3c9780114ff7a6574bcc17f48
      // MacLion, etc., for which we no longer have bots.
    };
 diff --git a/gpu/config/gpu_test_expectations_parser.cc b/gpu/config/gpu_test_expectations_parser.cc
-index fe415ba4c3480307aba6d9ffd4e9b704da002d5c..8abf57c3fc5673a11c2961664e7e83ba3b3a0a0e 100644
+index fe415ba4c3480307aba6d9ffd4e9b704da002d5c..35e83bcf6e7589b4e4408986640bcde3206ace8d 100644
 --- a/gpu/config/gpu_test_expectations_parser.cc
 +++ b/gpu/config/gpu_test_expectations_parser.cc
 @@ -53,6 +53,7 @@ enum Token {
@@ -39557,6 +39564,15 @@ index fe415ba4c3480307aba6d9ffd4e9b704da002d5c..8abf57c3fc5673a11c2961664e7e83ba
    // gpu vendor
    kConfigNVidia,
    kConfigAMD,
+@@ -94,7 +95,7 @@ struct TokenInfo {
+   int32_t flag;
+ };
+ 
+-const std::array<TokenInfo, 42> kTokenData = {{
++const std::array<TokenInfo, kNumberOfExactMatchTokens> kTokenData = {{
+     {"win10", GPUTestConfig::kOsWin10},
+     {"win", GPUTestConfig::kOsWin},
+     {"lion", GPUTestConfig::kOsMacLion},
 @@ -116,6 +117,7 @@ const std::array<TokenInfo, 42> kTokenData = {{
      {"linux", GPUTestConfig::kOsLinux},
      {"chromeos", GPUTestConfig::kOsChromeOS},
@@ -39720,6 +39736,19 @@ index 4a97b2ad2e0f5edf166d71c730d5b0fa13b583c2..9180d6007b682381bfb3e82b59c7b459
      if (is_posix) {
        sources += [ "vulkan_util_posix.cc" ]
  
+diff --git a/gpu/vulkan/features.gni b/gpu/vulkan/features.gni
+index a8eef7f635009d1c4b28358a1d5270ef92adf057..d228dd6e1ddb53467f3dbcafd5b96dd8261fc5f6 100644
+--- a/gpu/vulkan/features.gni
++++ b/gpu/vulkan/features.gni
+@@ -8,7 +8,7 @@ import("//build/config/ui.gni")
+ # For details see declare_args() in build/config/BUILDCONFIG.gn.
+ declare_args() {
+   # Enable experimental vulkan backend.
+-  enable_vulkan = is_linux || is_chromeos || is_android || is_fuchsia
++  enable_vulkan = is_aros || is_linux || is_chromeos || is_android || is_fuchsia
+ 
+   # Enable swiftshader vulkan. Disabling it can save build time, however
+   # --use-vulkan=swiftshader and some tests which use swiftshader vulkan will
 diff --git a/gpu/vulkan/vulkan_instance.cc b/gpu/vulkan/vulkan_instance.cc
 index 6e0a6b816d000e9f3965cd0f90036690ccf0220f..4bce5f4ab6060c681d0a13fda4d1de9f240b5f62 100644
 --- a/gpu/vulkan/vulkan_instance.cc
@@ -54643,6 +54672,20 @@ index e8427c48432305af2baa5685b8788118339b17ae..de224b8ed3eddde8837e5b4bd5c52dbe
      (target_os == "mac" && (target_cpu == "x64" || target_cpu == "arm64")) ||
      (target_os == "win" &&
       (target_cpu == "x86" || target_cpu == "x64" || target_cpu == "arm64"))
+diff --git a/third_party/xnnpack/BUILD.gn b/third_party/xnnpack/BUILD.gn
+index 384d72e8ea91dcfeba350d0b4245c7a9d9d0b509..9773b6e6a05167f6002425b691bf0cb5cf87ebfd 100644
+--- a/third_party/xnnpack/BUILD.gn
++++ b/third_party/xnnpack/BUILD.gn
+@@ -38,6 +38,9 @@ config("xnnpack_public_config") {
+               "XNN_LOG_LEVEL=0",
+               "XNN_LOG_TO_STDIO=0",
+             ] + xnn_defines
++  if (is_aros) {
++    defines += [ "XNN_HAS_MMAP=0" ]
++  }
+ }
+ 
+ config("xnnpack_private_config") {
 diff --git a/third_party/zlib/BUILD.gn b/third_party/zlib/BUILD.gn
 index 29248e1da410bfab7952bb9481dbf938d3247ffd..1a84c3465740b5118826731545c1c1f809738e88 100644
 --- a/third_party/zlib/BUILD.gn
@@ -56539,7 +56582,7 @@ index 0000000000000000000000000000000000000000..fa341361d06b4efa8dfb21e19c8f1233
 +#endif  // UI_OZONE_PLATFORM_AROS_AROS_EGL_LIBRARY_H_
 diff --git a/ui/ozone/platform/aros/aros_native_window.h b/ui/ozone/platform/aros/aros_native_window.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..1f61f706f01efa77b1b0dc7dd3fe4e651a05ecff
+index 0000000000000000000000000000000000000000..9554753a71ad37a61980ce5ee78a3174e2c3f208
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_native_window.h
 @@ -0,0 +1,25 @@
@@ -56550,7 +56593,7 @@ index 0000000000000000000000000000000000000000..1f61f706f01efa77b1b0dc7dd3fe4e65
 +#ifndef UI_OZONE_PLATFORM_AROS_AROS_NATIVE_WINDOW_H_
 +#define UI_OZONE_PLATFORM_AROS_AROS_NATIVE_WINDOW_H_
 +
-+#include "ui/gfx/native_widget_types.h"
++#include "ui/gfx/native_ui_types.h"
 +
 +struct Window;
 +
@@ -56916,7 +56959,7 @@ index 0000000000000000000000000000000000000000..1df752a62b5332aa4f33aa1aae06242e
 +#endif  // UI_OZONE_PLATFORM_AROS_AROS_SURFACE_FACTORY_H_
 diff --git a/ui/ozone/platform/aros/aros_window.cc b/ui/ozone/platform/aros/aros_window.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..92ab48eebc3be25ece46608a7564b17da517fdcc
+index 0000000000000000000000000000000000000000..05966b84a5dc834a900e132ccd3fa737db14fb26
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_window.cc
 @@ -0,0 +1,1485 @@
@@ -58084,7 +58127,7 @@ index 0000000000000000000000000000000000000000..92ab48eebc3be25ece46608a7564b17d
 +    return;
 +  }
 +
-+  MouseEvent event(ET_MOUSE_MOVED, location, root_location, EventTimeForNow(),
++  MouseEvent event(EventType::kMouseMoved, location, root_location, EventTimeForNow(),
 +                   ModifierFlagsFromQualifier(qualifier) |
 +                       MouseFlagsFromQualifier(qualifier),
 +                   EF_NONE);
@@ -58121,7 +58164,7 @@ index 0000000000000000000000000000000000000000..92ab48eebc3be25ece46608a7564b17d
 +  // longer carries the released button; Chromium expects it in flags, so add
 +  // it back.
 +  const bool released = (code & IECODE_UP_PREFIX) != 0;
-+  MouseEvent event(released ? ET_MOUSE_RELEASED : ET_MOUSE_PRESSED, location,
++  MouseEvent event(released ? EventType::kMouseReleased : EventType::kMousePressed, location,
 +                   root_location, EventTimeForNow(),
 +                   ModifierFlagsFromQualifier(qualifier) |
 +                       MouseFlagsFromQualifier(qualifier) | changed_button,
@@ -58207,7 +58250,7 @@ index 0000000000000000000000000000000000000000..92ab48eebc3be25ece46608a7564b17d
 +    key_code = layout_key_code;
 +  }
 +
-+  KeyEvent event(released ? ET_KEY_RELEASED : ET_KEY_PRESSED, key_code,
++  KeyEvent event(released ? EventType::kKeyReleased : EventType::kKeyPressed, key_code,
 +                 dom_code, flags, dom_key, EventTimeForNow());
 +  event.InitializeNative();
 +  // Keys arrive at Intuition's active window; a menu or popup that was
@@ -58407,7 +58450,7 @@ index 0000000000000000000000000000000000000000..92ab48eebc3be25ece46608a7564b17d
 +}  // namespace ui
 diff --git a/ui/ozone/platform/aros/aros_window.h b/ui/ozone/platform/aros/aros_window.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..41c42023d811d62de878528a7230c72b295207af
+index 0000000000000000000000000000000000000000..efb6f48686c09f06f9ccde8e32602a37f3c45598
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_window.h
 @@ -0,0 +1,179 @@
@@ -58433,7 +58476,7 @@ index 0000000000000000000000000000000000000000..41c42023d811d62de878528a7230c72b
 +#include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/size.h"
 +#include "ui/gfx/image/image_skia.h"
-+#include "ui/gfx/native_widget_types.h"
++#include "ui/gfx/native_ui_types.h"
 +#include "ui/platform_window/platform_window.h"
 +#include "ui/platform_window/platform_window_delegate.h"
 +#include "ui/platform_window/platform_window_init_properties.h"
@@ -59055,7 +59098,7 @@ index 0000000000000000000000000000000000000000..566292db9beeea9fa81c3d2d00130643
 +}  // namespace ui
 diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..85af2a79f16be52c2c3eca005bee70899ad15671
+index 0000000000000000000000000000000000000000..523910e46fdb4e23a723bf60b73f45df9abf7bf9
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_window_manager.h
 @@ -0,0 +1,121 @@
@@ -59081,7 +59124,7 @@ index 0000000000000000000000000000000000000000..85af2a79f16be52c2c3eca005bee7089
 +#include "base/synchronization/lock.h"
 +#include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/size.h"
-+#include "ui/gfx/native_widget_types.h"
++#include "ui/gfx/native_ui_types.h"
 +
 +struct MsgPort;
 +struct Window;
@@ -59452,10 +59495,10 @@ index 0000000000000000000000000000000000000000..3d6a4e2eceb589ff4ced7d9f0c7e7f2f
 +#endif  // UI_OZONE_PLATFORM_AROS_GL_OZONE_EGL_AROS_H_
 diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..9e85e84d5202a1867b845a28d5edfbec95dce060
+index 0000000000000000000000000000000000000000..e05cd57ad23257b3ae0263a2384179b6462f7b34
 --- /dev/null
 +++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,257 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -59489,6 +59532,7 @@ index 0000000000000000000000000000000000000000..9e85e84d5202a1867b845a28d5edfbec
 +#include "ui/ozone/platform/aros/aros_window_manager.h"
 +#include "ui/ozone/public/gpu_platform_support_host.h"
 +#include "ui/ozone/public/input_controller.h"
++#include "ui/ozone/public/stub_input_controller.h"
 +#include "ui/ozone/public/ozone_platform.h"
 +#include "ui/ozone/public/system_input_injector.h"
 +#include "ui/platform_window/platform_window_init_properties.h"
@@ -59646,7 +59690,7 @@ index 0000000000000000000000000000000000000000..9e85e84d5202a1867b845a28d5edfbec
 +    KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
 +        keyboard_layout_engine_.get());
 +    overlay_manager_ = std::make_unique<StubOverlayManager>();
-+    input_controller_ = CreateStubInputController();
++    input_controller_ = std::make_unique<StubInputController>();
 +    cursor_factory_ = std::make_unique<ArosCursorFactory>();
 +    gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
 +    return true;

@@ -1,5 +1,5 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index d6969b427ed614ec861c338cdd127ba4717dad1d..a08d3e360b1f82d8c60adcb1c9c8a4c41f8f4941 100644
+index d6969b427ed614ec861c338cdd127ba4717dad1d..08c61c6d3c2fc3d108080478e6cf122b6c0faf5c 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
 @@ -97,6 +97,9 @@ declare_args() {
@@ -29,7 +29,7 @@ index d6969b427ed614ec861c338cdd127ba4717dad1d..a08d3e360b1f82d8c60adcb1c9c8a4c4
  
 +  if (is_aros) {
 +    sources += libangle_gpu_info_util_aros_sources
-+    libs += [ "oop" ]
++    libs += [ "oop", "vulkan" ]
 +  }
 +
    if (use_libpci) {
@@ -435,6 +435,19 @@ index 0000000000000000000000000000000000000000..a7706b83deea17016d59bc6db863b719
 +}
 +
 +}  // namespace angle
+diff --git a/src/compiler/translator/IntermNode.cpp b/src/compiler/translator/IntermNode.cpp
+index 5189d334c75c45cf461d05c8465dbc506948e69a..60375246e26ae32a5495a14f50798681bd89b607 100644
+--- a/src/compiler/translator/IntermNode.cpp
++++ b/src/compiler/translator/IntermNode.cpp
+@@ -881,7 +881,7 @@ const TConstantUnion *TIntermAggregate::getConstantValue() const
+         // http://crbug.com/498400132
+         angle::base::CheckedNumeric<size_t> checkedArraySize = elementSize;
+         checkedArraySize *= getOutermostArraySize();
+-        constArray = new TConstantUnion[checkedArraySize.ValueOrDie()];
++        constArray = new TConstantUnion[static_cast<size_t>(checkedArraySize.ValueOrDie())];
+ 
+         size_t elementOffset = 0u;
+         for (TIntermNode *constructorArg : mArguments)
 diff --git a/src/compiler/translator/glslang.y b/src/compiler/translator/glslang.y
 index 8bba5d48701a5c3d52d1f4f44a884a9abf57f0ed..ef2316350033fbedb526fdada7119006f2e2e5d6 100644
 --- a/src/compiler/translator/glslang.y
@@ -473,12 +486,24 @@ index d436436a837c8e2f061ab3eb4cbba8c3f3b08171..7abb08bb747b433eb8ce18cda8420f4f
  #define YYLTYPE TSourceLoc
  #define YYLTYPE_IS_DECLARED 1
  #define YYLTYPE_IS_TRIVIAL 1
+diff --git a/src/compiler/translator/wgsl/RewritePipelineVariables.cpp b/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
+index f9611f2088470c09d366a36a7e16ef6d3d08dd0a..203e68e8f4ebbfe2410e213a018e45acae6836fd 100644
+--- a/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
++++ b/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
+@@ -27,6 +27,7 @@
+ #include "compiler/translator/tree_util/FindMain.h"
+ #include "compiler/translator/tree_util/ReplaceVariable.h"
+ #include "compiler/translator/util.h"
++#include <iostream>
+ #include "compiler/translator/wgsl/Utils.h"
+ 
+ namespace sh
 diff --git a/src/gpu_info_util/SystemInfo_aros.cpp b/src/gpu_info_util/SystemInfo_aros.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..a10b1093dfff0d3a15d9cb05e08b2ecea1e22ed0
+index 0000000000000000000000000000000000000000..eb2580382e6b37591f2acd932d4a2c4cfd310136
 --- /dev/null
 +++ b/src/gpu_info_util/SystemInfo_aros.cpp
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,256 @@
 +//
 +// Copyright 2026 The ANGLE Project Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
@@ -491,7 +516,12 @@ index 0000000000000000000000000000000000000000..a10b1093dfff0d3a15d9cb05e08b2ece
 +
 +#include <aros/asmcall.h>
 +#include <hidd/pci.h>
-+#include <hidd/vulkan_hidd.h>
++#define VK_NO_PROTOTYPES
++#include <vulkan/vulkan.h>
++#include <vector>
++
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ArosGetInstanceProcAddr(
++    VkInstance, const char *) __asm__("vkGetInstanceProcAddr");
 +#include <proto/oop.h>
 +
 +OOP_AttrBase HiddPCIDeviceAttrBase = 0;
@@ -515,52 +545,58 @@ index 0000000000000000000000000000000000000000..a10b1093dfff0d3a15d9cb05e08b2ece
 +
 +int EnumerateVulkanGPUs(SystemInfo *info)
 +{
-+    OOP_Object *vulkan =
-+        static_cast<OOP_Object *>(OOP_NewObject(nullptr, CLID_Hidd_Vulkan, nullptr));
-+    if (!vulkan)
-+    {
-+        return -1;
-+    }
-+
-+    struct VulkanGPUInfo entries[VULKAN_MAX_GPUS] = {};
-+    struct pHidd_Vulkan_EnumerateGPUs message = {};
-+    message.mID = OOP_GetMethodID(IID_Hidd_Vulkan, moHidd_Vulkan_EnumerateGPUs);
-+    message.gpu_info = entries;
-+    message.max_count = VULKAN_MAX_GPUS;
-+
-+    const ULONG count =
-+        static_cast<ULONG>(OOP_DoMethod(vulkan, reinterpret_cast<OOP_Msg>(&message)));
-+
++    const auto create = reinterpret_cast<PFN_vkCreateInstance>(
++        ArosGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
++    if (!create) return -1;
++    VkApplicationInfo application = {};
++    application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
++    application.pApplicationName = "ANGLE AROS inventory";
++    application.apiVersion = VK_API_VERSION_1_0;
++    VkInstanceCreateInfo settings = {};
++    settings.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
++    settings.pApplicationInfo = &application;
++    VkInstance instance = VK_NULL_HANDLE;
++    if (create(&settings, nullptr, &instance) != VK_SUCCESS) return -1;
++    const auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(
++        ArosGetInstanceProcAddr(instance, "vkDestroyInstance"));
++    const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
++        ArosGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices"));
++    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
++        ArosGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"));
 +    int activeIndex = -1;
-+    int32_t activePriority = 0;
-+    for (ULONG i = 0; i < count && i < VULKAN_MAX_GPUS; ++i)
++    bool selectedHardware = false;
++    if (destroy && enumerate && properties)
 +    {
-+        GPUDeviceInfo gpu;
-+        gpu.vendorId = entries[i].vendor_id;
-+        gpu.deviceId = entries[i].device_id;
-+        gpu.systemDeviceId = MakeSystemDeviceId(entries[i].pci_bus, entries[i].pci_dev,
-+                                                 entries[i].pci_func);
-+        if (entries[i].name[0])
++        uint32_t count = 0;
++        if (enumerate(instance, &count, nullptr) == VK_SUCCESS && count)
 +        {
-+            gpu.driverVendor = entries[i].name;
-+        }
-+        else if (entries[i].class_id[0])
-+        {
-+            gpu.driverVendor = entries[i].class_id;
-+        }
-+
-+        info->gpus.push_back(std::move(gpu));
-+
-+        const bool software = (entries[i].flags & VULKAN_GPU_SOFTWARE) != 0;
-+        if (!software &&
-+            (activeIndex < 0 || entries[i].priority > activePriority))
-+        {
-+            activeIndex = static_cast<int>(info->gpus.size() - 1);
-+            activePriority = entries[i].priority;
++            std::vector<VkPhysicalDevice> devices(count);
++            VkResult result = enumerate(instance, &count, devices.data());
++            if (result == VK_SUCCESS || result == VK_INCOMPLETE)
++            {
++                for (uint32_t i = 0; i < count; ++i)
++                {
++                    VkPhysicalDeviceProperties props = {};
++                    properties(devices[i], &props);
++                    GPUDeviceInfo gpu;
++                    gpu.vendorId = props.vendorID;
++                    gpu.deviceId = props.deviceID;
++                    gpu.driverVendor = props.deviceName;
++                    // Do not invent a PCI address for software or non-PCI GPUs.
++                    gpu.systemDeviceId = 0;
++                    info->gpus.push_back(std::move(gpu));
++                    if (activeIndex < 0 ||
++                        (props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU &&
++                         !selectedHardware))
++                    {
++                        activeIndex = static_cast<int>(info->gpus.size() - 1);
++                        selectedHardware = props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
++                    }
++                }
++            }
 +        }
 +    }
-+
-+    OOP_DisposeObject(vulkan);
++    if (destroy) destroy(instance, nullptr);
 +    return activeIndex;
 +}
 +
@@ -636,6 +672,7 @@ index 0000000000000000000000000000000000000000..a10b1093dfff0d3a15d9cb05e08b2ece
 +
 +int EnumeratePCIGPUs(SystemInfo *info)
 +{
++    if (!OOPBase) return -1;
 +    HiddPCIDeviceAttrBase = OOP_ObtainAttrBase(IID_Hidd_PCIDevice);
 +    if (!HiddPCIDeviceAttrBase)
 +    {
@@ -697,17 +734,17 @@ index 0000000000000000000000000000000000000000..a10b1093dfff0d3a15d9cb05e08b2ece
 +
 +bool GetSystemInfo(SystemInfo *info)
 +{
-+    if (!info || !OOPBase)
++    if (!info)
 +    {
 +        return false;
 +    }
 +
 +    info->gpus.clear();
 +
-+    // Vulkan HIDD is the accelerator registry; PCI adds display-only devices.
-+    // Gallium is selected through Hidd_Display once a rendering surface exists.
++    // Query Vulkan drivers directly, including software implementations.
++    // PCI inventory remains a fallback when the loader finds no device.
 +    int activeIndex = EnumerateVulkanGPUs(info);
-+    const int claimedDisplayIndex = EnumeratePCIGPUs(info);
++    const int claimedDisplayIndex = info->gpus.empty() ? EnumeratePCIGPUs(info) : -1;
 +
 +    if (info->gpus.empty())
 +    {
@@ -869,6 +906,42 @@ index 1d89bf7b0b31a8de81e2b7446ccd03d419788b89..69f968e70ac7056a6afdbcda1cd30a3e
    gl_backend_sources += [
      "egl/ContextEGL.cpp",
      "egl/ContextEGL.h",
+diff --git a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp b/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
+index bd7c8a9cd1e255da88020418db78f3c95d75041c..df4e59889e3fdfdcdbc681c723e45550bb032eb4 100644
+--- a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
+@@ -10,7 +10,6 @@
+ #include "libANGLE/renderer/wgpu/FramebufferWgpu.h"
+ #include "common/unsafe_buffers.h"
+ 
+-#include <__config>
+ 
+ #include "common/Color.h"
+ #include "common/debug.h"
+diff --git a/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp b/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
+index 71a43325a8e8f0b749b4851fe6fab286c7c185aa..7c8e4d95dc0a869f927492f1c40a366930232021 100644
+--- a/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
+@@ -7,6 +7,7 @@
+ //    Implements the class methods for ProgramWgpu.
+ //
+ 
++#include <iostream>
+ #include "libANGLE/renderer/wgpu/ProgramWgpu.h"
+ #include "common/unsafe_buffers.h"
+ 
+diff --git a/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp b/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
+index 1a9be1cb7e3cbf52b6a59fc85f69a2c5b64a637f..8c956cf3afa0f1d688c15c6a479f782134c59396 100644
+--- a/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
++++ b/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
+@@ -4,6 +4,7 @@
+ // found in the LICENSE file.
+ //
+ 
++#include <iostream>
+ #include "libANGLE/renderer/wgpu/wgpu_wgsl_util.h"
+ 
+ #include <sstream>
 diff --git a/src/libGLESv2.gni b/src/libGLESv2.gni
 index 2360cc03a993546d4ce4124e9854f242cbe252f7..3c0c40c95bf9e9ea06f37b43b348c8ba7df51fd2 100644
 --- a/src/libGLESv2.gni
