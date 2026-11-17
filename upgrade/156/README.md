@@ -131,3 +131,12 @@ x86-64 CEF rebuild is running. The x86-64 C++23 probe also passes in native AROS
 AArch64 execution and full CEF linking remain unverified.
 
 ![GCC 16.2 native AROS probe](evidence/gcc16-native-runtime.png) See `evidence/toolchain-migration.json` for provenance.
+
+
+## Assembler and ARM runtime update
+
+Both private toolchains now use the Binutils 2.47 AROS patch already carried by master. The previous x86 Binutils 2.32 assembler rejected Chromium's AVX-512 FP16 kernels; the same kernel now compiles. ARM baseline architecture flags precede the per-codec flags, so SVE kernels retain their instruction selection without raising the baseline for the whole browser.
+
+`aros/aarch64-gcc16-runtime-helpers.patch` adds GCC's standard `t-aarch64` runtime definitions to the existing AROS configuration. This supplies the ZA-state helper required by GCC 16's exception unwinder. The upstream detector defaults SME support to false when the OS has no detection API; this does not enable SME in AROS. Both architectures compile/link the C++23 runtime probe, and x86-64 runs it successfully on native AROS. See `evidence/binutils247-validation.json` for the warning-policy detail and artifact hashes.
+
+![GCC 16 and Binutils 2.47 native runtime](evidence/gcc16-binutils247-native.png)

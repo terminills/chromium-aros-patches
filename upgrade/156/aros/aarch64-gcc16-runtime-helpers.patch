@@ -1,0 +1,13 @@
+diff --git a/tools/crosstools/gnu/gcc-16.2.0-aros.diff b/tools/crosstools/gnu/gcc-16.2.0-aros.diff
+index 7507f34e..6d530d4a 100644
+--- a/tools/crosstools/gnu/gcc-16.2.0-aros.diff
++++ b/tools/crosstools/gnu/gcc-16.2.0-aros.diff
+@@ -1787,7 +1787,7 @@ diff -ruN gcc-16.2.0/libgcc/config.host gcc-16.2.0.aros/libgcc/config.host
+ +	md_unwind_header=aarch64/aarch64-unwind.h
+ +	# Out-of-line atomics and TFmode soft float. The generic aros case
+ +	# below leaves tmake_file empty, which is not enough on aarch64.
+-+	tmake_file="${tmake_file} ${cpu_type}/t-lse ${cpu_type}/t-softfp t-softfp"
+++	tmake_file="${tmake_file} ${cpu_type}/t-aarch64 ${cpu_type}/t-lse ${cpu_type}/t-softfp t-softfp"
+ +	;;
+ +*-*-aros*)
+ +	tmake_file=
