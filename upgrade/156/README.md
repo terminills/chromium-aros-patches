@@ -108,8 +108,8 @@ The Rust standard library builds successfully through that GN graph using
 little-endian, AArch64 (see `evidence/arm64-rust-std-object.txt`).
 
 This is compile evidence only. Fresh GCC 16.2.0 toolchains for x86-64 and
-AArch64 are building from the current AROS toolchain patches; the
-`raspi-aarch64-smp` SDK remains in progress. CEF linking, Raspberry Pi boot,
+AArch64 now compile and link a C++23 probe using the current AROS patches.
+A complete Raspberry Pi system build remains pending. CEF linking, Raspberry Pi boot,
 application isolation, graphics and media runtime remain unverified.
 The full Chromium 156 patch queues are still being migrated; the root queues
 remain the older baseline and must not be mistaken for a completed 156 port.
@@ -124,7 +124,8 @@ runtime components. Chromium also requires `std::ranges::starts_with`,
 which is present in the GCC 16.2 sources but absent from the copied GCC 15
 headers used for the initial migration.
 
-Both new toolchains have reached GCC compilation. They are not yet validated
-release prerequisites. The copied compiler's original headers are restored;
-a temporary Chromium-local `cstdint` overlay will be removed after switching
-to the new toolchain. See `evidence/toolchain-migration.json` for provenance.
+Both new toolchains pass compile and link probes covering `std::uint64_t`
+and `std::ranges::starts_with`. Both Chromium GN graphs now select GCC 16.2;
+the temporary Chromium-local `cstdint` overlay has been removed. The full
+x86-64 CEF rebuild is running. Native execution and full CEF linking remain
+unverified. See `evidence/toolchain-migration.json` for provenance.
