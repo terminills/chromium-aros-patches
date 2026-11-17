@@ -19,7 +19,11 @@ extern "C" ssize_t __wrap_pread(int fd, void* data, size_t size, off_t offset) {
 }
 int main() {
   using namespace tflite::xnnpack;
+#ifdef SNAPSHOT_NATIVE_RUNTIME
+  char path[] = "T:aros-file-snapshot-XXXXXX";
+#else
   char path[] = "/tmp/aros-file-snapshot-XXXXXX";
+#endif
   int fd = mkstemp(path);
   assert(fd >= 0);
   unlink(path);

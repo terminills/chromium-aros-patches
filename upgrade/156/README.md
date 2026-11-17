@@ -38,8 +38,12 @@ The TensorFlow Lite fallback passes a host regression harness selecting the
 AROS code path: injected short reads, EINTR and premature EOF; preserved file
 position; invalid offsets/descriptors; retry after failure; and rejection of
 resize/discard operations. Its source also cross-compiles with both native
-AROS GCC 16 toolchains. This is not native runtime validation of the fallback.
+AROS GCC 16 toolchains. The same regression harness then passed on native
+AROS x86-64 SMP in the owned QEMU/KVM VM, with return code 0. AArch64 runtime
+validation is still pending.
 The harness and retained output are in `evidence/tflite-aros-file-snapshot-test.*`.
+
+![Native Chromium-local file snapshot regression](evidence/file-snapshot-native.png)
 
 ## Native Rust prerequisite
 
