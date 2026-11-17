@@ -107,8 +107,24 @@ The Rust standard library builds successfully through that GN graph using
 `rust/aarch64-unknown-aros.json`; an extracted object is verified as ELF64,
 little-endian, AArch64 (see `evidence/arm64-rust-std-object.txt`).
 
-This is compile evidence only. The separate GCC 15.2.0 toolchain and
-`raspi-aarch64-smp` SDK build are in progress. CEF linking, Raspberry Pi boot,
+This is compile evidence only. Fresh GCC 16.2.0 toolchains for x86-64 and
+AArch64 are building from the current AROS toolchain patches; the
+`raspi-aarch64-smp` SDK remains in progress. CEF linking, Raspberry Pi boot,
 application isolation, graphics and media runtime remain unverified.
 The full Chromium 156 patch queues are still being migrated; the root queues
 remain the older baseline and must not be mistaken for a completed 156 port.
+
+## Toolchain migration
+
+The upgrade now targets GCC 16.2.0. The fresh GCC 15.2 AArch64 build exposed
+a missing unwinder configuration already fixed in AROS's GCC 16.2 patch by
+[upstream commit b44eff7b](https://github.com/aros-development-team/AROS/commit/b44eff7b4ae7c383c420bef120886c2cacac9371).
+The commit explains both the required helpers and the intentionally omitted
+runtime components. Chromium also requires `std::ranges::starts_with`,
+which is present in the GCC 16.2 sources but absent from the copied GCC 15
+headers used for the initial migration.
+
+Both new toolchains have reached GCC compilation. They are not yet validated
+release prerequisites. The copied compiler's original headers are restored;
+a temporary Chromium-local `cstdint` overlay will be removed after switching
+to the new toolchain. See `evidence/toolchain-migration.json` for provenance.
