@@ -1,0 +1,9 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "f913e1b7213f2706fec69575af5fcde3f7eec2e0af9897c8434f6a693c3700d7",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "4ba159b177734e8f6c05935843be8cf7dcd676504d4e2fe7492391d5cd4f2d25",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28"
+  },
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048676\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nEcho Host-ready-RC:$RC\nC:CEFHost T:CEFHostProfiles --allow-stop\nEcho Duplicate-host-RC:$RC\nRun >RAM:CEF-clientA.log C:CEFHostProbe clientA 250\nWait 1\nRun >RAM:CEF-clientB.log C:CEFHostProbe clientB 600 1\nWait 7\nC:CEFHostProbe stats\nWait 7\nC:CEFHostProbe stats\nC:CEFHostProbe clientC 0\nC:CEFHostProbe stop\nType RAM:CEF-clientA.log\nType RAM:CEF-clientB.log\nWait 5\nType RAM:CEF-host.log >DEBUG:\nEcho Host-test-finished\nWait 3600\n"
+}
