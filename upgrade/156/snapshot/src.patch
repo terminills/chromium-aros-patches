@@ -19532,7 +19532,7 @@ index 3de8ca69c9248a9ebf408526ca9192d6ddd035f4..3e178b16f02146bbe162f34f265f4f41
            Show search with Chromium in system tray and turn on keyboard shortcut
          </message>
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
-index 21e5fd0d9256fde91f8b129224c2665edcda9e56..a9ce0fd813b35244a0b8427ee775c5ba563e383c 100644
+index 21e5fd0d9256fde91f8b129224c2665edcda9e56..3e57fc6fa8a742bd61b20cd1dc537776234f1e67 100644
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
 @@ -6324,7 +6324,7 @@ Keep your key file in a safe place. You will need it to create new versions of y
@@ -19562,6 +19562,15 @@ index 21e5fd0d9256fde91f8b129224c2665edcda9e56..a9ce0fd813b35244a0b8427ee775c5ba
          <message name="IDS_DEVICE_SIGNALS_CONSENT_DIALOG_TITLE" desc="Title of the dialog shown when user consent is required to share device signals.">
            Share information about your device?
          </message>
+@@ -17783,7 +17783,7 @@ Please help our engineers fix this problem. Tell us what happened right before y
+       Open Anyway
+     </message>
+ 
+-    <if expr="is_win or is_macosx or is_linux or is_chromeos">
++    <if expr="is_win or is_macosx or is_linux or is_chromeos or is_aros">
+       <message name="IDS_UTILITY_PROCESS_SYSTEM_SIGNALS_NAME" desc="The name of the utility process used to collect system signals. Only spawned on Windows, Mac, Linux or ChromeOS.">
+         System Signals Utilities
+       </message>
 diff --git a/chrome/app/glic_strings.grdp b/chrome/app/glic_strings.grdp
 index d11ee3c5510ba98197486d462c86ed735d41aaf2..634307d6114c8ff68ecc449f8c85094d56395431 100644
 --- a/chrome/app/glic_strings.grdp
@@ -22185,6 +22194,102 @@ index 0000000000000000000000000000000000000000..d5c4a895d86139e4a25c249a09fdb18a
 +  }
 +  return false;
 +}
+diff --git a/chrome/browser/global_features.cc b/chrome/browser/global_features.cc
+index 4835b332bd4e9981c43657f1f02796d1107e9573..0b86161e8fe701cee77ba732a74004e1e6873930 100644
+--- a/chrome/browser/global_features.cc
++++ b/chrome/browser/global_features.cc
+@@ -46,12 +46,16 @@
+ #include "chrome/browser/ui/tabs/tab_drag_api/desktop_tab_drag_impl/tab_drag_session_desktop_injector.h"
+ #endif
+ 
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
++#include "chrome/browser/ui/webui/whats_new/whats_new_registrar.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+ // This causes a gn error on Android builds, because gn does not understand
+ // buildflags, so we include it only on platforms where it is used.
+ #include "chrome/browser/default_browser/default_browser_manager.h"
+ #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
+-#include "chrome/browser/ui/webui/whats_new/whats_new_registrar.h"
+ #include "components/user_education/common/user_education_features.h"  // nogncheck
+ #endif
+ 
+@@ -219,11 +223,14 @@ void GlobalFeatures::PostBrowserProcessInitCore() {
+   }
+ #endif
+   system_permissions_platform_handle_ = CreateSystemPermissionsPlatformHandle();
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+   // TODO(crbug.com/463742800): Migrate WhatsNewRegistry (and other non-core
+   // features) to Init().
+   whats_new_registry_ = CreateWhatsNewRegistry();
++#endif
+ 
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+   default_browser_manager_ =
+       GetUserDataFactory()
+           .CreateInstance<default_browser::DefaultBrowserManager>(
+@@ -345,7 +352,8 @@ GlobalFeatures::CreateSystemPermissionsPlatformHandle() {
+   return system_permission_settings::PlatformHandle::Create();
+ }
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ std::unique_ptr<whats_new::WhatsNewRegistry>
+ GlobalFeatures::CreateWhatsNewRegistry() {
+   return whats_new::CreateWhatsNewRegistry();
+diff --git a/chrome/browser/global_features.h b/chrome/browser/global_features.h
+index 54372d6a8c317c8c38c154c64bd85f5306213d36..efb5690dbb4dda0ddea3813259c4958abc90446f 100644
+--- a/chrome/browser/global_features.h
++++ b/chrome/browser/global_features.h
+@@ -26,7 +26,8 @@ class GlobalBrowserCollection;
+ namespace system_permission_settings {
+ class PlatformHandle;
+ }  // namespace system_permission_settings
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ namespace whats_new {
+ class WhatsNewRegistry;
+ }  // namespace whats_new
+@@ -167,7 +168,8 @@ class GlobalFeatures {
+   system_permissions_platform_handle() {
+     return system_permissions_platform_handle_.get();
+   }
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+   whats_new::WhatsNewRegistry* whats_new_registry() {
+     return whats_new_registry_.get();
+   }
+@@ -270,7 +272,8 @@ class GlobalFeatures {
+ 
+   virtual std::unique_ptr<system_permission_settings::PlatformHandle>
+   CreateSystemPermissionsPlatformHandle();
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+   virtual std::unique_ptr<whats_new::WhatsNewRegistry> CreateWhatsNewRegistry();
+ #endif
+   virtual std::unique_ptr<GlobalBrowserCollection>
+@@ -294,9 +297,12 @@ class GlobalFeatures {
+ 
+   std::unique_ptr<system_permission_settings::PlatformHandle>
+       system_permissions_platform_handle_;
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+   std::unique_ptr<whats_new::WhatsNewRegistry> whats_new_registry_;
++#endif
+ 
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+   std::unique_ptr<default_browser::DefaultBrowserManager>
+       default_browser_manager_;
+ #endif
 diff --git a/chrome/browser/hid/BUILD.gn b/chrome/browser/hid/BUILD.gn
 index ea9ceb0fcc987b8070f38f73fbc2f2da4be8b3fc..d754b612cf5ac31c6aa159270d60ae372174bf73 100644
 --- a/chrome/browser/hid/BUILD.gn
@@ -33213,7 +33318,7 @@ index 989b675c23b79e7e1b2880cc1a34720e30bca9f4..664dc67f658b2ecf10fb68f0560ecbc1
  #endif
  
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index dd94399247f838679d60516c17f75cd21e50afd8..5840b7efdfc0d4cfbf2aa79f76b5ffcc4fa63173 100644
+index dd94399247f838679d60516c17f75cd21e50afd8..700650e483e4679d9b6841e2c4ed4d3f79b55def 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -1425,13 +1425,14 @@ inline constexpr char kPinInfoBarTimesShown[] =
@@ -33233,6 +33338,16 @@ index dd94399247f838679d60516c17f75cd21e50afd8..5840b7efdfc0d4cfbf2aa79f76b5ffcc
  
  // A collection of position, size, and other data relating to the browser
  // window to restore on startup.
+@@ -2935,7 +2936,8 @@ inline constexpr char kLensRegionSearchEnabled[] =
+ inline constexpr char kLensDesktopNTPSearchEnabled[] =
+     "policy.lens_desktop_ntp_search_enabled";
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
++    BUILDFLAG(IS_AROS)
+ // A dict mapping the edition name with the major version it was shown.
+ inline constexpr char kWhatsNewEditionUsed[] = "browser.whats_new.edition_used";
+ // A list containing the features of each module in order of when they
 diff --git a/chrome/common/url_constants.h b/chrome/common/url_constants.h
 index 1bbf3afad91dd927bc7d9f1fe0d7ba69a507959b..074f4cd891b06ac08fa06577fab0781a46b0c44f 100644
 --- a/chrome/common/url_constants.h
