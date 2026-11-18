@@ -1738,7 +1738,7 @@ index 941ae31148b4691d425870ec8a66b2cb8a560d5e..ee5fcd16285cc9437cc43d82a7405874
   private:
    FlagUpdater() = delete;
 diff --git a/src/heap/heap.cc b/src/heap/heap.cc
-index 420c631486d5cc82d991164b776d07265f1a01dc..a72fee746a79dcd52f299586b4a2a6eddcdf9e16 100644
+index 420c631486d5cc82d991164b776d07265f1a01dc..10e290d1266e50b19d9d4fba4a9c8b08453b03f8 100644
 --- a/src/heap/heap.cc
 +++ b/src/heap/heap.cc
 @@ -5779,7 +5779,7 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
@@ -1750,7 +1750,7 @@ index 420c631486d5cc82d991164b776d07265f1a01dc..a72fee746a79dcd52f299586b4a2a6ed
          code_range_size_ == 0 ? kMaximalCodeRangeSize : code_range_size_;
      // When a target requires the code range feature, we put all code objects in
      // a contiguous range of virtual address space, so that they can call each
-@@ -5788,6 +5788,26 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
+@@ -5788,6 +5788,30 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
      // When pointer compression is enabled, isolates in the same group share the
      // same CodeRange, owned by the IsolateGroup.
      code_range_ = isolate_->isolate_group()->EnsureCodeRange(requested_size);
@@ -1767,8 +1767,12 @@ index 420c631486d5cc82d991164b776d07265f1a01dc..a72fee746a79dcd52f299586b4a2a6ed
 +    code_range_ = shared_code_range.lock();
 +    if (!code_range_) {
 +      code_range_ = std::make_shared<CodeRange>();
++      // Honor the embedder's requested capacity. Reserving the architecture
++      // maximum here discards gin's AROS limit and eagerly consumes hundreds
++      // of MiB of physical RAM. As with IsolateGroup, the first reservation
++      // establishes the shared arena capacity for its lifetime.
 +      if (!code_range_->InitReservation(GetPlatformPageAllocator(),
-+                                        kMaximalCodeRangeSize, false)) {
++                                        requested_size, false)) {
 +        V8::FatalProcessOutOfMemory(
 +            isolate_, "Failed to allocate shared AROS CodeRange");
 +      }
