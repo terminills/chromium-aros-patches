@@ -168,7 +168,7 @@ index 97ab4cc1d55ae6762b9a58e61e69a683cf299dab..a7d9258a9023b2177c7a2eae116b9958
                 '-m', 'DAWN_COMMIT_HASH',
                 '-s', 'src/third_party/dawn',
 diff --git a/base/BUILD.gn b/base/BUILD.gn
-index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c9852e778 100644
+index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e47044081b2f142 100644
 --- a/base/BUILD.gn
 +++ b/base/BUILD.gn
 @@ -1088,6 +1088,25 @@ component("base") {
@@ -240,7 +240,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
    }
  
    if (is_posix || is_fuchsia) {
-@@ -1749,30 +1791,62 @@ component("base") {
+@@ -1749,30 +1791,66 @@ component("base") {
    }
  
    if ((is_posix && !is_ios) || is_fuchsia) {
@@ -283,15 +283,19 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
 +        "aros/crash_annotations.cc",
 +        "aros/crash_annotations.h",
 +        "aros/in6addr.cc",
++        "aros/initial_command_line.h",
 +        "aros/platform_spoof.cc",
 +        "aros/platform_spoof.h",
 +        "aros/socket_library.cc",
 +        "aros/socket_library.h",
 +        "native_library_aros.cc",
++        "nix/xdg_util.cc",
++        "nix/xdg_util.h",
 +        "process/launch_aros.cc",
 +        "threading/platform_thread_metrics_aros.cc",
 +        "profiler/module_cache_aros.cc",
 +      ]
++      deps += [ "//base/third_party/xdg_user_dirs" ]
 +    } else {
 +      sources += [
 +        "native_library_posix.cc",
@@ -317,7 +321,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
    }
  
    if (is_posix && !is_ios) {
-@@ -2443,6 +2517,13 @@ component("base") {
+@@ -2443,6 +2521,13 @@ component("base") {
      ]
    }
  
@@ -331,7 +335,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
    if (use_epoll) {
      sources += [
        "message_loop/message_pump_epoll.cc",
-@@ -2453,9 +2534,19 @@ component("base") {
+@@ -2453,9 +2538,19 @@ component("base") {
    # Android and MacOS have their own custom shared memory handle
    # implementations. e.g. due to supporting both POSIX and native handles.
    if (is_posix && !is_android && !is_apple) {
@@ -353,7 +357,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
        "version_info/nix/version_extra_utils.cc",
        "version_info/nix/version_extra_utils.h",
      ]
-@@ -4262,11 +4353,18 @@ test("base_unittests") {
+@@ -4262,11 +4357,18 @@ test("base_unittests") {
    deps += [ "//build/rust:cxx_cppdeps" ]
  
    data_deps = [
@@ -374,7 +378,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c
  
    if (is_win || is_linux) {
      data_deps += [ "//base/allocator:system_allocator_test_helper" ]
-@@ -4845,6 +4943,21 @@ proto_library("protobuf_hardening_test_support") {
+@@ -4845,6 +4947,21 @@ proto_library("protobuf_hardening_test_support") {
    generate_python = false
  }
  
@@ -2806,6 +2810,26 @@ index 0000000000000000000000000000000000000000..bd4bb0e20932f719f607a7e06ba42855
 +// mangled, so the definitions still resolve the C references.
 +const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT;
 +const struct in6_addr in6addr_loopback = IN6ADDR_LOOPBACK_INIT;
+diff --git a/base/aros/initial_command_line.h b/base/aros/initial_command_line.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..4971e983a42bb1d405b601ea51f4559510ef2fbf
+--- /dev/null
++++ b/base/aros/initial_command_line.h
+@@ -0,0 +1,14 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef BASE_AROS_INITIAL_COMMAND_LINE_H_
++#define BASE_AROS_INITIAL_COMMAND_LINE_H_
++#include "base/base_export.h"
++namespace base {
++class CommandLine;
++namespace aros {
++// Original arguments captured by Init(), scoped to the embedding application.
++BASE_EXPORT const CommandLine& InitialCommandLineForCurrentProcess();
++}  // namespace aros
++}  // namespace base
++#endif
 diff --git a/base/aros/platform_spoof.cc b/base/aros/platform_spoof.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..e068b0d17435ca0a235a0ee24755abe01b3f1371
@@ -4133,10 +4157,10 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea69aa6b79 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168b7368e06 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
-@@ -7,6 +7,11 @@
+@@ -7,6 +7,13 @@
  #include <algorithm>
  #include <array>
  #include <optional>
@@ -4144,11 +4168,13 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
 +
 +#if BUILDFLAG(IS_AROS)
 +#include <map>
++#include <memory>
++#include "base/aros/initial_command_line.h"
 +#endif
  #include <ostream>
  #include <string_view>
  
-@@ -17,6 +22,9 @@
+@@ -17,6 +24,9 @@
  #include "base/files/file_path.h"
  #include "base/logging.h"
  #include "base/not_fatal_until.h"
@@ -4158,7 +4184,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  #include "base/notreached.h"
  #include "base/numerics/checked_math.h"
  #include "base/strings/strcat.h"
-@@ -24,7 +32,14 @@
+@@ -24,7 +34,14 @@
  #include "base/strings/string_tokenizer.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
@@ -4174,7 +4200,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  
  #if BUILDFLAG(IS_WIN)
  #include <windows.h>
-@@ -36,10 +51,52 @@
+@@ -36,10 +53,53 @@
  
  namespace base {
  
@@ -4190,6 +4216,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
 +  Lock lock;
 +  std::map<struct Task*, CommandLine*> command_lines;
 +  std::map<struct Task*, CommandLine*> thread_bindings;
++  std::map<CommandLine*, std::unique_ptr<CommandLine>> initial_command_lines;
 +};
 +
 +CommandLineProcessRegistry& GetCommandLineProcessRegistry() {
@@ -4227,7 +4254,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  DuplicateSwitchHandler* g_duplicate_switch_handler = nullptr;
  
  constexpr CommandLine::CharType kSwitchTerminator[] = FILE_PATH_LITERAL("--");
-@@ -264,13 +321,25 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+@@ -264,13 +324,27 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(int argc, const char* const* argv) {
@@ -4249,11 +4276,13 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
 +#if BUILDFLAG(IS_AROS)
 +  command_line = new CommandLine(NO_PROGRAM);
 +  command_line->InitFromArgv(argc, argv);
++  registry.initial_command_lines[command_line] =
++      std::make_unique<CommandLine>(*command_line);
 +#else
    current_process_commandline_ = new CommandLine(NO_PROGRAM);
  #if BUILDFLAG(IS_WIN)
    current_process_commandline_->ParseFromString(::GetCommandLineW());
-@@ -279,6 +348,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -279,6 +353,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
    UNSAFE_BUFFERS(current_process_commandline_->InitFromArgv(argc, argv));
  #else
  #error Unsupported platform
@@ -4261,7 +4290,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  #endif
  
    return true;
-@@ -286,35 +356,86 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -286,35 +361,99 @@ bool CommandLine::Init(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(const StringVector& argv) {
@@ -4281,6 +4310,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  
 +#if BUILDFLAG(IS_AROS)
 +  command_line = new CommandLine(argv);
++  registry.initial_command_lines[command_line] =
++      std::make_unique<CommandLine>(*command_line);
 +#else
    current_process_commandline_ = new CommandLine(argv);
 +#endif
@@ -4294,6 +4325,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
 +  AutoLock lock(registry.lock);
 +  const auto it = registry.command_lines.find(FindTask(nullptr));
 +  DCHECK(it != registry.command_lines.end() && it->second);
++  registry.initial_command_lines.erase(it->second);
 +  delete it->second;
 +  registry.command_lines.erase(it);
 +#else
@@ -4331,6 +4363,16 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
 +
 +#if BUILDFLAG(IS_AROS)
 +// static
++const CommandLine& aros::InitialCommandLineForCurrentProcess() {
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  CommandLine* current = FindCommandLineForTask(registry, FindTask(nullptr));
++  CHECK(current);
++  const auto it = registry.initial_command_lines.find(current);
++  CHECK(it != registry.initial_command_lines.end());
++  return *it->second;
++}
++
 +void CommandLine::ArosBindCurrentThread(CommandLine* command_line) {
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
@@ -4348,7 +4390,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +559,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +577,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -21342,6 +21384,85 @@ index 0000000000000000000000000000000000000000..bdeb67819dae8137813fb20593227c89
 +  // Wanderer has no application-icon progress protocol. Chrome's in-window
 +  // download UI remains authoritative.
 +}
+diff --git a/chrome/browser/enterprise/BUILD.gn b/chrome/browser/enterprise/BUILD.gn
+index 789007dc354d9640dc70e9fcc964c2245ceda486..046e4baa50dffad3aa043a83f1dc3ce4c5fda5c9 100644
+--- a/chrome/browser/enterprise/BUILD.gn
++++ b/chrome/browser/enterprise/BUILD.gn
+@@ -278,7 +278,7 @@ source_set("enterprise") {
+         [ "//components/enterprise/connectors/core:cloud_content_scanning" ]
+   }
+ 
+-  if (is_linux || is_win || is_mac || is_chromeos || is_android) {
++  if (is_linux || is_win || is_mac || is_chromeos || is_android || is_aros) {
+     public += [
+       "reporting/realtime_event_upload_helper.h",
+       "reporting/saas_usage/navigation_handle_data_delegate.h",
+@@ -291,7 +291,7 @@ source_set("enterprise") {
+     ]
+   }
+ 
+-  if (is_linux || is_win || is_mac) {
++  if (is_linux || is_win || is_mac || is_aros) {
+     public += [
+       "connectors/device_trust/browser/signing_key_policy_observer.h",
+       "connectors/device_trust/signals/decorators/browser/browser_signals_decorator.h",
+@@ -381,7 +381,7 @@ source_set("enterprise") {
+ static_library("browser_launch_reporting") {
+   sources = []
+   deps = []
+-  if (is_linux || is_win || is_mac) {
++  if (is_linux || is_win || is_mac || is_aros) {
+     sources += [
+       "reporting/browser_launch/browser_launch_data_collector_desktop.cc",
+       "reporting/browser_launch/browser_launch_data_collector_desktop.h",
+@@ -392,6 +392,10 @@ static_library("browser_launch_reporting") {
+       "reporting/browser_launch/scoped_initial_command_line.cc",
+       "reporting/browser_launch/scoped_initial_command_line.h",
+     ]
++    if (is_aros) {
++      # CEF uses the per-application initial command line captured by base.
++      sources -= [ "reporting/browser_launch/scoped_initial_command_line.cc" ]
++    }
+     deps += [
+       ":enterprise",
+       "//base",
+@@ -771,7 +775,7 @@ source_set("impl") {
+         [ "//chrome/browser/enterprise/connectors/analysis:sdk_manager" ]
+   }
+ 
+-  if (is_linux || is_win || is_mac || is_chromeos || is_android) {
++  if (is_linux || is_win || is_mac || is_chromeos || is_android || is_aros) {
+     sources += [
+       "reporting/realtime_event_upload_helper.cc",
+       "reporting/saas_usage/navigation_handle_data_delegate.cc",
+@@ -786,7 +790,7 @@ source_set("impl") {
+     deps += [ "//components/enterprise/device_trust/core:device_trust_service" ]
+   }
+ 
+-  if (is_linux || is_win || is_mac) {
++  if (is_linux || is_win || is_mac || is_aros) {
+     sources += [
+       "connectors/device_trust/browser/signing_key_policy_observer.cc",
+       "connectors/device_trust/signals/decorators/browser/browser_signals_decorator.cc",
+@@ -828,6 +832,18 @@ source_set("impl") {
+       "//chrome/browser/ui/browser_window:create_browser_window",
+       "//chrome/services/system_signals/public/cpp/browser",
+     ]
++    if (is_aros) {
++      # Native desktop sign-in does not imply an OS attestation-key backend.
++      sources -= [
++        "connectors/device_trust/browser/signing_key_policy_observer.cc",
++        "connectors/device_trust/signals/decorators/browser/browser_signals_decorator.cc",
++        "remote_commands/rotate_attestation_credential_job.cc",
++      ]
++      deps -= [
++        "//chrome/browser/enterprise/connectors/device_trust/key_management/browser",
++        "//chrome/browser/enterprise/connectors/device_trust/key_management/core",
++      ]
++    }
+   }
+ 
+   if (is_linux || is_chromeos) {
 diff --git a/chrome/browser/enterprise/connectors/reporting/BUILD.gn b/chrome/browser/enterprise/connectors/reporting/BUILD.gn
 index 89da84c976bbe37389c709797f70db1820a59c6e..f25e43ff9eeef3929077fdcae0d4ee38eaceb09e 100644
 --- a/chrome/browser/enterprise/connectors/reporting/BUILD.gn
@@ -22479,6 +22600,47 @@ index 555b3c0ced2c5df3aa42cf8657a155c6fcb50c88..3b4908a6998be5db896ea4a87fa8518d
      BUILDFLAG(SAFE_BROWSING_AVAILABLE)
      AddNotificationHandler(
          NotificationHandler::Type::TAILORED_SECURITY,
+diff --git a/chrome/browser/notifications/notification_platform_bridge.cc b/chrome/browser/notifications/notification_platform_bridge.cc
+index f24bd8bb11ff2bef8ce91c1c2cb918ee5a3f42ad..97dfd2da6450e8fbe3b27fe598df21b187867e81 100644
+--- a/chrome/browser/notifications/notification_platform_bridge.cc
++++ b/chrome/browser/notifications/notification_platform_bridge.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/notifications/notification_platform_bridge.h"
+ 
+ #include "base/check.h"
++#include "build/build_config.h"
+ #include "base/files/file_path.h"
+ #include "chrome/browser/profiles/profile.h"
+ 
+@@ -24,3 +25,15 @@ base::FilePath NotificationPlatformBridge::GetProfileBaseNameFromProfileId(
+     const std::string& profile_id) {
+   return base::FilePath::FromUTF8Unsafe(profile_id);
+ }
++
++#if BUILDFLAG(IS_AROS)
++// AROS uses Chromium's message-center popup UI. No OS notification service
++// is registered; the delegator retains its existing message-center fallback.
++std::unique_ptr<NotificationPlatformBridge> NotificationPlatformBridge::Create() {
++  return nullptr;
++}
++
++bool NotificationPlatformBridge::CanHandleType(NotificationHandler::Type) {
++  return false;
++}
++#endif
+diff --git a/chrome/browser/notifications/notification_platform_bridge_delegator.cc b/chrome/browser/notifications/notification_platform_bridge_delegator.cc
+index d28134cf02567aa0ea3f746b7e39c8df5b295cdf..b82008c7a53264a2c5d3571a9ea384cbfe31de28 100644
+--- a/chrome/browser/notifications/notification_platform_bridge_delegator.cc
++++ b/chrome/browser/notifications/notification_platform_bridge_delegator.cc
+@@ -54,6 +54,8 @@ bool SystemNotificationsEnabled(Profile* profile) {
+   return true;
+ #elif BUILDFLAG(IS_WIN)
+   return NotificationPlatformBridgeWin::SystemNotificationEnabled();
++#elif BUILDFLAG(IS_AROS)
++  return false;
+ #else
+ #if BUILDFLAG(IS_LINUX)
+   if (profile) {
 diff --git a/chrome/browser/optimization_guide/BUILD.gn b/chrome/browser/optimization_guide/BUILD.gn
 index 4729e1faed70c38e9b67f245fe74753d781460b5..eba05615019be7fde0a4122a45931a959a02beae 100644
 --- a/chrome/browser/optimization_guide/BUILD.gn
@@ -24611,7 +24773,7 @@ index 1d85b91424ea75ab0fa126d9b26b8089e0c3b371..4c283acd4e27eabbeb1e5abf6ba645e8
  build_webui("build") {
    grd_prefix = "tab_search"
 diff --git a/chrome/browser/safe_browsing/BUILD.gn b/chrome/browser/safe_browsing/BUILD.gn
-index 091f14ebdee03ee7ad2ab2194c325285a42b698e..b3c9b918a41efe73c6ca8f1711d5ba1222273b90 100644
+index 091f14ebdee03ee7ad2ab2194c325285a42b698e..bac94b51353d6fbdc692bb7a8d1c17f3522534f1 100644
 --- a/chrome/browser/safe_browsing/BUILD.gn
 +++ b/chrome/browser/safe_browsing/BUILD.gn
 @@ -48,6 +48,7 @@ static_library("safe_browsing") {
@@ -24630,6 +24792,15 @@ index 091f14ebdee03ee7ad2ab2194c325285a42b698e..b3c9b918a41efe73c6ca8f1711d5ba12
      "//components/keyed_service/content",
      "//components/language/core/browser",
      "//components/no_state_prefetch/browser",
+@@ -159,7 +161,7 @@ static_library("safe_browsing") {
+     allow_circular_includes_from += [ "//chrome/browser/ash/file_manager" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     public += [ "security_settings_bundle_toast_helper.h" ]
+     sources += [ "security_settings_bundle_toast_helper.cc" ]
+     deps += [
 diff --git a/chrome/browser/screen_ai/screen_ai_service_handler_base.cc b/chrome/browser/screen_ai/screen_ai_service_handler_base.cc
 index 69e252ff90f269c2b1a0c0d27e07d5548f4377c7..154d23bd115daabea668d59ddea2521bffb26464 100644
 --- a/chrome/browser/screen_ai/screen_ai_service_handler_base.cc
@@ -25210,7 +25381,7 @@ index 66d26e03834b694f58aee0acf4ab871293465dfc..36d31d10be4eea8e6e375302abb80618
  build_webui("build") {
    grd_prefix = "ai_overlay_dialog_untrusted"
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 238f8625e42d8703c72c266c36e32bbfb2113095..1832cb3bcb54764de6d4b3782ea0eb9ceb84167e 100644
+index 238f8625e42d8703c72c266c36e32bbfb2113095..95d9cda9217b430f5fa0b8455bca16ecd751fbf3 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
 @@ -8,6 +8,7 @@ import("//build/config/compiler/compiler.gni")
@@ -25347,18 +25518,19 @@ index 238f8625e42d8703c72c266c36e32bbfb2113095..1832cb3bcb54764de6d4b3782ea0eb9c
      deps += [
        "//chrome/browser/ui/views/device_signals_consent",
        "//chrome/browser/ui/views/device_signals_consent:impl",
-@@ -4410,6 +4443,10 @@ static_library("ui") {
+@@ -4410,6 +4443,11 @@ static_library("ui") {
        ]
      }
  
 +    if (is_aros) {
 +      sources += [ "views/frame/browser_desktop_window_tree_host_aros.cc" ]
++      deps += [ "//chrome/browser/ui/views/frame:browser_native_widget_factory_aura" ]
 +    }
 +
      if (is_win || is_linux || is_chromeos) {
        deps += [ "//chrome/browser/ui/views:bluetooth_dialogs" ]
      }
-@@ -4620,6 +4657,10 @@ static_library("ui") {
+@@ -4620,6 +4658,10 @@ static_library("ui") {
      }
    }
  
@@ -25369,7 +25541,7 @@ index 238f8625e42d8703c72c266c36e32bbfb2113095..1832cb3bcb54764de6d4b3782ea0eb9c
    if (enable_pdf) {
      deps += [
        # TODO(crbug.com/372750819): Remove this dependency when the following
-@@ -4648,6 +4689,7 @@ static_library("ui") {
+@@ -4648,6 +4690,7 @@ static_library("ui") {
      deps += [
        "//chrome/browser/printing",
        "//chrome/browser/printing:impl",
@@ -27649,7 +27821,7 @@ index c6e05eb620dd216529c32d6b3660fc44c8b47baf..99b20faea5b8b70d0720ccca1a6aaf92
    // ones that need to call AttachTabHelpers; if you think you do, re-read the
    // design document linked above, especially the section "Reusing tab helpers".
 diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
-index fa77a939373e4a4e03d681d05409f67d220ed8b8..5a9a792745cc63345c7574e595e23121196f8bca 100644
+index fa77a939373e4a4e03d681d05409f67d220ed8b8..9dae41bddd2fa432df97069fc5d9a6fd595ec041 100644
 --- a/chrome/browser/ui/tabs/BUILD.gn
 +++ b/chrome/browser/ui/tabs/BUILD.gn
 @@ -2,7 +2,7 @@
@@ -27661,6 +27833,24 @@ index fa77a939373e4a4e03d681d05409f67d220ed8b8..5a9a792745cc63345c7574e595e23121
  
  import("//chrome/common/features.gni")
  import("//components/signin/features.gni")
+@@ -452,7 +452,7 @@ if (!is_android) {
+       "vertical_tab_strip_state_controller_impl.h",
+     ]
+ 
+-    if (is_win || is_mac || is_linux || is_chromeos) {
++    if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+       sources += [ "inactive_window_mouse_event_controller.h" ]
+     }
+ 
+@@ -526,7 +526,7 @@ if (!is_android) {
+       "vertical_tab_strip_state_controller_impl.cc",
+     ]
+ 
+-    if (is_win || is_mac || is_linux || is_chromeos) {
++    if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+       sources += [ "inactive_window_mouse_event_controller.cc" ]
+     }
+ 
 @@ -698,7 +698,7 @@ if (!is_android) {
        ]
      }
@@ -28375,6 +28565,41 @@ index d6e792f666f6e8991e084b7ba9ac618260c40dfe..0b49d420004ea1788d7705b4318bd66c
  #include "components/strings/grit/components_strings.h"
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index d1973034eed485334dad8980883d3647be2e4759..e84d917205864cf25dc821bc2d7422c10b09f4d8 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -1468,14 +1468,6 @@ if (is_win) {
+     ]
+   }
+ 
+-  source_set("browser_native_widget_factory_aura") {
+-    sources = [ "browser_native_widget_factory_aura.cc" ]
+-    public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+-    deps = [
+-      ":browser_native_widget_aura",
+-      ":browser_native_widget_factory",
+-    ]
+-  }
+ 
+   source_set("browser_window_property_manager_win") {
+     public = [ "browser_window_property_manager_win.h" ]
+@@ -2780,3 +2772,15 @@ source_set("browser_widget_impl") {
+     deps += [ "//media" ]
+   }
+ }
++
++if (is_win || is_aros) {
++  source_set("browser_native_widget_factory_aura") {
++    sources = [ "browser_native_widget_factory_aura.cc" ]
++    public_deps = [ "//chrome/browser:browser_public_dependencies" ]
++    deps = [
++      ":browser_native_widget_aura",
++      ":browser_native_widget_factory",
++    ]
++  }
++
++}
 diff --git a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_aros.cc b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..4ad212a6777ff0254eee515f01d6e581d0bc989f
@@ -34285,6 +34510,19 @@ index ba80712294914eb1d6104030664377674f9949b1..14d3b14dabbd5b328609633b10098ca1
  #endif
    void Clear() { crash_key_.Clear(); }
    void Set(std::string_view value) { crash_key_.Set(value); }
+diff --git a/components/device_signals/core/browser/BUILD.gn b/components/device_signals/core/browser/BUILD.gn
+index 42bae1c2662d6ffad154924e20229f570cc67c1a..bb79bb41f6bd5ac5ce794a9751e0aa3064ed5c17 100644
+--- a/components/device_signals/core/browser/BUILD.gn
++++ b/components/device_signals/core/browser/BUILD.gn
+@@ -70,7 +70,7 @@ static_library("browser") {
+       "//components/safe_browsing/android:safe_browsing_api_handler",
+       "//components/safe_browsing/android:safe_browsing_api_handler_util",
+     ]
+-  } else if (is_win || is_mac || is_linux || is_chromeos) {
++  } else if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     public += [
+       "agent_signals_collector.h",
+       "certificate_signals_collector.h",
 diff --git a/components/discardable_memory/common/discardable_shared_memory_heap.cc b/components/discardable_memory/common/discardable_shared_memory_heap.cc
 index 585d63942a72ff7bc8ad9c3eae6c01b64173404c..82ed1bfea8b4584567be9ea4f0929346eb96c188 100644
 --- a/components/discardable_memory/common/discardable_shared_memory_heap.cc
@@ -34466,7 +34704,7 @@ index 017c0cc8809f8f1b899124e21dd48acc34bcba09..6d173f614dbad3ab6fbbc0051c27146b
    if (!is_chromeos) {
      sources += [
 diff --git a/components/enterprise/buildflags/buildflags.gni b/components/enterprise/buildflags/buildflags.gni
-index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389695bcc3f 100644
+index 07c3959373c4a2310a054d97adc93b5fb233bce8..af9d7e287a1e8adca704e336f31476ca7e75f02e 100644
 --- a/components/enterprise/buildflags/buildflags.gni
 +++ b/components/enterprise/buildflags/buildflags.gni
 @@ -10,7 +10,7 @@ declare_args() {
@@ -34498,7 +34736,7 @@ index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389
  
    enterprise_screenshot_protection = is_win || is_mac || is_ios || is_android
  
-@@ -35,7 +35,7 @@ declare_args() {
+@@ -35,11 +35,11 @@ declare_args() {
  
    # Support on all platforms except for iOS since it uses `WKWebView` cache.
    enterprise_cache_encryption =
@@ -34507,6 +34745,11 @@ index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389
  
    # Indicates support for Enterprise Proxy policy and service.
    enterprise_proxy =
+-      is_win || is_mac || is_linux || is_chromeos || is_android || is_ios
++      is_win || is_mac || is_linux || is_chromeos || is_android || is_ios || is_aros
+ }
+ 
+ declare_args() {
 diff --git a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc b/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc
 index d9c676f1b16d365c3d8da2304d20eefb652d1813..6f4f79fecf9ca2d0d630e1883feb46967d99842f 100644
 --- a/components/enterprise/connectors/core/cloud_content_scanning/connector_data_pipe_getter.cc
@@ -51410,7 +51653,7 @@ index d8139fcb7050033bef6381c465e293907c6bed07..e5363c2c2118659732fe1e22e6c38a14
        socket_fd_ = kInvalidSocket;
      }
 diff --git a/net/socket/tcp_socket_posix.cc b/net/socket/tcp_socket_posix.cc
-index e8837a969d7a36a50a320a6f226cee8511252eda..b9a25cf2bea7c72827c1d6e4691412f60e721cc1 100644
+index e8837a969d7a36a50a320a6f226cee8511252eda..4ffb7fb1ffaf017afd64561b8d0456fe17903b67 100644
 --- a/net/socket/tcp_socket_posix.cc
 +++ b/net/socket/tcp_socket_posix.cc
 @@ -46,6 +46,10 @@
@@ -51439,6 +51682,19 @@ index e8837a969d7a36a50a320a6f226cee8511252eda..b9a25cf2bea7c72827c1d6e4691412f6
      PLOG(ERROR) << "Failed to set SO_KEEPALIVE on fd: " << fd;
      return false;
    }
+@@ -128,7 +138,12 @@ base::TimeDelta GetTransportRtt(SocketDescriptor fd) {
+   info.tcpi_rtt = 0;
+ 
+   socklen_t info_len = sizeof(tcp_info);
++#if BUILDFLAG(IS_AROS)
++  if (base::aros::GetSocketOption(fd, IPPROTO_TCP, TCP_INFO, &info,
++                                  &info_len) != 0)
++#else
+   if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &info_len) != 0)
++#endif
+     return base::TimeDelta();
+ 
+   // Verify that |tcpi_rtt| in tcp_info struct was updated. Note that it's
 diff --git a/net/socket/udp_socket_posix.cc b/net/socket/udp_socket_posix.cc
 index b1f48b0b057bc5bb30423789ded1ee583aabc44f..8a7303f9c9c6635f78f2e03036010c34a1e1edf7 100644
 --- a/net/socket/udp_socket_posix.cc

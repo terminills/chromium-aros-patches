@@ -1,0 +1,81 @@
+From b92ba5181378b4de912ad138bf4bbff69f05cb6b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 17 Nov 2026 18:50:53 -0600
+Subject: [PATCH] collect-aros: propagate failed symbol inspection subprocesses
+
+---
+ tools/collect-aros/backend-generic.c | 21 +++++++++++++++------
+ 1 file changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/tools/collect-aros/backend-generic.c b/tools/collect-aros/backend-generic.c
+index ff14d2bc..e22983ab 100644
+--- a/tools/collect-aros/backend-generic.c
++++ b/tools/collect-aros/backend-generic.c
+@@ -40,6 +40,15 @@ static FILE *my_popen(const char *command, const char *file)
+     return pipe;
+ }
+ 
++/* Symbol inspection failures must not look like an empty, valid symbol set. */
++static void close_inspection_pipe(FILE *pipe)
++{
++    int read_failed = ferror(pipe);
++    int status = pclose(pipe);
++    if (read_failed || status != 0)
++        fatal("collect-aros", "symbol inspection subprocess failed");
++}
++
+ /* The target nm without NM_NAME's options: the symbol scans below need the
+    defined symbols too, and the host's plain "nm" may not read target ELF. */
+ static FILE *nm_popen(const char *file)
+@@ -71,7 +80,7 @@ void collect_sets(const char *file, setnode **setlist_ptr)
+         parse_secname(secname, setlist_ptr);
+     }
+ 
+-    pclose(pipe);
++    close_inspection_pipe(pipe);
+ }
+ 
+ void collect_libs(const char *file, setnode **liblist_ptr)
+@@ -124,7 +133,7 @@ void collect_libs(const char *file, setnode **liblist_ptr)
+         *liblist_ptr = node;
+     }
+ 
+-    pclose(pipe);
++    close_inspection_pipe(pipe);
+ }
+ 
+ void collect_extra(const char *file, setnode **liblist_ptr)
+@@ -184,7 +193,7 @@ void collect_extra(const char *file, setnode **liblist_ptr)
+         free(objname);
+     }
+ 
+-    pclose(pipe);
++    close_inspection_pipe(pipe);
+ }
+ 
+ /* nm marks an undefined symbol 'U', and one that is only weakly referenced
+@@ -258,7 +267,7 @@ int check_and_print_undefined_symbols(const char *file)
+             skipping = 0;
+     }
+ 
+-    pclose(pipe);
++    close_inspection_pipe(pipe);
+ 
+     return undefined_syms;
+ }
+@@ -287,10 +296,10 @@ int has_undefined_symbols(const char *file)
+     while (fgets(line, sizeof(line), pipe) != NULL)
+     {
+         result = 1;
+-        break;
++        /* Drain the stream so the producer can exit normally, not SIGPIPE. */
+     }
+ 
+-    pclose(pipe);
++    close_inspection_pipe(pipe);
+ 
+     return result;
+ }
+-- 
+2.53.0
+

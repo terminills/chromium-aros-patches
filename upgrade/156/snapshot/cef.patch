@@ -874,6 +874,26 @@ index 2b0b561fcd5354f001b9eb365607529b373471e1..f97ea256198b88df31079bfc82d4b6e7
  }
  
  void ChromeContentClientCef::AddAdditionalSchemes(Schemes* schemes) {
+diff --git a/libcef/common/chrome/chrome_main_delegate_cef.cc b/libcef/common/chrome/chrome_main_delegate_cef.cc
+index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..216fa36aa9aed3b12331b7d3753fc0f75a9df290 100644
+--- a/libcef/common/chrome/chrome_main_delegate_cef.cc
++++ b/libcef/common/chrome/chrome_main_delegate_cef.cc
+@@ -49,6 +49,15 @@
+ #include "cef/libcef/common/util_linux.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/initial_command_line.h"
++// CEF does not link chrome_main.cc. Preserve each embedding application's
++// original arguments before CEF or Chrome modifies its working command line.
++const base::CommandLine& GetInitialBrowserCommandLine() {
++  return base::aros::InitialCommandLineForCurrentProcess();
++}
++#endif
++
+ namespace {
+ 
+ base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit
 diff --git a/libcef/common/crash_reporter_client.h b/libcef/common/crash_reporter_client.h
 index 97f2cfe3b742868cbf109ab5997babd424edaa3c..8e76a6fcc0286f925b8baf7df86448daf57332f2 100644
 --- a/libcef/common/crash_reporter_client.h
