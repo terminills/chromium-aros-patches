@@ -22404,7 +22404,7 @@ index 0000000000000000000000000000000000000000..1fdbe62d5dd93cd4d65074fd65d27470
 +
 +}  // namespace media_router
 diff --git a/chrome/browser/media/webrtc/BUILD.gn b/chrome/browser/media/webrtc/BUILD.gn
-index 9f01a15f0665271f19d5e43420a6a795a019573f..f859a5ddaca5d3400ac4c4a0c0161f45f8dc8912 100644
+index 9f01a15f0665271f19d5e43420a6a795a019573f..da5f03388a990bd4a5a254326e07cebb99b72621 100644
 --- a/chrome/browser/media/webrtc/BUILD.gn
 +++ b/chrome/browser/media/webrtc/BUILD.gn
 @@ -2,7 +2,7 @@
@@ -22416,6 +22416,15 @@ index 9f01a15f0665271f19d5e43420a6a795a019573f..f859a5ddaca5d3400ac4c4a0c0161f45
  
  import("//build/config/ozone.gni")
  import("//build/config/ui.gni")
+@@ -298,7 +298,7 @@ source_set("webrtc") {
+     deps += [ "//components/remote_cocoa/browser" ]
+   }
+ 
+-  if (is_linux && use_ozone) {
++  if ((is_linux || is_aros) && use_ozone) {
+     sources += [ "window_icon_util_ozone.cc" ]
+     deps += [ "//ui/ozone" ]
+   }
 diff --git a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
 index 9757afeaa2a5f4308caf1daaf828e43601271ea5..56238f718ce7f405f0c1b3331ed94dbbf7e18520 100644
 --- a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
@@ -24549,8 +24558,30 @@ index 4257c36e8765550dac475e67c9ff616f2396e731..1b42c8a27132bf41addd47b24210abe2
    // Returns whether the system profile is in a region where we can show a
    // search engine choice screen. If the profile is not a system profile, this
    // function crashes. Used for clients associated with system profiles (where
+diff --git a/chrome/browser/renderer_context_menu/BUILD.gn b/chrome/browser/renderer_context_menu/BUILD.gn
+index beb9606cb654f81dbef97a438c73b4ebeed41db8..732be9c0c52ad942c29449c8a35b5e5321db440f 100644
+--- a/chrome/browser/renderer_context_menu/BUILD.gn
++++ b/chrome/browser/renderer_context_menu/BUILD.gn
+@@ -222,7 +222,7 @@ source_set("impl") {
+     ]
+   }
+ 
+-  if (is_linux || is_chromeos || is_win) {
++  if (is_linux || is_chromeos || is_win || is_aros) {
+     public += [ "spelling_options_submenu_observer.h" ]
+     sources += [ "spelling_options_submenu_observer.cc" ]
+   }
+@@ -430,7 +430,7 @@ if (!is_android) {
+       "//url",
+     ]
+ 
+-    if (is_linux || is_chromeos || is_win) {
++    if (is_linux || is_chromeos || is_win || is_aros) {
+       sources += [
+         # This test is for the spelling options submenu that's only for
+         # Windows, ChromeOS, and Linux.
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
-index b55c138d48f3b41695803f5e22f2ab9731d9378c..be1e148e2a52cb1c1d3c26594627118746e80f41 100644
+index b55c138d48f3b41695803f5e22f2ab9731d9378c..2710571b437e7642d8cdca9a07379d92994ba442 100644
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 +++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 @@ -487,6 +487,18 @@ ui::ImageModel GetLensContextMenuIcon() {
@@ -24638,6 +24669,15 @@ index b55c138d48f3b41695803f5e22f2ab9731d9378c..be1e148e2a52cb1c1d3c265946271187
  custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList
  RenderViewContextMenu::GetHandlersForLinkUrl() {
    custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList handlers =
+@@ -6205,7 +6255,7 @@ void RenderViewContextMenu::AppendRevisedTextSelectionSection() {
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ bool RenderViewContextMenu::IsLinkToIsolatedWebApp() const {
+   // Using `unfiltered_link_url`, because `link_url` is being replaced with
+   // about:blank#blocked if the source is a normal site.
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.h b/chrome/browser/renderer_context_menu/render_view_context_menu.h
 index 836cc56f67cc8a980610eb2865c8fa83df7d035f..2b87922e773ca5e6eee2d194db76d84109e97b3e 100644
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.h
@@ -27945,7 +27985,7 @@ index c19d4ba646850e49d845046f01dc46b661d71acb..9351661accb8a5e293dcc1d311516d67
  
  BrowserWindowInterface* StartupBrowserCreatorImpl::OpenURLsInBrowser(
 diff --git a/chrome/browser/ui/tab_contents/BUILD.gn b/chrome/browser/ui/tab_contents/BUILD.gn
-index 606da0def2107530f86dd5ce51889ca74d3bc21a..b05c971dc9d89e5df5474b4853e5be084208a0ef 100644
+index 606da0def2107530f86dd5ce51889ca74d3bc21a..a00225c5e3f3881e51ae406288f7cb8efebeecd8 100644
 --- a/chrome/browser/ui/tab_contents/BUILD.gn
 +++ b/chrome/browser/ui/tab_contents/BUILD.gn
 @@ -5,7 +5,7 @@
@@ -27957,6 +27997,24 @@ index 606da0def2107530f86dd5ce51889ca74d3bc21a..b05c971dc9d89e5df5474b4853e5be08
  
  source_set("tab_contents") {
    sources = [
+@@ -14,7 +14,7 @@ source_set("tab_contents") {
+     "tab_contents_iterator.h",
+   ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "chrome_web_contents_menu_helper.h",
+       "chrome_web_contents_view_handle_drop.h",
+@@ -40,7 +40,7 @@ source_set("impl") {
+     "tab_contents_iterator.cc",
+   ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "chrome_web_contents_menu_helper.cc",
+       "chrome_web_contents_view_handle_drop.cc",
 diff --git a/chrome/browser/ui/tab_helpers.h b/chrome/browser/ui/tab_helpers.h
 index c6e05eb620dd216529c32d6b3660fc44c8b47baf..99b20faea5b8b70d0720ccca1a6aaf92bb3637c5 100644
 --- a/chrome/browser/ui/tab_helpers.h
@@ -33130,6 +33188,27 @@ index 989b675c23b79e7e1b2880cc1a34720e30bca9f4..664dc67f658b2ecf10fb68f0560ecbc1
  #error "This file only applies to desktop Linux and ChromeOS."
  #endif
  
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index dd94399247f838679d60516c17f75cd21e50afd8..5840b7efdfc0d4cfbf2aa79f76b5ffcc4fa63173 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -1425,13 +1425,14 @@ inline constexpr char kPinInfoBarTimesShown[] =
+     "browser.pin_infobar_times_shown";
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+ 
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_AROS)
+ 
+ // How many times the session restore infobar has been shown.
+ inline constexpr char kSessionRestoreInfoBarTimesShown[] =
+     "browser.session_restore_infobar_times_shown";
+ 
+-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#endif  // Desktop session restore infobar.
+ 
+ // A collection of position, size, and other data relating to the browser
+ // window to restore on startup.
 diff --git a/chrome/common/url_constants.h b/chrome/common/url_constants.h
 index 1bbf3afad91dd927bc7d9f1fe0d7ba69a507959b..074f4cd891b06ac08fa06577fab0781a46b0c44f 100644
 --- a/chrome/common/url_constants.h
@@ -46399,7 +46478,7 @@ index d2edc9d79ac28c2f3e53692a8315591edb493d4a..a61e0f9f218690034b2ec7daf5b0dc9d
      : public testing::TestWithParam<
            std::tuple<gfx::Size, VideoCaptureImplementationTweak>> {
 diff --git a/media/cdm/cdm_adapter.cc b/media/cdm/cdm_adapter.cc
-index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf95dde3c5 100644
+index 8de444a6be9f907db5e56ef3b702fc0675980ffe..07af6f8827550fd6a3358f5bb23cc1223b675e12 100644
 --- a/media/cdm/cdm_adapter.cc
 +++ b/media/cdm/cdm_adapter.cc
 @@ -10,6 +10,7 @@
@@ -46612,7 +46691,28 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__ << ": "
             << encrypted->AsHumanReadableString(/*verbose=*/true);
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -636,6 +664,7 @@ void CdmAdapter::DecryptAndDecodeAudio(scoped_refptr<DecoderBuffer> encrypted,
+@@ -611,6 +639,7 @@ void CdmAdapter::DecryptAndDecodeAudio(scoped_refptr<DecoderBuffer> encrypted,
+   ToCdmInputBuffer(*encrypted, &subsamples, &input_buffer);
+   cdm::Status status =
+       cdm_->DecryptAndDecodeSamples(input_buffer, audio_frames.get());
++  widevine_trace.Value("status", static_cast<int64_t>(status));
+   TRACE_EVENT_END("media", "key ID", GetHexKeyId(input_buffer), "status",
+                   CdmStatusToString(status));
+ 
+@@ -626,16 +655,20 @@ void CdmAdapter::DecryptAndDecodeAudio(scoped_refptr<DecoderBuffer> encrypted,
+   CHECK(audio_frames->FrameBuffer());
+   if (!AudioFramesDataToAudioFrames(std::move(audio_frames),
+                                     &audio_frame_list)) {
++    widevine_trace.Value("frame_conversion_success", 0);
+     DVLOG(1) << __func__ << " unable to convert Audio Frames";
+     std::move(audio_decode_cb).Run(Decryptor::kError, empty_frames);
+     return;
+   }
+ 
++  widevine_trace.Value("frame_conversion_success", 1);
++  widevine_trace.Value("decoded_frames", audio_frame_list.size());
+   std::move(audio_decode_cb).Run(Decryptor::kSuccess, audio_frame_list);
+ }
  
  void CdmAdapter::DecryptAndDecodeVideo(scoped_refptr<DecoderBuffer> encrypted,
                                         VideoDecodeCB video_decode_cb) {
@@ -46620,7 +46720,30 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__ << ": "
             << encrypted->AsHumanReadableString(/*verbose=*/true);
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -679,6 +708,7 @@ void CdmAdapter::DecryptAndDecodeVideo(scoped_refptr<DecoderBuffer> encrypted,
+@@ -652,6 +685,7 @@ void CdmAdapter::DecryptAndDecodeVideo(scoped_refptr<DecoderBuffer> encrypted,
+   ToCdmInputBuffer(*encrypted, &subsamples, &input_buffer);
+   cdm::Status status =
+       cdm_->DecryptAndDecodeFrame(input_buffer, video_frame.get());
++  widevine_trace.Value("status", static_cast<int64_t>(status));
+   TRACE_EVENT_END("media", "key ID", GetHexKeyId(input_buffer), "status",
+                   CdmStatusToString(status));
+ 
+@@ -665,12 +699,14 @@ void CdmAdapter::DecryptAndDecodeVideo(scoped_refptr<DecoderBuffer> encrypted,
+   scoped_refptr<VideoFrame> decoded_frame = video_frame->TransformToVideoFrame(
+       aspect_ratio_.GetNaturalSize(visible_rect));
+   if (!decoded_frame) {
++    widevine_trace.Value("frame_conversion_success", 0);
+     DLOG(ERROR) << __func__ << ": TransformToVideoFrame failed.";
+     std::move(video_decode_cb).Run(Decryptor::kError, nullptr);
+     return;
+   }
+ 
+   decoded_frame->metadata().protected_video = is_video_encrypted_;
++  widevine_trace.Value("frame_conversion_success", 1);
+ 
+   ++cdm_metrics_data_.video_frames_processed;
+   ++frames_processed_;
+@@ -679,6 +715,7 @@ void CdmAdapter::DecryptAndDecodeVideo(scoped_refptr<DecoderBuffer> encrypted,
  }
  
  void CdmAdapter::ResetDecoder(StreamType stream_type) {
@@ -46628,7 +46751,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": stream_type = " << stream_type;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::ResetDecoder", "stream_type", stream_type);
-@@ -687,6 +717,7 @@ void CdmAdapter::ResetDecoder(StreamType stream_type) {
+@@ -687,6 +724,7 @@ void CdmAdapter::ResetDecoder(StreamType stream_type) {
  }
  
  void CdmAdapter::DeinitializeDecoder(StreamType stream_type) {
@@ -46636,7 +46759,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": stream_type = " << stream_type;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::DeinitializeDecoder", "stream_type",
-@@ -708,6 +739,8 @@ void CdmAdapter::DeinitializeDecoder(StreamType stream_type) {
+@@ -708,6 +746,8 @@ void CdmAdapter::DeinitializeDecoder(StreamType stream_type) {
  
  void CdmAdapter::OnResolveKeyStatusPromise(uint32_t promise_id,
                                             cdm::KeyStatus_2 key_status) {
@@ -46645,7 +46768,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": promise_id = " << promise_id
             << ", key_status = " << static_cast<uint32_t>(key_status);
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -719,6 +752,9 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
+@@ -719,6 +759,9 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
                                       bool has_additional_usable_key,
                                       const cdm::KeyInformation_2* keys_info,
                                       uint32_t keys_info_count) {
@@ -46655,7 +46778,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    std::string session_id_str(session_id, session_id_size);
    DVLOG(2) << __func__ << ": session_id = " << session_id_str;
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -746,6 +782,8 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
+@@ -746,6 +789,8 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
  
  void CdmAdapter::OnResolveKeyStatusPromise(uint32_t promise_id,
                                             cdm::KeyStatus key_status) {
@@ -46664,7 +46787,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": promise_id = " << promise_id
             << ", key_status = " << key_status;
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -757,6 +795,9 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
+@@ -757,6 +802,9 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
                                       bool has_additional_usable_key,
                                       const cdm::KeyInformation* keys_info,
                                       uint32_t keys_info_count) {
@@ -46674,7 +46797,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    std::string session_id_str(session_id, session_id_size);
    DVLOG(2) << __func__ << ": session_id = " << session_id_str;
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -783,6 +824,8 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
+@@ -783,6 +831,8 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
  }
  
  cdm::Buffer* CdmAdapter::Allocate(uint32_t capacity) {
@@ -46683,7 +46806,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__ << ": capacity = " << capacity;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::Allocate", "capacity", capacity);
-@@ -791,6 +834,8 @@ cdm::Buffer* CdmAdapter::Allocate(uint32_t capacity) {
+@@ -791,6 +841,8 @@ cdm::Buffer* CdmAdapter::Allocate(uint32_t capacity) {
  }
  
  void CdmAdapter::SetTimer(int64_t delay_ms, void* context) {
@@ -46692,7 +46815,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    CHECK(task_runner_->BelongsToCurrentThread());
  
    auto delay = base::Milliseconds(delay_ms);
-@@ -806,6 +851,7 @@ void CdmAdapter::SetTimer(int64_t delay_ms, void* context) {
+@@ -806,6 +858,7 @@ void CdmAdapter::SetTimer(int64_t delay_ms, void* context) {
  }
  
  void CdmAdapter::TimerExpired(void* context) {
@@ -46700,7 +46823,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__ << ": context = " << context;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::TimerExpired", "context", context);
-@@ -814,11 +860,14 @@ void CdmAdapter::TimerExpired(void* context) {
+@@ -814,11 +867,14 @@ void CdmAdapter::TimerExpired(void* context) {
  }
  
  cdm::Time CdmAdapter::GetCurrentWallTime() {
@@ -46715,7 +46838,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__ << ": success = " << success;
    CHECK(task_runner_->BelongsToCurrentThread());
    DCHECK_NE(init_promise_id_, CdmPromiseAdapter::kInvalidPromiseId);
-@@ -835,6 +884,8 @@ void CdmAdapter::OnInitialized(bool success) {
+@@ -835,6 +891,8 @@ void CdmAdapter::OnInitialized(bool success) {
  }
  
  void CdmAdapter::OnResolvePromise(uint32_t promise_id) {
@@ -46724,7 +46847,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": promise_id = " << promise_id;
    CHECK(task_runner_->BelongsToCurrentThread());
    cdm_promise_adapter_.ResolvePromise(promise_id);
-@@ -843,6 +894,8 @@ void CdmAdapter::OnResolvePromise(uint32_t promise_id) {
+@@ -843,6 +901,8 @@ void CdmAdapter::OnResolvePromise(uint32_t promise_id) {
  void CdmAdapter::OnResolveNewSessionPromise(uint32_t promise_id,
                                              const char* session_id,
                                              uint32_t session_id_size) {
@@ -46733,17 +46856,18 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": promise_id = " << promise_id;
    CHECK(task_runner_->BelongsToCurrentThread());
    cdm_promise_adapter_.ResolvePromise(promise_id,
-@@ -854,6 +907,9 @@ void CdmAdapter::OnRejectPromise(uint32_t promise_id,
+@@ -854,6 +914,10 @@ void CdmAdapter::OnRejectPromise(uint32_t promise_id,
                                   uint32_t system_code,
                                   const char* error_message,
                                   uint32_t error_message_size) {
 +  base::aros::WidevineDebugScope widevine_trace("CdmAdapter::OnRejectPromise");
 +  widevine_trace.Value("promise_id", static_cast<int64_t>(promise_id));
++  widevine_trace.Value("exception", static_cast<int64_t>(exception));
 +  widevine_trace.Value("system_code", static_cast<int64_t>(system_code));
    std::string error_message_str(error_message, error_message_size);
    DVLOG(2) << __func__ << ": promise_id = " << promise_id
             << ", exception = " << exception << ", system_code = " << system_code
-@@ -882,6 +938,9 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
+@@ -882,6 +946,9 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
                                    cdm::MessageType message_type,
                                    const char* message,
                                    uint32_t message_size) {
@@ -46753,7 +46877,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    std::string session_id_str(session_id, session_id_size);
    DVLOG(2) << __func__ << ": session_id = " << session_id_str;
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -901,6 +960,7 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
+@@ -901,6 +968,7 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
  void CdmAdapter::OnExpirationChange(const char* session_id,
                                      uint32_t session_id_size,
                                      cdm::Time new_expiry_time) {
@@ -46761,7 +46885,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    std::string session_id_str(session_id, session_id_size);
    DVLOG(2) << __func__ << ": session_id = " << session_id_str
             << ", new_expiry_time = " << new_expiry_time;
-@@ -915,6 +975,7 @@ void CdmAdapter::OnExpirationChange(const char* session_id,
+@@ -915,6 +983,7 @@ void CdmAdapter::OnExpirationChange(const char* session_id,
  
  void CdmAdapter::OnSessionClosed(const char* session_id,
                                   uint32_t session_id_size) {
@@ -46769,7 +46893,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    CHECK(task_runner_->BelongsToCurrentThread());
  
    std::string session_id_str(session_id, session_id_size);
-@@ -928,6 +989,7 @@ void CdmAdapter::SendPlatformChallenge(const char* service_id,
+@@ -928,6 +997,7 @@ void CdmAdapter::SendPlatformChallenge(const char* service_id,
                                         uint32_t service_id_size,
                                         const char* challenge,
                                         uint32_t challenge_size) {
@@ -46777,7 +46901,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    CHECK(task_runner_->BelongsToCurrentThread());
  
    if (!cdm_config_.allow_distinctive_identifier) {
-@@ -950,6 +1012,8 @@ void CdmAdapter::OnChallengePlatformDone(
+@@ -950,6 +1020,8 @@ void CdmAdapter::OnChallengePlatformDone(
      const std::string& signed_data,
      const std::string& signed_data_signature,
      const std::string& platform_key_certificate) {
@@ -46786,7 +46910,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": success = " << success;
    TRACE_EVENT1("media", "CdmAdapter::OnChallengePlatformDone", "success",
                 success);
-@@ -973,6 +1037,8 @@ void CdmAdapter::OnChallengePlatformDone(
+@@ -973,6 +1045,8 @@ void CdmAdapter::OnChallengePlatformDone(
  }
  
  void CdmAdapter::EnableOutputProtection(uint32_t desired_protection_mask) {
@@ -46795,7 +46919,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(1) << __func__;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::EnableOutputProtection",
-@@ -985,6 +1051,8 @@ void CdmAdapter::EnableOutputProtection(uint32_t desired_protection_mask) {
+@@ -985,6 +1059,8 @@ void CdmAdapter::EnableOutputProtection(uint32_t desired_protection_mask) {
  }
  
  void CdmAdapter::OnEnableOutputProtectionDone(bool success) {
@@ -46804,7 +46928,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    // CDM needs to call QueryOutputProtectionStatus() to see if it took effect
    // or not.
    DVLOG(1) << __func__ << ": success = " << success;
-@@ -993,6 +1061,7 @@ void CdmAdapter::OnEnableOutputProtectionDone(bool success) {
+@@ -993,6 +1069,7 @@ void CdmAdapter::OnEnableOutputProtectionDone(bool success) {
  }
  
  void CdmAdapter::QueryOutputProtectionStatus() {
@@ -46812,7 +46936,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT0("media", "CdmAdapter::QueryOutputProtectionStatus");
  
-@@ -1005,6 +1074,10 @@ void CdmAdapter::QueryOutputProtectionStatus() {
+@@ -1005,6 +1082,10 @@ void CdmAdapter::QueryOutputProtectionStatus() {
  void CdmAdapter::OnQueryOutputProtectionStatusDone(bool success,
                                                     uint32_t link_mask,
                                                     uint32_t protection_mask) {
@@ -46823,7 +46947,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": success = " << success;
    // Combining |link_mask| and |protection_mask| since there's no TRACE_EVENT3.
    TRACE_EVENT2("media", "CdmAdapter::OnQueryOutputProtectionStatusDone",
-@@ -1029,6 +1102,7 @@ void CdmAdapter::OnQueryOutputProtectionStatusDone(bool success,
+@@ -1029,6 +1110,7 @@ void CdmAdapter::OnQueryOutputProtectionStatusDone(bool success,
  }
  
  void CdmAdapter::ReportOutputProtectionQuery() {
@@ -46831,7 +46955,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    if (uma_for_output_protection_query_reported_)
      return;
  
-@@ -1038,6 +1112,9 @@ void CdmAdapter::ReportOutputProtectionQuery() {
+@@ -1038,6 +1120,9 @@ void CdmAdapter::ReportOutputProtectionQuery() {
  
  void CdmAdapter::ReportOutputProtectionQueryResult(uint32_t link_mask,
                                                     uint32_t protection_mask) {
@@ -46841,15 +46965,17 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    CHECK(uma_for_output_protection_query_reported_);
  
    if (uma_for_output_protection_positive_result_reported_)
-@@ -1075,6 +1152,7 @@ void CdmAdapter::ReportOutputProtectionQueryResult(uint32_t link_mask,
+@@ -1075,6 +1160,9 @@ void CdmAdapter::ReportOutputProtectionQueryResult(uint32_t link_mask,
  
  void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,
                                                cdm::Status decoder_status) {
 +  base::aros::WidevineDebugScope widevine_trace("CdmAdapter::OnDeferredInitializationDone");
++  widevine_trace.Value("stream_type", static_cast<int64_t>(stream_type));
++  widevine_trace.Value("status", static_cast<int64_t>(decoder_status));
    DVLOG(1) << __func__ << ": stream_type = " << stream_type
             << ", decoder_status = " << decoder_status;
    CHECK(task_runner_->BelongsToCurrentThread());
-@@ -1092,6 +1170,7 @@ void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,
+@@ -1092,6 +1180,7 @@ void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,
  }
  
  cdm::FileIO* CdmAdapter::CreateFileIO(cdm::FileIOClient* client) {
@@ -46857,7 +46983,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(3) << __func__;
    CHECK(task_runner_->BelongsToCurrentThread());
  
-@@ -1104,6 +1183,8 @@ cdm::FileIO* CdmAdapter::CreateFileIO(cdm::FileIOClient* client) {
+@@ -1104,6 +1193,8 @@ cdm::FileIO* CdmAdapter::CreateFileIO(cdm::FileIOClient* client) {
  }
  
  void CdmAdapter::RequestStorageId(uint32_t version) {
@@ -46866,7 +46992,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": version = " << version;
    CHECK(task_runner_->BelongsToCurrentThread());
  
-@@ -1126,6 +1207,7 @@ void CdmAdapter::RequestStorageId(uint32_t version) {
+@@ -1126,6 +1217,7 @@ void CdmAdapter::RequestStorageId(uint32_t version) {
  }
  
  void CdmAdapter::ReportMetrics(cdm::MetricName metric_name, uint64_t value) {
@@ -46874,7 +47000,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    switch (metric_name) {
      case cdm::kSdkVersion:
        cdm_metrics_data_.license_sdk_version = value;
-@@ -1170,6 +1252,8 @@ void CdmAdapter::ReportMetrics(cdm::MetricName metric_name, uint64_t value) {
+@@ -1170,6 +1262,8 @@ void CdmAdapter::ReportMetrics(cdm::MetricName metric_name, uint64_t value) {
  
  void CdmAdapter::OnStorageIdObtained(uint32_t version,
                                       const std::vector<uint8_t>& storage_id) {
@@ -46883,7 +47009,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    DVLOG(2) << __func__ << ": version = " << version;
    CHECK(task_runner_->BelongsToCurrentThread());
    TRACE_EVENT1("media", "CdmAdapter::OnStorageIdObtained", "version", version);
-@@ -1180,6 +1264,7 @@ void CdmAdapter::OnStorageIdObtained(uint32_t version,
+@@ -1180,6 +1274,7 @@ void CdmAdapter::OnStorageIdObtained(uint32_t version,
  bool CdmAdapter::AudioFramesDataToAudioFrames(
      std::unique_ptr<AudioFramesImpl> audio_frames,
      Decryptor::AudioFrames* result_frames) {
@@ -46891,7 +47017,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..d4c04926c62f3e508629a09bd37715cf
    base::span<uint8_t> data = AsSpan(audio_frames->FrameBuffer());
    const SampleFormat sample_format =
        ToMediaSampleFormat(audio_frames->Format());
-@@ -1257,6 +1342,8 @@ bool CdmAdapter::AudioFramesDataToAudioFrames(
+@@ -1257,6 +1352,8 @@ bool CdmAdapter::AudioFramesDataToAudioFrames(
  }
  
  void CdmAdapter::OnFileRead(int file_size_bytes) {
