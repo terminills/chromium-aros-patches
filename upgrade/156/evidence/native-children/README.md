@@ -182,3 +182,39 @@ The browser covers most of About AROS in the screenshot. This is a native CEF
 worker exercise, not full Chrome UI, network, or multi-app acceptance.
 
 ![Native ARM JS/Wasm worker pass](cef-direct-arm24-rendered.png)
+
+
+## Runtime 99 and storage/metrics/cache ownership follow-up
+
+Native run 99 clears the path containment failure and reaches app A first paint
+at 1674.30 MiB whole-guest use. It then fails the browser-only
+`MojoUkmRecorder::MarkSourceForDeletion` NOTREACHED. The global UKM delegator
+could forward browser calls to a renderer delegate. The current snapshot scopes
+that delegator and its client registry to the native owner; the assertion stays.
+
+The storage audit also found a utility process changing the engine-global
+SQLite default and filesystem factory. Sandboxed VFS registrations now get
+immutable owner-qualified names without replacing the engine default. Database
+open/delete resolve the owner's default or explicit alias; ATTACH uses its
+connection's VFS. The filesystem factory and persistent-cache VFS delegate,
+registration guard and virtual-file map are owner-local. The prior AROS
+workaround allowing a sandboxed VFS to replace VFSWrapper is removed.
+
+The MemoryCache Persistent root and its dump provider's WeakPersistent pointer
+are now per renderer, as are parkable string/image managers which hold renderer
+task runners and background state. Engine code, allocator and stateless providers
+remain shared. This does not qualify repeated child-state reclamation or full
+Perfetto attribution. ProcessLocalValue lookup costs still need optimization
+and measurement after native correctness is established.
+
+Both complete x64 and AArch64 archive builds pass. Native links and run 100 are
+pending. Run 100 additionally requires every logged child to report a successful
+CEFExecuteProcess return; this precedes final CloseLibrary and is not proof of
+task disappearance or resident memory reclamation. The retained watcher checks
+are host synthetic acceptance-logic tests, not guest execution evidence.
+
+ARM run 25 passes local JS/Wasm workers, page rendering, browser close, CEF
+teardown and script RC0 on the preceding native-SQL-path candidate. Its screenshot
+was visually reviewed. Whole guest is 1187.09 MiB at first paint and 1151.78 MiB
+after CEF close. Network and two-app acceptance remain open. ARM 26 is prepared
+for the current candidate with an opt-in test-client About AROS launcher.

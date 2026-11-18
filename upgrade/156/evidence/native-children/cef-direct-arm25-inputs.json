@@ -1,0 +1,28 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "133652e54f156aea1aafaa08fa96bdcfe9c6117c608fe9c22c3a67415f1d6e24",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "d0eb748cd317c23374f3b7fae21694ffdce7f2a29658de6042c339390c9cf2bb",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "117c1ca8e0b60af716e7900a224329c780556882390d39b55a9202fee10a13ca"
+  },
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nRun >NIL: SYS:System/About\nC:CEFDirectBrowser T:cef-arm25.ppm \"@SYS:CEF-worker-url.txt\" 1500\nEcho ARM25-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T22:03:09.422593+00:00",
+    "validation": "Private native SQL path candidate includes compositor scheduler owner correction. Runtime98 clears child coordinator then fails storage root containment because Database legacy conversion rewrites T: paths to /T:/ before sandboxed VFS. Remove obsolete conversion for open and ATTACH; native local VFS already resolves DOS locks, containment assertions unchanged. Cross-build/native runtime99 pending. Exact-base replay checked; not published.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "eeac36535df481b16d1709855c8bb0d0483d5b8404e9328ae9ec3d7d3c63dad9",
+        "applied_tree": "4f224e952a4cd6e82f3dc946dd10b0302cdb242a",
+        "bytes": 2937314
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}

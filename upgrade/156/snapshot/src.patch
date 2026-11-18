@@ -38017,6 +38017,41 @@ index 8644f277234752606c4241a0733a48f96638cf32..3891a8b2eda427156330f281c750ef59
    // TODO(crbug.com/40191566): Send to the platform settings.
    // The iOS Blink port also need to send the platform settings.
    NOTIMPLEMENTED_LOG_ONCE();
+diff --git a/components/services/storage/filesystem_proxy_factory.cc b/components/services/storage/filesystem_proxy_factory.cc
+index c68ec25983d492f9a29e2567d126d004047c5169..a66c878595365f0f78025b9bbb3c3330b9d31fad 100644
+--- a/components/services/storage/filesystem_proxy_factory.cc
++++ b/components/services/storage/filesystem_proxy_factory.cc
+@@ -8,6 +8,10 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/no_destructor.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace storage {
+ 
+@@ -19,9 +23,19 @@ std::unique_ptr<FilesystemProxy> CreateUnrestrictedFilesystemProxy() {
+ }
+ 
+ FilesystemProxyFactory& GetFactory() {
++#if BUILDFLAG(IS_AROS)
++  struct ProcessFactory {
++    FilesystemProxyFactory factory =
++        base::BindRepeating(&CreateUnrestrictedFilesystemProxy);
++  };
++  struct FilesystemProxyFactoryProcessTag;
++  return base::aros::ProcessLocalValue<
++      ProcessFactory, FilesystemProxyFactoryProcessTag>().factory;
++#else
+   static base::NoDestructor<FilesystemProxyFactory> factory{
+       base::BindRepeating(&CreateUnrestrictedFilesystemProxy)};
+   return *factory;
++#endif
+ }
+ 
+ }  // namespace
 diff --git a/components/services/storage/public/cpp/filesystem/filesystem_impl.cc b/components/services/storage/public/cpp/filesystem/filesystem_impl.cc
 index e0b6fa1a6e852876beadbd256603286d207f2f73..a9b80f8cb925b088ec395a70c7072b7eb3fbe585 100644
 --- a/components/services/storage/public/cpp/filesystem/filesystem_impl.cc
@@ -38775,6 +38810,69 @@ index b137139d3719cc4f257842883f310724ba073da9..2c9fa5c545ad93f830ef6dad051d1443
    return static_cast<TokenServiceTable*>(db->GetTable(GetKey()));
  }
  
+diff --git a/components/sqlite_vfs/sqlite_sandboxed_vfs.cc b/components/sqlite_vfs/sqlite_sandboxed_vfs.cc
+index e35f835345f580300a4a4ad706fc4928a1155dca..948ea8b0e95f4f2c22611b54bd0417f8c92bec67 100644
+--- a/components/sqlite_vfs/sqlite_sandboxed_vfs.cc
++++ b/components/sqlite_vfs/sqlite_sandboxed_vfs.cc
+@@ -17,6 +17,10 @@
+ #include "base/notreached.h"
+ #include "base/strings/strcat.h"
+ #include "base/synchronization/lock.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/sqlite_vfs/file_system_id.h"
+ #include "components/sqlite_vfs/file_type.h"
+ #include "components/sqlite_vfs/metrics_util.h"
+@@ -30,7 +34,21 @@ namespace sqlite_vfs {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ProcessDelegateState {
++  base::Lock registration_lock;
++  SqliteSandboxedVfsDelegate* instance = nullptr;
++  bool registered = false;
++};
++struct ProcessDelegateStateTag;
++ProcessDelegateState& GetProcessDelegateState() {
++  return base::aros::ProcessLocalValue<ProcessDelegateState,
++                                       ProcessDelegateStateTag>();
++}
++#define g_instance (GetProcessDelegateState().instance)
++#else
+ SqliteSandboxedVfsDelegate* g_instance = nullptr;
++#endif
+ 
+ FileType GetFileType(int sqlite_requested_type) {
+   static constexpr int kTypeMask =
+@@ -83,6 +101,17 @@ SqliteSandboxedVfsDelegate::~SqliteSandboxedVfsDelegate() {
+ 
+ // static
+ SqliteSandboxedVfsDelegate* SqliteSandboxedVfsDelegate::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  auto& state = GetProcessDelegateState();
++  base::AutoLock lock(state.registration_lock);
++  if (!state.registered) {
++    sql::SandboxedVfs::Register(
++        kSqliteVfsName, std::make_unique<SqliteSandboxedVfsDelegate>(),
++        /*make_default=*/false);
++    state.registered = true;
++  }
++  return state.instance;
++#else
+   // When requesting the the global instance the first time make sure it exists
+   // and register it.
+   [[maybe_unused]] static const bool registered = [] {
+@@ -92,6 +121,7 @@ SqliteSandboxedVfsDelegate* SqliteSandboxedVfsDelegate::GetInstance() {
+     return true;
+   }();
+   return g_instance;
++#endif
+ }
+ 
+ sql::SandboxedVfsFile* SqliteSandboxedVfsDelegate::RetrieveSandboxedVfsFile(
 diff --git a/components/storage_monitor/BUILD.gn b/components/storage_monitor/BUILD.gn
 index cf0dd936c6cbeb3f2b56782c6d2b5dc9e1f4751c..9c66aedcb21f984669d2a5b16f1cc8259ba40614 100644
 --- a/components/storage_monitor/BUILD.gn
@@ -54715,6 +54813,67 @@ index 0000000000000000000000000000000000000000..38000e78f3fc15c25b2a52dfdcbd978e
 +}
 +
 +}  // namespace device
+diff --git a/services/metrics/public/cpp/delegating_ukm_recorder.cc b/services/metrics/public/cpp/delegating_ukm_recorder.cc
+index c988b49b75e2afadbeec64a1484ce3d0d7092db7..3c9a0cc358c50642f792937c3eb6fffbca2f3cb5 100644
+--- a/services/metrics/public/cpp/delegating_ukm_recorder.cc
++++ b/services/metrics/public/cpp/delegating_ukm_recorder.cc
+@@ -7,6 +7,10 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/no_destructor.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "services/metrics/public/cpp/ukm_recorder_client_interface_registry.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
+ 
+@@ -17,7 +21,14 @@ DelegatingUkmRecorder::~DelegatingUkmRecorder() = default;
+ 
+ // static
+ DelegatingUkmRecorder* DelegatingUkmRecorder::Get() {
++#if BUILDFLAG(IS_AROS)
++  struct DelegatingUkmRecorderProcessTag;
++  auto& instance = base::aros::ProcessLocalValue<
++      base::NoDestructor<DelegatingUkmRecorder>,
++      DelegatingUkmRecorderProcessTag>();
++#else
+   static base::NoDestructor<DelegatingUkmRecorder> instance;
++#endif
+   return instance.get();
+ }
+ 
+diff --git a/services/metrics/public/cpp/ukm_recorder_client_interface_registry.cc b/services/metrics/public/cpp/ukm_recorder_client_interface_registry.cc
+index 77e3852f8cf6cd26cc932cd70c5218260f581917..697d837d398d92a960b78b2c4b5c7b4e42bdaee3 100644
+--- a/services/metrics/public/cpp/ukm_recorder_client_interface_registry.cc
++++ b/services/metrics/public/cpp/ukm_recorder_client_interface_registry.cc
+@@ -17,6 +17,10 @@
+ #include "base/task/sequence_manager/tasks.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/thread_annotations.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "services/metrics/public/cpp/delegating_ukm_recorder.h"
+ #include "services/metrics/public/cpp/ukm_recorder.h"
+ 
+@@ -36,8 +40,15 @@ class UkmRecorderClientInterfaceRegistryStorage {
+   };
+ 
+   static UkmRecorderClientInterfaceRegistryStorage& GetInstance() {
++#if BUILDFLAG(IS_AROS)
++    struct UkmClientRegistryProcessTag;
++    auto& g_instance = base::aros::ProcessLocalValue<
++        base::NoDestructor<UkmRecorderClientInterfaceRegistryStorage>,
++        UkmClientRegistryProcessTag>();
++#else
+     static base::NoDestructor<UkmRecorderClientInterfaceRegistryStorage>
+         g_instance;
++#endif
+     return *g_instance;
+   }
+ 
 diff --git a/services/network/cookie_manager.cc b/services/network/cookie_manager.cc
 index b980d4df597a77ac915369a9543a74189156dc2a..0cbaca555dfe12d8a80c737d3da626fa281440df 100644
 --- a/services/network/cookie_manager.cc
@@ -55853,10 +56012,20 @@ index eeea5dd2d15345338f66e033cacab171c09e010c..e39ef7b8a591a9129452aa2ec39d3395
        android_get_device_api_level() > __ANDROID_API_V__) {
      sk_sp<SkFontMgr> ndk_fontmgr =
 diff --git a/sql/database.cc b/sql/database.cc
-index 528c012f79561c34534efeb361dfa9223686a0e3..a5e1be9f9c3e8e9192ad8d56d971bdd0c778952c 100644
+index 528c012f79561c34534efeb361dfa9223686a0e3..e21dccc7ae4bbd3da20f597a88d7cdc0bccba221 100644
 --- a/sql/database.cc
 +++ b/sql/database.cc
-@@ -1168,6 +1168,16 @@ bool Database::RazeInternal() {
+@@ -58,6 +58,9 @@
+ #include "base/tracing/protos/chrome_track_event.pbzero.h"  // IWYU pragma: keep
+ #include "base/types/pass_key.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "sql/sandboxed_vfs.h"
++#endif
+ #include "sql/database_memory_dump_provider.h"
+ #include "sql/initialization.h"
+ #include "sql/internal_api_token.h"
+@@ -1168,6 +1171,16 @@ bool Database::RazeInternal() {
  
    SqliteResultCode sqlite_result_code =
        BackupDatabaseForRaze(null_db.db(InternalApiToken()), db_);
@@ -55873,7 +56042,22 @@ index 528c012f79561c34534efeb361dfa9223686a0e3..a5e1be9f9c3e8e9192ad8d56d971bdd0
  
    // The destination database was locked.
    if (sqlite_result_code == SqliteResultCode::kBusy) {
-@@ -2169,6 +2179,8 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+@@ -1348,7 +1361,13 @@ bool Database::Delete(const base::FilePath& path) {
+ 
+   EnsureSqliteInitialized();
+ 
+-  sqlite3_vfs* vfs = sqlite3_vfs_find(nullptr);
++  sqlite3_vfs* vfs = sqlite3_vfs_find(
++#if BUILDFLAG(IS_AROS)
++      SandboxedVfs::GetVfsNameForCurrentProcess(nullptr)
++#else
++      nullptr
++#endif
++  );
+   CHECK(vfs);
+   CHECK(vfs->xDelete);
+   CHECK(vfs->xAccess);
+@@ -2169,6 +2188,8 @@ bool Database::OpenInternal(const std::string& db_file_path) {
      open_flags |= (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
    }
  
@@ -55882,7 +56066,22 @@ index 528c012f79561c34534efeb361dfa9223686a0e3..a5e1be9f9c3e8e9192ad8d56d971bdd0
    std::string uri_file_path = db_file_path;
    if (options_.exclusive_database_file_lock_) {
  #if BUILDFLAG(IS_WIN)
-@@ -2226,6 +2238,15 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+@@ -2197,9 +2218,13 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+                  db_file_path);
+     base::ElapsedTimer library_call_timer;
+ 
++    const char* vfs_name = options_.vfs_name_discouraged_;
++#if BUILDFLAG(IS_AROS)
++    vfs_name = SandboxedVfs::GetVfsNameForCurrentProcess(vfs_name);
++#endif
+     sqlite_result_code = ToSqliteResultCode(
+         sqlite3_open_v2(uri_file_path.c_str(), &db, open_flags,
+-                        options_.vfs_name_discouraged_));
++                        vfs_name));
+ 
+     // If SQLITE_OPEN_READWRITE is specified, the database must not be opened in
+     // read-only mode. If it is, set the result code to
+@@ -2226,6 +2251,15 @@ bool Database::OpenInternal(const std::string& db_file_path) {
    if (sqlite_result_code == SqliteResultCode::kOk) {
      db_ = db;
    } else {
@@ -55935,7 +56134,7 @@ index 740342ec4b6c1ad183ad149e349c74f3394f8df0..4498723dcc3b0f9edff832de8befcd03
      return sqlite_result_code;
    }
 diff --git a/sql/sandboxed_vfs.cc b/sql/sandboxed_vfs.cc
-index b2dec81225944154586000e50946d41345077a9d..b8995a755d9f8b3d7d7c97151a0792560e7cc5fe 100644
+index b2dec81225944154586000e50946d41345077a9d..8d45144bb86f3efce55aa1d92c0d403900a725a1 100644
 --- a/sql/sandboxed_vfs.cc
 +++ b/sql/sandboxed_vfs.cc
 @@ -19,6 +19,7 @@
@@ -55946,7 +56145,82 @@ index b2dec81225944154586000e50946d41345077a9d..b8995a755d9f8b3d7d7c97151a079256
  #include "base/no_destructor.h"
  #include "base/notreached.h"
  #include "base/threading/platform_thread.h"
-@@ -164,6 +165,12 @@ int SandboxedVfs::Open(const char* full_path,
+@@ -27,9 +28,29 @@
+ #include "sql/sandboxed_vfs_file.h"
+ #include "sql/vfs_wrapper.h"
+ #include "third_party/sqlite/sqlite3.h"
++#if BUILDFLAG(IS_AROS)
++#include <map>
++#include "base/aros/process_local.h"
++#include "base/strings/string_number_conversions.h"
++#endif
+ 
+ namespace sql {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++struct ProcessVfsState {
++  base::Lock lock;
++  std::map<std::string, std::string> names;
++  const char* default_name = nullptr;
++  std::vector<SandboxedVfs*> instances;
++};
++struct ProcessVfsStateTag;
++ProcessVfsState& GetProcessVfsState() {
++  return base::aros::ProcessLocalValue<ProcessVfsState, ProcessVfsStateTag>();
++}
++}  // namespace
++#endif
++
+ namespace {
+ 
+ // Extracts the SandboxedVfs* stashed in a SQLite VFS structure.
+@@ -151,12 +172,44 @@ SandboxedVfsFileType VfsFileTypeFromPath(const char* full_path_cstr) {
+ void SandboxedVfs::Register(const char* name,
+                             std::unique_ptr<Delegate> delegate,
+                             bool make_default) {
++#if BUILDFLAG(IS_AROS)
++  sql::EnsureSqliteInitialized(/*create_wrapper=*/false);
++  auto& state = GetProcessVfsState();
++  base::AutoLock lock(state.lock);
++  // The name is unique within the calling process upstream. Keep it unique
++  // across native processes sharing SQLite, and retain its backing string.
++  auto [entry, inserted] = state.names.emplace(
++      name, std::string(name) + ".aros." +
++                base::NumberToString(base::aros::CurrentProcessIdentity()));
++  CHECK(inserted);
++  const char* registered_name = entry->second.c_str();
++  state.instances.push_back(
++      new SandboxedVfs(registered_name, std::move(delegate), false));
++  if (make_default)
++    state.default_name = registered_name;
++  LOG(INFO) << "[Chromium:AROS:SQLite] registered owner VFS=" << registered_name
++            << " process_default=" << make_default
++            << " engine_default=" << sqlite3_vfs_find(nullptr)->zName;
++#else
+   static base::NoDestructor<std::vector<SandboxedVfs*>>
+       registered_vfs_instances;
+   sql::EnsureSqliteInitialized(/*create_wrapper=*/false);
+   registered_vfs_instances->push_back(
+       new SandboxedVfs(name, std::move(delegate), make_default));
++#endif
++}
++
++#if BUILDFLAG(IS_AROS)
++const char* SandboxedVfs::GetVfsNameForCurrentProcess(
++    const char* requested_name) {
++  auto& state = GetProcessVfsState();
++  base::AutoLock lock(state.lock);
++  if (!requested_name)
++    return state.default_name;
++  const auto it = state.names.find(requested_name);
++  return it == state.names.end() ? requested_name : it->second.c_str();
+ }
++#endif
+ 
+ int SandboxedVfs::Open(const char* full_path,
+                        sqlite3_file& result_file,
+@@ -164,6 +217,12 @@ int SandboxedVfs::Open(const char* full_path,
                         int* granted_flags) {
    base::FilePath file_path = base::FilePath::FromUTF8Unsafe(full_path);
    base::File file = delegate_->OpenFile(file_path, requested_flags);
@@ -55959,7 +56233,7 @@ index b2dec81225944154586000e50946d41345077a9d..b8995a755d9f8b3d7d7c97151a079256
    if (!file.IsValid()) {
      // TODO(pwnall): Figure out if we can remove the fallback to read-only.
      if (!(requested_flags & SQLITE_OPEN_READWRITE)) {
-@@ -199,8 +206,16 @@ int SandboxedVfs::Open(const char* full_path,
+@@ -199,8 +258,16 @@ int SandboxedVfs::Open(const char* full_path,
  
  int SandboxedVfs::Delete(const char* full_path, int sync_dir) {
    DCHECK(full_path);
@@ -55976,7 +56250,7 @@ index b2dec81225944154586000e50946d41345077a9d..b8995a755d9f8b3d7d7c97151a079256
  }
  
  int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
-@@ -225,6 +240,10 @@ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
+@@ -225,6 +292,10 @@ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
      default:
        NOTREACHED() << "Unsupported xAccess flags: " << flags;
    }
@@ -55987,29 +56261,31 @@ index b2dec81225944154586000e50946d41345077a9d..b8995a755d9f8b3d7d7c97151a079256
    return SQLITE_OK;
  }
  
-@@ -290,8 +309,22 @@ SandboxedVfs::SandboxedVfs(const char* name,
-       last_error_(base::File::FILE_OK) {
-   if (make_default) {
-     // This shouldn't override the VFS wrapper.
+diff --git a/sql/sandboxed_vfs.h b/sql/sandboxed_vfs.h
+index f318bab7ac161ef4e0fb8905d7c949d9146d183a..1737b2db66a10d6eda73f0f635212b46d5fe893c 100644
+--- a/sql/sandboxed_vfs.h
++++ b/sql/sandboxed_vfs.h
+@@ -12,6 +12,7 @@
+ #include "base/files/file.h"
+ #include "base/files/file_path.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
+ #include "sql/sandboxed_vfs_file.h"
+ #include "third_party/sqlite/sqlite3.h"
+ 
+@@ -98,6 +99,12 @@ class COMPONENT_EXPORT(SQL) SandboxedVfs {
+                        std::unique_ptr<Delegate> delegate,
+                        bool make_default);
+ 
 +#if BUILDFLAG(IS_AROS)
-+    if (std::string_view(sqlite3_vfs_find(nullptr)->zName) ==
-+        kVfsWrapperName) {
-+      LOG(WARNING)
-+          << "[Chromium:AROS:SQLite] SandboxedVfs default registration "
-+             "observed existing VFSWrapper; continuing for hosted "
-+             "process reentry name="
-+          << name;
-+    } else {
-+      DCHECK_NE(std::string_view(sqlite3_vfs_find(nullptr)->zName),
-+                kVfsWrapperName);
-+    }
-+#else
-     DCHECK_NE(std::string_view(sqlite3_vfs_find(nullptr)->zName),
-               kVfsWrapperName);
++  // Resolve a process-local registration without replacing SQLite's resident
++  // engine-wide default. Returned registered names have engine lifetime.
++  static const char* GetVfsNameForCurrentProcess(const char* requested_name);
 +#endif
-   }
-   // The register function returns a SQLite status as an int. The status is
-   // ignored here. If registration fails, we'd want to report the error while
++
+   Delegate* delegate() const { return delegate_.get(); }
+ 
+   // sqlite3_vfs implementation.
 diff --git a/sql/vfs_wrapper.cc b/sql/vfs_wrapper.cc
 index 763ed71b7099a345c6342c6ac083f6f4e9bda4de..36809f9ee897a40df4ad34ee282ee264d9063456 100644
 --- a/sql/vfs_wrapper.cc
@@ -58465,6 +58741,39 @@ index 6101076273a181fea07fe49ade81946eca6a9b69..04b8d186b1e8f926faff4b1fc315f4ab
    }
  }
  
+diff --git a/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc b/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc
+index 160a98c6f74a60e0e8353c98ca1da931b0b67f71..b3dff5b7ad5bfdcb117975f9ee072e16cc51e600 100644
+--- a/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc
++++ b/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc
+@@ -18,6 +18,10 @@
+ #include "base/trace_event/memory_allocator_dump.h"
+ #include "base/trace_event/process_memory_dump.h"
+ #include "base/trace_event/trace_event.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/bindings/parkable_string.h"
+@@ -118,8 +122,17 @@ ParkableStringManagerDumpProvider::ParkableStringManagerDumpProvider() =
+     default;
+ 
+ ParkableStringManager& ParkableStringManager::Instance() {
++#if BUILDFLAG(IS_AROS)
++  struct ProcessManager {
++    ParkableStringManager manager;
++  };
++  struct ParkableStringManagerProcessTag;
++  return base::aros::ProcessLocalValue<
++      ProcessManager, ParkableStringManagerProcessTag>().manager;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(ParkableStringManager, instance, ());
+   return instance;
++#endif
+ }
+ 
+ ParkableStringManager::~ParkableStringManager() = default;
 diff --git a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc b/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
 index 6580983ed4acaf309f5da7a659f1afb61bc430ed..ae527428a2bdb0d7f1c04b522ea3568076a638ba 100644
 --- a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
@@ -59064,6 +59373,35 @@ index a4f0741229fb42790b4e81f6c8332625badcf439..8e97101b6739147584027c4b869e06fd
    // Tries to find the cached display item corresponding to the given
    // parameters. If found, appends the cached display item to the new display
    // list and returns true. Otherwise returns false.
+diff --git a/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc b/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc
+index 516364e434433a7eca878ea85c040ad0a751ce2e..4758130a6e29f2167452045d1927ad3b7141ad5d 100644
+--- a/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc
++++ b/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc
+@@ -9,6 +9,10 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "base/trace_event/process_memory_dump.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/renderer/platform/graphics/parkable_image.h"
+ #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
+ #include "third_party/blink/renderer/platform/wtf/wtf.h"
+@@ -27,7 +31,13 @@ constexpr base::TimeDelta ParkableImageManager::kDelayedParkingInterval;
+ 
+ // static
+ ParkableImageManager& ParkableImageManager::Instance() {
++#if BUILDFLAG(IS_AROS)
++  struct ParkableImageManagerProcessTag;
++  auto& instance = base::aros::ProcessLocalValue<
++      base::NoDestructor<ParkableImageManager>, ParkableImageManagerProcessTag>();
++#else
+   static base::NoDestructor<ParkableImageManager> instance;
++#endif
+   return *instance;
+ }
+ 
 diff --git a/third_party/blink/renderer/platform/heap/BUILD.gn b/third_party/blink/renderer/platform/heap/BUILD.gn
 index 90f462aa66fd19e0cf89f0fd683c2f28faf291b6..10dd8ca4e0fbed4c4e8a4d0eaa9e3d1c20213823 100644
 --- a/third_party/blink/renderer/platform/heap/BUILD.gn
@@ -59312,6 +59650,38 @@ index 41b484492dccabac68c73777da72799c7a4d2821..d22dcce446a3c59e7d781e5262dd8943
  }
  
  source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc b/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc
+index aaf3cd2de1242bda2b81dd35961099594c309104..e5db102571b00cb962790455cc1a0a176017d3a7 100644
+--- a/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc
++++ b/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc
+@@ -3,14 +3,27 @@
+ // found in the LICENSE file.
+ 
+ #include "third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace blink {
+ 
+ void MemoryCacheDumpClient::Trace(Visitor* visitor) const {}
+ 
+ MemoryCacheDumpProvider* MemoryCacheDumpProvider::Instance() {
++#if BUILDFLAG(IS_AROS)
++  struct ProcessProvider {
++    MemoryCacheDumpProvider provider;
++  };
++  struct MemoryCacheDumpProviderProcessTag;
++  return &base::aros::ProcessLocalValue<
++      ProcessProvider, MemoryCacheDumpProviderProcessTag>().provider;
++#else
+   DEFINE_STATIC_LOCAL(MemoryCacheDumpProvider, instance, ());
+   return &instance;
++#endif
+ }
+ 
+ bool MemoryCacheDumpProvider::OnMemoryDump(
 diff --git a/third_party/blink/renderer/platform/loader/BUILD.gn b/third_party/blink/renderer/platform/loader/BUILD.gn
 index 601e551b9d222f8b6ff917f0ce1cfc336395bac9..ab3407868aaf5b90c5e1bec1893a89d42c063fb0 100644
 --- a/third_party/blink/renderer/platform/loader/BUILD.gn
@@ -59335,6 +59705,36 @@ index 601e551b9d222f8b6ff917f0ce1cfc336395bac9..ab3407868aaf5b90c5e1bec1893a89d4
  }
  
  source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
+index 6eb483256948e65217f4434815c96e07b42fefa2..4eccd7b15172c10410cdbf1c7d6c4b4ae01b0d8d 100644
+--- a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
++++ b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
+@@ -34,6 +34,10 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/clamped_math.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+@@ -133,7 +137,14 @@ int GetResourceTypePriority(ResourceType type) {
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_AROS)
++struct MemoryCacheProcessTag;
++#define g_memory_cache \
++  (base::aros::ProcessLocalValue<Persistent<MemoryCache>*, \
++                                MemoryCacheProcessTag>())
++#else
+ static Persistent<MemoryCache>* g_memory_cache;
++#endif
+ 
+ static constexpr base::TimeDelta kDefaultStrongReferencePruneDelay =
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 index eb403c197b6dd9ba138e05cd4b1902628ad51985..0293bbc5f4eda9ab3d283574f0e7892226f2e822 100644
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
