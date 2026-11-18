@@ -7,13 +7,18 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-18 UTC
 
-Both architectures have produced complete CEF archives; further desktop
-dependency fixes are rebuilding. A usable native CEF module has **not** linked.
-An earlier zero-exit build produced a nine-byte invalid file after the linker
-crashed. The host collector now propagates child signals, validates ELF output,
-checks inspection-tool failures, and avoids rescanning whole archives already
-included in its first stage. The corrected link exposes unresolved dependencies
-and fails correctly. No native browser-window success is claimed.
+Both architectures have produced complete CEF archives. The x86-64 native
+CEF/Blink module now passes linking and ELF validation. On native AROS with two
+CPUs, the public CEF library opens, reports Chromium 156 and the expected CEF
+revision/API hash, and closes with return code 0. Initialization and browser
+rendering are still being tested. AArch64 native module linking is in progress;
+no AArch64 runtime result is claimed.
+
+The earlier nine-byte invalid module was rejected. The host collector now
+propagates child signals, checks inspection-tool failures, validates ELF output,
+and avoids rescanning already included whole archives.
+
+See `evidence/cef156-version41-result.json`, its input hashes and serial log.
 
 Both native V8 modules include native Exec workers, a shared code arena and
 shared dispatch backing with separate isolate allocation/GC spaces. The latest
@@ -24,10 +29,17 @@ finish with return code 0. Incremental guest RAM for B is **7,048,736 bytes**
 This is bounded V8 evidence, not full CEF/profile isolation qualification.
 The original on-demand 2 MiB PartitionAlloc policy remains.
 
-The larger 5,000-function-per-isolate stress test is still under investigation.
-It exposed a GC diagnostic formatting failure: the compact static C formatter
-omits floating-point conversions. Engine-local full formatter integration is
-being tested. Native AArch64 execution remains untested.
+The larger 5,000-function-per-isolate stress test passes on one CPU, including
+isolate replacement and both app exits. Its identical two-CPU image still
+fails in the kernel; this remains an open stress qualification issue. Both
+engines now use the full AROS formatter locally, fixing GC diagnostics that
+previously treated a floating-point argument as a string pointer. Native stack
+bounds also pass a two-core JavaScript recursion/RangeError regression.
+
+The allocator-owner retirement candidate passes 200 native rounds with Exec
+workers on CPUs 0 and 1, but is not yet integrated into the engine build.
+Native AArch64 execution and ARM Linux ET_DYN/CDM loading remain untested; the
+SDK's Linux-object mapper currently implements x86-64 only.
 
 ![Controlled shared V8 lifecycle passes](evidence/v8-memory34-live.png)
 
@@ -116,9 +128,9 @@ are in the current snapshot; the controlled V8 runtime test above covers their b
 The AROS-only non-compressed V8 heap now holds a reference to a shared code
 arena instead of reserving one arena per isolate. Its page allocator is engine
 owned, and the last isolate releases the arena. The modified heap cross-compiles
-with actual GN flags on x86-64 and AArch64; the warmed-code multi-app runtime
-probe is prepared but has not yet passed. This is a candidate fix, not a measured
-memory improvement.
+with actual GN flags on x86-64 and AArch64. The controlled two-core warmed-code
+run now passes with shared dispatch backing; the measured result and larger
+stress qualification limits are recorded in the current status above.
 
 Use two cores for current native qualification; higher-core AROS scheduler
 issues remain separate follow-up work.
