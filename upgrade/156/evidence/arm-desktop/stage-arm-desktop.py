@@ -4,7 +4,7 @@ r=Path('/mnt/short-term/job0254-01a1e62b')
 e=Path('/run/media/terminills/Amiwest/job0254-01a1e62b/evidence')
 a=r/'aros-arm64-gcc16-build/bin/raspi-aarch64-smp/AROS'
 w=e.parent/'arm-runtime';stage=w/'stage'
-required=['aros-aarch64-raspi.img','aros-aarch64-bsp.rom','System/About','Libs/cef-blink.library','Libs/cef.library','Libs/v8.library','S/Startup-Sequence']
+required=['aros-aarch64-raspi.img','aros-aarch64-bsp.rom','System/About','System/Wanderer/Wanderer','Libs/stdcio.library','Libs/posixc.library','boot/raspi-smp/Libs/debug.library','Libs/cef-blink.library','Libs/cef.library','Libs/v8.library','S/Startup-Sequence']
 for f in required: assert (a/f).is_file(),f
 assert (e/'cef156-arm64-native-module10-elf.json').is_file()
 assert not stage.exists()
@@ -12,6 +12,7 @@ stage.mkdir()
 (stage/"AROS.boot").write_text("aarch64\n")
 for name in ['C','Classes','Devs','Fonts','L','Libs','Locale','Prefs','S','Storage','System','Tools','Utilities','WBStartup']:
  if (a/name).is_dir(): shutil.copytree(a/name,stage/name,symlinks=True)
+shutil.copy2(a/'boot/raspi-smp/Libs/debug.library',stage/'Libs/debug.library')
 # mtools rejects AUX as a DOS reserved name; AROS creates it during boot.
 shutil.move(stage/'Devs/DOSDrivers/AUX', stage/'S/AUX-Mountlist')
 startup=stage/'S/Startup-Sequence'
