@@ -168,7 +168,7 @@ index 97ab4cc1d55ae6762b9a58e61e69a683cf299dab..a7d9258a9023b2177c7a2eae116b9958
                 '-m', 'DAWN_COMMIT_HASH',
                 '-s', 'src/third_party/dawn',
 diff --git a/base/BUILD.gn b/base/BUILD.gn
-index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2ab1ca7abc 100644
+index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..00fa4425dcc0a590f67d11a7b347881c9852e778 100644
 --- a/base/BUILD.gn
 +++ b/base/BUILD.gn
 @@ -1088,6 +1088,25 @@ component("base") {
@@ -197,20 +197,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
    }
  
    if (is_linux || is_chromeos) {
-@@ -1128,6 +1147,12 @@ component("base") {
- 
-   all_dependent_configs = []
-   defines = [ "BASE_IMPLEMENTATION" ]
-+  if (is_aros && use_blink) {
-+    # Blink adds process/memory.cc, which provides UncheckedCalloc. Keep the
-+    # remaining AROS stub implementations without defining that symbol twice.
-+    # Non-Blink tools continue to use the complete stub.
-+    defines += [ "BASE_AROS_USE_BLINK_MEMORY_IMPL" ]
-+  }
-   data = []
-   data_deps = []
-   libs = []
-@@ -1215,6 +1240,25 @@ component("base") {
+@@ -1215,6 +1234,25 @@ component("base") {
      libs += [ "atomic" ]
    }
  
@@ -236,7 +223,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
    if (use_allocator_shim) {
      if (is_apple) {
        sources += [ "allocator/early_zone_registration_apple.h" ]
-@@ -1727,11 +1771,15 @@ component("base") {
+@@ -1727,11 +1765,15 @@ component("base") {
    if (is_posix) {
      sources += [
        "base_paths_posix.h",
@@ -253,7 +240,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
    }
  
    if (is_posix || is_fuchsia) {
-@@ -1749,30 +1797,61 @@ component("base") {
+@@ -1749,30 +1791,62 @@ component("base") {
    }
  
    if ((is_posix && !is_ios) || is_fuchsia) {
@@ -302,6 +289,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
 +        "aros/socket_library.h",
 +        "native_library_aros.cc",
 +        "process/launch_aros.cc",
++        "threading/platform_thread_metrics_aros.cc",
 +        "profiler/module_cache_aros.cc",
 +      ]
 +    } else {
@@ -329,7 +317,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
    }
  
    if (is_posix && !is_ios) {
-@@ -2443,6 +2522,13 @@ component("base") {
+@@ -2443,6 +2517,13 @@ component("base") {
      ]
    }
  
@@ -343,7 +331,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
    if (use_epoll) {
      sources += [
        "message_loop/message_pump_epoll.cc",
-@@ -2453,9 +2539,19 @@ component("base") {
+@@ -2453,9 +2534,19 @@ component("base") {
    # Android and MacOS have their own custom shared memory handle
    # implementations. e.g. due to supporting both POSIX and native handles.
    if (is_posix && !is_android && !is_apple) {
@@ -365,7 +353,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
        "version_info/nix/version_extra_utils.cc",
        "version_info/nix/version_extra_utils.h",
      ]
-@@ -4262,11 +4358,18 @@ test("base_unittests") {
+@@ -4262,11 +4353,18 @@ test("base_unittests") {
    deps += [ "//build/rust:cxx_cppdeps" ]
  
    data_deps = [
@@ -386,7 +374,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..69f2461ab9c7e0ab07c06ad711b85d2a
  
    if (is_win || is_linux) {
      data_deps += [ "//base/allocator:system_allocator_test_helper" ]
-@@ -4845,6 +4948,21 @@ proto_library("protobuf_hardening_test_support") {
+@@ -4845,6 +4943,21 @@ proto_library("protobuf_hardening_test_support") {
    generate_python = false
  }
  
@@ -4145,7 +4133,7 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..66030170637a5299add4f01fcb2157dc4b0a0b17 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..866f75dc8a2727f11c7365e5f7f46dea69aa6b79 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
 @@ -7,6 +7,11 @@
@@ -4273,7 +4261,31 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..66030170637a5299add4f01fcb2157dc
  #endif
  
    return true;
-@@ -299,22 +369,62 @@ bool CommandLine::Init(const StringVector& argv) {
+@@ -286,35 +356,86 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+ 
+ // static
+ bool CommandLine::Init(const StringVector& argv) {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  CommandLine*& command_line = registry.command_lines[FindTask(nullptr)];
++  if (command_line) {
++#else
+   if (current_process_commandline_) {
++#endif
+     // If this is intentional, Reset() must be called first. If we are using
+     // the shared build mode, we have to share a single object across multiple
+     // shared libraries.
+     return false;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  command_line = new CommandLine(argv);
++#else
+   current_process_commandline_ = new CommandLine(argv);
++#endif
+   return true;
+ }
  
  // static
  void CommandLine::Reset() {
@@ -4336,7 +4348,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..66030170637a5299add4f01fcb2157dc
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +548,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +559,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -4420,10 +4432,10 @@ index c5591140dd64a374bea2aa2f89236f5ad150a44d..cd43be99a628dc200d490bf1578f8e60
  bool BeingDebugged() {
 diff --git a/base/debug/stack_trace_aros.cc b/base/debug/stack_trace_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f6b91961e3d5e693ddf9a5734984880649eb9924
+index 0000000000000000000000000000000000000000..e39877c604521046c35f83c7d92efcb0dbd62450
 --- /dev/null
 +++ b/base/debug/stack_trace_aros.cc
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,186 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4512,8 +4524,8 @@ index 0000000000000000000000000000000000000000..f6b91961e3d5e693ddf9a57349848806
 +  return false;
 +}
 +
-+size_t CollectStackTrace(const void** trace, size_t count) {
-+  if (!trace || count == 0)
++size_t CollectStackTrace(span<const void*> trace) {
++  if (trace.empty())
 +    return 0;
 +
 +  APTR KernelBase = OpenResource("kernel.resource");
@@ -4523,10 +4535,17 @@ index 0000000000000000000000000000000000000000..f6b91961e3d5e693ddf9a57349848806
 +  APTR frames[StackTrace::kMaxTraces];
 +  const ULONG depth = KrnBacktraceFromFrame(
 +      __builtin_frame_address(0), frames,
-+      static_cast<ULONG>(std::min(count, StackTrace::kMaxTraces)));
++      static_cast<ULONG>(std::min(trace.size(), StackTrace::kMaxTraces)));
 +  for (ULONG i = 0; i < depth; ++i)
 +    trace[i] = frames[i];
 +  return static_cast<size_t>(depth);
++}
++
++void StackTrace::PrintMessageWithPrefix(cstring_view prefix_string,
++                                        cstring_view message) {
++  if (!prefix_string.empty())
++    ArosKPutStr(prefix_string.c_str());
++  ArosKPutStr(message.c_str());
 +}
 +
 +void StackTrace::PrintWithPrefixImpl(cstring_view prefix_string) const {
@@ -8354,10 +8373,10 @@ index 28b60a6bbb55b3efe60ec34b79524ce194c54ff4..ca7a05cf3bff7182cfd687a9bb0c0a8c
  
 diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..5ba5f68c111a16e33d15b8edfe608a76fbfdb1d5
+index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960a7552615
 --- /dev/null
 +++ b/base/native_library_aros.cc
-@@ -0,0 +1,536 @@
+@@ -0,0 +1,541 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -8707,6 +8726,11 @@ index 0000000000000000000000000000000000000000..5ba5f68c111a16e33d15b8edfe608a76
 +  return message;
 +}
 +
++NativeLibrary LoadNativeLibrary(const FilePath& library_path,
++                                NativeLibraryLoadError* error) {
++  return LoadNativeLibraryWithOptions(library_path, NativeLibraryOptions(), error);
++}
++
 +NativeLibrary LoadNativeLibraryWithOptions(const FilePath& library_path,
 +                                           const NativeLibraryOptions& options,
 +                                           NativeLibraryLoadError* error) {
@@ -9029,10 +9053,10 @@ index 846605f5028cdca65e5988c31aa177c238b88066..5ea3aa9ea9daf7fbd2b22e6146ddce6f
  }  // namespace
 diff --git a/base/process/launch_aros.cc b/base/process/launch_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..ee9cef2fa7218903482949d513a649e831276b40
+index 0000000000000000000000000000000000000000..10d38141a5a644e9048a93d5837899e4bdb0ee58
 --- /dev/null
 +++ b/base/process/launch_aros.cc
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,367 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -9064,6 +9088,15 @@ index 0000000000000000000000000000000000000000..ee9cef2fa7218903482949d513a649e8
 +#include <proto/exec.h>
 +
 +namespace base {
++void CheckPThreadStackMinIsSafe() {
++  if constexpr (!__builtin_constant_p(PTHREAD_STACK_MIN)) {
++    [[maybe_unused]] static const bool checked = [] {
++      CHECK_GE(PTHREAD_STACK_MIN_CONST, PTHREAD_STACK_MIN);
++      return true;
++    }();
++  }
++}
++
 +namespace {
 +
 +constexpr ULONG kChromiumChildStackSize = 4 * 1024 * 1024;
@@ -9391,23 +9424,6 @@ index 0000000000000000000000000000000000000000..ee9cef2fa7218903482949d513a649e8
 +void RaiseProcessToHighPriority() {}
 +
 +}  // namespace base
-diff --git a/base/process/memory_stubs.cc b/base/process/memory_stubs.cc
-index 71a51d71045771c4c7e2bf46ebd8c5b83e6fd6ce..3a4ef6fe487f8acaabcede51a0ad51c03d54741f 100644
---- a/base/process/memory_stubs.cc
-+++ b/base/process/memory_stubs.cc
-@@ -30,10 +30,12 @@ bool UncheckedMalloc(size_t size, void** result) {
-   return *result != nullptr;
- }
- 
-+#if !defined(BASE_AROS_USE_BLINK_MEMORY_IMPL)
- bool UncheckedCalloc(size_t num_items, size_t size, void** result) {
-   *result = calloc(num_items, size);
-   return *result != nullptr;
- }
-+#endif
- 
- void UncheckedFree(void* ptr) {
-   free(ptr);
 diff --git a/base/process/process_aros.cc b/base/process/process_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..9bb6f479a67e90b6c834ef9eb0f18104b56ea542
@@ -12734,6 +12750,91 @@ index 008e513956d07ab59f0e1fc7d81e3c3604789e68..4022db456ca0235744e44c44b54ca03c
  struct ThreadTypeToNiceValuePairForTest {
    ThreadType priority;
    int nice_value;
+diff --git a/base/threading/platform_thread_metrics.cc b/base/threading/platform_thread_metrics.cc
+index 1e1ead4d24c4779948682f36f487a28638006d91..ea9ff19f4d4f4966db586647e710e4898e587550 100644
+--- a/base/threading/platform_thread_metrics.cc
++++ b/base/threading/platform_thread_metrics.cc
+@@ -54,7 +54,7 @@ PlatformThreadMetrics::CreateForCurrentThread() {
+ }
+ 
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ // static
+ std::unique_ptr<PlatformThreadMetrics>
+@@ -72,7 +72,7 @@ std::unique_ptr<PlatformThreadMetrics> PlatformThreadMetrics::CreateFromId(
+ }
+ 
+ #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) ||
+-        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX)
++        // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ PlatformThreadMetrics::~PlatformThreadMetrics() = default;
+ 
+diff --git a/base/threading/platform_thread_metrics.h b/base/threading/platform_thread_metrics.h
+index f51333e43c61f03c9b3fd270e71c691865e5e955..bdde486ae63994efc618be26ca9b778a49eaa6ae 100644
+--- a/base/threading/platform_thread_metrics.h
++++ b/base/threading/platform_thread_metrics.h
+@@ -68,7 +68,7 @@ class BASE_EXPORT PlatformThreadMetrics {
+ #endif
+ 
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS) || BUILDFLAG(IS_WIN)
+   static std::unique_ptr<PlatformThreadMetrics> CreateFromId(
+       PlatformThreadId tid);
+ #endif
+@@ -109,7 +109,7 @@ class BASE_EXPORT PlatformThreadMetrics {
+ 
+   PlatformThreadHandle handle_;
+ #elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX)
++    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   explicit PlatformThreadMetrics(PlatformThreadId tid) : tid_(tid) {}
+ 
+   PlatformThreadId tid_;
+diff --git a/base/threading/platform_thread_metrics_aros.cc b/base/threading/platform_thread_metrics_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..165171e8880b2bce4c3d967890282deef1ca787d
+--- /dev/null
++++ b/base/threading/platform_thread_metrics_aros.cc
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include "base/threading/platform_thread_metrics.h"
++#include <devices/timer.h>
++#include <exec/tasks.h>
++#include <resources/task.h>
++#include <proto/exec.h>
++#include <proto/task.h>
++
++namespace base {
++std::optional<TimeDelta> PlatformThreadMetrics::GetCumulativeCPUUsage() {
++  APTR TaskResBase = OpenResource("task.resource");
++  if (!TaskResBase)
++    return std::nullopt;
++  TaskList* list = LockTaskList(LTF_ALL);
++  if (!list)
++    return std::nullopt;
++  std::optional<TimeDelta> result;
++  while (Task* task = NextTaskEntry(list, LTF_ALL)) {
++    if (reinterpret_cast<intptr_t>(task) != tid_.raw())
++      continue;
++    if (GetETask(task)) {
++      timeval used{};
++      TagItem tags[] = {
++          {TaskTag_CPUTime, reinterpret_cast<IPTR>(&used)}, {TAG_DONE, 0}};
++      QueryTaskTagList(task, tags);
++      result = Seconds(used.tv_secs) + Microseconds(used.tv_micro);
++    }
++    break;
++  }
++  UnLockTaskList(list, LTF_ALL);
++  return result;
++}
++}  // namespace base
 diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
 index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3b466e16f 100644
 --- a/base/threading/platform_thread_posix.cc
@@ -16617,10 +16718,10 @@ index 0000000000000000000000000000000000000000..211a5dfb231c5600ff0546ef7980e4ca
 +    main()
 diff --git a/build/config/aros/v8_library/v8_function_imports.txt b/build/config/aros/v8_library/v8_function_imports.txt
 new file mode 100644
-index 0000000000000000000000000000000000000000..3e4d2df0c43e35b88ac844e89a0252855dba54f1
+index 0000000000000000000000000000000000000000..15693e87fedf50bab33a3686bd5045fb2fd90fd7
 --- /dev/null
 +++ b/build/config/aros/v8_library/v8_function_imports.txt
-@@ -0,0 +1,712 @@
+@@ -0,0 +1,844 @@
 +_ZN2v82V810GetVersionEv
 +_ZN12v8_inspector11V8Inspector6createEPN2v87IsolateEPNS_17V8InspectorClientE
 +_ZN12v8_inspector12StringBuffer6createENS_10StringViewE
@@ -17333,6 +17434,138 @@ index 0000000000000000000000000000000000000000..3e4d2df0c43e35b88ac844e89a025285
 +_ZNK2v87Message14GetEndPositionEv
 +_ZNK2v87Message14GetStartColumnEv
 +_ZNK2v87Message16GetStartPositionEv
++_ZN2v810StackTrace17CurrentScriptDataEPNS_7IsolateESt4spanINS0_10ScriptDataELm18446744073709551615EE
++_ZN2v811ArrayBuffer15NewBackingStoreEPNS_7IsolateEmNS_30BackingStoreInitializationModeENS_25BackingStoreOnFailureModeE
++_ZN2v811ArrayBuffer3NewEPNS_7IsolateEmNS_30BackingStoreInitializationModeE
++_ZN2v811ArrayBuffer9Allocator19NewDefaultAllocatorEv
++_ZN2v811CpuProfiler13CollectSampleEPNS_7IsolateESt8optionalImE
++_ZN2v811HandleScope16DeleteExtensionsEPNS_7IsolateE
++_ZN2v811HandleScope6ExtendEPNS_7IsolateE
++_ZN2v812Float16Array3NewENS_5LocalINS_11ArrayBufferEEEmm
++_ZN2v812Float16Array3NewENS_5LocalINS_17SharedArrayBufferEEEmm
++_ZN2v812HeapProfiler16IsTakingSnapshotEv
++_ZN2v812HeapProfiler23CopyNameForHeapSnapshotEPKc
++_ZN2v812HeapProfiler27GetDetachedJSWrapperObjectsEv
++_ZN2v812api_internal23GetFunctionTemplateDataEPNS_7IsolateENS_5LocalINS_4DataEEE
++_ZN2v812api_internal25GetFunctionTemplateDataV2EPNS_7IsolateENS_5LocalINS_4DataEEE
++_ZN2v813WasmStreaming25SetHasCompiledModuleBytesEv
++_ZN2v813WasmStreaming6FinishERKSt8functionIFvRNS0_22ModuleCachingInterfaceEEE
++_ZN2v813WasmStreaming6UnpackEPNS_7IsolateENS_5LocalINS_4DataEEE
++_ZN2v814ScriptCompiler14StreamedSourceC1ESt10unique_ptrINS0_28FlexibleExternalSourceStreamESt14default_deleteIS3_EE
++_ZN2v814ScriptCompiler35StartConsumingCodeCacheOnBackgroundEPNS_7IsolateESt10unique_ptrINS0_10CachedDataESt14default_deleteIS4_EE
++_ZN2v815ArrayBufferView11GetContentsESt4spanIhLm18446744073709551615EE
++_ZN2v815CppHeapExternal7NewImplEPNS_7IsolateEPvNS_17CppHeapPointerTagE
++_ZN2v815SnapshotCreator10AddContextENS_5LocalINS_7ContextEEENS_31SerializeInternalFieldsCallbackENS_28SerializeContextDataCallbackENS_27SerializeAPIWrapperCallbackE
++_ZN2v815SnapshotCreator17SetDefaultContextENS_5LocalINS_7ContextEEENS_31SerializeInternalFieldsCallbackENS_28SerializeContextDataCallbackENS_27SerializeAPIWrapperCallbackE
++_ZN2v815SnapshotCreatorC1EPNS_7IsolateERKNS1_12CreateParamsE
++_ZN2v815ValueSerializer35ReleaseSharedImmutableBackingStoresEv
++_ZN2v815ValueSerializerC1EPNS_7IsolateEPNS0_8DelegateENS0_30SharedImmutableArrayBufferModeE
++_ZN2v816FunctionTemplate14SetCallHandlerEPFvRKNS_20FunctionCallbackInfoINS_5ValueEEEENS_5LocalINS_4DataEEENS_14SideEffectTypeERKSt4spanIKNS_9CFunctionELm18446744073709551615EE
++_ZN2v816FunctionTemplate16SetInterfaceNameENS_5LocalINS_6StringEEE
++_ZN2v816FunctionTemplate19SetExceptionContextENS_16ExceptionContextE
++_ZN2v816FunctionTemplate25NewWithCFunctionOverloadsEPNS_7IsolateEPFvRKNS_20FunctionCallbackInfoINS_5ValueEEEENS_5LocalIS4_EENSA_INS_9SignatureEEEiNS_19ConstructorBehaviorENS_14SideEffectTypeERKSt4spanIKNS_9CFunctionELm18446744073709551615EE
++_ZN2v816WasmModuleObject7CompileEPNS_7IsolateESt4spanIKhLm18446744073709551615EE
++_ZN2v817ValueDeserializer31SetSharedImmutableBackingStoresESt6vectorISt10shared_ptrINS_12BackingStoreEESaIS4_EE
++_ZN2v818DictionaryTemplate11NewInstanceENS_5LocalINS_7ContextEEESt4spanINS_10MaybeLocalINS_5ValueEEELm18446744073709551615EE
++_ZN2v818DictionaryTemplate3NewEPNS_7IsolateESt4spanIKSt17basic_string_viewIcSt11char_traitsIcEELm18446744073709551615EE
++_ZN2v819CpuProfilingOptionsC1ENS_16CpuProfilingModeEjiNS_10MaybeLocalINS_7ContextEEENS_16CpuProfileSourceE
++_ZN2v821WasmModuleCompilation15OnBytesReceivedEPKhm
++_ZN2v821WasmModuleCompilation5AbortEv
++_ZN2v821WasmModuleCompilation6FinishEPNS_7IsolateERKSt8functionIFvRNS_13WasmStreaming22ModuleCachingInterfaceEEERKS3_IFvSt7variantIJNS_5LocalINS_16WasmModuleObjectEEENSC_INS_5ValueEEEEEEE
++_ZN2v821WasmModuleCompilationC1ERKNS_16WasmModuleObject14CompileOptionsE
++_ZN2v821WasmModuleCompilationD1Ev
++_ZN2v823ExternalMemoryAccounter6UpdateEPNS_7IsolateEl
++_ZN2v823ExternalMemoryAccounter8DecreaseEPNS_7IsolateEm
++_ZN2v823ExternalMemoryAccounter8IncreaseEPNS_7IsolateEm
++_ZN2v823ExternalMemoryAccounterC1EOS0_
++_ZN2v823ExternalMemoryAccounterD1Ev
++_ZN2v823ExternalMemoryAccounteraSEOS0_
++_ZN2v82V828EnableWebAssemblyTrapHandlerEb
++_ZN2v835TryToCopyAndConvertArrayToCppBufferILj768EiEEbNS_5LocalINS_5ArrayEEEPT0_j
++_ZN2v84JSON5ParseENS_5LocalINS_7ContextEEENS1_INS_6StringEEESt8optionalINS_12ScriptOriginEE
++_ZN2v84Name15GetIdentityHashEv
++_ZN2v85Proxy10GetHandlerEv
++_ZN2v85Proxy9GetTargetEv
++_ZN2v86Module17InstantiateModuleENS_5LocalINS_7ContextEEEPFNS_10MaybeLocalIS0_EES3_NS1_INS_6StringEEENS1_INS_10FixedArrayEEENS1_IS0_EEEPFNS4_INS_6ObjectEEES3_S7_S9_SA_E
++_ZN2v86Module18GetModuleNamespaceENS_17ModuleImportPhaseE
++_ZN2v86Module21CreateSyntheticModuleEPNS_7IsolateENS_5LocalINS_6StringEEERKSt4spanIKS5_Lm18446744073709551615EEPFNS_10MaybeLocalINS_7PromiseEEENS3_INS_7ContextEEENS3_IS0_EEENS3_INS_4DataEEE
++_ZN2v86Module22EvaluateForImportDeferENS_5LocalINS_7ContextEEE
++_ZN2v86Number12NewFromInt32EPNS_7IsolateEi
++_ZN2v86Number13NewFromUint32EPNS_7IsolateEj
++_ZN2v86Object10WrapGlobalEPNS_7IsolateERKNS_5LocalIS0_EEPNS0_9WrappableENS_17CppHeapPointerTagE
++_ZN2v86Object18GetCreationContextEPNS_7IsolateE
++_ZN2v86Object20CheckGlobalWrappableEPNS_7IsolateERKNS_5LocalIS0_EENS_8internal8TagRangeINS_17CppHeapPointerTagEEE
++_ZN2v86Object21SetNativeDataPropertyENS_5LocalINS_7ContextEEENS1_INS_4NameEEEPFvS5_RKNS_20PropertyCallbackInfoINS_5ValueEEEEPFvS5_NS1_IS7_EERKNS6_INS_7BooleanEEEESD_NS_17PropertyAttributeENS_14SideEffectTypeESL_
++_ZN2v86Object25GetCreationContextCheckedEPNS_7IsolateE
++_ZN2v86Object32SetAlignedPointerInInternalFieldEiPvt
++_ZN2v86Object38SlowGetAlignedPointerFromInternalFieldEit
++_ZN2v86Object4WrapEPNS_7IsolateEmNS_17CppHeapPointerTagEPv
++_ZN2v86Object50GetAlignedPointerFromEmbedderDataInCreationContextEPNS_7IsolateEiNS_17CppHeapPointerTagE
++_ZN2v86Object5CloneEPNS_7IsolateE
++_ZN2v86String17InternalizeStringEPNS_7IsolateE
++_ZN2v87Context39SetAlignedPointerInEmbedderDataInternalEiPvNS_17CppHeapPointerTagE
++_ZN2v87Context3NewEPNS_7IsolateEPNS_22ExtensionConfigurationENS_10MaybeLocalINS_14ObjectTemplateEEENS5_INS_5ValueEEENS_33DeserializeInternalFieldsCallbackEPNS_14MicrotaskQueueENS_30DeserializeContextDataCallbackENS_29DeserializeAPIWrapperCallbackE
++_ZN2v87Context48SetTemporalHostSystemUTCEpochNanosecondsCallbackEPFlNS_5LocalIS0_EEE
++_ZN2v87Isolate11SetPriorityENS0_8PriorityE
++_ZN2v87Isolate12SetIsLoadingEb
++_ZN2v87Isolate14SetPromiseHookEPFvNS_15PromiseHookTypeENS_5LocalINS_7PromiseEEENS2_INS_5ValueEEEE
++_ZN2v87Isolate18GetStackTraceLimitEv
++_ZN2v87Isolate18SetIsInputHandlingEb
++_ZN2v87Isolate18SetMemorySaverModeEb
++_ZN2v87Isolate19HasPendingExceptionEv
++_ZN2v87Isolate19RetryCustomAllocateESt8functionIFbvEE
++_ZN2v87Isolate26SetCrashKeyStringCallbacksESt8functionIFPvPKcNS_12CrashKeySizeEEES1_IFvS2_St17basic_string_viewIcSt11char_traitsIcEEEE
++_ZN2v87Isolate27ContextDisposedNotificationENS_17ContextDependantsE
++_ZN2v87Isolate31SetExceptionPropagationCallbackEPFvNS_27ExceptionPropagationMessageEE
++_ZN2v87Isolate35SetReleaseCppHeapCallbackForTestingEPFvSt10unique_ptrINS_7CppHeapESt14default_deleteIS2_EEE
++_ZN2v87Isolate36SetContinuationPreservedEmbedderDataENS_5LocalINS_4DataEEE
++_ZN2v87Isolate36SetIsJSApiWrapperNativeErrorCallbackEPFbPS0_NS_5LocalINS_6ObjectEEEE
++_ZN2v87Isolate38ValidateAndCanonicalizeUnicodeLocaleIdB5cxx11ESt17basic_string_viewIcSt11char_traitsIcEE
++_ZN2v87Isolate39SetWasmCustomDescriptorsEnabledCallbackEPFbNS_5LocalINS_7ContextEEEE
++_ZN2v87Isolate47SetHostImportModuleWithPhaseDynamicallyCallbackEPFNS_10MaybeLocalINS_7PromiseEEENS_5LocalINS_7ContextEEENS4_INS_4DataEEENS4_INS_5ValueEEENS4_INS_6StringEEENS_17ModuleImportPhaseENS4_INS_10FixedArrayEEEE
++_ZN2v87Message22PrintCurrentStackTraceEPNS_7IsolateERSoPFbS2_NS_5LocalINS_6StringEEEE
++_ZN2v88External3NewEPNS_7IsolateEPvt
++_ZN2v88Function3NewENS_5LocalINS_7ContextEEEPFvRKNS_20FunctionCallbackInfoINS_5ValueEEEENS1_INS_4DataEEEiNS_19ConstructorBehaviorENS_14SideEffectTypeE
++_ZN2v88Function4CallEPNS_7IsolateENS_5LocalINS_7ContextEEENS3_INS_5ValueEEEiPS7_
++_ZN2v88Template21SetNativeDataPropertyENS_5LocalINS_4NameEEEPFvS3_RKNS_20PropertyCallbackInfoINS_5ValueEEEEPFvS3_NS1_IS5_EERKNS4_INS_7BooleanEEEESB_NS_17PropertyAttributeENS_14SideEffectTypeESJ_
++_ZN2v89Exception17CaptureStackTraceENS_5LocalINS_7ContextEEENS1_INS_6ObjectEEE
++_ZN5cppgc8internal13NameTraitBase24GetNameFromTypeSignatureEPKc
++_ZN5cppgc8internal22EnsureGCInfoIndexTrait17EnsureGCInfoIndexERSt6atomicItEPFvPNS_7VisitorEPKvEPFNS0_14HeapObjectNameES8_NS0_30HeapObjectNameForUnnamedObjectEE
++_ZN5cppgc8internal33MakeGarbageCollectedTraitInternal8AllocateERNS_16AllocationHandleEmSt11align_val_tt
++_ZN5cppgc8internal33MakeGarbageCollectedTraitInternal8AllocateERNS_16AllocationHandleEmSt11align_val_ttNS1_8MixinTagE
++_ZN5cppgc8internal33MakeGarbageCollectedTraitInternal8AllocateERNS_16AllocationHandleEmtNS1_8MixinTagE
++_ZN5cppgc8internal33MakeGarbageCollectedTraitInternal8AllocateERNS_16AllocationHandleEmtNS_16CustomSpaceIndexENS1_8MixinTagE
++_ZN5cppgc8internal9FatalImplEPKcN2v814SourceLocationE
++_ZNK12v8_inspector12V8DebuggerId4pairEv
++_ZNK2v810FixedArray3GetEi
++_ZNK2v810StackFrame17GetSourcePositionEv
++_ZNK2v811ArrayBuffer11WasDetachedEv
++_ZNK2v812BackingStore8ByteSpanEv
++_ZNK2v813ModuleRequest8GetPhaseEv
++_ZNK2v813UnboundScript8ScriptIdEv
++_ZNK2v815ArrayBufferView9HasBufferEv
++_ZNK2v815CppHeapExternal9ValueImplEPNS_7IsolateENS_8internal8TagRangeINS_17CppHeapPointerTagEEE
++_ZNK2v817SharedArrayBuffer10ByteLengthEv
++_ZNK2v817SharedArrayBuffer4DataEv
++_ZNK2v819UnboundModuleScript8ScriptIdEv
++_ZNK2v821CompileHintsCollector15GetCompileHintsEPNS_7IsolateE
++_ZNK2v84Data17IsCppHeapExternalEv
++_ZNK2v84Data7IsValueEv
++_ZNK2v85Proxy9IsRevokedEv
++_ZNK2v85Value13IsNativeErrorEv
++_ZNK2v85Value14IsFloat16ArrayEv
++_ZNK2v85Value7IsProxyEv
++_ZNK2v86Module36GetSyntheticModuleHostDefinedOptionsEv
++_ZNK2v86RegExp9GetSourceEv
++_ZNK2v86Script24GetCompileHintsCollectorEv
++_ZNK2v86Script8ScriptIdEv
++_ZNK2v86String10IsExternalEv
++_ZNK2v86String12WriteOneByteEPNS_7IsolateEjjPhi
++_ZNK2v86String15IsInStringTableEPNS_7IsolateE
++_ZNK2v86String5WriteEPNS_7IsolateEjjPti
++_ZNK2v86String9WriteUtf8EPNS_7IsolateEPcmiPm
++_ZNK2v88External5ValueEt
++_ZNK2v88Function17GetScriptLocationEv
 diff --git a/build/config/aros/v8_library/v8_import_resolver.cc b/build/config/aros/v8_library/v8_import_resolver.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..13b818cb8cb68d55c6db2f87779aed8283a93677
@@ -26754,6 +26987,37 @@ index 171bbea1326c847eadcd3d3f1192281f94a36da2..2d882caeb567c0286357884a9c49e19d
  
  source_set("prefs") {
    sources = [
+diff --git a/chrome/browser/ui/profiles/BUILD.gn b/chrome/browser/ui/profiles/BUILD.gn
+index b32810bd9f6b232fe7bf72a246de296fa657dfee..76bc728176a71c3c559c05a2964719d325aa70ef 100644
+--- a/chrome/browser/ui/profiles/BUILD.gn
++++ b/chrome/browser/ui/profiles/BUILD.gn
+@@ -30,7 +30,7 @@ source_set("profiles") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "profile_customization_synced_theme_waiter.h",
+       "profile_customization_util.h",
+@@ -90,7 +90,7 @@ source_set("impl") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "profile_customization_synced_theme_waiter.cc",
+       "profile_customization_util.cc",
+@@ -176,7 +176,7 @@ source_set("unit_tests") {
+     }
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "profile_customization_util_unittest.cc",
+       "profile_picker_unittest.cc",
 diff --git a/chrome/browser/ui/qrcode_generator/BUILD.gn b/chrome/browser/ui/qrcode_generator/BUILD.gn
 index fb523b6efa1883ebf8922f1ae71844977a5e60be..5c681bf448baec1ab9c962b98135317537894a3c 100644
 --- a/chrome/browser/ui/qrcode_generator/BUILD.gn
@@ -26987,6 +27251,52 @@ index d2379e41ee0b18d0d2592cd10daa620edc0fe09f..9316511b61a14bdfeecd70821ebe01de
    // Returns a platform-specific SigninViewContolllerDelegate instance that
    // displays the managed user notice modal dialog. The returned object
    // should delete itself when the window it's managing is closed.
+diff --git a/chrome/browser/ui/startup/BUILD.gn b/chrome/browser/ui/startup/BUILD.gn
+index 716f94e0dcb3b5a6d5c86596c64d493ddbfad2c7..2dabe8c5bd2cc49568fc56ddfed6a6c0e0d58190 100644
+--- a/chrome/browser/ui/startup/BUILD.gn
++++ b/chrome/browser/ui/startup/BUILD.gn
+@@ -75,12 +75,12 @@ source_set("startup") {
+     sources += [ "chrome_for_testing_infobar_delegate.h" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "web_app_startup_utils.h" ]
+     public_deps += [ "//components/services/app_service/public/cpp:app_types" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "first_run_service.h",
+       "web_app_info_recorder_utils.h",
+@@ -297,7 +297,7 @@ source_set("impl") {
+       ]
+     }
+ 
+-    if (is_win || is_mac || is_linux) {
++    if (is_win || is_mac || is_linux || is_aros) {
+       deps += [ "//chrome/browser/ui/views/session_restore_infobar" ]
+     }
+ 
+@@ -331,7 +331,7 @@ source_set("impl") {
+     sources += [ "chrome_for_testing_infobar_delegate.cc" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "web_app_startup_utils.cc" ]
+     deps += [
+       "//chrome/browser/lifetime:termination_notification",
+@@ -339,7 +339,7 @@ source_set("impl") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "first_run_service.cc",
+       "web_app_info_recorder_utils.cc",
 diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
 index f212d0761b76b01aac7d875d92013267b6500225..8361c4ac0e6fd09814ef1b71b3adcccdf17a814b 100644
 --- a/chrome/browser/ui/startup/bad_flags_prompt.cc
@@ -30669,7 +30979,7 @@ index dca19f26e0b41b010f5a7f51614ac96dae987219..768fe249d3b082033f1aabebea6c1686
  source_set("safe_browsing") {
    sources = [
 diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
-index 321973594dd22cb4ded84552c7e16167c2c36056..582f9ec2a4a3ec20dab3a8ec4fa8fda500bf97b4 100644
+index 321973594dd22cb4ded84552c7e16167c2c36056..8db251ccfe99f83b9e45892ae78e15c08767255d 100644
 --- a/chrome/browser/ui/webui/settings/BUILD.gn
 +++ b/chrome/browser/ui/webui/settings/BUILD.gn
 @@ -6,7 +6,7 @@ import("//build/config/ozone.gni")
@@ -30681,6 +30991,24 @@ index 321973594dd22cb4ded84552c7e16167c2c36056..582f9ec2a4a3ec20dab3a8ec4fa8fda5
  
  source_set("settings") {
    sources = [
+@@ -108,7 +108,7 @@ source_set("settings") {
+     public_deps += [ "//ui/webui/resources/cr_components/signin:mojo_bindings" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "settings_default_browser_handler.h",
+       "settings_manage_profile_handler.h",
+@@ -335,7 +335,7 @@ source_set("impl") {
+     "//v8:v8_version",
+   ]
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "settings_default_browser_handler.cc",
+       "settings_manage_profile_handler.cc",
 @@ -365,6 +365,10 @@ source_set("impl") {
      deps += [ "//chrome/browser/win" ]
    }
@@ -41735,6 +42063,19 @@ index 499ba9f14a50e1f4855991f42350d49b40f671b6..f2de47c6045e46817e202378ac6f2118
    return VideoCaptureServiceConfiguration::kEnabledForBrowserProcess;
  #elif BUILDFLAG(IS_IOS)
    return VideoCaptureServiceConfiguration::kEnabledForBrowserProcess;
+diff --git a/content/public/common/features.gni b/content/public/common/features.gni
+index 72b79775c2ded55528464d2b9e7a194c379b691b..b4a852f7da6a00381b63e94cd23cc062c8b04ac7 100644
+--- a/content/public/common/features.gni
++++ b/content/public/common/features.gni
+@@ -23,7 +23,7 @@ declare_args() {
+ # is only enabled for desktop Android, but should be enabled on all Android
+ # at some point once the feature is stable. See crbug.com/40418135.
+ enable_screen_capture = is_linux || is_chromeos || (is_apple && use_blink) ||
+-                        is_win || is_android || is_fuchsia
++                        is_win || is_android || is_fuchsia || is_aros
+ 
+ assert(
+     !enable_separate_renderer_binary || is_win || is_mac || is_linux,
 diff --git a/content/public/common/zygote/features.gni b/content/public/common/zygote/features.gni
 index 5f8775d57801014a38ec6e0be376fea27ff5ab6b..aaec68849240f9e7a9bdeda70b19cc12984442ca 100644
 --- a/content/public/common/zygote/features.gni
