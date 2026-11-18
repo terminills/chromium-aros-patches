@@ -8415,10 +8415,10 @@ index 28b60a6bbb55b3efe60ec34b79524ce194c54ff4..ca7a05cf3bff7182cfd687a9bb0c0a8c
  
 diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960a7552615
+index 0000000000000000000000000000000000000000..48964ecc1c2470b14e13b8f5680610cd5a491344
 --- /dev/null
 +++ b/base/native_library_aros.cc
-@@ -0,0 +1,541 @@
+@@ -0,0 +1,560 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -8454,7 +8454,9 @@ index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960
 +// maps the object into exec memory and resolves it against a glibc-ABI
 +// shim, so a Linux shared object such as the Widevine CDM runs on native
 +// AROS where there is no host dynamic linker.
++#if defined(ARCH_CPU_X86_64)
 +#include <linuxso.h>
++#endif
 +
 +namespace base {
 +
@@ -8789,6 +8791,7 @@ index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960
 +    trace.Value("host_loader_available", HostLibBase != nullptr);
 +    if (!HostLibBase || getenv("AROS_LINUXSO")) {
 +      aros::WidevineDebugScope loader_trace("native.linuxso.open");
++#if defined(ARCH_CPU_X86_64)
 +      char reason[512] = {};
 +      struct LinuxSO* so =
 +          linuxso_open(library_path.value().c_str(), reason, sizeof(reason));
@@ -8810,6 +8813,16 @@ index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960
 +                << library_path.value() << " loader=linuxso";
 +      return WrapArosLibrary(ArosNativeLibraryKind::kLinuxSharedObject,
 +                             library_path.BaseName().value(), so);
++#else
++      // The SDK Linux ET_DYN mapper currently implements the x86-64 ABI only.
++      // Native AROS modules and hosted hostlib loading remain available.
++      loader_trace.Value("architecture_supported", false);
++      if (error)
++        error->message = "Linux ET_DYN loader is unavailable for this AROS CPU";
++      LOG(ERROR) << "[Chromium:AROS:NativeLibrary] Linux ET_DYN architecture "
++                    "unsupported by the SDK loader";
++      return nullptr;
++#endif
 +    }
 +
 +    std::string host_path;
@@ -8893,7 +8906,9 @@ index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960
 +    if (HostLibBase)
 +      HostLib_Close(aros_library->handle, nullptr);
 +  } else if (aros_library->kind == ArosNativeLibraryKind::kLinuxSharedObject) {
++#if defined(ARCH_CPU_X86_64)
 +    linuxso_close(static_cast<struct LinuxSO*>(aros_library->handle));
++#endif
 +  } else if (aros_library->kind == ArosNativeLibraryKind::kLoadSegModule) {
 +    RunLoadSegModuleShutdown(aros_library);
 +    UnLoadSeg(reinterpret_cast<BPTR>(aros_library->handle));
@@ -8926,8 +8941,12 @@ index 0000000000000000000000000000000000000000..e9a36a9a0842a24e0b72c8d42d872960
 +  }
 +
 +  if (aros_library->kind == ArosNativeLibraryKind::kLinuxSharedObject) {
++#if defined(ARCH_CPU_X86_64)
 +    void* result =
 +        linuxso_sym(static_cast<struct LinuxSO*>(aros_library->handle), name);
++#else
++    void* result = nullptr;
++#endif
 +    LOG(INFO) << "[Chromium:AROS:NativeLibrary] linuxso symbol lookup module="
 +              << aros_library->name << " name=" << name << " result=" << result;
 +    trace.Value("resolved", result != nullptr);
