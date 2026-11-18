@@ -242,3 +242,10 @@ Final renderer-extension-state complete archives pass on both x64 (full3) and AR
 Both renderer-extension-state native links pass. Native101 reaches blank first paint in both windows, then localStorage.setItem uses a Mojo endpoint on the wrong sequence. Exact symbols identify StorageAreaProxy::GetAll, CachedStorageArea::EnsureLoaded and the V8 storage callback. The engine-global StorageController held renderer heap roots, namespaces and Mojo state. New snapshot scopes it per renderer without disabling sequence checks. Multi-app content/isolation/shutdown checks have not passed. Strict allocator parsing correctly reports unknown because one entry was interleaved.
 
 The native x64 SDK clock probe requests100ms monotonic deadlines: NULL/default realtime attributes return after1082us, explicit monotonic attributes after100077us. Both SDK timeout calls return normally. Chromium had selected default attributes while computing monotonic deadlines; the new snapshot enables its existing monotonic attribute path on AROS. This is a Chromium adapter fix, not a direct Exec lock migration or explanation of ARM stalls. Native102 wrapper validation remains pending. The separate platform registry change replaces recycled CommandLine pointer identities with monotonic native owner IDs.
+
+
+### ARM27 regression and DOM-storage archive completion
+
+ARM27 preceding extension-state candidate passes local JS/Wasm workers, paint/close, teardown and RC0. Screenshot visually reviewed with PASS text and About AROS. First-paint whole guest1184.69MiB, after-close1148.46MiB. Native ARM clock probe measures16019us for legacy NULL attrs and119206us for matching monotonic attrs, for requested100ms deadlines. DOM-storage complete archives now PASS both architectures; native links and runtime102/ARM28 remain pending.
+
+Exact run101/ARM27 ELF size audits are retained for future packaging optimization. They count static section payloads and tables, not resident memory or savings. x64 retains1,045,774 sections; ARM packager emits6. No linker/packaging changes are included in the DOM-storage candidate.

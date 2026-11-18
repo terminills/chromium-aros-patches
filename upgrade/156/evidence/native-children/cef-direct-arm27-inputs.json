@@ -1,0 +1,39 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "081c521624419ac76a06554b440aff35743994659f4c42fe197969e34ab2277e",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "7863a66d26e9b9bc222dcb392515135158e180c9e887cf0aca51ce4c687ccd38",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "ce3c979d2a3e29fceeb95f94ac9ec24d78b1b475b75289fd81bc020cfcc73f24"
+  },
+  "web_test_client_sha256": "29321648535f3c7ba88410ab0e360fc3d5d682097ce62b730b3dc4499f60b771",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm27.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM27-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T22:44:47.142257+00:00",
+    "validation": "Native run100 renderer B initialization destroys renderer A Chrome observer through engine-global CEF renderer-client LazyInstance; stack resolved against exact native symbols. Scope CEF and Chrome renderer-client instances per monotonic native owner, retaining existing AtExit behavior and sequence checks. Required companions scope enabled extensions renderer singleton, lookup pointer, extension registry, script and worker contexts, frame/webview/document sets, isolated world settings, localization cache, injection routing/counter, worker task-runner dispatch and incognito/instant state. ScriptContextSet uniqueness assertion restored. Renderer singleton: each owns dispatcher/API providers and Mojo UKM remote. Complete archives and runtime101 pending; exact-base replay checked; not release-ready.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "dbae1f86b74479da9093740f40435de26ffcc9d2b078f2d8fd7172dd2032fb61",
+        "applied_tree": "af03aa102c66e13e3c42342651e143239e1308b6",
+        "bytes": 2967739
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "388154f7b205dcc23d19d9a68fb235e71fdcca9a6160f587a674c2ecb8f124f6",
+        "applied_tree": "7b7af44f39610741dda0e5e073d6526c686ca10f",
+        "bytes": 62059
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
