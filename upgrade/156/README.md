@@ -75,6 +75,34 @@ Full engine builds, multiple-app/profile isolation, lifecycle, graphics and CDM
 runtime validation are still required. No performance or conformance claim is
 made by publishing these prerequisites.
 
+## Native SQLite path and locking integration
+
+The candidate VFS resolves assigns and Unix-form volume names through DOS locks:
+`T:Cookies` and `/T/Cookies` identify the same native file. For a new database,
+it resolves the existing parent and appends the filename with `AddPart`.
+
+SQLite's POSIX record locks fail on this SDK. The native candidate instead uses
+Exec semaphores and DOS `SameLock` identity in a versioned, data-only registry
+shared between engine modules. It implements shared readers, a reserved writer,
+pending-writer exclusion, exclusive ownership, downgrade and orderly close.
+Per-database records are freed on last close; one small registry remains until
+reboot and holds no engine code pointers. Other SQLite ports must adopt this
+locking contract before concurrently opening the same database. Abrupt task
+termination recovery remains unqualified.
+
+The one-core native fixture passes create/close/reopen/readback, undersized path
+buffers, concurrent readers, competing writers, release/reacquire, and two
+separately compiled helpers sharing the registry. Both helpers cross-compile
+for AArch64. See `evidence/native-sqlite59-result.json` and
+`tests/build-native-sqlite-aros.py`. The fixture omits ICU collation only;
+production keeps ICU. Full CEF profile integration is still under test.
+
+Native pc-x86_64 page protection now uses the existing dynamic `KrnMapGlobal`
+API for identity-mapped allocator memory, preserving on-demand 2 MiB superpages.
+A 48-region native protect/restore fixture passes, beyond the legacy protection
+API's fixed 32 split-table limit. Other architectures retain their protection
+backend. This is a Chromium-local change, with no SDK mmap or kernel patch.
+
 ## Chromium-local memory mapping compatibility
 
 The AROS SDK must not implement `mmap` for this port. Keep compatibility in

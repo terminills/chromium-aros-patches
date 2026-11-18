@@ -1,0 +1,16 @@
+PAGE55 architecture=pc-x86_64
+PAGE55 split/protect/restore 48/48 PASS
+PATH55 input=T:Cookies
+PATH55 rc=0 output=RAM Disk:T/Cookies
+PATH55 input=RAM:Cookies
+PATH55 rc=0 output=RAM Disk:Cookies
+PATH55 input=/T/Cookies
+PATH55 rc=0 output=RAM Disk:T/Cookies
+PATH55 open rc=0 err=not an error
+SQL55 code=3850 disk I/O error in "CREATE TABLE proof(v INTEGER); INSERT INTO proof VALUES(156);"
+PATH55 exec rc=10 err=disk I/O error
+PATH55 reopen rc=0 err=not an error
+SQL55 code=3850 disk I/O error in "SELECT v FROM proof"
+PATH55 prepare rc=10 step=-1 err=disk I/O error
+PATH55 create/close/reopen/query and short-buffer FAIL
+PAGEPATH55 complete

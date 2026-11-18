@@ -1,0 +1,17 @@
+{
+  "scope": "Native x86-64 AROS QEMU, one CPU; focused SQLite fixture omits ICU only. Not full CEF profile or ARM runtime qualification.",
+  "probe_sha256": "39caf219e392048c9ce1896bffe057059077bc71f7a1da2b8a11075bfab06b71",
+  "kernel": "51de41664494385b93c5285599b64ecec44bf0b0",
+  "dynamic_mapping_regions": 48,
+  "create_close_reopen_query": "PASS",
+  "short_output_buffer": "PASS",
+  "concurrent_readers_and_competing_writers": "PASS",
+  "separate_engine_registry_pending_writer_downgrade": "PASS",
+  "arm64_helper_cross_compile": "PASS",
+  "full_engine_integration": "pending",
+  "remaining_limits": [
+    "Native locking is cooperative among consumers of this versioned registry; foreign POSIX or dotfile VFS users must not concurrently access the same database.",
+    "Orderly close is tested; abrupt task death recovery remains unqualified.",
+    "One small data-only registry is retained until reboot; per-database locks and connection allocations are released on close."
+  ]
+}
