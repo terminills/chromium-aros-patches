@@ -1341,6 +1341,27 @@ index 0bc7a1c202b9780746eee100b8f4648245a6ae7c..147b68fedf7c0ae9bdfe6e959a38973a
 +#endif
 +
  #endif  // V8_DEOPTIMIZER_TRANSLATION_OPCODE_H_
+diff --git a/src/execution/stack-guard.cc b/src/execution/stack-guard.cc
+index 33f0a514e757ef2fd46ee317bffd225ed156fcaa..6c10d82adf770229f5795a56a365791fec52fa49 100644
+--- a/src/execution/stack-guard.cc
++++ b/src/execution/stack-guard.cc
+@@ -249,6 +249,16 @@ void StackGuard::ThreadLocal::Initialize(Isolate* isolate,
+   const uintptr_t kLimitSize = v8_flags.stack_size * KB;
+   DCHECK_GT(base::Stack::GetStackStart(), kLimitSize);
+   uintptr_t limit = base::Stack::GetStackStart() - kLimitSize;
++#if defined(V8_TARGET_OS_AROS)
++  // Exec tasks can have much smaller stacks than V8's default stack-size
++  // flag. Keep a native-call margin inside the actual task allocation.
++  const uintptr_t native_limit = base::Stack::GetReservedStackLimit();
++  const uintptr_t native_start = base::Stack::GetStackStart();
++  CHECK_LT(native_limit, native_start);
++  const uintptr_t native_size = native_start - native_limit;
++  const uintptr_t margin = std::min<uintptr_t>(64 * KB, native_size / 4);
++  limit = std::max(limit, native_limit + margin);
++#endif
+   real_jslimit_ = SimulatorStack::JsLimitFromCLimit(isolate, limit);
+   set_jslimit(SimulatorStack::JsLimitFromCLimit(isolate, limit));
+ #ifdef USE_SIMULATOR
 diff --git a/src/execution/thread-id.cc b/src/execution/thread-id.cc
 index ec4e95ad5d83452f68739f838e05596420f380ab..8c0009c3f6797243be91103bfe4d421a86d868bf 100644
 --- a/src/execution/thread-id.cc
