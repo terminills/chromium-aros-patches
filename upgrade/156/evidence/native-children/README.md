@@ -30,7 +30,8 @@ the resident libraries and executes its real child arguments.
 - The current snapshot serializes resident dispatcher installation with a native
   AROS lock before either observer mutation or hook insertion. Subsequent
   initialization returns under the documented first-initialization-wins contract.
-  Both complete archives pass; native link and runtime 93 are pending.
+  Both complete archives and native x64 linking pass. Run 93 clears this
+  boundary and stops at the still-global memory-pressure listener registry.
   The allocation fast path has no new lock, and allocator checks remain intact.
 
 `source-manifests.json` distinguishes the run-90 source tree from the later
@@ -66,3 +67,22 @@ The run-92 input manifest pins the preceding cache/profiler candidate. The
 current snapshot manifest pins the later allocator candidate; their runtime
 claims are deliberately distinct. Run-92 address comparison is grouped by
 preceding host because each guest reboot relocates its libraries.
+
+## Memory-routing candidate
+
+Run 93 fails at `memory_pressure_listener_registry.cc:96` before browser first
+paint. Host, GPU and utility helpers share allocator addresses. Its screenshot
+is retained privately; the public serial/result/input files pin the failure.
+The result was saved before screenshot capture encountered an open QMP file;
+the VM was paused and a separate capture then succeeded. This is no runtime pass.
+
+The current snapshot scopes the memory-pressure listener registry, memory
+consumer registry, and main-thread-default handle to each native process.
+It also corrects child shutdown state, renderer main-task-runner storage, and
+last-resort GC policy ownership found in the same audit. These prevent one
+child from replacing or shutting down a sibling's state. Both complete archive
+builds pass; run 94 native link/runtime are pending. All existing ownership
+and duplicate-registration checks remain.
+
+A separate private follow-up is correcting Blink main/compositor thread and
+main heap storage ownership; it is not included or validated by this snapshot.

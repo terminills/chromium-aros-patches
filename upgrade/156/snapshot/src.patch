@@ -6714,6 +6714,37 @@ index b44515c9baa976f80d6414b03bb0e628534dfdc5..4ab1fae3208cc75109b27f15103d663d
  // Linux and Android provide MADV_REMOVE which is preferred as it has a
  // behavior that can be verified in tests. Other POSIX flavors (MacOSX, BSDs),
  // provide MADV_FREE which has the same result but memory is purged lazily.
+diff --git a/base/memory/memory_pressure_listener_registry.cc b/base/memory/memory_pressure_listener_registry.cc
+index 02418fbc80ee8399519b235928ce6e197582bf0c..3bf02c21fb9038e3aae01eac74c1836866d95e62 100644
+--- a/base/memory/memory_pressure_listener_registry.cc
++++ b/base/memory/memory_pressure_listener_registry.cc
+@@ -15,6 +15,10 @@
+ #include "base/trace_event/memory_pressure_level_proto.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/tracing_buildflags.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace base {
+ 
+@@ -29,7 +33,15 @@ BASE_FEATURE(kSuppressMemoryListeners,
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct MemoryPressureRegistryProcessTag;
++// Registrations and callbacks belong to the native process main thread.
++#define g_memory_pressure_listener_registry \
++  (base::aros::ProcessLocalValue<MemoryPressureListenerRegistry*, \
++                                MemoryPressureRegistryProcessTag>())
++#else
+ MemoryPressureListenerRegistry* g_memory_pressure_listener_registry = nullptr;
++#endif
+ 
+ BASE_FEATURE_PARAM(std::string,
+                    kSuppressMemoryListenersMask,
 diff --git a/base/memory/page_size_posix.cc b/base/memory/page_size_posix.cc
 index 61189677efa123309c9bc95018bf7a8a9f8e7a00..7f644c37839976f66e955530c5d936385aa4efad 100644
 --- a/base/memory/page_size_posix.cc
@@ -7512,6 +7543,35 @@ index 45d88e33556c32eb1fb07bf9f6a7a3e5979e3e25..b60c71dd099af77b1d66b103538219d9
  };
  
  }  // namespace base
+diff --git a/base/memory_coordinator/memory_consumer_registry.cc b/base/memory_coordinator/memory_consumer_registry.cc
+index 2e8df76a0ccf9584682a7f770a71002bed2e6546..852ae5f761d624204a141c643fad15b530e9df33 100644
+--- a/base/memory_coordinator/memory_consumer_registry.cc
++++ b/base/memory_coordinator/memory_consumer_registry.cc
+@@ -9,6 +9,9 @@
+ #include "base/check_op.h"
+ #include "base/hash/hash.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/memory_coordinator/memory_consumer_android.h"
+@@ -18,7 +21,14 @@ namespace base {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct MemoryConsumerRegistryProcessTag;
++#define g_memory_consumer_registry \
++  (base::aros::ProcessLocalValue<MemoryConsumerRegistry*, \
++                                MemoryConsumerRegistryProcessTag>())
++#else
+ MemoryConsumerRegistry* g_memory_consumer_registry = nullptr;
++#endif
+ 
+ }  // namespace
+ 
 diff --git a/base/message_loop/message_pump.cc b/base/message_loop/message_pump.cc
 index bfb28d5af9a4a72e6c39b37fba92bc57106845bf..9febe6611fefd0a4b3ae9316322761584d0e2860 100644
 --- a/base/message_loop/message_pump.cc
@@ -11476,6 +11536,37 @@ index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..b41c6ec513895b20b38bcdfeb1ecb520
    static_assert(
        std::is_base_of_v<WatchableIOMessagePumpPosix, MessagePumpForUI>,
        "CurrentThreadForUI::WatchFileDescriptor is supported only"
+diff --git a/base/task/single_thread_task_runner.cc b/base/task/single_thread_task_runner.cc
+index 9c438b2dd0cabd46befa5a8eda32d684d170bbf9..784efe3320ae3e13f2073ef90eba66b6a046d8e6 100644
+--- a/base/task/single_thread_task_runner.cc
++++ b/base/task/single_thread_task_runner.cc
+@@ -16,6 +16,10 @@
+ #include "base/run_loop.h"
+ #include "base/task/sequence_manager/sequence_manager_impl.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace base {
+ 
+@@ -26,8 +30,15 @@ using SequenceManagerImpl = sequence_manager::internal::SequenceManagerImpl;
+ constinit thread_local SingleThreadTaskRunner::CurrentDefaultHandle*
+     current_default_handle = nullptr;
+ 
++#if BUILDFLAG(IS_AROS)
++struct MainThreadDefaultProcessTag;
++#define main_thread_default_handle \
++  (base::aros::ProcessLocalValue<SingleThreadTaskRunner::MainThreadDefaultHandle*, \
++                                MainThreadDefaultProcessTag>())
++#else
+ constinit SingleThreadTaskRunner::MainThreadDefaultHandle*
+     main_thread_default_handle = nullptr;
++#endif
+ 
+ // This function can be removed, and the calls below replaced with direct
+ // variable accesses, once the MSAN workaround is not necessary.
 diff --git a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc b/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
 index 797febff372eda1b2d83401c19759aa2e426b61a..a3a75429a70e6c5be9a2392e13f4b01d3dc24a72 100644
 --- a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
@@ -42922,7 +43013,7 @@ index 654fb9d77d1678dd5bd31692a94c14d644d0775a..f3fadcb127f5ad5380196426da1ceb8b
    virtual ~WebContentsView() = default;
  
 diff --git a/content/child/child_process.cc b/content/child/child_process.cc
-index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..bfc0f228d491b3cc8f06d6a11b4df2caefd2beac 100644
+index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..1e8542a4965e4ef66bbd96dc19735b4fda08b7bc 100644
 --- a/content/child/child_process.cc
 +++ b/content/child/child_process.cc
 @@ -6,8 +6,11 @@
@@ -42937,40 +43028,56 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..bfc0f228d491b3cc8f06d6a11b4df2ca
  #include "base/message_loop/message_pump_type.h"
  #include "base/process/process_handle.h"
  #include "base/synchronization/waitable_event.h"
-@@ -47,6 +50,10 @@ namespace {
+@@ -33,6 +36,10 @@
+ #include "base/test/clang_profiling.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "content/common/android/cpu_time_metrics.h"
+ #endif
+@@ -47,6 +54,15 @@ namespace {
  
  constinit thread_local ChildProcess* child_process = nullptr;
  
 +#if BUILDFLAG(IS_AROS)
-+std::atomic_bool g_process_shutdown_started{false};
++struct ChildShutdownStateTag;
++std::atomic_bool& ProcessShutdownStarted() {
++  // Helpers share this image, but shutting down one child must not prevent
++  // service workers from starting in a sibling native process.
++  return base::aros::ProcessLocalValue<std::atomic_bool, ChildShutdownStateTag>();
++}
 +#endif
 +
  class ChildIOThread : public base::Thread {
   public:
    ChildIOThread() : base::Thread("Chrome_ChildIOThread") {}
-@@ -80,6 +87,9 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
+@@ -80,6 +96,9 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
      : resetter_(&child_process, this, nullptr),
        io_thread_(std::make_unique<ChildIOThread>()),
        is_renderer_(is_renderer) {
 +#if BUILDFLAG(IS_AROS)
-+  g_process_shutdown_started.store(false, std::memory_order_release);
++  ProcessShutdownStarted().store(false, std::memory_order_release);
 +#endif
    // Start ThreadPoolInstance if not already done. A ThreadPoolInstance
    // should already exist, and may already be running when ChildProcess is
    // instantiated in the browser process or in a test process.
-@@ -161,6 +171,11 @@ ChildProcess::ChildProcess(
+@@ -161,6 +180,11 @@ ChildProcess::ChildProcess(
  ChildProcess::~ChildProcess() {
    DCHECK_EQ(child_process, this);
  
 +#if BUILDFLAG(IS_AROS)
 +  VLOG(1) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor begin";
-+  g_process_shutdown_started.store(true, std::memory_order_release);
++  ProcessShutdownStarted().store(true, std::memory_order_release);
 +#endif
 +
    // Signal this event before destroying the child process.  That way all
    // background threads can cleanup.
    // For example, in the renderer the RenderThread instances will be able to
-@@ -168,9 +183,21 @@ ChildProcess::~ChildProcess() {
+@@ -168,9 +192,21 @@ ChildProcess::~ChildProcess() {
    shutdown_event_.Signal();
  
    if (main_thread_) {  // null in unittests.
@@ -42992,7 +43099,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..bfc0f228d491b3cc8f06d6a11b4df2ca
      } else {
        // Leak the main_thread_. See a comment in
        // RenderThreadImpl::ShouldBeDestroyed.
-@@ -179,15 +206,31 @@ ChildProcess::~ChildProcess() {
+@@ -179,15 +215,31 @@ ChildProcess::~ChildProcess() {
    }
  
    if (io_thread_) {
@@ -43024,7 +43131,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..bfc0f228d491b3cc8f06d6a11b4df2ca
  #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
    // Flush the profiling data to disk. Doing this manually (vs relying on this
    // being done automatically when the process exits) will ensure that this data
-@@ -225,13 +268,22 @@ void ChildProcess::AddRefProcess() {
+@@ -225,13 +277,22 @@ void ChildProcess::AddRefProcess() {
    DCHECK(!main_thread_.get() ||  // null in unittests.
           main_thread_->main_thread_runner()->BelongsToCurrentThread());
    ref_count_++;
@@ -43048,13 +43155,13 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..bfc0f228d491b3cc8f06d6a11b4df2ca
      return;
  
    if (main_thread_)  // null in unittests.
-@@ -242,6 +294,14 @@ ChildProcess* ChildProcess::current() {
+@@ -242,6 +303,14 @@ ChildProcess* ChildProcess::current() {
    return child_process;
  }
  
 +bool ChildProcess::IsProcessShutdownStarted() {
 +#if BUILDFLAG(IS_AROS)
-+  return g_process_shutdown_started.load(std::memory_order_acquire);
++  return ProcessShutdownStarted().load(std::memory_order_acquire);
 +#else
 +  return false;
 +#endif
@@ -43933,6 +44040,33 @@ index 53fe3c0216f598a6e35563db769fb7fa5dbf11c8..1b9f7bf635a832a58e9a8e317222fa51
  };
  
  }  // namespace content
+diff --git a/content/renderer/memory_coordinator/last_resort_gc_policy.cc b/content/renderer/memory_coordinator/last_resort_gc_policy.cc
+index 301e9935c7538cce5af312ff72120474a21cfbd1..db8b468dc15b27749dac678bc12fd63f66415de9 100644
+--- a/content/renderer/memory_coordinator/last_resort_gc_policy.cc
++++ b/content/renderer/memory_coordinator/last_resort_gc_policy.cc
+@@ -13,12 +13,22 @@
+ #include "base/memory_coordinator/memory_consumer.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/time/time.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace content {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct LastResortGCPolicyTag;
++#define g_instance \
++  (base::aros::ProcessLocalValue<LastResortGCPolicy*, LastResortGCPolicyTag>())
++#else
+ LastResortGCPolicy* g_instance = nullptr;
++#endif
+ 
+ }  // namespace
+ 
 diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
 index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..b8f7f88639774a9b765b7675e8bbb50ab25919b5 100644
 --- a/content/renderer/render_frame_impl.cc
@@ -43975,10 +44109,20 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..b8f7f88639774a9b765b7675e8bbb50a
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f610eac07 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..e1b185f938dc9c54690615bb946ad70a614adc89 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
-@@ -146,6 +146,7 @@
+@@ -57,6 +57,9 @@
+ #include "base/trace_event/trace_event.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "cc/base/histograms.h"
+ #include "cc/base/switches.h"
+ #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
+@@ -146,6 +149,7 @@
  #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
  #include "third_party/blink/public/mojom/cpu_performance.mojom.h"
  #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom.h"
@@ -43986,7 +44130,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
  #include "third_party/blink/public/platform/modules/video_capture/web_video_capture_impl_manager.h"
  #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
  #include "third_party/blink/public/platform/web_cache.h"
-@@ -206,7 +207,7 @@
+@@ -206,7 +210,7 @@
  
  #if BUILDFLAG(IS_APPLE)
  #include <malloc/malloc.h>
@@ -43995,7 +44139,27 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
  #include <malloc.h>
  #endif
  
-@@ -568,6 +569,8 @@ void RenderThreadImpl::Init() {
+@@ -241,8 +245,19 @@ using ::blink::WebView;
+ // incorrectly from the wrong thread.
+ constinit thread_local RenderThreadImpl* render_thread = nullptr;
+ 
++#if BUILDFLAG(IS_AROS)
++struct RendererMainTaskRunnerTag;
++using RendererMainTaskRunner =
++    base::LazyInstance<scoped_refptr<base::SingleThreadTaskRunner>>::
++        DestructorAtExit;
++// Renderer workers must route back to their own native process main thread.
++#define g_main_task_runner \
++  (base::aros::ProcessLocalValue<RendererMainTaskRunner, \
++                                RendererMainTaskRunnerTag>())
++#else
+ base::LazyInstance<scoped_refptr<base::SingleThreadTaskRunner>>::
+     DestructorAtExit g_main_task_runner = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ // v8::MemoryPressureLevel should correspond to base::MemoryPressureLevel.
+ static_assert(
+@@ -568,6 +583,8 @@ void RenderThreadImpl::Init() {
        GetContentClient()->renderer()->CreateURLLoaderThrottleProvider(
            blink::URLLoaderThrottleProviderType::kFrame);
  
@@ -44004,7 +44168,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
    GetAssociatedInterfaceRegistry()->AddInterface<mojom::Renderer>(
        base::BindRepeating(&RenderThreadImpl::OnRendererInterfaceReceiver,
                            base::Unretained(this)));
-@@ -625,8 +628,14 @@ void RenderThreadImpl::Init() {
+@@ -625,8 +642,14 @@ void RenderThreadImpl::Init() {
    // TODO(boliu): In single process, browser main loop should set up the
    // discardable memory manager, and should skip this if kSingleProcess.
    // See crbug.com/503724.
@@ -44021,7 +44185,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
  
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
    ChildProcess::current()->SetIOThreadType(base::ThreadType::kPresentation);
-@@ -657,8 +666,13 @@ void RenderThreadImpl::Init() {
+@@ -657,8 +680,13 @@ void RenderThreadImpl::Init() {
  RenderThreadImpl::~RenderThreadImpl() {
    // The destructor should not run in multi-process mode because Shutdown()
    // terminates the process. The destructor only needs to clean up for tests.
@@ -44035,7 +44199,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
    g_main_task_runner.Get() = nullptr;
  
    // Need to make sure this reference is removed on the correct task runner;
-@@ -667,6 +681,9 @@ RenderThreadImpl::~RenderThreadImpl() {
+@@ -667,6 +695,9 @@ RenderThreadImpl::~RenderThreadImpl() {
      video_frame_compositor_thread_->task_runner()->ReleaseSoon(
          FROM_HERE, std::move(video_frame_compositor_context_provider_));
    }
@@ -44045,7 +44209,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +700,49 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +714,49 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
@@ -44096,7 +44260,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..42d15bd9998f3d0deb9c3844f650957f
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +753,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +767,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
