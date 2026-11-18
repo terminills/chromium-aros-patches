@@ -20673,7 +20673,7 @@ index e19d98a3223c11d57b7b37b9cb6c74b23f98a019..c5881c8bef303654cf697253007838b4
    // Crashpad keeps the records of C++ crashes (segfaults, etc) in its
    // internal database. The JavaScript error reporter writes JS error upload
 diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
-index b754a843cd9045248f38295b5fd15d13a925b797..607bd28c0e3fd4371255d407edff32b305bf3949 100644
+index b754a843cd9045248f38295b5fd15d13a925b797..23195012a8468fe56c3f182a88cf2116759e7c0b 100644
 --- a/chrome/browser/devtools/BUILD.gn
 +++ b/chrome/browser/devtools/BUILD.gn
 @@ -172,6 +172,7 @@ static_library("devtools") {
@@ -20684,6 +20684,18 @@ index b754a843cd9045248f38295b5fd15d13a925b797..607bd28c0e3fd4371255d407edff32b3
      "//components/paint_preview/buildflags",
      "//components/variations/service",
      "//components/vector_icons",
+@@ -256,6 +257,11 @@ static_library("devtools") {
+       "//ui/shell_dialogs",
+     ]
+     public_deps += [ "//chrome/browser/themes" ]
++    if (is_aros) {
++      # The resident CEF closure also reaches the dedicated source_set.
++      sources -= [ "devtools_contents_resizing_strategy.cc" ]
++      deps += [ ":devtools_contents_resizing_strategy" ]
++    }
+     if (!is_android) {
+       deps += [
+         "//chrome/browser:certificate_viewer",
 diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
 index 37a83372cec45117a84b810f9b4667bcc8a26a74..3766984eb34ca77bdc99434710f59513fb4f2f0e 100644
 --- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
@@ -27728,6 +27740,28 @@ index 768c0d7768a967c37aa10cafe10d15dc74eea64c..aacdb036253afb2edf5cec10a5ed6a0f
  
  source_set("cast") {
    sources = [
+diff --git a/chrome/browser/ui/ui_features.cc b/chrome/browser/ui/ui_features.cc
+index 562d8529586fa175ca3a790b5217669c638cadbe..3ff4b3865688bd708acb874a7c2f4402c0b7789c 100644
+--- a/chrome/browser/ui/ui_features.cc
++++ b/chrome/browser/ui/ui_features.cc
+@@ -34,6 +34,9 @@ namespace features {
+ BASE_FEATURE(kUseActionsForBrowserCommands, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Enables the use of WGC for the Eye Dropper screen capture.
++#if !BUILDFLAG(IS_AROS)
++// The AROS resident closure uses the definition in components/eye_dropper.
++// BASE_FEATURE has C linkage, so the namespace does not distinguish a copy.
+ BASE_FEATURE(kAllowEyeDropperWGCScreenCapture,
+ #if BUILDFLAG(IS_WIN)
+              base::FEATURE_ENABLED_BY_DEFAULT
+@@ -41,6 +44,7 @@ BASE_FEATURE(kAllowEyeDropperWGCScreenCapture,
+              base::FEATURE_DISABLED_BY_DEFAULT
+ #endif  // BUILDFLAG(IS_WIN)
+ );
++#endif
+ 
+ BASE_FEATURE(kCtrlTabMru, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
 diff --git a/chrome/browser/ui/user_education/BUILD.gn b/chrome/browser/ui/user_education/BUILD.gn
 index f5683e778f799278241e6f44dba65c4fd17f9507..de6c594310981dca635feac2f45bf1061f83c39c 100644
 --- a/chrome/browser/ui/user_education/BUILD.gn
@@ -34076,7 +34110,7 @@ index e699a6a394fd7a41b441ff6edeb1a17bfe51bc85..f9cd862488d21a8f9a9d5031063c2347
  #if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
    // Should work on any Posix system.
 diff --git a/components/enterprise/BUILD.gn b/components/enterprise/BUILD.gn
-index 017c0cc8809f8f1b899124e21dd48acc34bcba09..58d04b784260e566dd13c922d814962d06da151c 100644
+index 017c0cc8809f8f1b899124e21dd48acc34bcba09..6d173f614dbad3ab6fbbc0051c27146b430de03a 100644
 --- a/components/enterprise/BUILD.gn
 +++ b/components/enterprise/BUILD.gn
 @@ -5,7 +5,9 @@
@@ -34090,6 +34124,19 @@ index 017c0cc8809f8f1b899124e21dd48acc34bcba09..58d04b784260e566dd13c922d814962d
  }
  
  static_library("enterprise") {
+@@ -139,6 +141,12 @@ static_library("enterprise") {
+     "//components/reporting/client:report_queue_configuration",
+     "//components/reporting/util:status",
+   ]
++  if (is_aros) {
++    # Share the dedicated implementation inside the resident engine instead
++    # of compiling it into both this archive and the promotion source_set.
++    sources -= [ "browser/promotion/promotion_eligibility_checker.cc" ]
++    public_deps += [ "//components/enterprise/browser/promotion" ]
++  }
+ 
+   if (!is_chromeos) {
+     sources += [
 diff --git a/components/enterprise/buildflags/buildflags.gni b/components/enterprise/buildflags/buildflags.gni
 index 07c3959373c4a2310a054d97adc93b5fb233bce8..db6bb53671457082c12ca3504f393389695bcc3f 100644
 --- a/components/enterprise/buildflags/buildflags.gni
