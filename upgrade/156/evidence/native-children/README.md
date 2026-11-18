@@ -232,3 +232,6 @@ The run100 first renderer entry is interleaved with allocator logging. Its resul
 ARM26 uses the preceding renderer-caches engine and aros-web test-client now published at a70c6cf. Local JS/Wasm workers PASS, browser paint/close PASS, CEF teardown returns and shell RC0. Screenshot visibly includes PASS text and native About AROS (aarch64-raspi ABI_V1, bfdbbd7c). First-paint whole-guest use1186.70MiB; after-close1147.91MiB. The earlier visual-review note was written before shutdown; the final result confirms clean return. This does not establish networking, full Chrome UI, multi-app isolation, or reclamation.
 
 Final source snapshot adds renderer-owned extension client/dispatcher, extension and script registries, worker contexts and routing, frame/webview/document collections, isolated-world settings, localization and injection state, and incognito/instant flags. ScriptContextSet uniqueness DCHECK is restored. Immutable resources and resident engine code remain shared. Full3 archives and native101/ARM27 validation pending.
+
+
+Final renderer-extension-state complete archives pass on both x64 (full3) and ARM (full3). Native links are in progress. Host-only watcher regressions reject incomplete child counts and mismatched allocator addresses, including the retained actual run100 interleaved log. These parser checks are not native runtime proof.
