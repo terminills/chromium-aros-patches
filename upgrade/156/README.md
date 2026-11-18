@@ -13,9 +13,14 @@ CPUs, the public CEF library opens, reports Chromium 156 and the expected CEF
 revision/API hash, and closes with return code 0. A one-CPU diagnostic control
 now completes CEF initialization and a message-loop tick; teardown remains
 unverified. The identical two-CPU initialization image reproduces a kernel
-scheduler-list cycle. Browser creation reaches its callback with matching image
-packs, but first paint is still pending. No AArch64 runtime result is claimed.
+scheduler-list cycle. The one-core browser loads its test document (status 200), paints at 769x540,
+and reaches its close callback. A profile-error dialog remains visible in this
+build; full CEF teardown then fails a Viz root-frame-sink CHECK. The native
+SQLite locking integration is queued for the next runtime build. No AArch64 runtime result is claimed.
 See `evidence/cef156-init49-result.json` and its serial log for the precise scope.
+See `evidence/cef156-browser56-result.json` for the separate painting/close result.
+
+![Native page painting with the retained profile error](evidence/cef156-browser56-painted.png)
 
 The earlier nine-byte invalid module was rejected. The host collector now
 propagates child signals, checks inspection-tool failures, validates ELF output,

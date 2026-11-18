@@ -1,0 +1,16 @@
+PAGE59 architecture=pc-x86_64
+PAGE59 split/protect/restore 48/48 PASS
+PATH59 input=T:Cookies
+PATH59 rc=0 output=RAM Disk:T/Cookies
+PATH59 input=RAM:Cookies
+PATH59 rc=0 output=RAM Disk:Cookies
+PATH59 input=/T/Cookies
+PATH59 rc=0 output=RAM Disk:T/Cookies
+PATH59 open rc=0 err=not an error
+PATH59 exec rc=0 err=not an error
+PATH59 reopen rc=0 err=not an error
+PATH59 prepare rc=0 step=100 err=another row available
+PATH59 create/close/reopen/query and short-buffer PASS
+PATH59 concurrent readers, competing writers, release/reacquire PASS
+PATH59 separate engine registry, pending writer, reader exclusion, downgrade PASS
+PAGEPATH59 complete
