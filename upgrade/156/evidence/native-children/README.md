@@ -249,3 +249,12 @@ The native x64 SDK clock probe requests100ms monotonic deadlines: NULL/default r
 ARM27 preceding extension-state candidate passes local JS/Wasm workers, paint/close, teardown and RC0. Screenshot visually reviewed with PASS text and About AROS. First-paint whole guest1184.69MiB, after-close1148.46MiB. Native ARM clock probe measures16019us for legacy NULL attrs and119206us for matching monotonic attrs, for requested100ms deadlines. DOM-storage complete archives now PASS both architectures; native links and runtime102/ARM28 remain pending.
 
 Exact run101/ARM27 ELF size audits are retained for future packaging optimization. They count static section payloads and tables, not resident memory or savings. x64 retains1,045,774 sections; ARM packager emits6. No linker/packaging changes are included in the DOM-storage candidate.
+
+
+### Native102 crash-memory reporter ownership; ARM28 PASS
+
+DOM-storage engine links pass both architectures. Native102 starts GPU, utility and three renderer children; all five allocator pairs are parsed and match the host. It fails when CrashMemoryMetricsReporterImpl::Bind replaces the engine-global reporter receiver from another renderer task. Exact stack resolution and failed screenshot are retained. A first-renderer RunLoop nesting-observer null fault follows; its cause has not been established or patched with a null-check workaround. Multi-app acceptance has not passed.
+
+New reporter candidate creates one reporter per monotonic owner, publishes immutable entries, and performs only an existing-state lookup from the OOM callback. Owner lookup is nonblocking; unavailable/busy ownership or an uninitialized reporter skips that optional metric rather than allocating or recursively blocking under memory failure. The engine callback is installed once and atomically published on AROS; original duplicate-registration and Mojo sequence checks remain. Entry lifetimes are still engine-long; this is not reclamation proof. Final full2 archives PASS both CPUs; native103/ARM29 pending. A small native probe links the actual callback object to test empty and registered dispatch; it does not force OOM or establish SMP/reporting correctness.
+
+ARM28 preceding DOM-storage/clock candidate PASS local workers, rendering, clean close, teardown and RC0. Reviewed screenshot shows PASS text with About AROS. Whole guest first-paint1188.80MiB, after-close1151.83MiB.

@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-18T23:09:47.491098+00:00",
-  "validation": "Run101 extension-state candidate paints both x64 apps, then localStorage.SetItem reaches renderer-shared StorageController Mojo remote and sequence CHECK. Scope controller heap roots/namespaces/remotes per renderer, retaining checks. Includes monotonic platform owner identity and condition clock correction; native101 SDK probe demonstrated legacy 100ms deadline returned in1082us vs100077us with matching monotonic attributes. Complete DOM-storage archives PASS x64+ARM; native links in progress and runtime102 pending. ARM27 preceding extension-state regression PASS workers, rendering, shutdown and RC0; ARM clock probe also PASS. ARM27 validates preceding extension-state candidate; no claim of stall fix, full Chrome UI, direct-native locks, or memory reclamation.",
+  "recorded_utc": "2026-11-18T23:31:16.391157+00:00",
+  "validation": "Native102 DOM-storage candidate triggers second renderer CrashMemoryMetricsReporterImpl::Bind replacing engine-global Mojo receiver; exact symbols retained. New candidate owns reporter per monotonic identity using immutable published entries, existing-only OOM lookup and nonblocking identity query, plus once-only atomic callback publication on AROS. No allocation introduced in OOM dispatch. Native102 also records a first-renderer RunLoop nesting-observer null fault after the fatal; cause not yet proven. Complete final full2 archives PASS both architectures; native links and runtime103/ARM29 pending. ARM28 preceding DOM-storage candidate PASS workers, paint/close, teardown and RC0.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
       "patch": "src.patch",
-      "sha256": "df29eeaa59bd7cb16d0c53f08e9fee179d01abf9738030463e92b6228478d481",
-      "applied_tree": "17c58644bc831c83b951983c8a7a7f676f038f6f",
-      "bytes": 2969994
+      "sha256": "d0cbe4877bb9ccda436584a01376e8a9a80f7c397b6c291292f26c4bd7194434",
+      "applied_tree": "e93c760ef7afbed6f978739e1707eabc7f3b8eba",
+      "bytes": 2976798
     },
     {
       "path": "v8",

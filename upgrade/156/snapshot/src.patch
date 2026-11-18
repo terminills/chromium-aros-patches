@@ -855,6 +855,53 @@ index 266ce80a76d9b8d71e7fba750e5ef1a02fef776f..b0cb70cf7fc2ea29ef4cc54eb836db80
    // Though we do not forward placement new, we need to define this explicitly
    // to allow it.
    static void* operator new(std::size_t, void* ptr) { return ptr; }
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/oom_callback.cc b/base/allocator/partition_allocator/src/partition_alloc/oom_callback.cc
+index 0db8407182a854ba01d1700624c58dbb0c985d50..01c61eaa476da80ac7f1acd584482bf97f5c2559 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/oom_callback.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/oom_callback.cc
+@@ -5,23 +5,42 @@
+ #include "partition_alloc/oom_callback.h"
+ 
+ #include "partition_alloc/partition_alloc_check.h"
++#include "partition_alloc/build_config.h"
++#if PA_BUILDFLAG(IS_AROS)
++#include <atomic>
++#endif
+ 
+ namespace partition_alloc {
+ 
+ namespace {
++#if PA_BUILDFLAG(IS_AROS)
++static_assert(std::atomic<PartitionAllocOomCallback>::is_always_lock_free);
++constinit std::atomic<PartitionAllocOomCallback> g_oom_callback{nullptr};
++#else
+ PartitionAllocOomCallback g_oom_callback;
++#endif
+ }  // namespace
+ 
+ void SetPartitionAllocOomCallback(PartitionAllocOomCallback callback) {
++#if PA_BUILDFLAG(IS_AROS)
++  PA_DCHECK(!g_oom_callback.load(std::memory_order_relaxed));
++  g_oom_callback.store(callback, std::memory_order_release);
++#else
+   PA_DCHECK(!g_oom_callback);
+   g_oom_callback = callback;
++#endif
+ }
+ 
+ namespace internal {
+ void RunPartitionAllocOomCallback() {
++#if PA_BUILDFLAG(IS_AROS)
++  if (auto callback = g_oom_callback.load(std::memory_order_acquire))
++    callback();
++#else
+   if (g_oom_callback) {
+     g_oom_callback();
+   }
++#endif
+ }
+ }  // namespace internal
+ 
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
 index e7ab4f97f730a215afe8e68249b3042d62aec219..cf4da3b6695ce8b551e08dce0aba11b37892370d 100644
 --- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
@@ -3076,10 +3123,10 @@ index 0000000000000000000000000000000000000000..6e7a10f44dd908bb4c14d9a723218863
 +#endif  // BASE_AROS_PLATFORM_SPOOF_H_
 diff --git a/base/aros/process_local.h b/base/aros/process_local.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..8bdf971dc7df50994c422093616b14f773d6ce4b
+index 0000000000000000000000000000000000000000..c4fc94eaa8e9b734eaf22640ee483410814c53bc
 --- /dev/null
 +++ b/base/aros/process_local.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,42 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3096,6 +3143,11 @@ index 0000000000000000000000000000000000000000..8bdf971dc7df50994c422093616b14f7
 +// their owner's identity; a native child receives a new identity at Init().
 +// Zero represents bootstrap before any logical process has been registered.
 +BASE_EXPORT uint64_t CurrentProcessIdentity();
++// Best-effort, allocation-free query after CommandLine initialization. Returns
++// false if the registry is busy or the current owner is unavailable. Intended
++// for failure handlers that must not construct state or recursively block.
++BASE_EXPORT bool TryCurrentProcessIdentity(uint64_t* identity);
++
 +
 +// Resident-image replacement for process-local static storage. Tag separates
 +// distinct globals with the same value type. Entries intentionally have engine
@@ -4362,7 +4414,7 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a41ebbc2f 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb40678c807832 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
 @@ -7,6 +7,13 @@
@@ -4500,7 +4552,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a
  #endif
  
    return true;
-@@ -286,35 +366,112 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -286,35 +366,125 @@ bool CommandLine::Init(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(const StringVector& argv) {
@@ -4572,8 +4624,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a
 +#else
    return !!current_process_commandline_;
 +#endif
-+}
-+
+ }
+ 
 +#if BUILDFLAG(IS_AROS)
 +// static
 +uint64_t aros::CurrentProcessIdentity() {
@@ -4584,6 +4636,19 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a
 +  const auto identity = registry.process_identities.find(current);
 +  CHECK(identity != registry.process_identities.end());
 +  return identity->second;
++}
++
++bool aros::TryCurrentProcessIdentity(uint64_t* identity) {
++  auto& registry = GetCommandLineProcessRegistry();
++  if (!registry.lock.Try())
++    return false;
++  CommandLine* current = FindCommandLineForTask(registry, FindTask(nullptr));
++  const auto found = registry.process_identities.find(current);
++  const bool available = current && found != registry.process_identities.end();
++  if (available)
++    *identity = found->second;
++  registry.lock.Release();
++  return available;
 +}
 +
 +const CommandLine& aros::InitialCommandLineForCurrentProcess() {
@@ -4600,8 +4665,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
 +  registry.thread_bindings[FindTask(nullptr)] = command_line;
- }
- 
++}
++
 +// static
 +void CommandLine::ArosUnbindCurrentThread() {
 +  auto& registry = GetCommandLineProcessRegistry();
@@ -4613,7 +4678,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +595,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +608,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -57750,6 +57815,120 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..c4afba40f2f90c57db4f19213fac1df7
  
    GetBlinkInitializer().RegisterMemoryWatchers(platform);
  
+diff --git a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
+index f6070712991c1267775f63be1d68d07ebedbdaae..e99991a956777581cd9ddc1259fb011257a059c8 100644
+--- a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
++++ b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
+@@ -11,6 +11,10 @@
+ #include "base/process/memory.h"
+ #include "base/process/process_metrics.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include <atomic>
++#include "base/aros/process_local.h"
++#endif
+ #include "partition_alloc/oom_callback.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+@@ -22,6 +26,36 @@
+ 
+ namespace blink {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++struct ReporterEntry {
++  uint64_t owner;
++  CrashMemoryMetricsReporterImpl* reporter;
++  ReporterEntry* next;
++};
++static_assert(std::atomic<ReporterEntry*>::is_always_lock_free);
++struct ReporterRegistry {
++  base::Lock creation_lock;
++  std::atomic<ReporterEntry*> head{nullptr};
++};
++ReporterRegistry& GetReporterRegistry() {
++  static base::NoDestructor<ReporterRegistry> registry;
++  return *registry;
++}
++CrashMemoryMetricsReporterImpl* FindReporter(uint64_t owner) {
++  // Entries and reporters have the original singleton's engine lifetime.
++  // Publish immutable links only after construction; OOM lookup never allocates
++  // or acquires the creation lock, including when allocation fails under it.
++  for (auto* entry = GetReporterRegistry().head.load(std::memory_order_acquire);
++       entry; entry = entry->next) {
++    if (entry->owner == owner)
++      return entry->reporter;
++  }
++  return nullptr;
++}
++}  // namespace
++#endif
++
+ // static
+ void CrashMemoryMetricsReporterImpl::Bind(
+     mojo::PendingReceiver<mojom::blink::CrashMemoryMetricsReporter> receiver) {
+@@ -32,9 +66,22 @@ void CrashMemoryMetricsReporterImpl::Bind(
+ }
+ 
+ CrashMemoryMetricsReporterImpl& CrashMemoryMetricsReporterImpl::Instance() {
++#if BUILDFLAG(IS_AROS)
++  const uint64_t owner = base::aros::CurrentProcessIdentity();
++  auto& registry = GetReporterRegistry();
++  base::AutoLock lock(registry.creation_lock);
++  if (auto* existing = FindReporter(owner))
++    return *existing;
++  auto* reporter = new CrashMemoryMetricsReporterImpl();
++  auto* entry = new ReporterEntry{
++      owner, reporter, registry.head.load(std::memory_order_relaxed)};
++  registry.head.store(entry, std::memory_order_release);
++  return *reporter;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(CrashMemoryMetricsReporterImpl,
+                                   crash_memory_metrics_reporter_impl, ());
+   return crash_memory_metrics_reporter_impl;
++#endif
+ }
+ 
+ CrashMemoryMetricsReporterImpl::CrashMemoryMetricsReporterImpl()
+@@ -47,8 +94,17 @@ CrashMemoryMetricsReporterImpl::CrashMemoryMetricsReporterImpl()
+              &CrashMemoryMetricsReporterImpl::SampleMemoryState)
+ #endif
+ {
+-  ::partition_alloc::SetPartitionAllocOomCallback(
+-      CrashMemoryMetricsReporterImpl::OnOOMCallback);
++#if BUILDFLAG(IS_AROS)
++  // Initialize lookup infrastructure before registering an allocation-failure
++  // callback, including direct construction by tests.
++  (void)base::aros::CurrentProcessIdentity();
++  (void)GetReporterRegistry();
++  // PartitionAlloc is engine-global; install this dispatch callback only once.
++  static std::atomic_flag registered = ATOMIC_FLAG_INIT;
++  if (!registered.test_and_set(std::memory_order_relaxed))
++#endif
++    ::partition_alloc::SetPartitionAllocOomCallback(
++        CrashMemoryMetricsReporterImpl::OnOOMCallback);
+ }
+ 
+ CrashMemoryMetricsReporterImpl::~CrashMemoryMetricsReporterImpl() = default;
+@@ -94,8 +150,18 @@ void CrashMemoryMetricsReporterImpl::SampleMemoryState(TimerBase*) {
+ #endif
+ 
+ void CrashMemoryMetricsReporterImpl::OnOOMCallback() {
++#if BUILDFLAG(IS_AROS)
++  uint64_t owner;
++  if (!base::aros::TryCurrentProcessIdentity(&owner))
++    return;
++  auto* reporter = FindReporter(owner);
++  if (!reporter)
++    return;
++  CrashMemoryMetricsReporterImpl& instance = *reporter;
++#else
+   CrashMemoryMetricsReporterImpl& instance =
+       CrashMemoryMetricsReporterImpl::Instance();
++#endif
+   // None of the code executed while holding the`lock_` should allocate memory;
+   // if it does, it may trigger an OOM and end up in a deadlock.
+   base::AutoLock auto_lock(instance.lock_);
 diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
 index 056bd22809479eac64251cfc67f37336c4438424..78c23a72f02e13971ae9058285cb5ac2378793fd 100644
 --- a/third_party/blink/renderer/core/BUILD.gn
