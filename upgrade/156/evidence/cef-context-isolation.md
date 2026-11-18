@@ -13,4 +13,4 @@ The refcount probe does not independently acknowledge that every internal A obje
 
 Prototype78 failed because its identity comparison consumed the retained wrapper reference for the other context. The next comparison unwrapped a freed wrapper. CEF's generated cpptoc_ref_counted.h Unwrap explicitly releases the reference transferred by a refptr_same parameter. The corrected client adds a reference before each comparison; self remains borrowed. The engine was unchanged. Failed runtime78 ISO and raw log remain retained; the public log is normalized only for line endings/trailing whitespace.
 
-ARM runtime19 is pending separately; its cross-build is not presented as a runtime pass.
+ARM runtime19 also passed the same cookie separation, B-after-A-reference-release, and full shutdown checks. The retained ARM serial log and result accompany its exact input manifest. This does not resolve or qualify the separately retained intermittent ARM stalls.
