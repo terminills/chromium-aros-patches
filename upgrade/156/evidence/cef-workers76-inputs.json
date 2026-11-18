@@ -1,0 +1,6 @@
+{
+  "cef_sha256": "e4cfdcd88c9c1a582455aa38f66f598d24c94de818ff0c3707e0d9ee457de6d5",
+  "client_sha256": "19d1fcc8b4ad939999cd94f6d392aad70c4c49536cb7553bb6954a1fd0eb9b3b",
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nEcho Network-stack-wait-RC:$RC\nType RAM:AROSTCP-startup.log\nType RAM:AROSTCP-startup.log >DEBUG:\nStack 1048576\nC:CEF156Memory-x64 RAM:CEF76.ppm \"http://10.0.2.2:40255/\" 3000\nEcho \"CEF browser RC: $RC\"\nWait 3600\n",
+  "engine_modules": "Integrated CEF section-name packing build; unchanged candidate V8; HTTP fetch and network-loaded WebAssembly worker"
+}
