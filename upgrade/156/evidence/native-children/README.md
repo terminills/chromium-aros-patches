@@ -81,8 +81,29 @@ consumer registry, and main-thread-default handle to each native process.
 It also corrects child shutdown state, renderer main-task-runner storage, and
 last-resort GC policy ownership found in the same audit. These prevent one
 child from replacing or shutting down a sibling's state. Both complete archive
-builds pass; run 94 native link/runtime are pending. All existing ownership
+builds and native x64 link pass. Run 94 reaches host READY and then fails the
+performance-scenario observer initialization check. All existing ownership
 and duplicate-registration checks remain.
 
 A separate private follow-up is correcting Blink main/compositor thread and
 main heap storage ownership; it is not included or validated by this snapshot.
+
+## Direct-browser regression control
+
+The direct browser using its default context passes on the memory-routing
+candidate: page paint, same-origin cookie/localStorage checks, DOM and Worker
+state checks through 60 seconds, browser close, and CEF shutdown all succeed.
+`cef-direct94-control-*` pins that successful native x64 control (ISO run 97).
+The preceding host/custom-context control (ISO run 96) was invalid for this
+purpose: it hits the already known single-process storage-partition restriction.
+Its failed result is retained and must not be called a new routing regression.
+
+The direct control reports whole-guest use of 138.80 MiB before opening CEF,
+879.88 MiB after opening it, 1550.92 MiB at first paint, and 1495.69 MiB after
+closing CEF. These are whole-guest snapshots, not isolated browser RSS, and
+closing a library is not proof of expunging resident engine allocations.
+This control proves neither two-app isolation nor long-term memory reclamation.
+
+Run 94's GPU free-pointer text was interleaved with other serial output; its
+full address comparison is indeterminate. The parseable utility record matches
+the host. A malformed log field must not be reported as an allocator mismatch.

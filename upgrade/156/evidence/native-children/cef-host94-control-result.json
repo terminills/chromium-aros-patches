@@ -1,0 +1,25 @@
+{
+  "mode": "single-process one-client regression control, not native-child isolation",
+  "pass": false,
+  "captured_application": false,
+  "timed_out": false,
+  "memory": [
+    {
+      "app": "A",
+      "phase": "host-client-connected",
+      "whole_guest_bytes": {
+        "total": 4294393409,
+        "free": 2689474368,
+        "used": 1604919041,
+        "largest": 1200451808
+      },
+      "whole_guest_mib": {
+        "total": 4095.45,
+        "free": 2564.88,
+        "used": 1530.57,
+        "largest": 1144.84
+      }
+    }
+  ],
+  "interpretation": "Invalid regression control: even one custom host request context hits the known single-process storage-partition restriction. This does not isolate memory-routing behavior. Separate direct browser default-context control required."
+}
