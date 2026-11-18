@@ -1,0 +1,56 @@
+{
+  "frames": [
+    {
+      "section_offset": "0xee85f9",
+      "symbol": "mojo::InterfaceEndpointClient::~InterfaceEndpointClient()",
+      "symbol_offset": "0x249"
+    },
+    {
+      "section_offset": "0xee8618",
+      "symbol": "mojo::InterfaceEndpointClient::~InterfaceEndpointClient()",
+      "symbol_offset": "0x18"
+    },
+    {
+      "section_offset": "0xefadaa",
+      "symbol": "mojo::ReceiverSetState::~ReceiverSetState()",
+      "symbol_offset": "0x3a"
+    },
+    {
+      "section_offset": "0x126a2751",
+      "symbol": "ChromeRenderThreadObserver::~ChromeRenderThreadObserver()",
+      "symbol_offset": "0x61"
+    },
+    {
+      "section_offset": "0x126a27e8",
+      "symbol": "ChromeRenderThreadObserver::~ChromeRenderThreadObserver()",
+      "symbol_offset": "0x18"
+    },
+    {
+      "section_offset": "0x12694bae",
+      "symbol": "ChromeContentRendererClient::RenderThreadStarted()",
+      "symbol_offset": "0x22e"
+    },
+    {
+      "section_offset": "0x2d2dc3",
+      "symbol": "ChromeContentRendererClientCef::RenderThreadStarted()",
+      "symbol_offset": "0x23"
+    },
+    {
+      "section_offset": "0xa2c58b2",
+      "symbol": "content::RenderThreadImpl::Init()",
+      "symbol_offset": "0x1262"
+    },
+    {
+      "section_offset": "0xa2c7953",
+      "symbol": "content::RenderThreadImpl::RenderThreadImpl(base::RepeatingCallback<void ()>, std::unique_ptr<blink::scheduler::WebThreadScheduler, std::default_delete<blink::scheduler::WebThreadScheduler> >)",
+      "symbol_offset": "0x643"
+    },
+    {
+      "section_offset": "0xa2ce76c",
+      "symbol": "content::RendererMain(content::MainFunctionParams)",
+      "symbol_offset": "0x4dc"
+    }
+  ],
+  "finding": "Engine-global CEF renderer-client LazyInstance: RenderThreadStarted replaces chrome_observer_ unique_ptr, destroying first renderer Mojo receivers on second renderer task. Native fatal sequence check preserved; scope LazyInstance by monotonic native owner.",
+  "serial_caveat": "First renderer entry is interleaved with PA diagnostics and is not parsed by watcher. shared_allocator_addresses=True only covers three complete records, not all four children. Run100 failed before acceptance."
+}

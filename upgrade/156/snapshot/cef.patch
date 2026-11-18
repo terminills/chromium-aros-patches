@@ -878,10 +878,21 @@ index 2b0b561fcd5354f001b9eb365607529b373471e1..f97ea256198b88df31079bfc82d4b6e7
  
  void ChromeContentClientCef::AddAdditionalSchemes(Schemes* schemes) {
 diff --git a/libcef/common/chrome/chrome_main_delegate_cef.cc b/libcef/common/chrome/chrome_main_delegate_cef.cc
-index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..af55f19ab269d0344cfa0b9e6c6473fa9b4c8405 100644
+index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..3b2e0a40c35980f06ecd1d8e3402f4b61218757c 100644
 --- a/libcef/common/chrome/chrome_main_delegate_cef.cc
 +++ b/libcef/common/chrome/chrome_main_delegate_cef.cc
-@@ -49,6 +49,15 @@
+@@ -11,6 +11,10 @@
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
+ #include "base/lazy_instance.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "base/path_service.h"
+ #include "base/strings/string_split.h"
+ #include "base/threading/threading_features.h"
+@@ -49,10 +53,31 @@
  #include "cef/libcef/common/util_linux.h"
  #endif
  
@@ -896,8 +907,24 @@ index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..af55f19ab269d0344cfa0b9e6c6473fa
 +
  namespace {
  
++#if BUILDFLAG(IS_AROS)
++namespace {
++struct CefRendererClientOwner {};
++using RendererClientInstance =
++    base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit;
++}
++// Native renderers share the resident engine, but own their thread-bound
++// observers and Mojo receivers. Retain normal owner AtExit destruction.
++#define g_chrome_content_renderer_client \
++  (base::aros::ProcessLocalValue<RendererClientInstance, CefRendererClientOwner>())
++#else
  base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit
-@@ -467,6 +476,13 @@ void ChromeMainDelegateCef::PreSandboxStartup() {
+     g_chrome_content_renderer_client = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ template <typename FeatureType>
+ bool IsFeatureEnabledByDefault(const FeatureType& feature) {
+@@ -467,6 +492,13 @@ void ChromeMainDelegateCef::PreSandboxStartup() {
    }
    if (!resources_dir.empty()) {
      base::PathService::Override(chrome::DIR_RESOURCES, resources_dir);

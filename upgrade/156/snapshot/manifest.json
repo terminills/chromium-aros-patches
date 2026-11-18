@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-18T22:29:54.018907+00:00",
-  "validation": "Exact-base replay checked. Complete x64 and AArch64 archives pass for storage VFS/factory/cache delegate, UKM delegation/client registry, and renderer cache/dump-provider ownership. Native links and runtime100/ARM26 pending. Prior SQL-path candidate runtime99 reaches app A first paint then fails browser-only UKM call on renderer delegate; ARM25 passes local JS/Wasm workers and clean teardown. No two-app acceptance or lifetime reclamation qualification.",
+  "recorded_utc": "2026-11-18T22:39:57.223716+00:00",
+  "validation": "Native run100 renderer B initialization destroys renderer A Chrome observer through engine-global CEF renderer-client LazyInstance; stack resolved against exact native symbols. Scope CEF and Chrome renderer-client instances per monotonic native owner, retaining existing AtExit behavior and sequence checks. Complete archives and runtime101 pending; exact-base replay checked; not release-ready. Renderer-caches preceding candidate complete archives and native links PASS both architectures. New renderer-client archive builds in progress; native101 pending.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
       "patch": "src.patch",
-      "sha256": "36ab2a3be6b6e3f61cb4d6c17550a537030795c3f5d346f260f17c86eb22c8c8",
-      "applied_tree": "ebaa4a224102e5535979f6e168d8ed26c91e8f7f",
-      "bytes": 2952746
+      "sha256": "46238e5fd9e61af227111a705175e2456cf25e85c1720a31a642603a38850d8c",
+      "applied_tree": "bdda62909d5fa284f5340a3bd6d759f10e6d3c49",
+      "bytes": 2953930
     },
     {
       "path": "v8",
@@ -27,9 +27,9 @@
       "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
       "upstream_url": "https://github.com/chromiumembedded/cef.git",
       "patch": "cef.patch",
-      "sha256": "dd3c73cdf455d5e1ed35f0e6d296ff0dc40677d47e2d89f8c648393a25a23b30",
-      "applied_tree": "392205be3d11544eef77a8da44c732a78b0b21c2",
-      "bytes": 61079
+      "sha256": "388154f7b205dcc23d19d9a68fb235e71fdcca9a6160f587a674c2ecb8f124f6",
+      "applied_tree": "7b7af44f39610741dda0e5e073d6526c686ca10f",
+      "bytes": 62059
     },
     {
       "path": "third_party/icu",

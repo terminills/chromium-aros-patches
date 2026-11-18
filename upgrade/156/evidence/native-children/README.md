@@ -218,3 +218,10 @@ teardown and script RC0 on the preceding native-SQL-path candidate. Its screensh
 was visually reviewed. Whole guest is 1187.09 MiB at first paint and 1151.78 MiB
 after CEF close. Network and two-app acceptance remain open. ARM 26 is prepared
 for the current candidate with an opt-in test-client About AROS launcher.
+
+
+### Native run100: renderer client ownership
+
+Both renderer-caches native library links passed. Run100 connects app A and B, paints A, then the second renderer destroys the first renderer Chrome observer through the shared CEF renderer-client singleton. Exact retained symbol resolution identifies ChromeContentRendererClient::RenderThreadStarted, ChromeRenderThreadObserver destruction and Mojo receiver sequence failure. The check remains enabled. The new snapshot scopes both CEF and Chrome renderer-client LazyInstance storage to monotonic native owners, retaining AtExit behavior. New complete builds and native101 are pending.
+
+The run100 first renderer entry is interleaved with allocator logging. Its result field `shared_allocator_addresses: true` describes only the three complete parsed records, not all four started children. The retained stack analysis records this qualification; the next watcher cross-checks child-memory entry counts before accepting allocator coverage. Run100 is a failure, not multi-app acceptance.
