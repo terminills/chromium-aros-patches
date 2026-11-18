@@ -225,3 +225,10 @@ for the current candidate with an opt-in test-client About AROS launcher.
 Both renderer-caches native library links passed. Run100 connects app A and B, paints A, then the second renderer destroys the first renderer Chrome observer through the shared CEF renderer-client singleton. Exact retained symbol resolution identifies ChromeContentRendererClient::RenderThreadStarted, ChromeRenderThreadObserver destruction and Mojo receiver sequence failure. The check remains enabled. The new snapshot scopes both CEF and Chrome renderer-client LazyInstance storage to monotonic native owners, retaining AtExit behavior. New complete builds and native101 are pending.
 
 The run100 first renderer entry is interleaved with allocator logging. Its result field `shared_allocator_addresses: true` describes only the three complete parsed records, not all four started children. The retained stack analysis records this qualification; the next watcher cross-checks child-memory entry counts before accepting allocator coverage. Run100 is a failure, not multi-app acceptance.
+
+
+### ARM26 visual and runtime regression; extension ownership follow-up
+
+ARM26 uses the preceding renderer-caches engine and aros-web test-client now published at a70c6cf. Local JS/Wasm workers PASS, browser paint/close PASS, CEF teardown returns and shell RC0. Screenshot visibly includes PASS text and native About AROS (aarch64-raspi ABI_V1, bfdbbd7c). First-paint whole-guest use1186.70MiB; after-close1147.91MiB. The earlier visual-review note was written before shutdown; the final result confirms clean return. This does not establish networking, full Chrome UI, multi-app isolation, or reclamation.
+
+Final source snapshot adds renderer-owned extension client/dispatcher, extension and script registries, worker contexts and routing, frame/webview/document collections, isolated-world settings, localization and injection state, and incognito/instant flags. ScriptContextSet uniqueness DCHECK is restored. Immutable resources and resident engine code remain shared. Full3 archives and native101/ARM27 validation pending.

@@ -34457,10 +34457,20 @@ index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..10cbc1a37cce171e9f1221060fe9a760
            base::SingleThreadTaskRunner::GetCurrentDefault());
        mojo::PendingRemote<metrics::mojom::CallStackProfileCollector> collector;
 diff --git a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
-index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..8094130b0c6faa40b5359880f991c74f549ec22d 100644
+index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..6ff7704a07756fc7cefb5624b62fc7e2bee0cd0c 100644
 --- a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
 +++ b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
-@@ -9,6 +9,7 @@
+@@ -4,11 +4,17 @@
+ 
+ #include "chrome/renderer/extensions/chrome_extensions_renderer_client.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <utility>
+ 
  #include "base/feature_list.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/no_destructor.h"
@@ -34468,6 +34478,21 @@ index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..8094130b0c6faa40b5359880f991c74f
  #include "chrome/common/chrome_isolated_world_ids.h"
  #include "chrome/renderer/extensions/chrome_policy_activity_log_filter_delegate.h"
  #include "chrome/renderer/extensions/chrome_resource_request_policy_delegate.h"
+@@ -62,7 +68,14 @@ ChromeExtensionsRendererClient::~ChromeExtensionsRendererClient() {
+ 
+ // static
+ void ChromeExtensionsRendererClient::Create() {
++#if BUILDFLAG(IS_AROS)
++  struct ChromeExtensionsRendererOwner {};
++  (void)base::aros::ProcessLocalValue<
++      base::NoDestructor<ChromeExtensionsRendererClient>,
++      ChromeExtensionsRendererOwner>();
++#else
+   static base::NoDestructor<ChromeExtensionsRendererClient> client;
++#endif
+ }
+ 
+ bool ChromeExtensionsRendererClient::IsIncognitoProcess() const {
 diff --git a/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc b/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc
 index 8dd724e489aeacafd1eb7cc902cfa5dc90deec60..e0d1887373cd813962ebb76feb3c021c1fff05d4 100644
 --- a/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc
@@ -34556,6 +34581,46 @@ index ab12b010c13d95efdec9e4d2234fed54423734f1..48850a94ae255f29c0b8590229d6c1e8
  };
  
  #endif  // CHROME_RENDERER_PRINTING_CHROME_PRINT_RENDER_FRAME_HELPER_DELEGATE_H_
+diff --git a/chrome/renderer/process_state.cc b/chrome/renderer/process_state.cc
+index 8b9819f8c841e4b07ab3c2acdcb6de63de757b79..d3e6969459130dc775609a45d2ff9c5c6ae1c1d3 100644
+--- a/chrome/renderer/process_state.cc
++++ b/chrome/renderer/process_state.cc
+@@ -5,6 +5,11 @@
+ #include "chrome/renderer/process_state.h"
+ 
+ #if !BUILDFLAG(IS_ANDROID)
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <optional>
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+@@ -17,12 +22,23 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct IncognitoProcessOwner {};
++#define g_is_incognito_process \
++  (base::aros::ProcessLocalValue<bool, IncognitoProcessOwner>())
++#else
+ bool g_is_incognito_process = false;
++#endif
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+ std::optional<bool>& GetIsInstantProcessMutable() {
++#if BUILDFLAG(IS_AROS)
++  struct InstantProcessOwner {};
++  return base::aros::ProcessLocalValue<std::optional<bool>, InstantProcessOwner>();
++#else
+   static std::optional<bool> is_instant_process;
+   return is_instant_process;
++#endif
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
 index c71ffc189bf896455fb519d7f37fe2e2479b8dfc..65b196a03497871509b22e266ab2ca3b3be2c79c 100644
 --- a/chrome/test/BUILD.gn
@@ -45361,10 +45426,46 @@ index 7682bc5d1d6222510afd86ad1c348adb627afa6b..634e9e98e1da7ec2b687fcbb8b00c902
  
  void PermissionsInfo::RegisterPermissions(
 diff --git a/extensions/renderer/dispatcher.cc b/extensions/renderer/dispatcher.cc
-index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..31bc1e11bab2e8ed0bb04ebe7da73daa63c9f790 100644
+index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..76161ef1aedd4f88f0a7e6613f2277ede1e8b7dd 100644
 --- a/extensions/renderer/dispatcher.cc
 +++ b/extensions/renderer/dispatcher.cc
-@@ -1018,6 +1018,7 @@ void Dispatcher::LoadExtensions(
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/dispatcher.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -31,7 +36,6 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
+-#include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
+ #include "components/guest_view/buildflags/buildflags.h"
+ #include "content/public/common/content_features.h"
+@@ -229,8 +233,15 @@ class HandleScopeHelper {
+   v8::Context::Scope context_scope_;
+ };
+ 
++#if BUILDFLAG(IS_AROS)
++struct WorkerScriptContextSetOwner {};
++using WorkerScriptContextSetOwnerInstance = base::LazyInstance<WorkerScriptContextSet>::DestructorAtExit;
++#define g_worker_script_context_set \
++  (base::aros::ProcessLocalValue<WorkerScriptContextSetOwnerInstance, WorkerScriptContextSetOwner>())
++#else
+ base::LazyInstance<WorkerScriptContextSet>::DestructorAtExit
+     g_worker_script_context_set = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ // Creates a new extension from the data in the mojom::ExtensionLoadedParams
+ // object. A context_id needs to be passed because each browser context can have
+@@ -1018,6 +1029,7 @@ void Dispatcher::LoadExtensions(
      RendererExtensionRegistry* extension_registry =
          RendererExtensionRegistry::Get();
  
@@ -45372,7 +45473,7 @@ index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..31bc1e11bab2e8ed0bb04ebe7da73daa
      extension_registry->SetMojoJsEnabledForServiceWorker(
          id, is_mojo_js_enabled_for_service_worker);
  
-@@ -1035,7 +1036,15 @@ void Dispatcher::LoadExtensions(
+@@ -1035,7 +1047,15 @@ void Dispatcher::LoadExtensions(
      // renderer assume that an extension has been loaded (e.g. specifically
      // worker script evaluation process). If this fails, other CHECK()s and
      // logic will fail too.
@@ -45388,29 +45489,226 @@ index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..31bc1e11bab2e8ed0bb04ebe7da73daa
  
      unloaded_extensions_.erase(extension->id());
  
+diff --git a/extensions/renderer/extension_frame_helper.cc b/extensions/renderer/extension_frame_helper.cc
+index 5273756a5fca9337b2bffa61e09b988fe7ba3f1b..184a84513c50bed626d5ae45859d87ba8a262a30 100644
+--- a/extensions/renderer/extension_frame_helper.cc
++++ b/extensions/renderer/extension_frame_helper.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/extension_frame_helper.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <algorithm>
+ #include <set>
+ 
+@@ -49,8 +54,15 @@ namespace extensions {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct FrameHelpersOwner {};
++using FrameHelpersOwnerInstance = base::LazyInstance<std::set<const ExtensionFrameHelper*>>::DestructorAtExit;
++#define g_frame_helpers \
++  (base::aros::ProcessLocalValue<FrameHelpersOwnerInstance, FrameHelpersOwner>())
++#else
+ base::LazyInstance<std::set<const ExtensionFrameHelper*>>::DestructorAtExit
+     g_frame_helpers = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ // Returns true if the render frame corresponding with |frame_helper| matches
+ // the given criteria.
+diff --git a/extensions/renderer/extension_web_view_helper.cc b/extensions/renderer/extension_web_view_helper.cc
+index 188c2e9d68c0925b25894349d12c25de3abf830d..377a72fdf31053ac439e81842968753ea4c627cb 100644
+--- a/extensions/renderer/extension_web_view_helper.cc
++++ b/extensions/renderer/extension_web_view_helper.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/extension_web_view_helper.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <set>
+ 
+ #include "base/no_destructor.h"
+@@ -15,8 +20,13 @@ namespace {
+ using ExtensionWebViewHelperSet = std::set<const ExtensionWebViewHelper*>;
+ 
+ ExtensionWebViewHelperSet* GetWebViewHelperSet() {
++#if BUILDFLAG(IS_AROS)
++  struct Owner {};
++  return base::aros::ProcessLocalValue<base::NoDestructor<ExtensionWebViewHelperSet>, Owner>().get();
++#else
+   static base::NoDestructor<ExtensionWebViewHelperSet> web_view_helpers;
+   return web_view_helpers.get();
++#endif
+ }
+ 
+ }  // namespace
+diff --git a/extensions/renderer/extensions_renderer_client.cc b/extensions/renderer/extensions_renderer_client.cc
+index f3e6a617e5a57aef9cc97ec9c0c44b7b5dd5d6cf..767389bf6775254d042cad3939114370b69f062a 100644
+--- a/extensions/renderer/extensions_renderer_client.cc
++++ b/extensions/renderer/extensions_renderer_client.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/extensions_renderer_client.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <memory>
+ #include <ostream>
+ 
+@@ -39,7 +44,14 @@ namespace extensions {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ExtensionsRendererClientOwner {};
++#define g_client \
++  (base::aros::ProcessLocalValue<ExtensionsRendererClient*, \
++                                ExtensionsRendererClientOwner>())
++#else
+ ExtensionsRendererClient* g_client = nullptr;
++#endif
+ 
+ #if BUILDFLAG(ENABLE_GUEST_VIEW)
+ void IsGuestViewApiAvailableToScriptContext(bool* api_is_available,
+diff --git a/extensions/renderer/isolated_world_manager.cc b/extensions/renderer/isolated_world_manager.cc
+index 824fbeefad68b52924efdc80967a36c039855f7a..1bed8a92b5aa30d8c34d15f799771f43dc3a2506 100644
+--- a/extensions/renderer/isolated_world_manager.cc
++++ b/extensions/renderer/isolated_world_manager.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/isolated_world_manager.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <algorithm>
+ #include <map>
+ #include <string>
+@@ -34,8 +39,13 @@ IsolatedWorldManager::IsolatedWorldManager() = default;
+ IsolatedWorldManager::~IsolatedWorldManager() = default;
+ 
+ IsolatedWorldManager& IsolatedWorldManager::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  struct Owner {};
++  return *base::aros::ProcessLocalValue<base::NoDestructor<IsolatedWorldManager>, Owner>();
++#else
+   static base::NoDestructor<IsolatedWorldManager> g_instance;
+   return *g_instance;
++#endif
+ }
+ 
+ std::string IsolatedWorldManager::GetHostIdForIsolatedWorld(int world_id) {
+diff --git a/extensions/renderer/renderer_extension_registry.cc b/extensions/renderer/renderer_extension_registry.cc
+index 302cc0bb92f7eb695d485491a413bdb193946c8d..640340293706cf1969c7cdba74356382aee9c119 100644
+--- a/extensions/renderer/renderer_extension_registry.cc
++++ b/extensions/renderer/renderer_extension_registry.cc
+@@ -4,10 +4,14 @@
+ 
+ #include "extensions/renderer/renderer_extension_registry.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/check.h"
+ #include "base/lazy_instance.h"
+ #include "base/unguessable_token.h"
+-#include "build/build_config.h"
+ #include "content/public/renderer/render_thread.h"
+ #include "extensions/common/extension_id.h"
+ #include "extensions/common/manifest_handlers/background_info.h"
+@@ -18,8 +22,15 @@ namespace extensions {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct RendererExtensionRegistryOwner {};
++using RendererExtensionRegistryOwnerInstance = base::LazyInstance<RendererExtensionRegistry>::DestructorAtExit;
++#define g_renderer_extension_registry \
++  (base::aros::ProcessLocalValue<RendererExtensionRegistryOwnerInstance, RendererExtensionRegistryOwner>())
++#else
+ base::LazyInstance<RendererExtensionRegistry>::DestructorAtExit
+     g_renderer_extension_registry = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ }  // namespace
+ 
+diff --git a/extensions/renderer/script_context.cc b/extensions/renderer/script_context.cc
+index 42c7d1c1d76bf364b2f57bdee06b4ef8aab5a5d7..730ef551fbd473eb6f7f48d20cfcedcc3b63b0df 100644
+--- a/extensions/renderer/script_context.cc
++++ b/extensions/renderer/script_context.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/script_context.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <algorithm>
+ 
+ #include "base/command_line.h"
+@@ -98,8 +103,13 @@ using FrameToDocumentLoader =
+     base::flat_map<blink::WebLocalFrame*, blink::WebDocumentLoader*>;
+ 
+ FrameToDocumentLoader& FrameDocumentLoaderMap() {
++#if BUILDFLAG(IS_AROS)
++  struct Owner {};
++  return *base::aros::ProcessLocalValue<base::NoDestructor<FrameToDocumentLoader>, Owner>();
++#else
+   static base::NoDestructor<FrameToDocumentLoader> map;
+   return *map;
++#endif
+ }
+ 
+ blink::WebDocumentLoader* CurrentDocumentLoader(
 diff --git a/extensions/renderer/script_context_set.cc b/extensions/renderer/script_context_set.cc
-index 3fca384780c8fe2d8a44db2279499d7fe9f0871d..3c5b85f163176f2793aef64a92e535144c2105e9 100644
+index 3fca384780c8fe2d8a44db2279499d7fe9f0871d..d6cbe795319d6bb3e91de7dbe0f09b3dbb36bb33 100644
 --- a/extensions/renderer/script_context_set.cc
 +++ b/extensions/renderer/script_context_set.cc
-@@ -24,6 +24,7 @@
- #include "extensions/renderer/renderer_frame_context_data.h"
- #include "extensions/renderer/script_context.h"
- #include "pdf/buildflags.h"
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/script_context_set.h"
+ 
 +#include "build/build_config.h"
- #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
- #include "third_party/blink/public/web/web_document.h"
- #include "third_party/blink/public/web/web_local_frame.h"
-@@ -40,12 +41,18 @@ ScriptContextSet* g_context_set = nullptr;
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/compiler_specific.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+@@ -35,7 +40,13 @@ namespace extensions {
+ 
+ namespace {
+ // There is only ever one instance of the ScriptContextSet.
++#if BUILDFLAG(IS_AROS)
++struct ScriptContextSetOwner {};
++#define g_context_set \
++  (base::aros::ProcessLocalValue<ScriptContextSet*, ScriptContextSetOwner>())
++#else
+ ScriptContextSet* g_context_set = nullptr;
++#endif
+ }
  
  ScriptContextSet::ScriptContextSet(ExtensionIdSet* active_extension_ids)
-     : active_extension_ids_(active_extension_ids) {
-+#if BUILDFLAG(IS_AROS)
-+  if (!g_context_set)
-+    g_context_set = this;
-+#else
-   DCHECK(!g_context_set);
-   g_context_set = this;
-+#endif
+@@ -45,7 +56,8 @@ ScriptContextSet::ScriptContextSet(ExtensionIdSet* active_extension_ids)
  }
  
  ScriptContextSet::~ScriptContextSet() {
@@ -45420,6 +45718,129 @@ index 3fca384780c8fe2d8a44db2279499d7fe9f0871d..3c5b85f163176f2793aef64a92e53514
  }
  
  ScriptContext* ScriptContextSet::Register(
+diff --git a/extensions/renderer/script_injection.cc b/extensions/renderer/script_injection.cc
+index 4c032bed25466e13a829ccbc0cd6637c9dee45d6..a115b984b5028efacb0660c4c60f6f22662bfc1a 100644
+--- a/extensions/renderer/script_injection.cc
++++ b/extensions/renderer/script_injection.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/script_injection.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <map>
+ #include <optional>
+ #include <string>
+@@ -79,7 +84,13 @@ class ScriptInjectionForTracing {
+ const int64_t kInvalidRequestId = -1;
+ 
+ // The id of the next pending injection.
++#if BUILDFLAG(IS_AROS)
++struct PendingInjectionOwner {};
++#define g_next_pending_id \
++  (base::aros::ProcessLocalValue<int64_t, PendingInjectionOwner>())
++#else
+ int64_t g_next_pending_id = 0;
++#endif
+ 
+ }  // namespace
+ 
+diff --git a/extensions/renderer/shared_l10n_map.cc b/extensions/renderer/shared_l10n_map.cc
+index 15184f27d060d7c84c786a9f237873f54d97c573..f381e05ce46eef79c4851e27a5b07eb1659ddae9 100644
+--- a/extensions/renderer/shared_l10n_map.cc
++++ b/extensions/renderer/shared_l10n_map.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/shared_l10n_map.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/no_destructor.h"
+ #include "extensions/common/message_bundle.h"
+ #include "extensions/common/mojom/renderer_host.mojom.h"
+@@ -14,8 +19,13 @@ SharedL10nMap::SharedL10nMap() = default;
+ 
+ // static
+ SharedL10nMap& SharedL10nMap::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  struct Owner {};
++  return *base::aros::ProcessLocalValue<base::NoDestructor<SharedL10nMap>, Owner>();
++#else
+   static base::NoDestructor<SharedL10nMap> g_map;
+   return *g_map;
++#endif
+ }
+ 
+ std::string SharedL10nMap::GetMessage(const ExtensionId& extension_id,
+diff --git a/extensions/renderer/user_script_injector.cc b/extensions/renderer/user_script_injector.cc
+index 1e639bf617345d91541f58c67d028b59efcdaa12..b7a48876d10f52e230ad94432638a019aadbee2b 100644
+--- a/extensions/renderer/user_script_injector.cc
++++ b/extensions/renderer/user_script_injector.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/user_script_injector.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <tuple>
+ #include <vector>
+ 
+@@ -57,8 +62,15 @@ using RoutingInfoMap = std::map<RoutingInfoKey, bool>;
+ // After removed by the webview, the user scipt will also be removed
+ // from the render. Therefore, there won't be any query from the same
+ // |script_id| and |routing_id| pair.
++#if BUILDFLAG(IS_AROS)
++struct RoutingInfoMapOwner {};
++using RoutingInfoMapOwnerInstance = base::LazyInstance<RoutingInfoMap>::DestructorAtExit;
++#define g_routing_info_map \
++  (base::aros::ProcessLocalValue<RoutingInfoMapOwnerInstance, RoutingInfoMapOwner>())
++#else
+ base::LazyInstance<RoutingInfoMap>::DestructorAtExit g_routing_info_map =
+     LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ #endif
+ 
+diff --git a/extensions/renderer/worker_thread_dispatcher.cc b/extensions/renderer/worker_thread_dispatcher.cc
+index be468728e59b050ac7ef43f6a49cf0aedc64565a..c81fdcc0f9d0b4674e6f90de49e1c3da734bf91e 100644
+--- a/extensions/renderer/worker_thread_dispatcher.cc
++++ b/extensions/renderer/worker_thread_dispatcher.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "extensions/renderer/worker_thread_dispatcher.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include <utility>
+ 
+ #include "base/feature_list.h"
+@@ -48,8 +53,14 @@ WorkerThreadDispatcher::WorkerThreadDispatcher() = default;
+ WorkerThreadDispatcher::~WorkerThreadDispatcher() = default;
+ 
+ WorkerThreadDispatcher* WorkerThreadDispatcher::Get() {
++#if BUILDFLAG(IS_AROS)
++  struct WorkerDispatcherOwner {};
++  return base::aros::ProcessLocalValue<
++      base::NoDestructor<WorkerThreadDispatcher>, WorkerDispatcherOwner>().get();
++#else
+   static base::NoDestructor<WorkerThreadDispatcher> dispatcher;
+   return dispatcher.get();
++#endif
+ }
+ 
+ void WorkerThreadDispatcher::Init(content::RenderThread* render_thread) {
 diff --git a/gin/array_buffer.cc b/gin/array_buffer.cc
 index a87b06a928f755e089a24b3938c5cbaa9b6da43b..7de3ec2f78d6207c9fcfc410e8b5bf15f8d3d695 100644
 --- a/gin/array_buffer.cc

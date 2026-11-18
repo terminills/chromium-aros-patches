@@ -1,0 +1,29 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "408673bbb67f052d6b96f0d9cee118efc89778d1f2243b31c01f41c4607f6945",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "7863a66d26e9b9bc222dcb392515135158e180c9e887cf0aca51ce4c687ccd38",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "1ff13e12646c3f6c7bfc9286879a34f592090e0a5b057d6a61ecc7b7a53cb304"
+  },
+  "web_test_client_sha256": "29321648535f3c7ba88410ab0e360fc3d5d682097ce62b730b3dc4499f60b771",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFDirectBrowser T:cef-arm26.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM26-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T22:22:00.917954+00:00",
+    "validation": "Private renderer-cache candidate includes storage/VFS and UKM owner corrections. Scope MemoryCache Persistent root, its WeakPersistent dump provider, and parkable string/image task-runner state per native renderer. Engine code, allocator and stateless providers remain shared. Runtime99 preceding SQL-path candidate reaches first paint then shared UKM delegator failure. Both final archive builds and runtime100 pending; exact-base replay checked; not published.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "36ab2a3be6b6e3f61cb4d6c17550a537030795c3f5d346f260f17c86eb22c8c8",
+        "applied_tree": "ebaa4a224102e5535979f6e168d8ed26c91e8f7f",
+        "bytes": 2952746
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
