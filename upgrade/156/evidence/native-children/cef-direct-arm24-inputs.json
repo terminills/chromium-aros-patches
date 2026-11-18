@@ -1,0 +1,28 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "033f5d39b4a0dd778e57495019cd9a855945d7336783b4b5da85854c63dda563",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "d0eb748cd317c23374f3b7fae21694ffdce7f2a29658de6042c339390c9cf2bb",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "a7ebb9d0b31014a9a2aa12e332b0109799cd9ab3ced3de6a1374c75426561e1c"
+  },
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nRun >NIL: SYS:System/About\nC:CEFDirectBrowser T:cef-arm24.ppm \"@SYS:CEF-worker-url.txt\" 1500\nEcho ARM24-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T21:47:37.555987+00:00",
+    "validation": "Private child-coordinator candidate. Runtime95 clears scenario initialization and fails the shared ChildMemoryCoordinator singleton check; all four native child allocator records match the host. Scope coordinator to native owner, replace recycled WTF command-line pointer keys with monotonic identities, and serialize engine-wide WTF initialization. Both archive builds pending; native runtime98 pending. Exact-base replay checked; not yet published.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "f68fe3d524c89922b6d0423eb8f762943dd4cf78e60b930f0456b2bd51beae60",
+        "applied_tree": "7171bbd05a6f67e86725a88275448ee3bef520ca",
+        "bytes": 2937673
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}

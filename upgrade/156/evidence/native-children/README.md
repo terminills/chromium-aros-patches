@@ -150,3 +150,35 @@ isolated RSS or proof of expunging the resident engine. The browser screenshot
 was missed after the watcher ended, and guest shell RC was not routed to serial.
 This late result qualifies the local worker exercise, not network or multi-app
 behavior, and does not diagnose the long CEF-open interval.
+
+
+## Child coordinator runtime 98
+
+Both native links pass for the child-coordinator/WTF candidate. Run 98 clears
+the prior child-coordinator assertion, then fails the FilesystemProxy containment
+check: `/T:/CEFHostProfiles/Default/Login Data` and the Reporting/NEL database
+cannot be made relative to `T:CEFHostProfiles`. The input manifest pins this
+candidate and the result preserves the failure. Two-app acceptance remains open.
+
+The cause is the older `sql::Database::ArosPathForSqlite` conversion, which
+rewrites a native assign path for a Unix VFS workaround. The current AROS local
+SQLite VFS already resolves DOS locks; the sandboxed VFS preserves the supplied
+path for comparison with its root. The current snapshot removes the conversion
+for database open and ATTACH and retains the root containment assertion.
+
+
+The current snapshot also scopes the compositor scheduler pointer to each native
+owner, matching the already owner-local thread wrappers and preserving existing
+constructor/destructor checks. Both complete archive builds pass. Native links
+and runtime 99 remain pending.
+
+ARM run 24 passes with the preceding child-coordinator/WTF candidate: local
+JS/Wasm workers, page paint, browser close, CEF teardown and explicit script RC0.
+The rendered PNG was visually reviewed; the first-paint image was only a blank
+cyan frame and is not used as worker proof. Whole-guest memory is 112.35 MiB
+before CEF, 524.78 MiB after library open, 1185.15 MiB at first paint and
+1151.89 MiB after CEF close. These measurements are not isolated browser RSS.
+The browser covers most of About AROS in the screenshot. This is a native CEF
+worker exercise, not full Chrome UI, network, or multi-app acceptance.
+
+![Native ARM JS/Wasm worker pass](cef-direct-arm24-rendered.png)

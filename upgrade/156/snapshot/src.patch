@@ -55853,41 +55853,10 @@ index eeea5dd2d15345338f66e033cacab171c09e010c..e39ef7b8a591a9129452aa2ec39d3395
        android_get_device_api_level() > __ANDROID_API_V__) {
      sk_sp<SkFontMgr> ndk_fontmgr =
 diff --git a/sql/database.cc b/sql/database.cc
-index 528c012f79561c34534efeb361dfa9223686a0e3..8aac963cfdeae86978e8e2dedb5e3f52bb3d312f 100644
+index 528c012f79561c34534efeb361dfa9223686a0e3..a5e1be9f9c3e8e9192ad8d56d971bdd0c778952c 100644
 --- a/sql/database.cc
 +++ b/sql/database.cc
-@@ -102,6 +102,30 @@ static constexpr char kSqliteMainDatabaseName[] = "main";
- // Magic path value telling sqlite3_open_v2() to open an in-memory database.
- static constexpr char kSqliteOpenInMemoryPath[] = ":memory:";
- 
-+#if BUILDFLAG(IS_AROS)
-+// SQLite's Unix VFS recognizes only slash-prefixed paths as absolute. Convert
-+// native AROS volume and assign paths before SQLite canonicalizes them. Keep
-+// the volume separator in the slash-prefixed form so POSIXC recognizes and
-+// translates it even when the caller is a native AROS process rather than a
-+// POSIX nixmain executable.
-+std::string ArosPathForSqlite(const std::string& path) {
-+  const size_t volume_separator = path.find(':');
-+  if (volume_separator == std::string::npos || volume_separator == 0) {
-+    return path;
-+  }
-+
-+  std::string result("/");
-+  result.append(path, 0, volume_separator + 1);
-+  result.push_back('/');
-+  size_t relative_path = volume_separator + 1;
-+  while (relative_path < path.size() && path[relative_path] == '/') {
-+    ++relative_path;
-+  }
-+  result.append(path, relative_path, std::string::npos);
-+  return result;
-+}
-+#endif
-+
- // Spin for up to a second waiting for the lock to clear when setting
- // up the database.
- // TODO(shess): Better story on this.  http://crbug.com/56559
-@@ -1168,6 +1192,16 @@ bool Database::RazeInternal() {
+@@ -1168,6 +1168,16 @@ bool Database::RazeInternal() {
  
    SqliteResultCode sqlite_result_code =
        BackupDatabaseForRaze(null_db.db(InternalApiToken()), db_);
@@ -55904,30 +55873,16 @@ index 528c012f79561c34534efeb361dfa9223686a0e3..8aac963cfdeae86978e8e2dedb5e3f52
  
    // The destination database was locked.
    if (sqlite_result_code == SqliteResultCode::kBusy) {
-@@ -1548,6 +1582,8 @@ bool Database::AttachDatabase(const base::FilePath& other_db_path,
-   Statement statement(GetUniqueStatement("ATTACH ? AS ?"));
- #if BUILDFLAG(IS_WIN)
-   statement.BindString16(0, base::AsStringPiece16(other_db_path.value()));
-+#elif BUILDFLAG(IS_AROS)
-+  statement.BindString(0, ArosPathForSqlite(other_db_path.value()));
- #else
-   statement.BindString(0, other_db_path.value());
- #endif
-@@ -2169,7 +2205,12 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+@@ -2169,6 +2179,8 @@ bool Database::OpenInternal(const std::string& db_file_path) {
      open_flags |= (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
    }
  
--  std::string uri_file_path = db_file_path;
-+  std::string uri_file_path =
-+#if BUILDFLAG(IS_AROS)
-+      ArosPathForSqlite(db_file_path);
-+#else
-+      db_file_path;
-+#endif
++  // Keep native AROS assign paths intact: the local VFS resolves them through
++  // DOS locks, while the sandboxed VFS compares them with its native root.
+   std::string uri_file_path = db_file_path;
    if (options_.exclusive_database_file_lock_) {
  #if BUILDFLAG(IS_WIN)
-     const bool in_memory = db_file_path == kSqliteOpenInMemoryPath;
-@@ -2226,6 +2267,15 @@ bool Database::OpenInternal(const std::string& db_file_path) {
+@@ -2226,6 +2238,15 @@ bool Database::OpenInternal(const std::string& db_file_path) {
    if (sqlite_result_code == SqliteResultCode::kOk) {
      db_ = db;
    } else {
@@ -59665,6 +59620,37 @@ index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..f8e5bb936a3cb93a314f50acb66b4b42
    }
    // Calls ::ApplyPerformanceState if something's changed.
    performance_helper_.Check(time_now);
+diff --git a/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc b/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc
+index dc7300635f0e8cbcf836e3340eab5249ea00f11e..be1ca6af35956f745cd9d260eb26b1c0b0ac2a0d 100644
+--- a/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc
++++ b/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc
+@@ -11,6 +11,10 @@
+ #include "base/task/sequence_manager/task_queue.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/thread.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/public/platform/task_type.h"
+ #include "third_party/blink/renderer/platform/scheduler/common/features.h"
+ #include "third_party/blink/renderer/platform/scheduler/common/scheduler_helper.h"
+@@ -19,8 +23,15 @@ namespace blink {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct CompositorSchedulerProcessTag;
++#define g_compositor_thread_scheduler \
++  (base::aros::ProcessLocalValue<scheduler::CompositorThreadSchedulerImpl*, \
++                                CompositorSchedulerProcessTag>())
++#else
+ scheduler::CompositorThreadSchedulerImpl* g_compositor_thread_scheduler =
+     nullptr;
++#endif
+ 
+ }  // namespace
+ 
 diff --git a/third_party/blink/renderer/platform/weborigin/kurl.cc b/third_party/blink/renderer/platform/weborigin/kurl.cc
 index ba55faf452c2620a5c86ab4b3b09b14ff981e881..9fd5a6173d59f8526f6549b064295fc34eeb175f 100644
 --- a/third_party/blink/renderer/platform/weborigin/kurl.cc
