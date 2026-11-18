@@ -22040,7 +22040,7 @@ index 52f3ffa431b9b9ad429992dda3027ce5d721ddfc..2e1fb0fb72b012d50ae6e047de6ed4da
  source_set("file_system_access") {
    sources = [
 diff --git a/chrome/browser/first_run/BUILD.gn b/chrome/browser/first_run/BUILD.gn
-index 5b1c278390f5391ae9f42340dbf6f9e174f8c48e..9d72694fc33ee1a38154e46f1d4a85b2c399977b 100644
+index 5b1c278390f5391ae9f42340dbf6f9e174f8c48e..a46bc35371c63cb3a2610aef1870107637d97d55 100644
 --- a/chrome/browser/first_run/BUILD.gn
 +++ b/chrome/browser/first_run/BUILD.gn
 @@ -114,6 +114,13 @@ source_set("impl") {
@@ -22057,6 +22057,15 @@ index 5b1c278390f5391ae9f42340dbf6f9e174f8c48e..9d72694fc33ee1a38154e46f1d4a85b2
      if (is_linux) {
        sources += [
          "first_run_internal_linux.cc",
+@@ -122,7 +129,7 @@ source_set("impl") {
+       deps += [ "//chrome/browser/ui/views:eula_dialog_linux" ]
+     }
+ 
+-    if (is_linux || is_mac) {
++    if (is_linux || is_mac || is_aros) {
+       sources += [ "first_run_internal_posix.cc" ]
+     }
+   }
 diff --git a/chrome/browser/first_run/first_run_dialog.h b/chrome/browser/first_run/first_run_dialog.h
 index 9868ff4b7152fc20ae5c8337a3f9ec6933b5da4c..a3180358e0af797a0f27df9ebc7c9be665bab185 100644
 --- a/chrome/browser/first_run/first_run_dialog.h
@@ -22655,10 +22664,10 @@ index 4729e1faed70c38e9b67f245fe74753d781460b5..eba05615019be7fde0a4122a45931a95
  source_set("optimization_guide") {
    sources = [
 diff --git a/chrome/browser/picture_in_picture/BUILD.gn b/chrome/browser/picture_in_picture/BUILD.gn
-index 7fb62932ff13244780f1efbb8e457ee2a37ba233..b5863a94816f898d41e89c134ddff57060e992c6 100644
+index 7fb62932ff13244780f1efbb8e457ee2a37ba233..65103f6ef41c9d8fd6ab174d7cc084a9091baec2 100644
 --- a/chrome/browser/picture_in_picture/BUILD.gn
 +++ b/chrome/browser/picture_in_picture/BUILD.gn
-@@ -4,7 +4,7 @@
+@@ -4,14 +4,14 @@
  
  import("//chrome/common/features.gni")
  
@@ -22667,6 +22676,14 @@ index 7fb62932ff13244780f1efbb8e457ee2a37ba233..b5863a94816f898d41e89c134ddff570
  
  # The window occlusion logic is currently for desktop only, and the
  # WebContentsObserver-based implementation does not work on Linux
+ # since it depends on aura::WindowOcclusionTracker which is not
+ # supported on Linux.
+ use_web_contents_occlusion_helper = is_win || is_chromeos || is_mac
+-use_widget_occlusion_helper = is_linux
++use_widget_occlusion_helper = is_linux || is_aros
+ use_stub_occlusion_helper = is_android
+ 
+ source_set("picture_in_picture") {
 diff --git a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc b/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc
 index b02065efac3316f6493776df979752dd9d749a14..a47c2269b582c80628ab16bb45824211f532b074 100644
 --- a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc
@@ -25381,7 +25398,7 @@ index 66d26e03834b694f58aee0acf4ab871293465dfc..36d31d10be4eea8e6e375302abb80618
  build_webui("build") {
    grd_prefix = "ai_overlay_dialog_untrusted"
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 238f8625e42d8703c72c266c36e32bbfb2113095..95d9cda9217b430f5fa0b8455bca16ecd751fbf3 100644
+index 238f8625e42d8703c72c266c36e32bbfb2113095..8357704c9c4f625fe395bbc545770d9cc846e659 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
 @@ -8,6 +8,7 @@ import("//build/config/compiler/compiler.gni")
@@ -25495,7 +25512,12 @@ index 238f8625e42d8703c72c266c36e32bbfb2113095..95d9cda9217b430f5fa0b8455bca16ec
  
      if (enable_dice_support) {
        deps += [
-@@ -3462,6 +3488,13 @@ static_library("ui") {
+@@ -3458,10 +3484,17 @@ static_library("ui") {
+     libs += [ "crypt32.lib" ]
+   }
+ 
+-  if (is_linux || is_mac) {
++  if (is_linux || is_mac || is_aros) {
      deps += [ "//chrome/browser/ui/views:first_run_dialog" ]
    }
  
@@ -28338,6 +28360,22 @@ index 3cee0eb181af74905c6ebab5c9e56b2cc999cd46..9e997a4cecb41ab9eb2d3494f239edee
                            /*corners=*/std::nullopt,
                            "Chrome.AppMenu.MenuHostInitToNextFramePresented");
  }
+diff --git a/chrome/browser/ui/views/apps/BUILD.gn b/chrome/browser/ui/views/apps/BUILD.gn
+index 7c1484a7492a8c4dc247fe588e80ca33905ebfa6..9d151a5389cec7006a25bc4364d0cbc42e5e9106 100644
+--- a/chrome/browser/ui/views/apps/BUILD.gn
++++ b/chrome/browser/ui/views/apps/BUILD.gn
+@@ -120,6 +120,11 @@ source_set("impl") {
+     ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "chrome_app_window_client_views_aura.cc" ]
++    deps += [ "//chrome/browser/ui/apps" ]
++  }
++
+   if (is_linux) {
+     sources += [ "chrome_app_window_client_views_aura.cc" ]
+     deps += [
 diff --git a/chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.cc b/chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.cc
 index 56331d60609fd1e3a6488917bc06b550d4064f63..ae8ca8f70535ae5932a019d2bea0de2e637faed5 100644
 --- a/chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.cc
@@ -34511,7 +34549,7 @@ index ba80712294914eb1d6104030664377674f9949b1..14d3b14dabbd5b328609633b10098ca1
    void Clear() { crash_key_.Clear(); }
    void Set(std::string_view value) { crash_key_.Set(value); }
 diff --git a/components/device_signals/core/browser/BUILD.gn b/components/device_signals/core/browser/BUILD.gn
-index 42bae1c2662d6ffad154924e20229f570cc67c1a..bb79bb41f6bd5ac5ce794a9751e0aa3064ed5c17 100644
+index 42bae1c2662d6ffad154924e20229f570cc67c1a..96b3384955d18ce101dc907e22961b155c791298 100644
 --- a/components/device_signals/core/browser/BUILD.gn
 +++ b/components/device_signals/core/browser/BUILD.gn
 @@ -70,7 +70,7 @@ static_library("browser") {
@@ -34523,6 +34561,69 @@ index 42bae1c2662d6ffad154924e20229f570cc67c1a..bb79bb41f6bd5ac5ce794a9751e0aa30
      public += [
        "agent_signals_collector.h",
        "certificate_signals_collector.h",
+@@ -100,6 +100,10 @@ static_library("browser") {
+     sources += [ "linux/browser_utils_linux.cc" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "aros/browser_utils_aros.cc" ]
++  }
++
+   if (is_chromeos) {
+     deps += [ "//chromeos/dbus/constants" ]
+   }
+diff --git a/components/device_signals/core/browser/aros/browser_utils_aros.cc b/components/device_signals/core/browser/aros/browser_utils_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..835e0e59a58b2645fd15a1721784cf7decbdd350
+--- /dev/null
++++ b/components/device_signals/core/browser/aros/browser_utils_aros.cc
+@@ -0,0 +1,33 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include "components/device_signals/core/browser/browser_utils.h"
++#include "base/aros/socket_library.h"
++#include "net/base/ip_address.h"
++#include "net/base/ip_endpoint.h"
++#include "net/base/network_interfaces.h"
++
++namespace device_signals {
++std::string GetHostName() {
++  return net::GetHostName();
++}
++
++std::vector<std::string> GetSystemDnsServers() {
++  std::vector<std::string> configured;
++  if (!base::aros::GetConfiguredNameServers(&configured))
++    return {};
++  std::vector<std::string> servers;
++  for (const auto& server : configured) {
++    net::IPAddress address;
++    if (!address.AssignFromIPLiteral(server) || address.IsZero())
++      return {};
++    servers.push_back(net::IPEndPoint(address, 53).ToString());
++  }
++  return servers;
++}
++
++SettingValue GetOSFirewall() {
++  // There is no native firewall-status query in the AROS platform contract.
++  return SettingValue::UNKNOWN;
++}
++}  // namespace device_signals
+diff --git a/components/device_signals/core/browser/browser_utils.h b/components/device_signals/core/browser/browser_utils.h
+index aeda4187ac445ebe62b8320ab0cc1ccc8ee8f5b4..c783e1c0737bd0a40d189794d5690d9395194b79 100644
+--- a/components/device_signals/core/browser/browser_utils.h
++++ b/components/device_signals/core/browser/browser_utils.h
+@@ -39,7 +39,7 @@ std::string GetHostName();
+ #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS)
+ // Returns the hostname of the current machine.
+ std::vector<std::string> GetSystemDnsServers();
+ 
 diff --git a/components/discardable_memory/common/discardable_shared_memory_heap.cc b/components/discardable_memory/common/discardable_shared_memory_heap.cc
 index 585d63942a72ff7bc8ad9c3eae6c01b64173404c..82ed1bfea8b4584567be9ea4f0929346eb96c188 100644
 --- a/components/discardable_memory/common/discardable_shared_memory_heap.cc

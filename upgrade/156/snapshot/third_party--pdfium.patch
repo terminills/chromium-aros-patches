@@ -78,3 +78,34 @@ index 4743d2216fc9329970f9fafe598784c2098f9943..407c8af2f86de0df81cfeb8479d1855c
      sources += [ "linux/fx_linux_impl.cpp" ]
    }
  
+diff --git a/core/fxge/linux/fx_linux_impl.cpp b/core/fxge/linux/fx_linux_impl.cpp
+index 3cf0a2cf3e5d2c292688fa819bb4a2e4b8600e05..b707edb9a077e6f3063e2474ed7e4c58d978311f 100644
+--- a/core/fxge/linux/fx_linux_impl.cpp
++++ b/core/fxge/linux/fx_linux_impl.cpp
+@@ -18,7 +18,8 @@
+ #include "core/fxge/fx_font.h"
+ #include "core/fxge/systemfontinfo_iface.h"
+ 
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)
++#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && \
++    !BUILDFLAG(IS_AROS) && !defined(OS_ASMJS)
+ #error "Included on the wrong platform"
+ #endif
+ 
+@@ -170,10 +171,16 @@ class CLinuxPlatform : public CFX_GEModule::PlatformIface {
+         pInfo->AddPath(path);
+       }
+     } else {
++#if BUILDFLAG(IS_AROS)
++      // A boot-time multi-assign may hide the system TrueType directory.
++      pInfo->AddPath("FONTS:TrueType");
++      pInfo->AddPath("SYS:Fonts/TrueType");
++#else
+       pInfo->AddPath("/usr/share/fonts");
+       pInfo->AddPath("/usr/share/X11/fonts/Type1");
+       pInfo->AddPath("/usr/share/X11/fonts/TTF");
+       pInfo->AddPath("/usr/local/share/fonts");
++#endif
+     }
+     return pInfo;
+   }

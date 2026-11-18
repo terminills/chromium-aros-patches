@@ -2113,6 +2113,150 @@ index b62d736000f31b7b95ab876eed50b471fc82068f..e972dab2fece2b8387a7a3691a573bc6
    inline Register GetCachedRegister(int register_index);
  
    void LoadRegExpStackPointerFromMemory(Register dst);
+diff --git a/src/sandbox/js-dispatch-table.cc b/src/sandbox/js-dispatch-table.cc
+index cc21c21a05de417ed3a6d8c23e57d9ae721afffc..a864ba0b2c545116bedd5936bf3733829fc5e553 100644
+--- a/src/sandbox/js-dispatch-table.cc
++++ b/src/sandbox/js-dispatch-table.cc
+@@ -15,6 +15,16 @@
+ namespace v8 {
+ namespace internal {
+ 
++#if defined(V8_TARGET_OS_AROS) && !defined(V8_COMPRESS_POINTERS)
++void JSDispatchTable::Initialize() {
++  static_assert(!V8_STATIC_DISPATCH_HANDLES_BOOL);
++  InitializeSharedArosDispatchBacking(
++      kJSDispatchTableReservationSize, kSegmentSize * kNumReadOnlySegments,
++      JSDispatchEntry::IsWriteProtected);
++}
++#endif
++
++
+ void JSDispatchEntry::CheckFieldOffsets() {
+   static_assert(JSDispatchEntry::kEntrypointOffset ==
+                 offsetof(JSDispatchEntry, entrypoint_));
+diff --git a/src/sandbox/js-dispatch-table.h b/src/sandbox/js-dispatch-table.h
+index 0912c4037ebe9570d992b13c77ac18c0ad5b0094..32dda3ecb89ee2f51d9e2bfb190bb91a662b6d4c 100644
+--- a/src/sandbox/js-dispatch-table.h
++++ b/src/sandbox/js-dispatch-table.h
+@@ -197,6 +197,10 @@ class V8_EXPORT_PRIVATE JSDispatchTable
+   static_assert(!kSupportsCompaction);
+ 
+   JSDispatchTable() = default;
++#if defined(V8_TARGET_OS_AROS) && !defined(V8_COMPRESS_POINTERS)
++  void Initialize();
++#endif
++
+   JSDispatchTable(const JSDispatchTable&) = delete;
+   JSDispatchTable& operator=(const JSDispatchTable&) = delete;
+ 
+diff --git a/src/sandbox/segmented-table.cc b/src/sandbox/segmented-table.cc
+index 8d31f5bb993c9e7bb9454301499856514298d3ea..3eadc91bc753c2e284c001b01e1547c78e66a42c 100644
+--- a/src/sandbox/segmented-table.cc
++++ b/src/sandbox/segmented-table.cc
+@@ -5,6 +5,7 @@
+ #include "src/sandbox/segmented-table.h"
+ 
+ #include "src/base/emulated-virtual-address-subspace.h"
++#include "src/base/platform/mutex.h"
+ #include "src/utils/allocation.h"
+ 
+ #ifdef V8_ENABLE_MEMORY_CORRUPTION_API
+@@ -13,6 +14,48 @@
+ 
+ namespace v8::internal {
+ 
++#if defined(V8_TARGET_OS_AROS) && !defined(V8_COMPRESS_POINTERS)
++namespace {
++struct SharedArosDispatchBacking {
++  base::Mutex mutex;
++  VirtualAddressSpace* space = nullptr;
++  size_t users = 0;
++  size_t reservation_size = 0;
++  size_t read_only_size = 0;
++};
++
++SharedArosDispatchBacking& GetSharedArosDispatchBacking() {
++  static SharedArosDispatchBacking backing;
++  return backing;
++}
++}  // namespace
++
++void SegmentedTableBase::InitializeSharedArosDispatchBacking(
++    size_t reservation_size, size_t read_only_reservation_size,
++    bool wants_write_protection) {
++  static_assert(!V8_STATIC_DISPATCH_HANDLES_BOOL);
++  CHECK_NULL(vas_);
++  CHECK_NULL(base_);
++  auto& backing = GetSharedArosDispatchBacking();
++  base::MutexGuard guard(&backing.mutex);
++  if (!backing.space) {
++    Initialize(reservation_size, read_only_reservation_size,
++               wants_write_protection);
++    backing.space = vas_;
++    backing.reservation_size = reservation_size;
++    backing.read_only_size = read_only_reservation_size;
++  } else {
++    CHECK_EQ(backing.reservation_size, reservation_size);
++    CHECK_EQ(backing.read_only_size, read_only_reservation_size);
++    vas_ = backing.space;
++    base_ = reinterpret_cast<void*>(vas_->base());
++    read_only_reservation_size_ = read_only_reservation_size;
++  }
++  ++backing.users;
++}
++#endif
++
++
+ void SegmentedTableBase::Initialize(size_t reservation_size,
+                                     size_t read_only_reservation_size,
+                                     bool wants_write_protection) {
+@@ -99,6 +142,28 @@ void SegmentedTableBase::Initialize(size_t reservation_size,
+ void SegmentedTableBase::TearDown() {
+   CHECK(is_initialized());
+ 
++#if defined(V8_TARGET_OS_AROS) && !defined(V8_COMPRESS_POINTERS)
++  {
++    auto& backing = GetSharedArosDispatchBacking();
++    base::MutexGuard guard(&backing.mutex);
++    if (vas_ == backing.space) {
++      CHECK_GT(backing.users, 0u);
++      // Noncompressed dispatch handles use normal, isolate-owned RO spaces,
++      // not the fixed read-only segment shared by compressed-pointer builds.
++      CHECK_EQ(read_only_segments_used_, 0u);
++      if (--backing.users != 0) {
++        base_ = nullptr;
++        vas_ = nullptr;
++        read_only_reservation_size_ = 0;
++        return;
++      }
++      backing.space = nullptr;
++      backing.reservation_size = 0;
++      backing.read_only_size = 0;
++    }
++  }
++#endif
++
+ #ifdef V8_ENABLE_MEMORY_CORRUPTION_API
+   SandboxTesting::UnregisterSafeMemoryRegion(vas_->base());
+ #endif
+diff --git a/src/sandbox/segmented-table.h b/src/sandbox/segmented-table.h
+index c4e813fc0b284c45efcac36a1a1eac2cd3c6d14e..fb867ef8d7d181d9d34746cc52491c0aff18517a 100644
+--- a/src/sandbox/segmented-table.h
++++ b/src/sandbox/segmented-table.h
+@@ -64,6 +64,13 @@ class V8_EXPORT_PRIVATE SegmentedTableBase {
+   void Initialize(size_t reservation_size, size_t read_only_reservation_size,
+                   bool wants_write_protection);
+ 
++#if defined(V8_TARGET_OS_AROS) && !defined(V8_COMPRESS_POINTERS)
++  // Share only backing storage; each table retains its own allocation/GC spaces.
++  void InitializeSharedArosDispatchBacking(size_t reservation_size,
++                                          size_t read_only_reservation_size,
++                                          bool wants_write_protection);
++#endif
++
+   // Deallocates all memory associated with this table.
+   void TearDown();
+ 
 diff --git a/src/utils/allocation.cc b/src/utils/allocation.cc
 index 9fe80b267d2cad1942daa0e2a3c2d21f6a24052a..f126296308160a38e61c3ff7df8a7158629a4b4e 100644
 --- a/src/utils/allocation.cc
