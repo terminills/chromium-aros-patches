@@ -437,3 +437,5 @@ timer. AROS CEF releases its renderer manager at renderer message-loop
 destruction, before later browser-side AtExit cleanup. These source changes
 are under native integration testing; the ISO63/64 evidence above predates
 the integrated bridge and does not qualify this candidate.
+
+Native browser replays 65 and 66 (x86_64, one CPU) both painted, closed, and returned from full CEFShutdown. This closes the earlier renderer sequence-check failure for these fixtures. Replay 66 includes the final native MsgPort/Ozone watch changes, but its Web Notification permission/delivery path was not exercised. ARM module 10 passed link and ELF validation (SHA256 c25e60bb98033e7901b61f01420f681f9217845b0245f80b61e4aff8c3479341); ARM runtime remains pending. The private GCC 16 ARM kernel build requires KERNEL_ISA_CFLAGS="$(KERNEL_ISA_FLAGS) -mno-outline-atomics" to avoid unresolved out-of-line atomic helpers in the freestanding core.
