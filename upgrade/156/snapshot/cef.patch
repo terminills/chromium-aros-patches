@@ -878,7 +878,7 @@ index 2b0b561fcd5354f001b9eb365607529b373471e1..f97ea256198b88df31079bfc82d4b6e7
  
  void ChromeContentClientCef::AddAdditionalSchemes(Schemes* schemes) {
 diff --git a/libcef/common/chrome/chrome_main_delegate_cef.cc b/libcef/common/chrome/chrome_main_delegate_cef.cc
-index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..216fa36aa9aed3b12331b7d3753fc0f75a9df290 100644
+index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..af55f19ab269d0344cfa0b9e6c6473fa9b4c8405 100644
 --- a/libcef/common/chrome/chrome_main_delegate_cef.cc
 +++ b/libcef/common/chrome/chrome_main_delegate_cef.cc
 @@ -49,6 +49,15 @@
@@ -897,6 +897,20 @@ index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..216fa36aa9aed3b12331b7d3753fc0f7
  namespace {
  
  base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit
+@@ -467,6 +476,13 @@ void ChromeMainDelegateCef::PreSandboxStartup() {
+   }
+   if (!resources_dir.empty()) {
+     base::PathService::Override(chrome::DIR_RESOURCES, resources_dir);
++#if BUILDFLAG(IS_AROS)
++    // Native clients live separately from cef-blink.library and its packs.
++    // ResourceBundle loads scaled image packs through DIR_ASSETS, while the
++    // unscaled resources.pak uses chrome::DIR_RESOURCES. Keep both aligned
++    // with the CEF resources_dir_path selected above.
++    base::PathService::Override(base::DIR_ASSETS, resources_dir);
++#endif
+   }
+ 
+   if (command_line->HasSwitch(switches::kLocalesDirPath)) {
 diff --git a/libcef/common/crash_reporter_client.h b/libcef/common/crash_reporter_client.h
 index 97f2cfe3b742868cbf109ab5997babd424edaa3c..8e76a6fcc0286f925b8baf7df86448daf57332f2 100644
 --- a/libcef/common/crash_reporter_client.h

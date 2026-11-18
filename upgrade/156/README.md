@@ -7,12 +7,15 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-18 UTC
 
-Both architectures have produced complete CEF archives. The x86-64 native
-CEF/Blink module now passes linking and ELF validation. On native AROS with two
+Both architectures have produced complete CEF archives and native CEF/Blink
+modules that pass linking and ELF validation. On native x86-64 AROS with two
 CPUs, the public CEF library opens, reports Chromium 156 and the expected CEF
-revision/API hash, and closes with return code 0. Initialization and browser
-rendering are still being tested. AArch64 native module linking is in progress;
-no AArch64 runtime result is claimed.
+revision/API hash, and closes with return code 0. A one-CPU diagnostic control
+now completes CEF initialization and a message-loop tick; teardown remains
+unverified. The identical two-CPU initialization image reproduces a kernel
+scheduler-list cycle. Browser creation reaches its callback with matching image
+packs, but first paint is still pending. No AArch64 runtime result is claimed.
+See `evidence/cef156-init49-result.json` and its serial log for the precise scope.
 
 The earlier nine-byte invalid module was rejected. The host collector now
 propagates child signals, checks inspection-tool failures, validates ELF output,
@@ -36,8 +39,8 @@ engines now use the full AROS formatter locally, fixing GC diagnostics that
 previously treated a floating-point argument as a string pointer. Native stack
 bounds also pass a two-core JavaScript recursion/RangeError regression.
 
-The allocator-owner retirement candidate passes 200 native rounds with Exec
-workers on CPUs 0 and 1, but is not yet integrated into the engine build.
+The allocator-owner retirement fix passes 200 native rounds with Exec
+workers on CPUs 0 and 1 and is integrated into both native engine builds.
 Native AArch64 execution and ARM Linux ET_DYN/CDM loading remain untested; the
 SDK's Linux-object mapper currently implements x86-64 only.
 
