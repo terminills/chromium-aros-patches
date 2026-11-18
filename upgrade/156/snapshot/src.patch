@@ -168,7 +168,7 @@ index 97ab4cc1d55ae6762b9a58e61e69a683cf299dab..a7d9258a9023b2177c7a2eae116b9958
                 '-m', 'DAWN_COMMIT_HASH',
                 '-s', 'src/third_party/dawn',
 diff --git a/base/BUILD.gn b/base/BUILD.gn
-index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e47044081b2f142 100644
+index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..55a7ab11bd6f98e300f9af4776cff3847d6b7029 100644
 --- a/base/BUILD.gn
 +++ b/base/BUILD.gn
 @@ -1088,6 +1088,25 @@ component("base") {
@@ -240,7 +240,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
    }
  
    if (is_posix || is_fuchsia) {
-@@ -1749,30 +1791,66 @@ component("base") {
+@@ -1749,30 +1791,67 @@ component("base") {
    }
  
    if ((is_posix && !is_ios) || is_fuchsia) {
@@ -284,6 +284,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
 +        "aros/crash_annotations.h",
 +        "aros/in6addr.cc",
 +        "aros/initial_command_line.h",
++        "aros/process_local.h",
 +        "aros/platform_spoof.cc",
 +        "aros/platform_spoof.h",
 +        "aros/socket_library.cc",
@@ -321,7 +322,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
    }
  
    if (is_posix && !is_ios) {
-@@ -2443,6 +2521,13 @@ component("base") {
+@@ -2443,6 +2522,13 @@ component("base") {
      ]
    }
  
@@ -335,7 +336,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
    if (use_epoll) {
      sources += [
        "message_loop/message_pump_epoll.cc",
-@@ -2453,9 +2538,19 @@ component("base") {
+@@ -2453,9 +2539,19 @@ component("base") {
    # Android and MacOS have their own custom shared memory handle
    # implementations. e.g. due to supporting both POSIX and native handles.
    if (is_posix && !is_android && !is_apple) {
@@ -357,7 +358,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
        "version_info/nix/version_extra_utils.cc",
        "version_info/nix/version_extra_utils.h",
      ]
-@@ -4262,11 +4357,18 @@ test("base_unittests") {
+@@ -4262,11 +4358,18 @@ test("base_unittests") {
    deps += [ "//build/rust:cxx_cppdeps" ]
  
    data_deps = [
@@ -378,7 +379,7 @@ index 9569528f10db05a50e9f5f37ae6eb7828a3f9077..efdf1d88e0a6b120e2892b712e470440
  
    if (is_win || is_linux) {
      data_deps += [ "//base/allocator:system_allocator_test_helper" ]
-@@ -4845,6 +4947,21 @@ proto_library("protobuf_hardening_test_support") {
+@@ -4845,6 +4948,21 @@ proto_library("protobuf_hardening_test_support") {
    generate_python = false
  }
  
@@ -3008,6 +3009,49 @@ index 0000000000000000000000000000000000000000..6e7a10f44dd908bb4c14d9a723218863
 +}  // namespace base::aros
 +
 +#endif  // BASE_AROS_PLATFORM_SPOOF_H_
+diff --git a/base/aros/process_local.h b/base/aros/process_local.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..8bdf971dc7df50994c422093616b14f773d6ce4b
+--- /dev/null
++++ b/base/aros/process_local.h
+@@ -0,0 +1,37 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef BASE_AROS_PROCESS_LOCAL_H_
++#define BASE_AROS_PROCESS_LOCAL_H_
++#include <cstdint>
++#include <map>
++#include <memory>
++#include "base/base_export.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++namespace base::aros {
++// Monotonic identity of the initialized command-line owner. Workers inherit
++// their owner's identity; a native child receives a new identity at Init().
++// Zero represents bootstrap before any logical process has been registered.
++BASE_EXPORT uint64_t CurrentProcessIdentity();
++
++// Resident-image replacement for process-local static storage. Tag separates
++// distinct globals with the same value type. Entries intentionally have engine
++// lifetime, matching NoDestructor globals; do not put reclaimable application
++// resources here. LazyInstance values retain their normal AtExit destruction.
++// Monotonic IDs prevent a recycled Task/CommandLine address reusing old state.
++template <typename T, typename Tag>
++T& ProcessLocalValue() {
++  struct Registry {
++    Lock lock;
++    std::map<uint64_t, std::unique_ptr<T>> values;
++  };
++  const uint64_t identity = CurrentProcessIdentity();
++  static NoDestructor<Registry> registry;
++  AutoLock lock(registry->lock);
++  auto& value = registry->values[identity];
++  if (!value) value = std::make_unique<T>();
++  return *value;
++}
++}  // namespace base::aros
++#endif
 diff --git a/base/aros/socket_library.cc b/base/aros/socket_library.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0d700b85c
@@ -4253,7 +4297,7 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168b7368e06 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..8e87fc609b6cfab4a21bdc908b6e448a41ebbc2f 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
 @@ -7,6 +7,13 @@
@@ -4280,13 +4324,14 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  #include "base/notreached.h"
  #include "base/numerics/checked_math.h"
  #include "base/strings/strcat.h"
-@@ -24,7 +34,14 @@
+@@ -24,7 +34,15 @@
  #include "base/strings/string_tokenizer.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
 -#include "build/build_config.h"
 +#if BUILDFLAG(IS_AROS)
 +#include "base/synchronization/lock.h"
++#include "base/aros/process_local.h"
 +#endif
 +
 +#if BUILDFLAG(IS_AROS)
@@ -4296,7 +4341,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  
  #if BUILDFLAG(IS_WIN)
  #include <windows.h>
-@@ -36,10 +53,53 @@
+@@ -36,10 +54,55 @@
  
  namespace base {
  
@@ -4311,6 +4356,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
 +struct CommandLineProcessRegistry {
 +  Lock lock;
 +  std::map<struct Task*, CommandLine*> command_lines;
++  std::map<CommandLine*, uint64_t> process_identities;
++  uint64_t next_identity = 1;
 +  std::map<struct Task*, CommandLine*> thread_bindings;
 +  std::map<CommandLine*, std::unique_ptr<CommandLine>> initial_command_lines;
 +};
@@ -4350,7 +4397,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  DuplicateSwitchHandler* g_duplicate_switch_handler = nullptr;
  
  constexpr CommandLine::CharType kSwitchTerminator[] = FILE_PATH_LITERAL("--");
-@@ -264,13 +324,27 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+@@ -264,13 +327,29 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(int argc, const char* const* argv) {
@@ -4372,13 +4419,15 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
 +#if BUILDFLAG(IS_AROS)
 +  command_line = new CommandLine(NO_PROGRAM);
 +  command_line->InitFromArgv(argc, argv);
++  CHECK_NE(registry.next_identity, 0u);
++  registry.process_identities[command_line] = registry.next_identity++;
 +  registry.initial_command_lines[command_line] =
 +      std::make_unique<CommandLine>(*command_line);
 +#else
    current_process_commandline_ = new CommandLine(NO_PROGRAM);
  #if BUILDFLAG(IS_WIN)
    current_process_commandline_->ParseFromString(::GetCommandLineW());
-@@ -279,6 +353,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -279,6 +358,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
    UNSAFE_BUFFERS(current_process_commandline_->InitFromArgv(argc, argv));
  #else
  #error Unsupported platform
@@ -4386,7 +4435,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  #endif
  
    return true;
-@@ -286,35 +361,99 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -286,35 +366,112 @@ bool CommandLine::Init(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(const StringVector& argv) {
@@ -4406,6 +4455,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  
 +#if BUILDFLAG(IS_AROS)
 +  command_line = new CommandLine(argv);
++  CHECK_NE(registry.next_identity, 0u);
++  registry.process_identities[command_line] = registry.next_identity++;
 +  registry.initial_command_lines[command_line] =
 +      std::make_unique<CommandLine>(*command_line);
 +#else
@@ -4422,6 +4473,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
 +  const auto it = registry.command_lines.find(FindTask(nullptr));
 +  DCHECK(it != registry.command_lines.end() && it->second);
 +  registry.initial_command_lines.erase(it->second);
++  registry.process_identities.erase(it->second);
 +  delete it->second;
 +  registry.command_lines.erase(it);
 +#else
@@ -4459,6 +4511,16 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
 +
 +#if BUILDFLAG(IS_AROS)
 +// static
++uint64_t aros::CurrentProcessIdentity() {
++  auto& registry = GetCommandLineProcessRegistry();
++  AutoLock lock(registry.lock);
++  CommandLine* current = FindCommandLineForTask(registry, FindTask(nullptr));
++  if (!current) return 0;
++  const auto identity = registry.process_identities.find(current);
++  CHECK(identity != registry.process_identities.end());
++  return identity->second;
++}
++
 +const CommandLine& aros::InitialCommandLineForCurrentProcess() {
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
@@ -4486,7 +4548,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..3915fc71bf3897dbe8122e192c630168
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +577,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +595,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -8490,6 +8552,67 @@ index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..573decaf20e711238de03e716edc9b8b
  FieldTrialList::Observer::~Observer() = default;
  
  FieldTrialList::FieldTrialList() {
+diff --git a/base/metrics/histogram_macros_internal.h b/base/metrics/histogram_macros_internal.h
+index 91e2662df18e8c5186b78c43cced984281a4d5c7..ce4cae3d99c43f6854f7eec6b128130a35af6d11 100644
+--- a/base/metrics/histogram_macros_internal.h
++++ b/base/metrics/histogram_macros_internal.h
+@@ -62,6 +62,18 @@ struct EnumSizeTraits {
+ // define HISTOGRAM_POINTER_USE, which uses an `atomic_histogram_pointer`, and
+ // STATIC_HISTOGRAM_POINTER_BLOCK, which defines an `atomic_histogram_pointer`
+ // and forwards to HISTOGRAM_POINTER_USE.
++#if BUILDFLAG(IS_AROS)
++// A resident code image shares static call-site pointers between native
++// processes. Resolve the owning recorder rather than reusing a foreign pointer.
++#define HISTOGRAM_POINTER_USE(atomic_histogram_pointer, constant_histogram_name, \
++    histogram_add_method_invocation, histogram_factory_get_invocation) \
++  do { \
++    (void)(atomic_histogram_pointer); \
++    base::HistogramBase* histogram_pointer = histogram_factory_get_invocation; \
++    if (DCHECK_IS_ON()) histogram_pointer->CheckName(constant_histogram_name); \
++    histogram_pointer->histogram_add_method_invocation; \
++  } while (0)
++#else
+ #define HISTOGRAM_POINTER_USE(                                           \
+     atomic_histogram_pointer, constant_histogram_name,                   \
+     histogram_add_method_invocation, histogram_factory_get_invocation)   \
+@@ -92,6 +104,8 @@ struct EnumSizeTraits {
+     histogram_pointer->histogram_add_method_invocation;                  \
+   } while (0)
+ 
++#endif
++
+ // This is a helper macro used by other macros and shouldn't be used directly.
+ // Defines the static `atomic_histogram_pointer` and forwards to
+ // HISTOGRAM_POINTER_USE.
+diff --git a/base/metrics/persistent_histogram_allocator.cc b/base/metrics/persistent_histogram_allocator.cc
+index 7e2c897e8994215715434ebda68e1eef354f7d2a..11711e86ce8bfc0cabf711717648f337842de5de 100644
+--- a/base/metrics/persistent_histogram_allocator.cc
++++ b/base/metrics/persistent_histogram_allocator.cc
+@@ -39,6 +39,11 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace base {
+ 
+ namespace {
+@@ -59,7 +64,12 @@ enum : uint32_t {
+ // GlobalHistogramAllocator objects) are explicitly forbidden from doing
+ // anything essential at exit anyway due to the fact that they depend on data
+ // managed elsewhere and which could be destructed first.
++#if BUILDFLAG(IS_AROS)
++struct HistogramAllocatorProcessTag {};
++#define g_histogram_allocator (aros::ProcessLocalValue<std::atomic<GlobalHistogramAllocator*>, HistogramAllocatorProcessTag>())
++#else
+ std::atomic<GlobalHistogramAllocator*> g_histogram_allocator;
++#endif
+ 
+ // Calculate the number of bytes required to store all of a histogram's
+ // "counts". This will return zero (0) if `bucket_count` is not valid.
 diff --git a/base/metrics/persistent_histogram_storage.cc b/base/metrics/persistent_histogram_storage.cc
 index 4475ed0ec2c93d519e6b36bbe85e89062b353db7..788467e538404a0d3dce6028f08fc9dd53821f1c 100644
 --- a/base/metrics/persistent_histogram_storage.cc
@@ -8606,6 +8729,107 @@ index 28b60a6bbb55b3efe60ec34b79524ce194c54ff4..ca7a05cf3bff7182cfd687a9bb0c0a8c
    g_factory = factory.release();
  }
  
+diff --git a/base/metrics/statistics_recorder.cc b/base/metrics/statistics_recorder.cc
+index 98233a7724bb39baaaf1701317cc74cc018a243e..fcc5009db1b28c72a5cc2e2e97e5b34b2c479f63 100644
+--- a/base/metrics/statistics_recorder.cc
++++ b/base/metrics/statistics_recorder.cc
+@@ -26,6 +26,11 @@
+ #include "base/values.h"
+ #include "build/build_config.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace base {
+ namespace {
+ 
+@@ -36,6 +41,27 @@ bool HistogramNameLesser(const base::HistogramBase* a,
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_AROS)
++struct StatisticsRecorder::ArosProcessState {
++  StatisticsRecorder* top = nullptr;
++  bool vlog_initialized = false;
++  std::atomic<bool> active_callbacks{false};
++  std::atomic<GlobalSampleCallback> global_callback{nullptr};
++};
++StatisticsRecorder::ArosProcessState& StatisticsRecorder::ArosState() {
++  return aros::ProcessLocalValue<ArosProcessState, StatisticsRecorder>();
++}
++std::atomic<bool>& StatisticsRecorder::ArosActiveCallbacks() {
++  return ArosState().active_callbacks;
++}
++std::atomic<StatisticsRecorder::GlobalSampleCallback>& StatisticsRecorder::ArosGlobalCallback() {
++  return ArosState().global_callback;
++}
++#define top_ ArosState().top
++#define is_vlog_initialized_ ArosState().vlog_initialized
++#define have_active_callbacks_ ArosState().active_callbacks
++#define global_sample_callback_ ArosState().global_callback
++#else
+ // static
+ StatisticsRecorder* StatisticsRecorder::top_ = nullptr;
+ 
+@@ -49,6 +75,8 @@ std::atomic<bool> StatisticsRecorder::have_active_callbacks_{false};
+ std::atomic<StatisticsRecorder::GlobalSampleCallback>
+     StatisticsRecorder::global_sample_callback_{nullptr};
+ 
++#endif
++
+ StatisticsRecorder::ScopedHistogramSampleObserver::
+     ScopedHistogramSampleObserver(std::string_view name,
+                                   OnSampleCallback callback)
+diff --git a/base/metrics/statistics_recorder.h b/base/metrics/statistics_recorder.h
+index c68f41832c9036256d5a57364e6680f0d2cb664a..d5d1f87428e45c51f2a96c49fcea4f7d312d5c8c 100644
+--- a/base/metrics/statistics_recorder.h
++++ b/base/metrics/statistics_recorder.h
+@@ -339,14 +339,22 @@ class BASE_EXPORT StatisticsRecorder {
+   // Returns the global callback, if any, that should be called every time a
+   // histogram sample is added.
+   static GlobalSampleCallback global_sample_callback() {
++    #if BUILDFLAG(IS_AROS)
++    return ArosGlobalCallback().load(std::memory_order_relaxed);
++#else
+     return global_sample_callback_.load(std::memory_order_relaxed);
++#endif
+   }
+ 
+   // Returns whether there's either a global histogram callback set,
+   // or if any individual histograms have callbacks set. Used for early return
+   // when histogram samples are added.
+   static bool have_active_callbacks() {
++    #if BUILDFLAG(IS_AROS)
++    return ArosActiveCallbacks().load(std::memory_order_relaxed);
++#else
+     return have_active_callbacks_.load(std::memory_order_relaxed);
++#endif
+   }
+ 
+  private:
+@@ -437,6 +445,12 @@ class BASE_EXPORT StatisticsRecorder {
+   // Current global recorder. This recorder is used by static methods. When a
+   // new global recorder is created by CreateTemporaryForTesting(), then the
+   // previous global recorder is referenced by top_->previous_.
++#if BUILDFLAG(IS_AROS)
++  struct ArosProcessState;
++  static ArosProcessState& ArosState();
++  static std::atomic<bool>& ArosActiveCallbacks();
++  static std::atomic<GlobalSampleCallback>& ArosGlobalCallback();
++#else
+   static StatisticsRecorder* top_ GUARDED_BY(GetLock());
+ 
+   // Tracks whether InitLogOnShutdownWhileLocked() has registered a logging
+@@ -449,6 +463,7 @@ class BASE_EXPORT StatisticsRecorder {
+   // Stores a raw callback which should be called on any every histogram sample
+   // which gets added.
+   static std::atomic<GlobalSampleCallback> global_sample_callback_;
++#endif
+ };
+ 
+ }  // namespace base
 diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..48964ecc1c2470b14e13b8f5680610cd5a491344
@@ -36522,6 +36746,35 @@ index 9406f542f1a031307a4869e994cbce17438a55f9..1f45c455218af450d938b49b556a431f
      }
    }
    return result;
+diff --git a/components/metrics/child_histogram_fetcher_impl.cc b/components/metrics/child_histogram_fetcher_impl.cc
+index e137a00c964444b05e92ae5c0c51b72414cc9345..4ce349f0d42b3aefcec4c50ff5900a250f289ae6 100644
+--- a/components/metrics/child_histogram_fetcher_impl.cc
++++ b/components/metrics/child_histogram_fetcher_impl.cc
+@@ -17,6 +17,11 @@
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include "mojo/public/cpp/system/platform_handle.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace metrics {
+ 
+ ChildHistogramFetcherFactoryImpl::ChildHistogramFetcherFactoryImpl() = default;
+@@ -34,7 +39,12 @@ void ChildHistogramFetcherFactoryImpl::CreateFetcher(
+     base::UnsafeSharedMemoryRegion shared_memory,
+     mojo::PendingReceiver<mojom::ChildHistogramFetcher> receiver) {
+   // This message must be received only once.
++#if BUILDFLAG(IS_AROS)
++  struct ChildFetcherProcessTag {};
++  bool& already_called = base::aros::ProcessLocalValue<bool, ChildFetcherProcessTag>();
++#else
+   static bool already_called = false;
++#endif
+   CHECK(!already_called);
+   already_called = true;
+ 
 diff --git a/components/metrics/persistent_histograms.cc b/components/metrics/persistent_histograms.cc
 index 6b4b17b2ab11cd3f8ddc3828444faecde99960a3..ef32c2be9db8e323855a657f89ebd3fe539ec5f3 100644
 --- a/components/metrics/persistent_histograms.cc
@@ -44479,6 +44732,124 @@ index 80bfe1714f0fad2a917377a9e31ee88056735120..5d0899f0efdffbaf10331c1b97cf6c85
    return ui::kKeybindingPlatformLinux;
  #elif BUILDFLAG(IS_DESKTOP_ANDROID)
    // For now, we use linux keybindings on desktop android.
+diff --git a/extensions/common/extensions_client.cc b/extensions/common/extensions_client.cc
+index b0c3e44529aed181e31053bdbcceb02eb2f4f9f5..65aedb8a2978bdc56afb82ae924ed7d0a01b6ff3 100644
+--- a/extensions/common/extensions_client.cc
++++ b/extensions/common/extensions_client.cc
+@@ -5,6 +5,10 @@
+ #include "extensions/common/extensions_client.h"
+ 
+ #include <string_view>
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #include "base/check.h"
+ #include "base/notreached.h"
+@@ -21,7 +25,15 @@ namespace extensions {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ExtensionsClientProcessTag {};
++ExtensionsClient*& CurrentClient() {
++  return base::aros::ProcessLocalValue<ExtensionsClient*, ExtensionsClientProcessTag>();
++}
++#define g_client CurrentClient()
++#else
+ ExtensionsClient* g_client = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+diff --git a/extensions/common/features/feature_provider.cc b/extensions/common/features/feature_provider.cc
+index d360bf6ca0ca849d20bd360f8c24fcbab3ab69f3..cc2f3ed95823492ee3d5256a2ddaf0a38f0d06d5 100644
+--- a/extensions/common/features/feature_provider.cc
++++ b/extensions/common/features/feature_provider.cc
+@@ -22,6 +22,11 @@
+ #include "extensions/common/extensions_client.h"
+ #include "extensions/common/features/feature.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace extensions {
+ 
+ namespace {
+@@ -76,8 +81,13 @@ class FeatureProviderStatic {
+ };
+ 
+ const FeatureProviderStatic& GetFeatureProviderStatic() {
++#if BUILDFLAG(IS_AROS)
++  struct FeatureProviderProcessTag {};
++  return *base::aros::ProcessLocalValue<base::NoDestructor<FeatureProviderStatic>, FeatureProviderProcessTag>();
++#else
+   static base::NoDestructor<FeatureProviderStatic> instance;
+   return *instance;
++#endif
+ }
+ 
+ const Feature* GetFeatureFromProviderByName(std::string_view provider_name,
+diff --git a/extensions/common/manifest_handler_registry.cc b/extensions/common/manifest_handler_registry.cc
+index 8ae35d0a1a01048abc6e35f6cd099a3a7f5ee005..2afad942a6a2488b0b237192792b435da99f2420 100644
+--- a/extensions/common/manifest_handler_registry.cc
++++ b/extensions/common/manifest_handler_registry.cc
+@@ -15,13 +15,25 @@
+ #include "extensions/common/permissions/manifest_permission.h"
+ #include "extensions/common/permissions/manifest_permission_set.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace extensions {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ManifestRegistryProcessTag {};
++struct ManifestOverrideProcessTag {};
++#define g_registry (base::aros::ProcessLocalValue<base::LazyInstance<ManifestHandlerRegistry>::DestructorAtExit, ManifestRegistryProcessTag>())
++#define g_registry_override (base::aros::ProcessLocalValue<ManifestHandlerRegistry*, ManifestOverrideProcessTag>())
++#else
+ static base::LazyInstance<ManifestHandlerRegistry>::DestructorAtExit
+     g_registry = LAZY_INSTANCE_INITIALIZER;
+ static ManifestHandlerRegistry* g_registry_override = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+diff --git a/extensions/common/permissions/permissions_info.cc b/extensions/common/permissions/permissions_info.cc
+index 7682bc5d1d6222510afd86ad1c348adb627afa6b..634e9e98e1da7ec2b687fcbb8b00c902b256d707 100644
+--- a/extensions/common/permissions/permissions_info.cc
++++ b/extensions/common/permissions/permissions_info.cc
+@@ -9,12 +9,22 @@
+ #include "base/strings/string_util.h"
+ #include "extensions/common/alias.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace extensions {
+ 
+ // static
+ PermissionsInfo* PermissionsInfo::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  struct PermissionsProcessTag {};
++  return base::aros::ProcessLocalValue<base::NoDestructor<PermissionsInfo>, PermissionsProcessTag>().get();
++#else
+   static base::NoDestructor<PermissionsInfo> instance;
+   return instance.get();
++#endif
+ }
+ 
+ void PermissionsInfo::RegisterPermissions(
 diff --git a/extensions/renderer/dispatcher.cc b/extensions/renderer/dispatcher.cc
 index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..31bc1e11bab2e8ed0bb04ebe7da73daa63c9f790 100644
 --- a/extensions/renderer/dispatcher.cc
@@ -54731,6 +55102,87 @@ index 03e222b77200fd10659c8f9d516ce69bc8395353..56c7a8feafbcb25cb5a6ae3fe87c4753
    }
  
    void OnConnectSocketResult(base::expected<bool, int> res) {
+diff --git a/services/tracing/public/cpp/trace_startup.cc b/services/tracing/public/cpp/trace_startup.cc
+index 81c71cfa020d1a794888f30eb079509168b96f86..645ca45ae1254f056edace7fcf8490d8d162c49b 100644
+--- a/services/tracing/public/cpp/trace_startup.cc
++++ b/services/tracing/public/cpp/trace_startup.cc
+@@ -17,6 +17,9 @@
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/trace_session_observer.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/tracing/common/tracing_switches.h"
+ #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
+ #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
+@@ -97,7 +100,17 @@ class StartupTrackEventConfigObserver
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++struct TracingInitializedTag;
++bool& CurrentTracingInitialized() {
++  return base::aros::ProcessLocalValue<bool, TracingInitializedTag>();
++}
++}  // namespace
++#define g_tracing_initialized CurrentTracingInitialized()
++#else
+ bool g_tracing_initialized = false;
++#endif
+ 
+ bool IsTracingInitialized() {
+   return g_tracing_initialized;
+diff --git a/services/tracing/public/cpp/trace_startup_config.cc b/services/tracing/public/cpp/trace_startup_config.cc
+index 7d5ccb0e8d68f114dbfca6ffddf1f098331de734..44401e84840a04488a1eb4fc55f4e740b399eac4 100644
+--- a/services/tracing/public/cpp/trace_startup_config.cc
++++ b/services/tracing/public/cpp/trace_startup_config.cc
+@@ -24,6 +24,9 @@
+ #include "base/values.h"
+ #include "build/blink_buildflags.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/tracing/common/tracing_switches.h"
+ #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
+ #include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
+@@ -42,7 +45,16 @@ namespace tracing {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct TraceStartupPointerTag;
++const TraceStartupConfig*& CurrentStartupConfig() {
++  return base::aros::ProcessLocalValue<const TraceStartupConfig*,
++                                      TraceStartupPointerTag>();
++}
++#define g_instance CurrentStartupConfig()
++#else
+ const TraceStartupConfig* g_instance = nullptr;
++#endif
+ 
+ // Maximum trace config file size that will be loaded, in bytes.
+ const size_t kTraceConfigFileSizeLimit = 64 * 1024;
+@@ -106,7 +118,17 @@ void TraceStartupConfig::InitializeFromCommandLine(
+   //
+   // `GetInstance()` returns `*g_instance`, providing uniform access to either
+   // the production singleton or the currently active test instance.
++#if BUILDFLAG(IS_AROS)
++  // The code image is resident, but the command line and trace configuration
++  // belong to this native process. Preserve the duplicate-init CHECK above.
++  struct TraceStartupStorageTag;
++  auto& instance = base::aros::ProcessLocalValue<
++      std::unique_ptr<base::NoDestructor<TraceStartupConfig>>,
++      TraceStartupStorageTag>();
++  instance = std::make_unique<base::NoDestructor<TraceStartupConfig>>(command_line);
++#else
+   static const base::NoDestructor<TraceStartupConfig> instance(command_line);
++#endif
+ }
+ 
+ // static
 diff --git a/services/tracing/public/cpp/traced_process_impl.cc b/services/tracing/public/cpp/traced_process_impl.cc
 index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983a9ca96ce 100644
 --- a/services/tracing/public/cpp/traced_process_impl.cc
