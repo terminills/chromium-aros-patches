@@ -35078,6 +35078,29 @@ index aeda4187ac445ebe62b8320ab0cc1ccc8ee8f5b4..c783e1c0737bd0a40d189794d5690d93
  // Returns the hostname of the current machine.
  std::vector<std::string> GetSystemDnsServers();
  
+diff --git a/components/device_signals/core/common/platform_utils.cc b/components/device_signals/core/common/platform_utils.cc
+index 389ef6784e5a0db674c3d51b5d60d85d5e01546a..fa1f5ed5dcb68669e5aa5eabf97cc94df9dd54cf 100644
+--- a/components/device_signals/core/common/platform_utils.cc
++++ b/components/device_signals/core/common/platform_utils.cc
+@@ -17,6 +17,18 @@
+ 
+ namespace device_signals {
+ 
++#if BUILDFLAG(IS_AROS)
++// No native provider exposes these enterprise signals yet. Unknown must not
++// be reported as a successful security measurement.
++std::string GetSerialNumber() { return {}; }
++SettingValue GetScreenlockSecured() { return SettingValue::UNKNOWN; }
++SettingValue GetDiskEncrypted() { return SettingValue::UNKNOWN; }
++std::optional<CrowdStrikeSignals> GetCrowdStrikeSignals() {
++  return std::nullopt;
++}
++base::FilePath GetCrowdStrikeZtaFilePath() { return {}; }
++#endif
++
+ bool IsSupportedLocalPath(const base::FilePath& file_path) {
+   if (file_path.empty() || file_path.IsNetwork()) {
+     return false;
 diff --git a/components/discardable_memory/common/discardable_shared_memory_heap.cc b/components/discardable_memory/common/discardable_shared_memory_heap.cc
 index 585d63942a72ff7bc8ad9c3eae6c01b64173404c..82ed1bfea8b4584567be9ea4f0929346eb96c188 100644
 --- a/components/discardable_memory/common/discardable_shared_memory_heap.cc
@@ -37810,6 +37833,38 @@ index 7bb1f5758b0a31fb5ad3e7620d5910e67088bf95..90a32bb4d2dc8b49697c0a46109e05df
 +      is_android || is_chromeos || is_ios || is_linux || is_mac || is_win ||
 +      is_aros
  }
+diff --git a/components/supervised_user/core/browser/supervised_user_utils.cc b/components/supervised_user/core/browser/supervised_user_utils.cc
+index 62af0475f71c401f023bb50393d2823ef8bdf441..53bf4aad4fbcf5825b8ad77f6b79230ddd66ae8b 100644
+--- a/components/supervised_user/core/browser/supervised_user_utils.cc
++++ b/components/supervised_user/core/browser/supervised_user_utils.cc
+@@ -42,7 +42,7 @@ constexpr char kParentAccessResultQueryParameter[] = "result";
+ constexpr char kPacpOriginUrlHost[] = "families.google.com";
+ 
+ #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ // Returns the text that will be shown as the PACP widget subtitle, containing
+ // information about the blocked hostname and the blocking reason.
+ std::string GetBlockingReasonSubtitle(
+@@ -186,7 +186,7 @@ GURL NormalizeUrl(const GURL& url) {
+ }
+ 
+ #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ GURL GetParentAccessURL(
+     const std::string& locale,
+     const GURL& blocked_url,
+@@ -201,7 +201,8 @@ GURL GetParentAccessURL(
+   // Caller Ids for Desktop and iOS platforms.
+ #if BUILDFLAG(IS_IOS)
+   static constexpr char kCallerId[] = "qSTnVRdQ";
+-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
++    BUILDFLAG(IS_AROS)
+   static constexpr char kCallerId[] = "clwAA5XJ";
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+ 
 diff --git a/components/supervised_user/core/common/features.cc b/components/supervised_user/core/common/features.cc
 index e4c1bf8e034c70608ecdadfe8990f34900bd7217..18503d80d644dcaf0e041c82b51a002ca2999267 100644
 --- a/components/supervised_user/core/common/features.cc
