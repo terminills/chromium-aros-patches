@@ -1,0 +1,17 @@
+# Native CEF section-name metadata compaction
+
+The x86-64 CEF module had 1,045,892 ELF sections and a 59,920,325-byte section-name table. AROS debug.library retains this table as well as function-symbol names. The Chromium-only post-link packer shortens generated per-function .text/.data/.rodata/.bss and large-model equivalents, including their relocation-section labels. The final table is 306 bytes. AROS MEMF suffixes and special constructor/library sections retain their semantics.
+
+The transformation preserves section indices, file offsets, allocated contents, function symbols and relocations. It changes only section-name offsets, the name table and its declared size. File size stays unchanged; unused old table space is zeroed. The original ELF is retained for external debugging, where original section names may be needed. Runtime function symbol lookup stays available.
+
+Native x64 comparison: same V8 library, exact client extracted from ISO68, same local HTML and 769x540 viewport. Baseline 68: post-open 929.75 MiB / first-paint 1593.73 MiB. Final 73: post-open 871.76 MiB / first-paint 1538.59 MiB. These Exec AvailMem values cover the whole guest; timing and allocation layout explain differences between observed deltas and the 57.14 MiB table reduction. Both final73 first paint and full CEFShutdown return pass. Candidate73 uses a shorter post-paint hold. The visible AArch64 heading is identical test HTML, not architecture identification.
+
+Host tests cover ELF extended section indices, memory-placement suffixes, symbol/relocation byte preservation, ordinary ELF-reader acceptance, and preserving the working output after a failed link or strip. A large-module comparison also confirms all nonmetadata bytes match the original.
+
+Normal x64 CEF quick-build integration passes. The installed output has SHA256 e4cfdcd88c9c1a582455aa38f66f598d24c94de818ff0c3707e0d9ee457de6d5, byte-for-byte identical to the native73-tested image. Replaying the current packer against the retained pre-compaction ELF gives the same hash. The wrapper retains the full compiler output, runs the existing SDK strip command on a private copy, then packs section names and atomically publishes the result; this keeps repeated short names out of BFD postprocessing. ARM already uses a compact image and receives no section-name packaging change. ARM17 allocation tracing separately logged 128 MiB and 256 MiB mapping requests, then stalled during shutdown after painting and closing; both active CPUs were idle. This retained failure is not evidence that this x64-only transformation affects ARM.
+
+Implementation is published in aros-web commit `97ecd87` on chromium-156-aros-cef.
+
+The JS/WebAssembly fixture creates two dedicated WebWorkers. Each creates 5000 Function objects and instantiates a Wasm module exporting a function that returns 42. After receiving both ready messages, the page requests termination of A, waits 100 ms, then asks B to execute its JavaScript function and Wasm export and check its own identity. Both native architectures display AROS_JS_WASM_WORKERS_PASS. This is a bounded worker-lifetime regression; it does not prove independent application/profile isolation or acknowledgement of all A cleanup before B's check.
+
+Both ARM18 and x64 test74 subsequently close the browser and return from full CEFShutdown. Full logs, screenshots and native library hashes are retained alongside this note.
