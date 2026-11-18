@@ -1,0 +1,68 @@
+ninja: Entering directory `/mnt/short-term/job0254-01a1e62b/src/out/aros-cef156'
+[1/11] CXX obj/components/heap_profiling/in_process/in_process/heap_profiler_controller.o
+In file included from ../../base/metrics/histogram_base.h:24,
+                 from ../../base/metrics/bucket_ranges.h:30,
+                 from ../../base/metrics/histogram.h:82,
+                 from ../../base/metrics/histogram_functions.h:17,
+                 from ../../components/heap_profiling/in_process/heap_profiler_controller.cc:32:
+../../base/values.h:692:9: warning: declaration of 'using base::Value::BlobStorage = using base::BlobStorage = class std::vector<unsigned char>' changes meaning of 'BlobStorage' [-Wchanges-meaning]
+  692 |   using BlobStorage = BlobStorage;
+      |         ^~~~~~~~~~~
+../../base/values.h:692:23: note: used here to mean 'using base::BlobStorage = class std::vector<unsigned char>'
+  692 |   using BlobStorage = BlobStorage;
+      |                       ^~~~~~~~~~~
+../../base/values.h:40:7: note: declared here
+   40 | using BlobStorage = std::vector<uint8_t>;
+      |       ^~~~~~~~~~~
+[2/11] CXX clang_x64/obj/net/net/http_cache.o
+[3/11] AR clang_x64/obj/net/libnet.a
+[4/11] LINK clang_x64/make_top_domain_list_variables
+[5/11] ACTION //components/url_formatter/spoof_checks/top_domains:generate_top_domain_list_variables_file(//build/toolchain/aros:x64)
+[6/11] CXX obj/components/url_formatter/spoof_checks/top_domains/top_bucket_domains/top-bucket-domains-inc.o
+[7/11] CXX obj/net/net/http_cache.o
+In file included from ../../net/disk_cache/disk_cache.h:25,
+                 from ../../net/disk_cache/cache_encryption_delegate.h:15,
+                 from ../../net/http/http_cache.h:50,
+                 from ../../net/http/http_cache.cc:5:
+../../base/types/expected.h:270:42: warning: 'gsl::Owner' scoped attribute directive ignored [-Wattributes]
+  270 | class [[nodiscard, gsl::Owner]] expected final {
+      |                                          ^~~~~
+In file included from ../../net/http/http_request_headers.h:20,
+                 from ../../net/http/http_request_info.h:22,
+                 from ../../net/http/no_vary_search_cache.h:27,
+                 from ../../net/http/http_cache.h:53:
+../../base/values.h:692:9: warning: declaration of 'using base::Value::BlobStorage = using base::BlobStorage = class std::vector<unsigned char>' changes meaning of 'BlobStorage' [-Wchanges-meaning]
+  692 |   using BlobStorage = BlobStorage;
+      |         ^~~~~~~~~~~
+../../base/values.h:692:23: note: used here to mean 'using base::BlobStorage = class std::vector<unsigned char>'
+  692 |   using BlobStorage = BlobStorage;
+      |                       ^~~~~~~~~~~
+../../base/values.h:40:7: note: declared here
+   40 | using BlobStorage = std::vector<uint8_t>;
+      |       ^~~~~~~~~~~
+../../net/http/http_cache.cc: In instantiation of 'net::RequestPriority net::{anonymous}::GetHighestPriority(const T&) [with T = std::__cxx11::list<base::raw_ptr<net::HttpCache::Transaction, partition_alloc::internal::RawPtrTraits::kMayDangle> >]':
+../../net/http/http_cache.cc:455:49:   required from here
+  455 |       {RequestPriority::IDLE, GetHighestPriority(done_headers_queue_),
+      |                               ~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+../../net/http/http_cache.cc:105:19: warning: loop variable 'tx' creates a copy from type 'const base::raw_ptr<net::HttpCache::Transaction, partition_alloc::internal::RawPtrTraits::kMayDangle>' [-Wrange-loop-construct]
+  105 |   for (const auto tx : transactions) {
+      |                   ^~
+../../net/http/http_cache.cc:105:19: note: use reference type to prevent copying
+  105 |   for (const auto tx : transactions) {
+      |                   ^~
+      |                   &
+../../net/http/http_cache.cc: In instantiation of 'net::RequestPriority net::{anonymous}::GetHighestPriority(const T&) [with T = std::unordered_set<base::raw_ptr<net::HttpCache::Transaction, partition_alloc::internal::RawPtrTraits::kMayDangle> >]':
+../../net/http/http_cache.cc:456:67:   required from here
+  456 |        GetHighestPriority(add_to_entry_queue_), GetHighestPriority(readers_)});
+      |                                                 ~~~~~~~~~~~~~~~~~~^~~~~~~~~~
+../../net/http/http_cache.cc:105:19: warning: loop variable 'tx' creates a copy from type 'const base::raw_ptr<net::HttpCache::Transaction, partition_alloc::internal::RawPtrTraits::kMayDangle>' [-Wrange-loop-construct]
+  105 |   for (const auto tx : transactions) {
+      |                   ^~
+../../net/http/http_cache.cc:105:19: note: use reference type to prevent copying
+  105 |   for (const auto tx : transactions) {
+      |                   ^~
+      |                   &
+[8/11] AR obj/net/libnet.a
+[9/11] RUST obj/third_party/blink/renderer/core/libxml_ffi_364fb5ba.rlib obj/third_party/blink/renderer/core/libxml_ffi_364fb5ba.rmeta obj/third_party/blink/renderer/core/xml_ffi.rustflags.json obj/third_party/blink/renderer/core/xml_ffi.rsp.rust
+[10/11] RUST obj/content/browser/libchild_process_security_policy_impl_74420ed1.rlib obj/content/browser/libchild_process_security_policy_impl_74420ed1.rmeta obj/content/browser/child_process_security_policy_impl.rustflags.json obj/content/browser/child_process_security_policy_impl.rsp.rust
+[11/11] AR obj/cef/libcef.a

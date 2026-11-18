@@ -1,6 +1,6 @@
 # Native resident-engine children: development evidence
 
-The matching aros-web development commit is `137472c`. CEFHost's explicit
+The matching aros-web development commit is `be82ac7`. CEFHost's explicit
 `--native-children` diagnostic mode launches the small CEFSubprocess helper via
 the existing native AROS process/MessagePort implementation. Each helper opens
 the resident libraries and executes its real child arguments.
@@ -19,7 +19,19 @@ the resident libraries and executes its real child arguments.
   not a browser first-paint result.
 - The snapshot now additionally scopes tracing startup configuration and its
   initialization flag to each process. Both complete CEF archive builds pass
-  with that change; its native runtime remains pending at publication.
+  with that change. Run 91 clears tracing startup and exposes shared heap-profiler
+  and HTTP-cache initialization state. Run 92 clears those checks after those
+  values were scoped to their native owner.
+- Run 92 then traps in PartitionAlloc logging and recurses through allocator
+  dispatch. Exact installed ELF symbols identify duplicate hook insertion: the
+  resident dispatch node becomes self-linked before the observer-hook check.
+  Each parsed child matches its preceding host allocator addresses across three
+  reboots. This is failed runtime evidence, with no first paint.
+- The current snapshot serializes resident dispatcher installation with a native
+  AROS lock before either observer mutation or hook insertion. Subsequent
+  initialization returns under the documented first-initialization-wins contract.
+  Both complete archives pass; native link and runtime 93 are pending.
+  The allocation fast path has no new lock, and allocator checks remain intact.
 
 `source-manifests.json` distinguishes the run-90 source tree from the later
 tracing candidate. The candidate manifest was captured before archive completion;
@@ -49,3 +61,8 @@ Two-browser storage isolation, B continuing after A exits, callback draining,
 child retirement, host shutdown, and ARM native-child runtime acceptance remain
 open. Host session-only lifetime and earlier single-process browser/worker
 results are separate evidence and do not establish those outcomes.
+
+The run-92 input manifest pins the preceding cache/profiler candidate. The
+current snapshot manifest pins the later allocator candidate; their runtime
+claims are deliberately distinct. Run-92 address comparison is grouped by
+preceding host because each guest reboot relocates its libraries.
