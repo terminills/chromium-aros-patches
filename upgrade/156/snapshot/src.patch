@@ -23019,10 +23019,10 @@ index f24bd8bb11ff2bef8ce91c1c2cb918ee5a3f42ad..4896c60a002736fb197295a0e304a225
  
 diff --git a/chrome/browser/notifications/notification_platform_bridge_aros.cc b/chrome/browser/notifications/notification_platform_bridge_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f92295f62d297dfe50ded5a1e9f6563b250a1c3f
+index 0000000000000000000000000000000000000000..9cf4d791f09a36547f8eacee778a66fa3ba1b9a5
 --- /dev/null
 +++ b/chrome/browser/notifications/notification_platform_bridge_aros.cc
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,189 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23050,6 +23050,7 @@ index 0000000000000000000000000000000000000000..f92295f62d297dfe50ded5a1e9f6563b
 +#include <libraries/application.h>
 +#include <proto/exec.h>
 +// Resolve the optional library from this bridge, never a shared engine global.
++#define __APPLICATION_LIBBASE (library_)
 +#define __aros_getbase_ApplicationBase() (library_)
 +#include <proto/application.h>
 +
