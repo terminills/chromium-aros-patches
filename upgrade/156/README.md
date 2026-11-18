@@ -15,14 +15,27 @@ checks inspection-tool failures, and avoids rescanning whole archives already
 included in its first stage. The corrected link exposes unresolved dependencies
 and fails correctly. No native browser-window success is claimed.
 
-Both native V8 modules now include the Exec worker backend and shared code
-arena. The controlled x86-64 test reduced the second application's measured
-incremental allocation to 560,627,664 bytes, still unacceptable, and did not
-complete its lifecycle test. Traces identified a separate 256 MiB dispatch-table
-reservation per isolate. The current AROS-only candidate shares that backing
-reservation while retaining separate isolate tables, spaces and freelists.
-It compiles for both architectures; full rebuild and native memory/lifecycle
-validation are pending. The original 2 MiB PartitionAlloc policy remains.
+Both native V8 modules include native Exec workers, a shared code arena and
+shared dispatch backing with separate isolate allocation/GC spaces. The latest
+controlled x86-64 two-core test passes: two applications share one resident
+library, each owns two isolates, A exits before B resumes JavaScript, and both
+finish with return code 0. Incremental guest RAM for B is **7,048,736 bytes**
+(about 6.72 MiB), down from 560,627,664 bytes in the prior controlled test.
+This is bounded V8 evidence, not full CEF/profile isolation qualification.
+The original on-demand 2 MiB PartitionAlloc policy remains.
+
+The larger 5,000-function-per-isolate stress test is still under investigation.
+It exposed a GC diagnostic formatting failure: the compact static C formatter
+omits floating-point conversions. Engine-local full formatter integration is
+being tested. Native AArch64 execution remains untested.
+
+![Controlled shared V8 lifecycle passes](evidence/v8-memory34-live.png)
+
+The result, native module hash and memory phases are in
+`evidence/v8-memory34-result.json`; the synchronized fixture is
+`evidence/v8-shared-code156-probe.c`. The companion aros-web changes include
+allocator-selection synchronization and resident diagnostics that do not retain
+the first application's stdio lifetime.
 
 Desktop integration is incomplete. Native screen-lock notifications and
 Workbench shortcut creation are unavailable; shortcut calls report failure.
@@ -99,7 +112,7 @@ resources across apps, separate app/profile/isolate state, survival of the
 first application's exit, and measured incremental RAM for additional apps.
 Library packaging alone is insufficient. Native worker integration, direct
 Exec stack-bound queries and opt-in `AROS_V8_MEMORY_TRACE` allocation diagnostics
-are in the current snapshot; their full-engine runtime verification is pending.
+are in the current snapshot; the controlled V8 runtime test above covers their basic shared lifecycle.
 The AROS-only non-compressed V8 heap now holds a reference to a shared code
 arena instead of reserving one arena per isolate. Its page allocator is engine
 owned, and the last isolate releases the arena. The modified heap cross-compiles
