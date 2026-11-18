@@ -1,0 +1,28 @@
+diff --git a/arch/aarch64-native/kernel/platform_bcm27xx.c b/arch/aarch64-native/kernel/platform_bcm27xx.c
+index c2813705..05022d46 100644
+--- a/arch/aarch64-native/kernel/platform_bcm27xx.c
++++ b/arch/aarch64-native/kernel/platform_bcm27xx.c
+@@ -40,6 +40,14 @@
+ #define D(x) x
+ #define DFIQ(x)
+ 
++/* Private bring-up control; normal builds still start all four cores. */
++#ifndef AROS_BOOT_CPU_LIMIT
++#define AROS_BOOT_CPU_LIMIT 4
++#endif
++#if AROS_BOOT_CPU_LIMIT < 1 || AROS_BOOT_CPU_LIMIT > 4
++#error Invalid AROS_BOOT_CPU_LIMIT
++#endif
++
+ extern void mpcore_trampoline();
+ extern uint64_t mpcore_end;
+ extern uint64_t mpcore_pde;
+@@ -361,7 +369,7 @@ void bcm27xx_init(APTR _kernelBase, APTR _sysBase)
+     asm volatile("mrs %0, mair_el1" : "=r"(tmp));
+     ((uint64_t *)(trampoline_dst + trampoline_data_offset))[5] = tmp; /* MAIR */
+ 
+-    for (cpu = 1; cpu < 4; cpu++)
++    for (cpu = 1; cpu < AROS_BOOT_CPU_LIMIT; cpu++)
+     {
+         const char *method = bcm27xx_cpu_enable_method(cpu);
+         int psci = method && (method[0] == 'p');

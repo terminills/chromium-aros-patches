@@ -1,0 +1,84 @@
+From bfdbbd7ccff9e96687d5637ff2590eabfc4a610d Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 18 Nov 2026 08:16:53 -0600
+Subject: [PATCH] aarch64: enter secondary task through a fresh C stack frame
+
+After setting SP_EL0, branch through eret to a noreturn helper with SysBase passed in x0. Continuing the prior C frame reads locals from the replacement stack. Private raspi4b two-core QEMU boot passes the earlier Permit fault and reaches SD detection and the boot logo; desktop and broader SMP validation remain pending.
+---
+ arch/aarch64-native/kernel/kernel_cpu.c | 51 +++++++++++++------------
+ 1 file changed, 26 insertions(+), 25 deletions(-)
+
+diff --git a/arch/aarch64-native/kernel/kernel_cpu.c b/arch/aarch64-native/kernel/kernel_cpu.c
+index c491f6b1..c8797f41 100644
+--- a/arch/aarch64-native/kernel/kernel_cpu.c
++++ b/arch/aarch64-native/kernel/kernel_cpu.c
+@@ -132,6 +132,24 @@ struct Task *aarch64_IdleTask[AARCH64_MAXCPUS];
+ struct aarch64_CPULoadData aarch64_CPULoad[AARCH64_MAXCPUS];
+ #endif
+ 
++#if defined(__AROSEXEC_SMP__)
++/* Enter with a fresh ABI stack frame. Resuming cpu_Register after replacing
++ * SP_EL0 would read its saved locals and return address from the new stack. */
++static void __attribute__((noreturn)) cpu_RunBootstrap(struct ExecBase *SysBase)
++{
++    Permit();
++    Enable();
++
++    if (Exec_ARMCreateIdleTask(SysBase))
++        ((void (*)(void))SysBase->TaskExitCode)();
++
++    /* An idle-task allocation failure, or an unexpected task-exit return,
++     * must not return through a frame belonging to the old bootstrap stack. */
++    for (;;)
++        asm volatile("wfi");
++}
++#endif
++
+ void cpu_Register()
+ {
+     uint64_t tmp;
+@@ -208,33 +226,16 @@ void cpu_Register()
+     uint64_t bs_stack = (uint64_t)__tls->ThisTask->tc_SPUpper;
+     asm volatile(
+         "msr    sp_el0, %[bs_stack]  \n"
+-        "adr    x0, 1f               \n"
+-        "msr    elr_el1, x0          \n"
+-        "mov    x0, #0x4             \n"  /* SPSR: EL1t (SPSel=0, SP_EL0) */
+-        "msr    spsr_el1, x0         \n"
++        "msr    elr_el1, %[entry]    \n"
++        "mov    x0, %[sys_base]      \n"
++        "mov    x1, #0x4             \n"  /* EL1t, SP_EL0 */
++        "msr    spsr_el1, x1         \n"
+         "eret                        \n"
+-        "1:                          \n"
+-        : : [bs_stack] "r" (bs_stack)
+-        : "x0", "memory"
++        : : [bs_stack] "r" (bs_stack),
++            [entry] "r" (cpu_RunBootstrap), [sys_base] "r" (SysBase)
++        : "x0", "x1", "memory"
+     );
+-
+-    /* We now start up the interrupts */
+-    Permit();
+-    Enable();
+-
+-    /* Without an idle task, stay as this core's idle loop: exiting would
+-     * leave it nothing to run. Its load then reads as 0%. */
+-    if (!Exec_ARMCreateIdleTask(SysBase))
+-    {
+-        for (;;)
+-            asm volatile("wfi");
+-    }
+-
+-    /* The bootstrap's work is done. Do NOT return: we were reached by a
+-     * `br`, so x30 still holds firmware leftovers. Leave through exec's
+-     * task exit code instead, as every task does; the scheduler then runs
+-     * this core's idle task. */
+-    ((void (*)(void))SysBase->TaskExitCode)();
++    __builtin_unreachable();
+ #endif
+ }
+ 
+-- 
+2.53.0
+

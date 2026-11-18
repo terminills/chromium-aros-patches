@@ -1,0 +1,86 @@
+From a1efe589586f74e9613df103f059c41c1679b55e Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Wed, 18 Nov 2026 08:16:53 -0600
+Subject: [PATCH] arm: include declarations required by GCC 16 graphics builds
+
+---
+ arch/aarch64-raspi/boot/vc_fb.c                               | 3 ++-
+ arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_galliumclass.c | 2 ++
+ arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_intern.h       | 1 +
+ arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_mem.c          | 1 +
+ arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hdmi.c     | 1 +
+ 5 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/arch/aarch64-raspi/boot/vc_fb.c b/arch/aarch64-raspi/boot/vc_fb.c
+index 417bcba0..8b405e95 100644
+--- a/arch/aarch64-raspi/boot/vc_fb.c
++++ b/arch/aarch64-raspi/boot/vc_fb.c
+@@ -17,6 +17,7 @@
+ #include "vc_mb.h"
+ #include "vc_fb.h"
+ #include "boot.h"
++#include "mmu.h"
+ 
+ #undef ARM_PERIIOBASE
+ #define ARM_PERIIOBASE (__arm_periiobase)
+@@ -200,7 +201,7 @@ int vcfb_init(int emulated)
+      * and the RAM ranges (Pi 5: carveout at 0x3f800000) - map it
+      * explicitly instead of relying on query_vmem()'s coverage.
+      * Normal-NC: framebuffer wants write-combining, not Device. */
+-    mmu_map_section(vcfb_base, vcfb_base, vcfb_pitch * vcfb_height, 1, 0, 3, 0);
++    mmu_map_section((uintptr_t)vcfb_base, (uintptr_t)vcfb_base, vcfb_pitch * vcfb_height, 1, 0, 3, 0);
+ 
+     fb_Init(fb_width, fb_height, fb_depth, fb_pitch);
+ 
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_galliumclass.c b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_galliumclass.c
+index 65093ec5..56ee831a 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_galliumclass.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_galliumclass.c
+@@ -16,6 +16,8 @@
+ #include <aros/debug.h>
+ #include <proto/oop.h>
+ #include <proto/exec.h>
++#include <proto/utility.h>
++#include <clib/alib_protos.h>
+ #include <proto/graphics.h>
+ #include <proto/layers.h>
+ #include <proto/cybergraphics.h>
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_intern.h b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_intern.h
+index e0704f57..818e72a3 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_intern.h
++++ b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_intern.h
+@@ -15,6 +15,7 @@
+ #define V3D_INTERN_H
+ 
+ #include <exec/types.h>
++#include <aros/macros.h>
+ #include <exec/libraries.h>
+ #include <exec/memory.h>
+ #include <exec/semaphores.h>
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_mem.c b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_mem.c
+index 5cd1dc22..4af9589e 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_mem.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/v3d/v3d_mem.c
+@@ -26,6 +26,7 @@
+ 
+ #define DEBUG 0
+ #include <aros/debug.h>
++#include <string.h>
+ 
+ #include <exec/types.h>
+ #include <exec/memory.h>
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hdmi.c b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hdmi.c
+index f4a76ae0..d7328bba 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hdmi.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hdmi.c
+@@ -5,6 +5,7 @@
+ #define DEBUG 0
+ #include <aros/debug.h>
+ #include <proto/exec.h>
++#include <clib/alib_protos.h>
+ #include <proto/mbox.h>
+ #include <stdio.h>
+ 
+-- 
+2.53.0
+
