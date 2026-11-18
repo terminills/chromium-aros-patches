@@ -21579,6 +21579,20 @@ index f2a32439cf4596f512dad9881b9ea49dd2eb8349..ee407a5127575b2cde7b0d7bdb0576c2
  
  // Utility function to parse reports from a crash database that were
  // created past a given timestamp. Included in header for testing.
+diff --git a/chrome/browser/enterprise/signin/enterprise_signin_service.h b/chrome/browser/enterprise/signin/enterprise_signin_service.h
+index e29e30735367b7772f314d07d690fad116bedc97..f501a0e73f449c7a3210c05ffea456818adf35b2 100644
+--- a/chrome/browser/enterprise/signin/enterprise_signin_service.h
++++ b/chrome/browser/enterprise/signin/enterprise_signin_service.h
+@@ -9,7 +9,8 @@
+ 
+ #include "build/build_config.h"
+ 
+-#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN))
++#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
++      BUILDFLAG(IS_AROS))
+ #error EnterpriseSigninService should only be built on desktop platforms.
+ #endif  // !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN))
+ 
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
 index bd3a172183d755d0ba68d5e863c6c8156f504d8f..09618120e764c7a8c7022ed512b61b4a4814eb84 100644
 --- a/chrome/browser/extensions/BUILD.gn
@@ -32818,7 +32832,7 @@ index 0000000000000000000000000000000000000000..03eb8951546030335126b4181cf4e37a
 +
 +}  // namespace chrome
 diff --git a/chrome/common/chrome_switches.h b/chrome/common/chrome_switches.h
-index d8ed7db30a29b68f378dabd57dd52022082c5749..727c86887984e68e58e519ed13706f8dfc6a8251 100644
+index d8ed7db30a29b68f378dabd57dd52022082c5749..419131d2869ef1045fc1e4565695f4717344e7d3 100644
 --- a/chrome/common/chrome_switches.h
 +++ b/chrome/common/chrome_switches.h
 @@ -1035,7 +1035,7 @@ inline constexpr char kDebugPrint[] = "debug-print";
@@ -32830,6 +32844,16 @@ index d8ed7db30a29b68f378dabd57dd52022082c5749..727c86887984e68e58e519ed13706f8d
  // Causes the browser to launch directly in guest mode.
  inline constexpr char kGuest[] = "guest";
  
+@@ -1103,7 +1103,8 @@ inline constexpr char kGlicGuestUrlPresetPreprod[] =
+ 
+ inline constexpr char kGlicGuestUrlPresetProd[] = "glic-guest-url-preset-prod";
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
++    BUILDFLAG(IS_AROS)
+ // Writes open and installed web apps for each profile to the specified file
+ // without launching a new browser window or tab. Pass a absolute file path
+ // to specify where to output the information. Can be used together with
 diff --git a/chrome/common/crash_keys.cc b/chrome/common/crash_keys.cc
 index 523879a76b60930953de2c1594af84e3ebda5b65..ba514934713f06d1f59e932fd74e21d273b92da4 100644
 --- a/chrome/common/crash_keys.cc
@@ -37655,9 +37679,18 @@ index 7bb1f5758b0a31fb5ad3e7620d5910e67088bf95..90a32bb4d2dc8b49697c0a46109e05df
 +      is_aros
  }
 diff --git a/components/supervised_user/core/common/features.cc b/components/supervised_user/core/common/features.cc
-index e4c1bf8e034c70608ecdadfe8990f34900bd7217..e5228923b735cc2ccd26ad104bc8a04138f880e4 100644
+index e4c1bf8e034c70608ecdadfe8990f34900bd7217..18503d80d644dcaf0e041c82b51a002ca2999267 100644
 --- a/components/supervised_user/core/common/features.cc
 +++ b/components/supervised_user/core/common/features.cc
+@@ -30,7 +30,7 @@ BASE_FEATURE(kAllowSubframeLocalWebApprovals,
+ #endif
+ 
+ #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ const int kLocalWebApprovalBottomSheetLoadTimeoutDefaultValueMs = 5000;
+ 
+ const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs{
 @@ -69,7 +69,7 @@ BASE_FEATURE(kSupervisedUserVerificationPageOnAndroid,
               base::FEATURE_DISABLED_BY_DEFAULT);
  #endif
@@ -37668,9 +37701,18 @@ index e4c1bf8e034c70608ecdadfe8990f34900bd7217..e5228923b735cc2ccd26ad104bc8a041
               base::FEATURE_ENABLED_BY_DEFAULT);
  #endif
 diff --git a/components/supervised_user/core/common/features.h b/components/supervised_user/core/common/features.h
-index 5e00b161119fcbfb641db35f5f45eff965f34c6f..6c149efe442ce3dbd5f708b4db6d01a0ca10a14d 100644
+index 5e00b161119fcbfb641db35f5f45eff965f34c6f..e3aaa050a32c6e39be6d1fd8acd50ffe27a3fe54 100644
 --- a/components/supervised_user/core/common/features.h
 +++ b/components/supervised_user/core/common/features.h
+@@ -20,7 +20,7 @@ BASE_DECLARE_FEATURE(kLocalWebApprovals);
+ BASE_DECLARE_FEATURE(kAllowSubframeLocalWebApprovals);
+ 
+ #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_WIN)
++    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ extern const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs;
+ #endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_WIN)
 @@ -31,7 +31,7 @@ extern const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs;
  BASE_DECLARE_FEATURE(kSupervisedUserVerificationPageOnAndroid);
  #endif
