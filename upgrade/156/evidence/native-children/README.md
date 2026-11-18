@@ -140,3 +140,13 @@ each renderer still establishes main-thread TLS before that shared initializatio
 Complete x64 and AArch64 archive builds pass. Native engine links and runtime 98
 are pending. The compositor scheduler and WebRTC logging audit follow-ups are
 not part of this snapshot, and repeated child lifetime reclamation is still open.
+
+
+ARM 23 later completed after the bounded watcher ended: the retained
+`cef-direct-arm23-late-*` evidence shows JS/Wasm workers PASS, painted/closed
+cleanly and CEF teardown returned. The original timeout is preserved. First
+paint uses 1185.19 MiB whole guest, after CEF close 1151.71 MiB; neither is
+isolated RSS or proof of expunging the resident engine. The browser screenshot
+was missed after the watcher ended, and guest shell RC was not routed to serial.
+This late result qualifies the local worker exercise, not network or multi-app
+behavior, and does not diagnose the long CEF-open interval.
