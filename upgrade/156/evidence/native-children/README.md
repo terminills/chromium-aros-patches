@@ -85,8 +85,12 @@ builds and native x64 link pass. Run 94 reaches host READY and then fails the
 performance-scenario observer initialization check. All existing ownership
 and duplicate-registration checks remain.
 
-A separate private follow-up is correcting Blink main/compositor thread and
-main heap storage ownership; it is not included or validated by this snapshot.
+The current snapshot also scopes Blink main/compositor thread wrappers and main
+heap storage to the native owner. Release heap access keeps the task-local fast
+path. Performance scenario observer lists, mapping handles and their locks are
+owner-local; the global scenario backing data stays shared. Both complete x64
+and AArch64 CEF archive builds pass. Native library links and run 95 runtime
+acceptance are pending. Existing initialization checks remain enabled.
 
 ## Direct-browser regression control
 

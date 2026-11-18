@@ -37394,6 +37394,96 @@ index af911d600ac9464f23eb5242d121ead9d888ebfa..101075cdde412eb79f1b1297a73cfb39
  
  source_set("browser_binding") {
    visibility = [
+diff --git a/components/performance_manager/scenario_api/performance_scenario_memory.cc b/components/performance_manager/scenario_api/performance_scenario_memory.cc
+index b08d4be9ed435da8d761f68a31e011eb34ad134c..ba19896ab3b3beb62bf135d337c31dc7602773b6 100644
+--- a/components/performance_manager/scenario_api/performance_scenario_memory.cc
++++ b/components/performance_manager/scenario_api/performance_scenario_memory.cc
+@@ -13,6 +13,10 @@
+ #include "base/no_destructor.h"
+ #include "base/notreached.h"
+ #include "base/synchronization/lock.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/performance_manager/scenario_api/performance_scenario_observer.h"
+ #include "components/performance_manager/scenario_api/performance_scenarios.h"
+ 
+@@ -21,8 +25,17 @@ namespace performance_scenarios {
+ namespace {
+ 
+ base::Lock& MappingPtrLockForScope(ScenarioScope scope) {
++#if BUILDFLAG(IS_AROS)
++  struct CurrentMappingLockTag;
++  struct GlobalMappingLockTag;
++  auto& current_process_lock = base::aros::ProcessLocalValue<
++      base::NoDestructor<base::Lock>, CurrentMappingLockTag>();
++  auto& global_lock = base::aros::ProcessLocalValue<
++      base::NoDestructor<base::Lock>, GlobalMappingLockTag>();
++#else
+   static base::NoDestructor<base::Lock> current_process_lock;
+   static base::NoDestructor<base::Lock> global_lock;
++#endif
+   switch (scope) {
+     case ScenarioScope::kCurrentProcess:
+       return *current_process_lock;
+@@ -39,10 +52,21 @@ base::Lock& MappingPtrLockForScope(ScenarioScope scope) {
+ // MappingPtrLockForScope must be held to get that copy.
+ scoped_refptr<RefCountedScenarioMapping>& MappingPtrForScope(
+     ScenarioScope scope) {
++#if BUILDFLAG(IS_AROS)
++  // The shared-memory contents still describe global scenarios; the mapping
++  // handle and its lifetime belong to this native process.
++  struct CurrentMappingTag;
++  struct GlobalMappingTag;
++  using Mapping = base::NoDestructor<scoped_refptr<RefCountedScenarioMapping>>;
++  auto& current_process_mapping =
++      base::aros::ProcessLocalValue<Mapping, CurrentMappingTag>();
++  auto& global_mapping = base::aros::ProcessLocalValue<Mapping, GlobalMappingTag>();
++#else
+   static base::NoDestructor<scoped_refptr<RefCountedScenarioMapping>>
+       current_process_mapping;
+   static base::NoDestructor<scoped_refptr<RefCountedScenarioMapping>>
+       global_mapping;
++#endif
+   MappingPtrLockForScope(scope).AssertAcquired();
+   switch (scope) {
+     case ScenarioScope::kCurrentProcess:
+diff --git a/components/performance_manager/scenario_api/performance_scenario_observer.cc b/components/performance_manager/scenario_api/performance_scenario_observer.cc
+index 54e844a427aed38e2bef6d52c505cbec9750ae21..1ce80b74c48536228af24c592e68713b6be32e96 100644
+--- a/components/performance_manager/scenario_api/performance_scenario_observer.cc
++++ b/components/performance_manager/scenario_api/performance_scenario_observer.cc
+@@ -14,6 +14,10 @@
+ #include "base/observer_list.h"
+ #include "base/synchronization/lock.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/performance_manager/scenario_api/performance_scenario_memory.h"
+ #include "components/performance_manager/scenario_api/performance_scenarios.h"
+ #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+@@ -53,9 +57,19 @@ class LockedObserverListPtr {
+ };
+ 
+ LockedObserverListPtr& GetLockedObserverListPtrForScope(ScenarioScope scope) {
++#if BUILDFLAG(IS_AROS)
++  // Even global scenarios have a separate observer list in each process.
++  struct CurrentObserversTag;
++  struct GlobalObserversTag;
++  auto& current_process_observer_list = base::aros::ProcessLocalValue<
++      base::NoDestructor<LockedObserverListPtr>, CurrentObserversTag>();
++  auto& global_observer_list = base::aros::ProcessLocalValue<
++      base::NoDestructor<LockedObserverListPtr>, GlobalObserversTag>();
++#else
+   static base::NoDestructor<LockedObserverListPtr>
+       current_process_observer_list;
+   static base::NoDestructor<LockedObserverListPtr> global_observer_list;
++#endif
+   switch (scope) {
+     case ScenarioScope::kCurrentProcess:
+       return *current_process_observer_list;
 diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
 index f331f4df78737cdef2b06fb5807ac3b4d59302b1..5184975559d6ea7a2d0406b7e4d0ee31e01f2d76 100644
 --- a/components/permissions/permission_request_manager.cc
@@ -59085,6 +59175,103 @@ index c49040357e6c160655dea172dd0082a92814b0f0..ab96d59a2013526183ab2ecc3bdeb602
  #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h"
  #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector_backing.h"
  #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+diff --git a/third_party/blink/renderer/platform/heap/thread_state_storage.cc b/third_party/blink/renderer/platform/heap/thread_state_storage.cc
+index 6f932420bd60adc2300eedce075433f55d366ce9..60055ca6d86b452677183789139daa0c1ad6023d 100644
+--- a/third_party/blink/renderer/platform/heap/thread_state_storage.cc
++++ b/third_party/blink/renderer/platform/heap/thread_state_storage.cc
+@@ -7,6 +7,9 @@
+ #include <new>
+ 
+ #include "base/check_op.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace blink {
+ 
+@@ -14,7 +17,18 @@ constinit thread_local ThreadStateStorage* g_thread_specific_
+     __attribute__((tls_model(BLINK_HEAP_THREAD_LOCAL_MODEL))) = nullptr;
+ 
+ // static
++#if BUILDFLAG(IS_AROS)
++ThreadStateStorage* ThreadStateStorage::MainThreadStateStorage() {
++  struct ProcessStorage {
++    ThreadStateStorage storage;
++  };
++  struct MainHeapStorageProcessTag;
++  return &base::aros::ProcessLocalValue<ProcessStorage,
++                                       MainHeapStorageProcessTag>().storage;
++}
++#else
+ ThreadStateStorage ThreadStateStorage::main_thread_state_storage_;
++#endif
+ 
+ BLINK_HEAP_DEFINE_THREAD_LOCAL_GETTER(ThreadStateStorage::Current,
+                                       ThreadStateStorage*,
+@@ -25,7 +39,7 @@ void ThreadStateStorage::AttachMainThread(
+     ThreadState& thread_state,
+     cppgc::AllocationHandle& allocation_handle,
+     cppgc::HeapHandle& heap_handle) {
+-  g_thread_specific_ = new (&main_thread_state_storage_)
++  g_thread_specific_ = new (MainThreadStateStorage())
+       ThreadStateStorage(thread_state, allocation_handle, heap_handle);
+ }
+ 
+diff --git a/third_party/blink/renderer/platform/heap/thread_state_storage.h b/third_party/blink/renderer/platform/heap/thread_state_storage.h
+index 28a84143a188200f8fc9ab633a82a61433a6f25b..a9dc212b250542ac026672c7c3ff47dcf4310865 100644
+--- a/third_party/blink/renderer/platform/heap/thread_state_storage.h
++++ b/third_party/blink/renderer/platform/heap/thread_state_storage.h
+@@ -9,6 +9,7 @@
+ 
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/heap/thread_local.h"
+ #include "third_party/blink/renderer/platform/platform_export.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+@@ -52,9 +53,13 @@ extern constinit thread_local ThreadStateStorage* g_thread_specific_
+ // for ThreadState.
+ class PLATFORM_EXPORT ThreadStateStorage final {
+  public:
++#if BUILDFLAG(IS_AROS)
++  static ThreadStateStorage* MainThreadStateStorage();
++#else
+   ALWAYS_INLINE static ThreadStateStorage* MainThreadStateStorage() {
+     return &main_thread_state_storage_;
+   }
++#endif
+ 
+   BLINK_HEAP_DECLARE_THREAD_LOCAL_GETTER(Current,
+                                          ThreadStateStorage*,
+@@ -81,7 +86,9 @@ class PLATFORM_EXPORT ThreadStateStorage final {
+                                   cppgc::HeapHandle&);
+   static void DetachNonMainThread(ThreadStateStorage&);
+ 
++#if !BUILDFLAG(IS_AROS)
+   static ThreadStateStorage main_thread_state_storage_;
++#endif
+ 
+   ThreadStateStorage() = default;
+   ThreadStateStorage(ThreadState&,
+@@ -104,9 +111,18 @@ class ThreadStateStorageFor<kMainThreadOnly> {
+ 
+  public:
+   ALWAYS_INLINE static ThreadStateStorage* GetState() {
++#if BUILDFLAG(IS_AROS)
++    // Native renderers share the image, but each main task has its own heap.
++    // Keep allocation on the task-local fast path rather than looking up the
++    // owning process registry for every main-thread-only object.
++    auto* main_thread_storage = ThreadStateStorage::Current();
++    DCHECK_EQ(main_thread_storage, ThreadStateStorage::MainThreadStateStorage());
++    return main_thread_storage;
++#else
+     auto* main_thread_storage = ThreadStateStorage::MainThreadStateStorage();
+     DCHECK_EQ(main_thread_storage, ThreadStateStorage::Current());
+     return main_thread_storage;
++#endif
+   }
+ };
+ 
 diff --git a/third_party/blink/renderer/platform/image-decoders/BUILD.gn b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
 index ed037d2b73cffe58f6544d5909d64c404392b8a6..011f3d7a3e84d19b7d9deac91cbaab9479e2456a 100644
 --- a/third_party/blink/renderer/platform/image-decoders/BUILD.gn
@@ -59344,18 +59531,49 @@ index 548256efd869892238f5b909fb6522d2d8c05185..07518222f1f4b8faab0cd00a97456791
  
  source_set("test_support") {
 diff --git a/third_party/blink/renderer/platform/scheduler/common/thread.cc b/third_party/blink/renderer/platform/scheduler/common/thread.cc
-index 660e966c1d3db1f441d458b8961ff83072086d3b..59885ff3c18864cbc0221b6b58f3393d69068d52 100644
+index 660e966c1d3db1f441d458b8961ff83072086d3b..6a7db6b3a696b61c71efde90039f4b1ec29169fd 100644
 --- a/third_party/blink/renderer/platform/scheduler/common/thread.cc
 +++ b/third_party/blink/renderer/platform/scheduler/common/thread.cc
-@@ -12,6 +12,7 @@
+@@ -10,8 +10,12 @@
+ #include "base/threading/hang_watcher.h"
+ #include "base/threading/platform_thread.h"
  #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
  #include "third_party/blink/public/common/features.h"
 +#include "third_party/blink/public/platform/compositor_thread_lifecycle.h"
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
  #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-@@ -74,7 +75,12 @@ ThreadCreationParams& ThreadCreationParams::SetSupportsGC(bool gc_enabled) {
+@@ -34,13 +38,25 @@ namespace {
+ constinit thread_local Thread* current_thread = nullptr;
+ 
+ std::unique_ptr<MainThread>& GetMainThread() {
++#if BUILDFLAG(IS_AROS)
++  struct MainThreadProcessTag;
++  return base::aros::ProcessLocalValue<std::unique_ptr<MainThread>,
++                                       MainThreadProcessTag>();
++#else
+   DEFINE_STATIC_LOCAL(std::unique_ptr<MainThread>, main_thread, ());
+   return main_thread;
++#endif
+ }
+ 
+ std::unique_ptr<NonMainThread>& GetCompositorThread() {
++#if BUILDFLAG(IS_AROS)
++  struct NonMainThreadProcessTag;
++  return base::aros::ProcessLocalValue<std::unique_ptr<NonMainThread>,
++                                       NonMainThreadProcessTag>();
++#else
+   DEFINE_STATIC_LOCAL(std::unique_ptr<NonMainThread>, compositor_thread, ());
+   return compositor_thread;
++#endif
+ }
+ 
+ }  // namespace
+@@ -74,7 +90,12 @@ ThreadCreationParams& ThreadCreationParams::SetSupportsGC(bool gc_enabled) {
  }
  
  void Thread::CreateAndSetCompositorThread() {
@@ -59368,7 +59586,7 @@ index 660e966c1d3db1f441d458b8961ff83072086d3b..59885ff3c18864cbc0221b6b58f3393d
  
    ThreadCreationParams params(ThreadType::kCompositorThread);
    params.base_thread_type = base::ThreadType::kPresentation;
-@@ -110,6 +116,10 @@ void Thread::CreateAndSetCompositorThread() {
+@@ -110,6 +131,10 @@ void Thread::CreateAndSetCompositorThread() {
    GetCompositorThread() = std::move(compositor_thread);
  }
  
