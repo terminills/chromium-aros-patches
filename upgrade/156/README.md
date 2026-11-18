@@ -336,3 +336,28 @@ The AArch64 standalone V8 archive and 124 MiB native `v8.library` now cross-link
 `evidence/v8-arm64-build.json` records the exact library hash. AArch64 runtime and
 full CEF runtime remain pending; the built V8 artifact still uses the previous
 thread backend.
+
+
+## Native CEF high-address allocator correction
+
+CEF identity opens and closes on native x86-64, but initialization exposed a
+reservation metadata overflow. ISO44's hardware watchpoint caught a normal-bucket
+`0xfffe` tag at table index 2546; the inherited non-pool table had only 2048
+entries (4 GiB). The write damaged an Abseil TLS descriptor and caused a false
+32 GiB allocation request. `evidence/reservation-corruption44.json` records the
+instruction, library hash, addresses, and table dimensions.
+
+The AROS table now covers 256 GiB, matching its existing pool membership bitmap,
+and checks address/range bounds in release builds. This adds 252 KiB of static
+metadata per linked allocator instance; allocation remains on-demand in 2 MiB
+super pages. Offsets still describe individual reservations and retain their
+16-bit tag limit. This does not reserve 256 GiB of RAM or virtual address space.
+
+Run `python3 tests/run-reservation-offset.py /path/to/chromium/src
+/path/to/chromium/src/out/aros-cef156` from this directory. The host test uses
+production headers and generated AROS flags, with a fatal-check adapter for
+native logging. ASan/UBSan pass high-address normal buckets, direct maps and
+release tagging; an address at 256 GiB is rejected. The same test against the
+old headers reports a global buffer overflow. Native CEF initialization with
+the corrected library is still pending; these host results are not browser
+runtime qualification.

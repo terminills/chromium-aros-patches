@@ -1,0 +1,43 @@
+=================================================================
+==3981743==ERROR: AddressSanitizer: global-buffer-overflow on address 0x56300424a240 at pc 0x5630042459e3 bp 0x7ffe65691af0 sp 0x7ffe65691ae0
+WRITE of size 2 at 0x56300424a240 thread T0
+    #0 0x5630042459e2 in partition_alloc::internal::ReservationOffsetTable::SetNormalBucketsTag(unsigned long) const /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/reservation-baseline/partition_alloc/internal/reservation_offset_table_internal.h:109
+    #1 0x5630042459e2 in main /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/reservation-offset-regression.cc:14
+    #2 0x7f8bd602a600 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:59
+    #3 0x7f8bd602a717 in __libc_start_main_impl ../csu/libc-start.c:360
+    #4 0x563004245e64 in _start (/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/reservation-offset-baseline+0x2e64) (BuildId: e78ecaedb0ab57c9026d40bf1dd80ec20022b6a1)
+
+0x56300424a240 is located 0 bytes after global variable 'reservation_offset_table_' defined in '/mnt/short-term/job0254-01a1e62b/src/base/allocator/partition_allocator/src/partition_alloc/reservation_offset_table.cc:34:5' (0x563004249240) of size 4096
+SUMMARY: AddressSanitizer: global-buffer-overflow /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/reservation-baseline/partition_alloc/internal/reservation_offset_table_internal.h:109 in partition_alloc::internal::ReservationOffsetTable::SetNormalBucketsTag(unsigned long) const
+Shadow bytes around the buggy address:
+  0x563004249f80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x56300424a200: 00 00 00 00 00 00 00 00[f9]f9 f9 f9 00 00 00 00
+  0x56300424a280: f9 f9 f9 f9 f9 f9 f9 f9 00 00 00 00 00 00 00 00
+  0x56300424a300: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a380: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a400: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x56300424a480: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==3981743==ABORTING
