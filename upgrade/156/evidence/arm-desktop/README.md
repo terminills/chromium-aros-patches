@@ -23,3 +23,11 @@ Replay 12 exposed a separate packaging requirement: DOS had cached a null debug.
 Native Exec AvailMem reports 1977.93 MiB usable, 1396.26 MiB used and 581.67 MiB free after rendering, versus 14.09 MiB used at the desktop baseline. These are whole-guest measurements including diagnostic symbol metadata and shared libraries; they are not exclusive application attribution. Usage is effectively unchanged from the 180s through 480s samples. The module's 472.7 MiB file size is a separate disk measurement.
 
 About AROS is open behind the browser in this capture. ARM input, complete teardown, physical Pi execution, and network access remain unqualified at this evidence point. Earlier failures and screenshots above are retained as historical stages, not current first-paint blockers.
+
+## Comparable lifecycle memory probes
+
+`aros-web` commit `4c14aba` adds native Exec AvailMem samples before/after CEF opening, initialization, first paint, shutdown and library close. The client builds and reaches first paint on both AArch64 and x86_64. Replay 13 also completed browser close and returned from CEF shutdown. Replay 14 supplies the combined browser and About AROS screenshot.
+
+The ARM replay 14 baseline measures approximately 111.13 MiB before CEF open, 523.39 MiB after open, 651.44 MiB after initialization, and 1397.98 MiB at first paint. The pre-open value already includes client auto-initialized dependencies such as V8; the separate idle desktop sample is about 14 MiB. These are whole-guest samples, not exclusive ownership accounting.
+
+The same HTML is used on x86 for allocation comparisons, including its literal AArch64 heading; that text alone does not identify a test architecture. The x86 screen constrains the client to a smaller viewport, so optimization deltas are compared within each architecture. Code-arena sizing experiments remain separate pending validation.
