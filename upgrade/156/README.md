@@ -397,3 +397,22 @@ release tagging; an address at 256 GiB is rejected. The same test against the
 old headers reports a global buffer overflow. Native CEF initialization with
 the corrected library is still pending; these host results are not browser
 runtime qualification.
+
+## Native browser input and OS notification evidence (2026-11-18)
+
+ISO63 runs native module15 (SHA-256 in `evidence/cef156-link15-elf.json`)
+and the aros-web `4176f38` mouse/focus client on one x86-64 CPU. It paints
+the page without the earlier profile-error dialog. A native mouse click
+changes the DOM to `AROS_CLICK` and logs `AROS_INPUT_CLICK`. Closing the
+window reaches the browser-closed callback, but full CEF teardown fails a
+Mojo InterfaceEndpointClient sequence check. Symbolization identifies
+CefRenderManager destruction from the browser AtExitManager. This remains
+a failed full lifecycle test, despite the probe's earlier browser-only PASS.
+
+ISO64 separately exercises the installed application.library notification
+server: registration, display, double-click with a matching opaque token,
+close callback and withdrawal all succeed. `tests/native-notification-aros.c`
+is the direct native fixture; its serial prefix still says notification62.
+The initial fixture used a registration name containing spaces, which the
+OS API rejects; the corrected name is ChromiumNativeProbe. This is native
+OS API evidence, not yet Chromium Web Notification API integration.
