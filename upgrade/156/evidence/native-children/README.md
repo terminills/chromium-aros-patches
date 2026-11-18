@@ -111,3 +111,32 @@ This control proves neither two-app isolation nor long-term memory reclamation.
 Run 94's GPU free-pointer text was interleaved with other serial output; its
 full address comparison is indeterminate. The parseable utility record matches
 the host. A malformed log field must not be reported as an allocator mismatch.
+
+
+## Scenario candidate runtime 95 and ARM control 23
+
+Both native engine links pass for the scenario/Blink candidate published in
+`ddcf15f`. Native x64 run 95 clears scenario initialization, starts renderers,
+and fails the child memory coordinator singleton check at
+`content/child/memory_coordinator/child_memory_coordinator.cc:24`.
+All four parseable child records (GPU, utility and two renderers) use the host's
+allocator/free addresses. This is not a two-browser isolation pass. The input
+manifest pins the scenario source snapshot and installed binaries.
+
+ARM control 23 uses the same scenario candidate and local JS/Wasm worker fixture.
+It times out while opening CEF, before a worker result or teardown. It logs no
+Chromium fatal or native alert. The 112.48 MiB sample is before opening CEF,
+not browser memory use. ARM stall diagnosis is deferred; earlier worker passes
+remain separate evidence and do not qualify this candidate.
+
+
+## Child coordinator and WTF follow-up candidate
+
+The current source snapshot scopes ChildMemoryCoordinator to its native owner,
+retaining construction/destruction assertions. WTF initialization now uses the
+existing monotonic process identity instead of a reusable CommandLine address.
+An Exec-backed base lock serializes the complete engine-wide initialization;
+each renderer still establishes main-thread TLS before that shared initialization.
+Complete x64 and AArch64 archive builds pass. Native engine links and runtime 98
+are pending. The compositor scheduler and WebRTC logging audit follow-ups are
+not part of this snapshot, and repeated child lifetime reclamation is still open.

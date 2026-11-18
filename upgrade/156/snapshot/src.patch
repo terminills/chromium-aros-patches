@@ -43361,6 +43361,34 @@ index dea2625fba8473c02cdcc11320b417d119de8b4b..b91e73057afc3b8cc40c05ae32d31cf9
  }
  
  void ChildThreadImpl::Shutdown() {
+diff --git a/content/child/memory_coordinator/child_memory_coordinator.cc b/content/child/memory_coordinator/child_memory_coordinator.cc
+index 7f9c819fcd48f5b3ba589eb2213f3bb257f8c077..829c1be1168208b8c15d769d48adb4c63839ba3c 100644
+--- a/content/child/memory_coordinator/child_memory_coordinator.cc
++++ b/content/child/memory_coordinator/child_memory_coordinator.cc
+@@ -5,12 +5,23 @@
+ #include "content/child/memory_coordinator/child_memory_coordinator.h"
+ 
+ #include "base/check.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace content {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ChildMemoryCoordinatorProcessTag;
++#define g_instance \
++  (base::aros::ProcessLocalValue<ChildMemoryCoordinator*, \
++                                ChildMemoryCoordinatorProcessTag>())
++#else
+ ChildMemoryCoordinator* g_instance = nullptr;
++#endif
+ 
+ }  // namespace
+ 
 diff --git a/content/common/BUILD.gn b/content/common/BUILD.gn
 index 986ccc4601a39e1963aa654c44013a9a0d540328..4343d3b75d7494541db957823e325e0c77cd75c9 100644
 --- a/content/common/BUILD.gn
@@ -59828,10 +59856,10 @@ index b00d71494969a44318c4000e981857687c20a49d..cbece3fa40eb927e9c1dceb398f06447
  template <>
  class IsGarbageCollectedType<void> {
 diff --git a/third_party/blink/renderer/platform/wtf/wtf.cc b/third_party/blink/renderer/platform/wtf/wtf.cc
-index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4be9cace2 100644
+index b2886b6a98493291d472fcb065dcd47d9e402acd..8ac1b40dce9f7dc1ef3c9a351330cedcd0d641a6 100644
 --- a/third_party/blink/renderer/platform/wtf/wtf.cc
 +++ b/third_party/blink/renderer/platform/wtf/wtf.cc
-@@ -30,6 +30,11 @@
+@@ -30,7 +30,15 @@
  
  #include "third_party/blink/renderer/platform/wtf/wtf.h"
  
@@ -59841,9 +59869,13 @@ index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4
 +#include "base/no_destructor.h"
 +#include "base/synchronization/lock.h"
  #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
  #include "third_party/blink/renderer/platform/wtf/dtoa.h"
-@@ -47,6 +52,41 @@ namespace {
+ #include "third_party/blink/renderer/platform/wtf/functional.h"
+@@ -47,6 +55,35 @@ namespace {
  
  bool g_initialized = false;
  
@@ -59855,7 +59887,7 @@ index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4
 +
 +struct ProcessStateRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, ProcessState> states;
++  std::map<uint64_t, ProcessState> states;
 +};
 +
 +ProcessStateRegistry& GetProcessStateRegistry() {
@@ -59863,16 +59895,10 @@ index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4
 +  return *registry;
 +}
 +
-+const base::CommandLine* GetCurrentProcessIdentity() {
-+  return base::CommandLine::InitializedForCurrentProcess()
-+             ? base::CommandLine::ForCurrentProcess()
-+             : nullptr;
-+}
-+
 +bool MarkCurrentProcessInitialized(base::PlatformThreadId main_thread_id) {
 +  auto& registry = GetProcessStateRegistry();
 +  base::AutoLock lock(registry.lock);
-+  ProcessState& state = registry.states[GetCurrentProcessIdentity()];
++  ProcessState& state = registry.states[base::aros::CurrentProcessIdentity()];
 +  if (state.initialized) {
 +    return false;
 +  }
@@ -59885,7 +59911,7 @@ index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4
  #if defined(COMPONENT_BUILD) && BUILDFLAG(IS_WIN)
  constinit thread_local bool g_is_main_thread = false;
  #endif
-@@ -69,14 +109,28 @@ constinit thread_local bool g_is_main_thread = false;
+@@ -69,14 +106,29 @@ constinit thread_local bool g_is_main_thread = false;
  #endif
  
  void InitializeWtf() {
@@ -59902,16 +59928,17 @@ index b2886b6a98493291d472fcb065dcd47d9e402acd..db746909bdfcddb6e5ec673e594cdab4
    g_is_main_thread = true;
  #endif
 -  g_main_thread_identifier = CurrentThread();
-+  g_main_thread_identifier = main_thread_id;
-+
 +#if BUILDFLAG(IS_AROS)
-+  // Hosted AROS runs Chromium pseudo-processes in one address space. The first
-+  // one performs WTF's true global initialization; later identities get their
-+  // own initialization guard above but must not reconstruct global string atoms.
++  // Native AROS children share the resident image. Wait for all engine-wide
++  // initialization to complete before another child uses the global atoms.
++  // Each child still establishes its own main-thread TLS above.
++  static base::NoDestructor<base::Lock> initialization_lock;
++  base::AutoLock initialization_guard(*initialization_lock);
 +  if (g_initialized) {
 +    return;
 +  }
 +#endif
++  g_main_thread_identifier = main_thread_id;
 +  g_initialized = true;
  
    Threading::Initialize();

@@ -1,0 +1,35 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "3adb8cf6bfff1f8e98e22cabbd43a2a9f79ad6d32864db43ce59e599110d64bd",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "3729fb2b605e5f4357b1bcf4c295f315b2de4c031fee5d2beebed1c25fca5a79",
+    "C/CEFSubprocess": "480eedcddfaee7f5881aac15ffe811e4b1ec1267850902924bc5f92b987aed40",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28",
+    "C/CEFHostBrowser": "5f2c91a2c005735151f39f95212b114559f849e6f95984cc7d46045d1e85cdbd"
+  },
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nWait 3\nRun >RAM:CEF-appB.log Execute S:CEF-AppB\nWait 60\nC:CEFHostProbe stats\nWait 60\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nType RAM:CEF-appA.log >DEBUG:\nType RAM:CEF-appB.log >DEBUG:\nEcho Shared-browser-test-finished\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T21:07:30.044815+00:00",
+    "validation": "Private scenario candidate includes Blink thread and heap ownership. Run94 clears memory-pressure registry, reaches host READY, then fails shared performance scenario observer initialization. Current candidate scopes observer lists and mapping handles/locks per native process while keeping global scenario backing shared. Cross-build/native runtime95 pending; exact-base replay checked; not published.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "7c9a3fac3e8ff1e49bbba21fbaeee4a451e8aa2e60e10b6121d44bd051aaf57f",
+        "applied_tree": "51e56f08615b9ffd3544522949a7e3c8587a53a6",
+        "bytes": 2936718
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "b311dafd5ce8f1fdd0a4d947d8b303bae7cd39e3e17bd041f0c1a452ce6c94d8",
+    "tools/CEFHost/CEFSubprocess.c": "1537f20a8e9a20218f0b6261d94f65f6921fd24c3ff4495a86baf6c396d8e526",
+    "libs/cef/test_cef_host_browser.c": "20e93ad0c59fb2a99b6f2f2b46b821d3b3cfc991316e72de17504d2f76336439",
+    "libs/cef/test_cef_browser.c": "c3124b80787f5a33cf18e6997189f2a07783b0cbbe6988e0aa1b70a55dc830d5"
+  },
+  "fixture_sha256": "aff6e7600dbbc9bfdb3dbfe5f87063542f963530275b4cd82c99cacd21862033"
+}

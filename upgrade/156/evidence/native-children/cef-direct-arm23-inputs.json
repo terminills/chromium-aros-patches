@@ -1,0 +1,28 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "05271708c8fa6a3e509e6ad18bbda5ac3e5c81aa87dd0c279238723ce120c61c",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "d0eb748cd317c23374f3b7fae21694ffdce7f2a29658de6042c339390c9cf2bb",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "89234295af8212f9e302d90f1ddb487e12f284cb87f890b299686cba00917461"
+  },
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nRun >NIL: SYS:System/About\nC:CEFDirectBrowser T:cef-arm23.ppm \"@SYS:CEF-worker-url.txt\" 1500\nEcho ARM23-browser-returned:$RC\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T21:07:30.044815+00:00",
+    "validation": "Private scenario candidate includes Blink thread and heap ownership. Run94 clears memory-pressure registry, reaches host READY, then fails shared performance scenario observer initialization. Current candidate scopes observer lists and mapping handles/locks per native process while keeping global scenario backing shared. Cross-build/native runtime95 pending; exact-base replay checked; not published.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "7c9a3fac3e8ff1e49bbba21fbaeee4a451e8aa2e60e10b6121d44bd051aaf57f",
+        "applied_tree": "51e56f08615b9ffd3544522949a7e3c8587a53a6",
+        "bytes": 2936718
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
