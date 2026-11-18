@@ -416,3 +416,24 @@ is the direct native fixture; its serial prefix still says notification62.
 The initial fixture used a registration name containing spaces, which the
 OS API rejects; the corrected name is ChromiumNativeProbe. This is native
 OS API evidence, not yet Chromium Web Notification API integration.
+
+## Native notification and event-loop candidate
+
+The current snapshot replaces the AROS no-service notification stub with an
+application.library bridge. It preserves Chromium's permission checks and
+feature switches. Each accepted notification gets an opaque token mapped to
+its originating profile, notification ID and origin; click and close messages
+are replied before dispatch to Chromium. Profile teardown withdraws its
+notifications. Missing library or port initialization retains message-center
+fallback. The server cannot enumerate displayed notifications or distinguish
+timeout from user dismissal, so synchronization is reported unsupported and
+close is conservatively reported as not user initiated. Native action buttons
+and notification image export are not implemented by this candidate.
+
+Exec message-port watches now join the native pump's Wait/WaitSelect signals,
+with registration generations protecting callback removal/replacement. Ozone
+uses them for IDCMP and presentation messages instead of its 8 ms polling
+timer. AROS CEF releases its renderer manager at renderer message-loop
+destruction, before later browser-side AtExit cleanup. These source changes
+are under native integration testing; the ISO63/64 evidence above predates
+the integrated bridge and does not qualify this candidate.

@@ -7403,10 +7403,10 @@ index bfb28d5af9a4a72e6c39b37fba92bc57106845bf..9febe6611fefd0a4b3ae931632276158
  #endif
 diff --git a/base/message_loop/message_pump_aros.cc b/base/message_loop/message_pump_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb05601d491169
+index 0000000000000000000000000000000000000000..5bfb2f9bdb5b5dcf2279455dacc8bfa29bde6521
 --- /dev/null
 +++ b/base/message_loop/message_pump_aros.cc
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,720 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -7580,6 +7580,9 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +  }
 +  native_resources_released_ = true;
 +
++  while (!port_controllers_.empty()) {
++    port_controllers_.back()->StopWatching();
++  }
 +  while (!controllers_.empty()) {
 +    controllers_.back()->StopWatchingFileDescriptor();
 +  }
@@ -7685,6 +7688,68 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +  return true;
 +}
 +
++MessagePumpAROS::PortWatchController::~PortWatchController() {
++  StopWatching();
++}
++
++void MessagePumpAROS::PortWatchController::StopWatching() {
++  if (pump_) pump_->StopWatchingPort(this);
++}
++
++bool MessagePumpAROS::WatchMessagePort(MsgPort* port,
++                                      PortWatchController* controller,
++                                      RepeatingClosure callback) {
++  CHECK_EQ(FindTask(nullptr), pump_task_);
++  if (native_resources_released_ || !port || !controller || !callback ||
++      port->mp_Flags != PA_SIGNAL || port->mp_SigTask != pump_task_ ||
++      port->mp_SigBit >= 32) return false;
++  controller->StopWatching();
++  const uint32_t mask = uint32_t{1} << port->mp_SigBit;
++  if (mask & (port_mask_ | wakeup_mask_ |
++              (uint32_t{1} << timer_port_->mp_SigBit))) return false;
++  controller->pump_ = this;
++  controller->mask_ = mask;
++  controller->generation_ = next_generation_++;
++  controller->callback_ = std::move(callback);
++  port_controllers_.push_back(controller);
++  port_mask_ |= mask;
++  // Also drain messages queued before the watch was installed.
++  pending_port_signals_ |= mask;
++  ScheduleWork();
++  return true;
++}
++
++void MessagePumpAROS::StopWatchingPort(PortWatchController* controller) {
++  CHECK_EQ(FindTask(nullptr), pump_task_);
++  std::erase(port_controllers_, controller);
++  port_mask_ &= ~controller->mask_;
++  pending_port_signals_ &= ~controller->mask_;
++  controller->pump_ = nullptr;
++  controller->mask_ = 0;
++  controller->callback_.Reset();
++}
++
++bool MessagePumpAROS::DispatchPortSignals() {
++  if (!port_mask_) return false;
++  const uint32_t signals = pending_port_signals_ |
++      (SetSignal(0, port_mask_) & port_mask_);
++  pending_port_signals_ = 0;
++  std::vector<std::pair<PortWatchController*, uint64_t>> ready;
++  for (auto* controller : port_controllers_) {
++    if (signals & controller->mask_)
++      ready.emplace_back(controller, controller->generation_);
++  }
++  for (const auto& [controller, generation] : ready) {
++    // An earlier callback may remove or replace a later watch.
++    if (std::find(port_controllers_.begin(), port_controllers_.end(), controller)
++            == port_controllers_.end() || controller->generation_ != generation)
++      continue;
++    auto callback = controller->callback_;
++    callback.Run();
++  }
++  return !ready.empty();
++}
++
 +void MessagePumpAROS::RebindToRunningTask() {
 +  // Exec signals are per-TASK: a signal bit is allocated out of the calling
 +  // task's own set, Signal() delivers to one named task, and a MsgPort replies
@@ -7704,6 +7769,7 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +    return;
 +  }
 +
++  CHECK(port_controllers_.empty());
 +  const int32_t wake_signal = AllocSignal(-1);
 +  if (wake_signal < 0) {
 +    LOG(ERROR) << "[Chromium:IO] pump runs on task=" << running_task
@@ -7744,6 +7810,8 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +  AutoReset<raw_ptr<RunState>> auto_reset_run_state(&run_state_, &run_state);
 +
 +  for (;;) {
++    const bool processed_ports = DispatchPortSignals();
++    if (run_state.should_quit) break;
 +    Delegate::NextWorkInfo next_work_info = delegate->DoWork();
 +    const bool immediate_work_available = next_work_info.is_immediate();
 +
@@ -7753,10 +7821,11 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +
 +    const bool processed_io =
 +        !controllers_.empty() && WaitForSocketEvents(TimeDelta(), false);
++    const bool processed_port_io = DispatchPortSignals();
 +    if (run_state.should_quit) {
 +      break;
 +    }
-+    if (immediate_work_available || processed_io) {
++    if (immediate_work_available || processed_io || processed_ports || processed_port_io) {
 +      // Spin detector. Every pass through here skips BeforeWait() and the
 +      // blocking wait below, so a long unbroken run of them means the pump has
 +      // stopped idling - which is what "busy looping / the mouse pointer is
@@ -7817,7 +7886,7 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +void MessagePumpAROS::WaitForIdleEvents(TimeDelta timeout,
 +                                        bool wait_indefinitely) {
 +  if (wait_indefinitely) {
-+    Wait(wakeup_mask_);
++    pending_port_signals_ |= Wait(wakeup_mask_ | port_mask_) & port_mask_;
 +    return;
 +  }
 +
@@ -7835,7 +7904,8 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +  SendIO(request);
 +
 +  const uint32_t timer_mask = uint32_t{1} << timer_port_->mp_SigBit;
-+  const uint32_t signals = Wait(wakeup_mask_ | timer_mask);
++  const uint32_t signals = Wait(wakeup_mask_ | timer_mask | port_mask_);
++  pending_port_signals_ |= signals & port_mask_;
 +  if (!(signals & timer_mask) && !CheckIO(request)) {
 +    AbortIO(request);
 +  }
@@ -7899,13 +7969,14 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +    timeout_pointer = &timeout_value;
 +  }
 +
-+  uint32_t signal_mask = wakeup_mask_;
++  uint32_t signal_mask = wakeup_mask_ | port_mask_;
 +  int result = 0;
 +  if (max_socket_fd >= 0) {
 +    result = aros::SocketWaitSelect(
 +        max_socket_fd + 1, watch_socket_read ? &read_fds : nullptr,
 +        watch_socket_write ? &write_fds : nullptr, nullptr, timeout_pointer,
 +        &signal_mask);
++    pending_port_signals_ |= signal_mask & port_mask_;
 +  } else {
 +    WaitForIdleEvents(timeout, wait_indefinitely);
 +  }
@@ -8058,10 +8129,10 @@ index 0000000000000000000000000000000000000000..feeebff5bcb6549be6e59f642cfb0560
 +}  // namespace base
 diff --git a/base/message_loop/message_pump_aros.h b/base/message_loop/message_pump_aros.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..240f9aaaa929f3c920837010ec2d4c5097df899b
+index 0000000000000000000000000000000000000000..5c3a382c131b4c6ebc7ba4aaab6b9235eb8d7064
 --- /dev/null
 +++ b/base/message_loop/message_pump_aros.h
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,160 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -8074,6 +8145,7 @@ index 0000000000000000000000000000000000000000..240f9aaaa929f3c920837010ec2d4c50
 +#include <vector>
 +
 +#include "base/base_export.h"
++#include "base/functional/callback.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/raw_ptr_exclusion.h"
 +#include "base/message_loop/message_pump.h"
@@ -8116,6 +8188,25 @@ index 0000000000000000000000000000000000000000..240f9aaaa929f3c920837010ec2d4c50
 +    uint64_t generation_ = 0;
 +  };
 +
++  // Watches a signal-owning Exec message port on its owning task. The callback
++  // must drain its messages; the controller must stop before the port is freed.
++  class BASE_EXPORT PortWatchController {
++   public:
++    PortWatchController() = default;
++    ~PortWatchController();
++    PortWatchController(const PortWatchController&) = delete;
++    PortWatchController& operator=(const PortWatchController&) = delete;
++    void StopWatching();
++   private:
++    friend class MessagePumpAROS;
++    raw_ptr<MessagePumpAROS> pump_ = nullptr;
++    RepeatingClosure callback_;
++    uint32_t mask_ = 0;
++    uint64_t generation_ = 0;
++  };
++  bool WatchMessagePort(MsgPort* port, PortWatchController* controller,
++                        RepeatingClosure callback);
++
 +  MessagePumpAROS();
 +
 +  MessagePumpAROS(const MessagePumpAROS&) = delete;
@@ -8150,6 +8241,12 @@ index 0000000000000000000000000000000000000000..240f9aaaa929f3c920837010ec2d4c50
 +    uint64_t generation;
 +    int ready_mode;
 +  };
++
++  void StopWatchingPort(PortWatchController* controller);
++  bool DispatchPortSignals();
++  std::vector<PortWatchController*> port_controllers_;
++  uint32_t port_mask_ = 0;
++  uint32_t pending_port_signals_ = 0;
 +
 +  void RebindToRunningTask();
 +  bool WaitForSocketEvents(TimeDelta timeout, bool wait_indefinitely);
@@ -11007,7 +11104,7 @@ index a409db52787bee4a75ebbf518aaf1d6a4e4e9556..c74b66cd3308bfd46f0c250102b9bd57
  // Provides the same functionality as base::AutoLock for CheckedLock.
  using CheckedAutoLock = internal::BasicAutoLock<CheckedLock>;
 diff --git a/base/task/current_thread.cc b/base/task/current_thread.cc
-index dd959f737c8c66d6370d45a392a90e9abbbe5f0f..35c4a47e1404914a1d20d1837f624ef36ce06260 100644
+index dd959f737c8c66d6370d45a392a90e9abbbe5f0f..9ff77e14b97c1ad9043ab71a5159da63991cee94 100644
 --- a/base/task/current_thread.cc
 +++ b/base/task/current_thread.cc
 @@ -51,6 +51,8 @@ void CurrentThread::AddDestructionObserver(
@@ -11019,7 +11116,21 @@ index dd959f737c8c66d6370d45a392a90e9abbbe5f0f..35c4a47e1404914a1d20d1837f624ef3
    DCHECK(current_->IsBoundToCurrentThread());
    current_->RemoveDestructionObserver(destruction_observer);
  }
-@@ -154,7 +156,8 @@ MessagePumpForUI* CurrentUIThread::GetMessagePumpForUI() const {
+@@ -150,11 +152,22 @@ bool CurrentUIThread::IsSet() {
+ #endif  // BUILDFLAG(IS_ANDROID)
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++bool CurrentUIThread::WatchMessagePort(
++    MsgPort* port, MessagePumpForUI::PortWatchController* controller,
++    RepeatingClosure callback) {
++  DCHECK(current_->IsBoundToCurrentThread());
++  return GetMessagePumpForUI()->WatchMessagePort(port, controller,
++                                               std::move(callback));
++}
++#endif
++
+ MessagePumpForUI* CurrentUIThread::GetMessagePumpForUI() const {
    return static_cast<MessagePumpForUI*>(current_->GetMessagePump());
  }
  
@@ -11030,7 +11141,7 @@ index dd959f737c8c66d6370d45a392a90e9abbbe5f0f..35c4a47e1404914a1d20d1837f624ef3
      int fd,
      bool persistent,
 diff --git a/base/task/current_thread.h b/base/task/current_thread.h
-index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..efbccd4e2dd309f01529b4ef11a3c128c734606b 100644
+index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..b41c6ec513895b20b38bcdfeb1ecb520d6e1dc74 100644
 --- a/base/task/current_thread.h
 +++ b/base/task/current_thread.h
 @@ -160,6 +160,12 @@ class BASE_EXPORT CurrentThread {
@@ -11060,9 +11171,16 @@ index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..efbccd4e2dd309f01529b4ef11a3c128
  };
  
  // UI extension of CurrentThread.
-@@ -247,7 +260,7 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
+@@ -246,8 +259,14 @@ class BASE_EXPORT CurrentUIThread : public CurrentThread {
+   static bool IsSet();
  
    CurrentUIThread* operator->() { return this; }
++#if BUILDFLAG(IS_AROS)
++  bool WatchMessagePort(MsgPort* port,
++                       MessagePumpForUI::PortWatchController* controller,
++                       RepeatingClosure callback);
++#endif
++
  
 -#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA)
 +#if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_AROS)
@@ -22850,6 +22968,21 @@ index f7dace047f1738c30344fdb07d36a4c2350eacae..a83e4066f1c4b2f25d28f159ae61eaf3
  #endif  // BUILDFLAG(IS_CHROMEOS)
  }
  
+diff --git a/chrome/browser/notifications/BUILD.gn b/chrome/browser/notifications/BUILD.gn
+index db93a36d53d31736269edae2eb99c89a97f0ee67..f35ead17c88d47876f5f78c653e170a865223a0c 100644
+--- a/chrome/browser/notifications/BUILD.gn
++++ b/chrome/browser/notifications/BUILD.gn
+@@ -189,6 +189,10 @@ source_set("impl") {
+     "scheduler/notification_schedule_service_factory.cc",
+   ]
+ 
++  if (is_aros) {
++    sources += [ "notification_platform_bridge_aros.cc" ]
++  }
++
+   public_deps = [
+     ":notifications",
+     "//chrome/browser:browser_public_dependencies",
 diff --git a/chrome/browser/notifications/notification_display_service_impl.cc b/chrome/browser/notifications/notification_display_service_impl.cc
 index 555b3c0ced2c5df3aa42cf8657a155c6fcb50c88..3b4908a6998be5db896ea4a87fa8518d491e3d86 100644
 --- a/chrome/browser/notifications/notification_display_service_impl.cc
@@ -22873,7 +23006,7 @@ index 555b3c0ced2c5df3aa42cf8657a155c6fcb50c88..3b4908a6998be5db896ea4a87fa8518d
      AddNotificationHandler(
          NotificationHandler::Type::TAILORED_SECURITY,
 diff --git a/chrome/browser/notifications/notification_platform_bridge.cc b/chrome/browser/notifications/notification_platform_bridge.cc
-index f24bd8bb11ff2bef8ce91c1c2cb918ee5a3f42ad..97dfd2da6450e8fbe3b27fe598df21b187867e81 100644
+index f24bd8bb11ff2bef8ce91c1c2cb918ee5a3f42ad..4896c60a002736fb197295a0e304a2259cdd8d57 100644
 --- a/chrome/browser/notifications/notification_platform_bridge.cc
 +++ b/chrome/browser/notifications/notification_platform_bridge.cc
 @@ -5,6 +5,7 @@
@@ -22884,35 +23017,200 @@ index f24bd8bb11ff2bef8ce91c1c2cb918ee5a3f42ad..97dfd2da6450e8fbe3b27fe598df21b1
  #include "base/files/file_path.h"
  #include "chrome/browser/profiles/profile.h"
  
-@@ -24,3 +25,15 @@ base::FilePath NotificationPlatformBridge::GetProfileBaseNameFromProfileId(
-     const std::string& profile_id) {
-   return base::FilePath::FromUTF8Unsafe(profile_id);
- }
+diff --git a/chrome/browser/notifications/notification_platform_bridge_aros.cc b/chrome/browser/notifications/notification_platform_bridge_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f92295f62d297dfe50ded5a1e9f6563b250a1c3f
+--- /dev/null
++++ b/chrome/browser/notifications/notification_platform_bridge_aros.cc
+@@ -0,0 +1,188 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
 +
-+#if BUILDFLAG(IS_AROS)
-+// AROS uses Chromium's message-center popup UI. No OS notification service
-+// is registered; the delegator retains its existing message-center fallback.
++#include "chrome/browser/notifications/notification_platform_bridge.h"
++
++#include <map>
++#include <optional>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
++#include "base/logging.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/current_thread.h"
++#include "base/unguessable_token.h"
++#include "chrome/browser/notifications/notification_display_service_impl.h"
++#include "chrome/common/notifications/notification_operation.h"
++#include "ui/message_center/public/cpp/notification.h"
++#include "url/origin.h"
++
++#include <exec/libraries.h>
++#include <libraries/application.h>
++#include <proto/exec.h>
++// Resolve the optional library from this bridge, never a shared engine global.
++#define __aros_getbase_ApplicationBase() (library_)
++#include <proto/application.h>
++
++namespace {
++
++class NotificationPlatformBridgeAros final : public NotificationPlatformBridge {
++ public:
++  NotificationPlatformBridgeAros() {
++    if (!base::CurrentUIThread::IsSet()) return;
++    library_ = OpenLibrary("application.library", 1);
++    if (!library_) return;
++    TagItem registration[] = {
++        {REGAPP_URLIdentifier, reinterpret_cast<IPTR>("org.chromium.browser")},
++        {REGAPP_NoIcon, TRUE}, {TAG_DONE, 0}};
++    app_id_ = RegisterApplicationA("Chromium", registration);
++    if (!app_id_) return;
++    TagItem attributes[] = {
++        {APPATTR_Port, reinterpret_cast<IPTR>(&port_)}, {TAG_DONE, 0}};
++    if (!GetApplicationAttrsA(app_id_, attributes) || !port_) return;
++    ready_ = base::CurrentUIThread::Get()->WatchMessagePort(
++        port_, &watch_,
++        base::BindRepeating(&NotificationPlatformBridgeAros::DrainMessages,
++                            weak_factory_.GetWeakPtr()));
++  }
++
++  ~NotificationPlatformBridgeAros() override {
++    weak_factory_.InvalidateWeakPtrs();
++    watch_.StopWatching();
++    for (const auto& [token, entry] : entries_) Withdraw(token);
++    if (app_id_) UnregisterApplicationA(app_id_, nullptr);
++    if (library_) CloseLibrary(library_);
++  }
++
++  void Display(NotificationHandler::Type type, Profile* profile,
++               const message_center::Notification& notification,
++               std::unique_ptr<NotificationCommon::Metadata> metadata) override {
++    Close(profile, notification.id());
++    if (!ready_) return;
++    const std::string token = "cef:" + base::UnguessableToken::Create().ToString();
++    const std::string title = base::UTF16ToUTF8(notification.title());
++    const std::string body = url::Origin::Create(notification.origin_url()).Serialize() +
++        "\n" + base::UTF16ToUTF8(notification.message());
++    TagItem tags[] = {
++        {APPNOTIFY_Title, reinterpret_cast<IPTR>(title.c_str())},
++        {APPNOTIFY_Text, reinterpret_cast<IPTR>(body.c_str())},
++        {APPNOTIFY_BackMsg, reinterpret_cast<IPTR>(token.c_str())},
++        {APPNOTIFY_ConfirmClose, TRUE}, {APPNOTIFY_CloseOnDC, TRUE},
++        {TAG_DONE, 0}};
++    // The OS copies the strings before returning. Opaque BackMsg tokens cannot
++    // invoke the server's special URL: command path.
++    const ULONG result = NotifyA(app_id_, tags);
++    if (result != APPNOTIFY_OK_MSGQUEUED) {
++      LOG(WARNING) << "Native AROS notification rejected: " << result;
++      return;
++    }
++    entries_.emplace(token, Entry{profile, type, notification.id(),
++                                  notification.origin_url()});
++  }
++
++  void Close(Profile* profile, const std::string& id) override {
++    for (auto it = entries_.begin(); it != entries_.end();) {
++      if (it->second.profile == profile && it->second.id == id) {
++        const std::string token = it->first;
++        it = entries_.erase(it);
++        Withdraw(token);
++      } else {
++        ++it;
++      }
++    }
++  }
++
++  void GetDisplayed(Profile*, GetDisplayedNotificationsCallback callback)
++      const override {
++    // application.library has no query for what the server still displays.
++    // Do not claim synchronization based only on our local token table.
++    std::move(callback).Run({}, false);
++  }
++
++  void GetDisplayedForOrigin(Profile*, const GURL&,
++                             GetDisplayedNotificationsCallback callback)
++      const override {
++    std::move(callback).Run({}, false);
++  }
++
++  void SetReadyCallback(NotificationBridgeReadyCallback callback) override {
++    std::move(callback).Run(ready_);
++  }
++
++  void DisplayServiceShutDown(Profile* profile) override {
++    for (auto it = entries_.begin(); it != entries_.end();) {
++      if (it->second.profile == profile) {
++        const std::string token = it->first;
++        it = entries_.erase(it);
++        Withdraw(token);
++      } else {
++        ++it;
++      }
++    }
++  }
++
++ private:
++  struct Entry {
++    raw_ptr<Profile> profile;
++    NotificationHandler::Type type;
++    std::string id;
++    GURL origin;
++  };
++
++  void Withdraw(const std::string& token) {
++    TagItem tags[] = {
++        {APPNOTIFY_Withdraw, reinterpret_cast<IPTR>(token.c_str())}, {TAG_DONE, 0}};
++    NotifyA(app_id_, tags);
++  }
++
++  void DrainMessages() {
++    auto alive = weak_factory_.GetWeakPtr();
++    while (auto* message = reinterpret_cast<ApplicationMsg*>(GetMsg(port_))) {
++      const ULONG type = message->type;
++      std::string token;
++      if (type == APPLIBMT_CustomMsg || type == APPLIBMT_ConfirmClose) {
++        const char* text = reinterpret_cast<ApplicationCustomMsg*>(message)->customMsg;
++        if (text) token = text;
++      }
++      ReplyMsg(&message->msg);
++      const auto found = entries_.find(token);
++      if (found == entries_.end()) continue;
++      const Entry entry = found->second;
++      const bool closed = type == APPLIBMT_ConfirmClose;
++      if (closed) entries_.erase(found);
++      auto* service = NotificationDisplayServiceImpl::GetForProfile(entry.profile);
++      if (service) {
++        // The native close message does not distinguish timeout from a user
++        // dismissal. Conservatively report false: do not manufacture user intent.
++        service->ProcessNotificationOperation(
++            closed ? NotificationOperation::kClose : NotificationOperation::kClick,
++            entry.type, entry.origin, entry.id, std::nullopt, std::nullopt,
++            closed ? std::optional<bool>(false) : std::nullopt,
++            std::nullopt, base::DoNothing());
++      }
++      if (!alive) return;
++    }
++  }
++
++  RAW_PTR_EXCLUSION Library* library_ = nullptr;
++  RAW_PTR_EXCLUSION MsgPort* port_ = nullptr;
++  ULONG app_id_ = 0;
++  bool ready_ = false;
++  std::map<std::string, Entry> entries_;
++  base::MessagePumpForUI::PortWatchController watch_;
++  base::WeakPtrFactory<NotificationPlatformBridgeAros> weak_factory_{this};
++};
++}  // namespace
++
 +std::unique_ptr<NotificationPlatformBridge> NotificationPlatformBridge::Create() {
-+  return nullptr;
++  return std::make_unique<NotificationPlatformBridgeAros>();
 +}
 +
-+bool NotificationPlatformBridge::CanHandleType(NotificationHandler::Type) {
-+  return false;
++bool NotificationPlatformBridge::CanHandleType(NotificationHandler::Type type) {
++  return type == NotificationHandler::Type::WEB_PERSISTENT ||
++         type == NotificationHandler::Type::WEB_NON_PERSISTENT;
 +}
-+#endif
-diff --git a/chrome/browser/notifications/notification_platform_bridge_delegator.cc b/chrome/browser/notifications/notification_platform_bridge_delegator.cc
-index d28134cf02567aa0ea3f746b7e39c8df5b295cdf..b82008c7a53264a2c5d3571a9ea384cbfe31de28 100644
---- a/chrome/browser/notifications/notification_platform_bridge_delegator.cc
-+++ b/chrome/browser/notifications/notification_platform_bridge_delegator.cc
-@@ -54,6 +54,8 @@ bool SystemNotificationsEnabled(Profile* profile) {
-   return true;
- #elif BUILDFLAG(IS_WIN)
-   return NotificationPlatformBridgeWin::SystemNotificationEnabled();
-+#elif BUILDFLAG(IS_AROS)
-+  return false;
- #else
- #if BUILDFLAG(IS_LINUX)
-   if (profile) {
 diff --git a/chrome/browser/optimization_guide/BUILD.gn b/chrome/browser/optimization_guide/BUILD.gn
 index 4729e1faed70c38e9b67f245fe74753d781460b5..eba05615019be7fde0a4122a45931a959a02beae 100644
 --- a/chrome/browser/optimization_guide/BUILD.gn
@@ -64880,15 +65178,17 @@ index 0000000000000000000000000000000000000000..efb6f48686c09f06f9ccde8e32602a37
 +#endif  // UI_OZONE_PLATFORM_AROS_AROS_WINDOW_H_
 diff --git a/ui/ozone/platform/aros/aros_window_manager.cc b/ui/ozone/platform/aros/aros_window_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..566292db9beeea9fa81c3d2d00130643c2dc5af8
+index 0000000000000000000000000000000000000000..393f53b6dd802266c7cfbeb14fc620d6d753ab30
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_window_manager.cc
-@@ -0,0 +1,457 @@
+@@ -0,0 +1,464 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "ui/ozone/platform/aros/aros_window_manager.h"
++#include "base/functional/bind.h"
++#include "base/task/current_thread.h"
 +#include "ui/ozone/platform/aros/aros_native_window.h"
 +
 +#include <utility>
@@ -64973,6 +65273,7 @@ index 0000000000000000000000000000000000000000..566292db9beeea9fa81c3d2d00130643
 +    }
 +  }
 +
++  presentation_watch_.StopWatching();
 +  if (owns_presentation_port_ && presentation_port_) {
 +    Forbid();
 +    RemPort(presentation_port_);
@@ -65017,6 +65318,10 @@ index 0000000000000000000000000000000000000000..566292db9beeea9fa81c3d2d00130643
 +    if (!owns_presentation_port_) {
 +      DeleteMsgPort(candidate);
 +    } else {
++      CHECK(base::CurrentUIThread::Get()->WatchMessagePort(
++          presentation_port_, &presentation_watch_,
++          base::BindRepeating(&ArosWindowManager::ProcessNativeEvents,
++                              base::Unretained(this))));
 +      LOG(INFO) << "[Chromium:Ozone:AROS] browser presentation port="
 +                << presentation_port_ << " name=" << kPresentationPortName;
 +    }
@@ -65343,10 +65648,10 @@ index 0000000000000000000000000000000000000000..566292db9beeea9fa81c3d2d00130643
 +}  // namespace ui
 diff --git a/ui/ozone/platform/aros/aros_window_manager.h b/ui/ozone/platform/aros/aros_window_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..523910e46fdb4e23a723bf60b73f45df9abf7bf9
+index 0000000000000000000000000000000000000000..636ed52467dc02bac4204408f847b459721a0716
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_window_manager.h
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,123 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -65367,6 +65672,7 @@ index 0000000000000000000000000000000000000000..523910e46fdb4e23a723bf60b73f45df
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/raw_ptr_exclusion.h"
 +#include "base/synchronization/lock.h"
++#include "base/message_loop/message_pump_for_ui.h"
 +#include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/size.h"
 +#include "ui/gfx/native_ui_types.h"
@@ -65456,6 +65762,7 @@ index 0000000000000000000000000000000000000000..523910e46fdb4e23a723bf60b73f45df
 +  RAW_PTR_EXCLUSION struct MsgPort* event_port_ = nullptr;
 +  RAW_PTR_EXCLUSION struct MsgPort* presentation_port_ = nullptr;
 +  RAW_PTR_EXCLUSION struct MsgPort* presentation_reply_port_ = nullptr;
++  base::MessagePumpForUI::PortWatchController presentation_watch_;
 +  bool owns_presentation_port_ = false;
 +  bool native_resources_released_ = false;
 +  gfx::AcceleratedWidget requested_activation_ = gfx::kNullAcceleratedWidget;
@@ -65740,7 +66047,7 @@ index 0000000000000000000000000000000000000000..3d6a4e2eceb589ff4ced7d9f0c7e7f2f
 +#endif  // UI_OZONE_PLATFORM_AROS_GL_OZONE_EGL_AROS_H_
 diff --git a/ui/ozone/platform/aros/ozone_platform_aros.cc b/ui/ozone/platform/aros/ozone_platform_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..e05cd57ad23257b3ae0263a2384179b6462f7b34
+index 0000000000000000000000000000000000000000..56411f373216e573449638a1a82ea7c4e1c38186
 --- /dev/null
 +++ b/ui/ozone/platform/aros/ozone_platform_aros.cc
 @@ -0,0 +1,257 @@
@@ -65761,7 +66068,6 @@ index 0000000000000000000000000000000000000000..e05cd57ad23257b3ae0263a2384179b6
 +#include "base/no_destructor.h"
 +#include "base/task/current_thread.h"
 +#include "base/time/time.h"
-+#include "base/timer/timer.h"
 +#include "ui/base/cursor/cursor_factory.h"
 +#include "ui/base/cursor/platform_cursor.h"
 +#include "ui/base/ime/input_method_minimal.h"
@@ -65818,14 +66124,15 @@ index 0000000000000000000000000000000000000000..e05cd57ad23257b3ae0263a2384179b6
 +  }
 +};
 +
-+// The first-window slice keeps IDCMP consumption local to Ozone. A subsequent
-+// commit will register the port signal directly with MessagePumpAROS.
++// Intuition wakes the native Exec pump when IDCMP messages arrive.
 +class ArosPlatformEventSource : public PlatformEventSource {
 + public:
 +  explicit ArosPlatformEventSource(ArosWindowManager* window_manager)
 +      : window_manager_(window_manager) {
-+    timer_.Start(FROM_HERE, base::Milliseconds(8), this,
-+                 &ArosPlatformEventSource::ProcessEvents);
++    CHECK(base::CurrentUIThread::Get()->WatchMessagePort(
++        window_manager_->event_port(), &watch_,
++        base::BindRepeating(&ArosPlatformEventSource::ProcessEvents,
++                            base::Unretained(this))));
 +  }
 +
 +  ArosPlatformEventSource(const ArosPlatformEventSource&) = delete;
@@ -65837,7 +66144,7 @@ index 0000000000000000000000000000000000000000..e05cd57ad23257b3ae0263a2384179b6
 +  void ProcessEvents() { window_manager_->ProcessNativeEvents(); }
 +
 +  raw_ptr<ArosWindowManager> window_manager_;
-+  base::RepeatingTimer timer_;
++  base::MessagePumpForUI::PortWatchController watch_;
 +};
 +
 +class OzonePlatformAros : public OzonePlatform,

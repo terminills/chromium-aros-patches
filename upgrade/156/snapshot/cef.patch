@@ -1230,7 +1230,7 @@ index 048402909952dc594b0ac36e1c55fe2d709c4901..80eaea882f2aa37abd0d57f0703ccee3
  #include "third_party/blink/public/platform/web_common.h"
  #include "v8/include/v8.h"
 diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
-index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..f70499cf8f5a2e38745e3d0d0c4bcda782642ecc 100644
+index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..1e40df3c209d36db9ba10d5bdff9cf7554e85605 100644
 --- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
 +++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
 @@ -5,6 +5,9 @@
@@ -1252,7 +1252,26 @@ index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..f70499cf8f5a2e38745e3d0d0c4bcda7
  
  ChromeContentRendererClientCef::ChromeContentRendererClientCef()
      : render_manager_(new CefRenderManager) {}
-@@ -37,6 +42,15 @@ void ChromeContentRendererClientCef::RenderThreadConnected() {
+@@ -31,12 +36,34 @@ void ChromeContentRendererClientCef::RenderThreadStarted() {
+   ChromeContentRendererClient::RenderThreadStarted();
+ 
+   render_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
++#if BUILDFLAG(IS_AROS)
++  base::CurrentThread::Get()->AddDestructionObserver(this);
++#endif
++}
++
++#if BUILDFLAG(IS_AROS)
++void ChromeContentRendererClientCef::WillDestroyCurrentMessageLoop() {
++  // The resident engine outlives its renderer task. Release sequence-bound
++  // Mojo endpoints here, while that task's execution environment still exists,
++  // rather than from the browser task's later AtExitManager callbacks.
++  base::CurrentThread::Get()->RemoveDestructionObserver(this);
++  render_manager_.reset();
+ }
++#endif
+ 
+ void ChromeContentRendererClientCef::RenderThreadConnected() {
    ChromeContentRendererClient::RenderThreadConnected();
  
    render_manager_->RenderThreadConnected();
@@ -1268,6 +1287,44 @@ index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..f70499cf8f5a2e38745e3d0d0c4bcda7
  }
  
  void ChromeContentRendererClientCef::RenderFrameCreated(
+diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.h b/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
+index 7275eae999949c050866dc8596898b2f353d0120..c7c3a3bf3f076d3c25eb18672d4a5dc299a7323c 100644
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
+@@ -10,6 +10,10 @@
+ 
+ #include "base/memory/scoped_refptr.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/task/current_thread.h"
++#endif
+ #include "chrome/renderer/chrome_content_renderer_client.h"
+ 
+ namespace cef {
+@@ -19,7 +23,11 @@ struct BrowserConfig;
+ class CefRenderManager;
+ 
+ // CEF override of ChromeContentRendererClient.
+-class ChromeContentRendererClientCef : public ChromeContentRendererClient {
++class ChromeContentRendererClientCef : public ChromeContentRendererClient
++#if BUILDFLAG(IS_AROS)
++    , public base::CurrentThread::DestructionObserver
++#endif
++{
+  public:
+   ChromeContentRendererClientCef();
+ 
+@@ -51,6 +59,9 @@ class ChromeContentRendererClientCef : public ChromeContentRendererClient {
+   void ExposeInterfacesToBrowser(mojo::BinderMap* binders) override;
+ 
+  private:
++#if BUILDFLAG(IS_AROS)
++  void WillDestroyCurrentMessageLoop() override;
++#endif
+   void OnBrowserCreated(blink::WebView* web_view,
+                         const cef::BrowserConfig& config);
+ 
 diff --git a/libcef/renderer/render_manager.cc b/libcef/renderer/render_manager.cc
 index 5012d60e6652794e1f5a8134325839e3f4156af2..5cb6970b31e5f5dc64a5422428d17370e720e63a 100644
 --- a/libcef/renderer/render_manager.cc
