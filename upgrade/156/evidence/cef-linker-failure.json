@@ -1,0 +1,14 @@
+{
+  "status": "Native CEF runtime unverified; final linker crash reproduced",
+  "private_aros_commit": "1b372a33",
+  "first_stage_bytes": 1161868320,
+  "final_link_returncode": -11,
+  "crash": "Binutils 2.47 bfd/elflink.c:6301 elf_link_add_archive_symbols while scanning libcef.a again",
+  "invalid_output_bytes": 9,
+  "regressions": [
+    "signaled child correctly returns failure",
+    "empty and nine-byte output rejected without mutation",
+    "valid ELF accepted"
+  ],
+  "next": "Validate final link without redundant whole-archive rescan, then native identity/browser tests"
+}

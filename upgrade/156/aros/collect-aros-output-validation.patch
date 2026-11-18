@@ -1,0 +1,75 @@
+From 1b372a33c5720729e117dad1e7dc6970238f1998 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Tue, 17 Nov 2026 18:30:35 -0600
+Subject: [PATCH] collect-aros: reject signaled link failures and invalid ELF
+ output
+
+---
+ tools/collect-aros/collect-aros.c   | 10 ++++++++++
+ tools/collect-aros/docommand-exec.c | 15 +++++++++++++--
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/tools/collect-aros/collect-aros.c b/tools/collect-aros/collect-aros.c
+index c4457432..f24968ec 100644
+--- a/tools/collect-aros/collect-aros.c
++++ b/tools/collect-aros/collect-aros.c
+@@ -56,6 +56,7 @@ static void exitfunc(void)
+ static int set_os_and_abi(const char *file)
+ {
+     int f;
++    unsigned char ident[16];
+     const unsigned char osabi = ELFOSABI_AROS;
+     const unsigned char abiversion = 1;
+ 
+@@ -63,6 +64,15 @@ static int set_os_and_abi(const char *file)
+ 
+     f = open(file, O_RDWR);
+     if (f >= 0) {
++        /* Never turn an empty or failed linker output into a nine-byte file. */
++        if (read(f, ident, sizeof(ident)) != sizeof(ident) ||
++            memcmp(ident, "\177ELF", 4) != 0 ||
++            (ident[4] != 1 && ident[4] != 2) ||
++            (ident[5] != 1 && ident[5] != 2) || ident[6] != 1) {
++            fprintf(stderr, "%s: linker output has no valid ELF identification\n", file);
++            close(f);
++            return 0;
++        }
+         lseek(f, EI_OSABI, SEEK_SET);
+         if (write(f, &osabi, 1) == 1) {
+             lseek(f, EI_ABIVERSION, SEEK_SET);
+diff --git a/tools/collect-aros/docommand-exec.c b/tools/collect-aros/docommand-exec.c
+index b59ebc60..d646a8ed 100644
+--- a/tools/collect-aros/docommand-exec.c
++++ b/tools/collect-aros/docommand-exec.c
+@@ -4,6 +4,7 @@
+ 
+ #include <unistd.h>
+ #include <stdlib.h>
++#include <stdio.h>
+ #include <string.h>
+ #include <errno.h>
+ #include <sys/wait.h>
+@@ -30,8 +31,18 @@ static void _docommandv(const char *command, char *argv[], int do_path)
+         _exit(EXIT_FAILURE);
+     }
+ 
+-    waitpid(pid, &status, 0);
+-    if (WEXITSTATUS(status) != 0)
++    while (waitpid(pid, &status, 0) == -1)
++    {
++        if (errno != EINTR)
++            fatal("waitpid()", strerror(errno));
++    }
++    if (WIFSIGNALED(status))
++    {
++        fprintf(stderr, "%s: terminated by signal %d\n", command,
++                WTERMSIG(status));
++        exit(EXIT_FAILURE);
++    }
++    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+         exit(EXIT_FAILURE);
+ }
+ 
+-- 
+2.53.0
+
