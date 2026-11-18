@@ -21406,7 +21406,7 @@ index 0000000000000000000000000000000000000000..bdeb67819dae8137813fb20593227c89
 +  // download UI remains authoritative.
 +}
 diff --git a/chrome/browser/enterprise/BUILD.gn b/chrome/browser/enterprise/BUILD.gn
-index 789007dc354d9640dc70e9fcc964c2245ceda486..046e4baa50dffad3aa043a83f1dc3ce4c5fda5c9 100644
+index 789007dc354d9640dc70e9fcc964c2245ceda486..ed70b5da24a5c641d1c923c5ee8de4215a27d52e 100644
 --- a/chrome/browser/enterprise/BUILD.gn
 +++ b/chrome/browser/enterprise/BUILD.gn
 @@ -278,7 +278,7 @@ source_set("enterprise") {
@@ -21465,7 +21465,15 @@ index 789007dc354d9640dc70e9fcc964c2245ceda486..046e4baa50dffad3aa043a83f1dc3ce4
      sources += [
        "connectors/device_trust/browser/signing_key_policy_observer.cc",
        "connectors/device_trust/signals/decorators/browser/browser_signals_decorator.cc",
-@@ -828,6 +832,18 @@ source_set("impl") {
+@@ -796,7 +800,6 @@ source_set("impl") {
+       "profile_management/profile_management_navigation_throttle.cc",
+       "remote_commands/cbcm_remote_commands_factory.cc",
+       "remote_commands/rotate_attestation_credential_job.cc",
+-      "reporting/browser_launch/browser_launch_event_uploader_desktop.cc",
+       "signals/system_signals_service_host_factory.cc",
+       "signin/enterprise_signin_prefs.cc",
+       "signin/enterprise_signin_service.cc",
+@@ -828,6 +831,18 @@ source_set("impl") {
        "//chrome/browser/ui/browser_window:create_browser_window",
        "//chrome/services/system_signals/public/cpp/browser",
      ]
