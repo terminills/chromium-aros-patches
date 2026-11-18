@@ -11075,18 +11075,18 @@ index 0000000000000000000000000000000000000000..d274923a1bb18a9c7b32a4c52e7d3ce5
 +
 +}  // namespace base
 diff --git a/base/synchronization/condition_variable_posix.cc b/base/synchronization/condition_variable_posix.cc
-index 80c786ff6a4e218d5cc91b07b825af038fb3bb83..867a652dc7da595c3122dc8a48351758dfbfd517 100644
+index 80c786ff6a4e218d5cc91b07b825af038fb3bb83..806a74092c9523869e18a189f4f85892225b092f 100644
 --- a/base/synchronization/condition_variable_posix.cc
 +++ b/base/synchronization/condition_variable_posix.cc
-@@ -41,7 +41,7 @@ ConditionVariable::ConditionVariable(Lock* user_lock)
+@@ -41,6 +41,8 @@ ConditionVariable::ConditionVariable(Lock* user_lock)
    // non-standard pthread_cond_timedwait_monotonic_np. Newer platform
    // versions have pthread_condattr_setclock.
    // Mac can use relative time deadlines.
--#if !BUILDFLAG(IS_APPLE) && !defined(HAVE_PTHREAD_COND_TIMEDWAIT_MONOTONIC)
-+#if !BUILDFLAG(IS_AROS) && !BUILDFLAG(IS_APPLE) && !defined(HAVE_PTHREAD_COND_TIMEDWAIT_MONOTONIC)
++// AROS supports monotonic condition attributes. TimedWait below computes
++  // monotonic deadlines, so the default realtime condition clock is unsuitable.
+ #if !BUILDFLAG(IS_APPLE) && !defined(HAVE_PTHREAD_COND_TIMEDWAIT_MONOTONIC)
    pthread_condattr_t attrs;
    rv = pthread_condattr_init(&attrs);
-   DCHECK_EQ(0, rv);
 diff --git a/base/synchronization/lock_impl.h b/base/synchronization/lock_impl.h
 index bc2e18a3615804506ac008fef2d0f0ead1bdbd22..b8e4e9bf7b9a4307080c1448c4b6441d78b63b03 100644
 --- a/base/synchronization/lock_impl.h
@@ -59094,6 +59094,49 @@ index e2b9ab66ffcfbc73cdbec2ba8086148dba6fec5f..7851610ee7e07ddfc151ad7907b07edb
    final_results_ = std::move(new_final_results);
  
    // The recognizer reports timestamps as offsets from the start of the audio
+diff --git a/third_party/blink/renderer/modules/storage/storage_controller.cc b/third_party/blink/renderer/modules/storage/storage_controller.cc
+index 17045a9ece7f677726ff0df2d753452beaccfeb8..1376b9597d1a958432bde29117b71328851c094e 100644
+--- a/third_party/blink/renderer/modules/storage/storage_controller.cc
++++ b/third_party/blink/renderer/modules/storage/storage_controller.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/modules/storage/storage_controller.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/feature_list.h"
+ #include "base/system/sys_info.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -42,12 +47,26 @@ StorageController::DomStorageConnection GetDomStorageConnection() {
+ 
+ // static
+ StorageController* StorageController::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  // Namespaces, heap roots and Mojo endpoints belong to the renderer that
++  // obtained the DOM storage connection, even when engine code is resident.
++  struct RendererStorageOwner {
++    base::NoDestructor<StorageController> controller{
++        GetDomStorageConnection(),
++        base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled()
++            ? kStorageControllerTotalCacheLimitInBytesLowEnd
++            : kStorageControllerTotalCacheLimitInBytes};
++  };
++  return base::aros::ProcessLocalValue<RendererStorageOwner,
++                                      RendererStorageOwner>().controller.get();
++#else
+   DEFINE_STATIC_LOCAL(StorageController, gCachedStorageAreaController,
+                       (GetDomStorageConnection(),
+                        base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled()
+                            ? kStorageControllerTotalCacheLimitInBytesLowEnd
+                            : kStorageControllerTotalCacheLimitInBytes));
+   return &gCachedStorageAreaController;
++#endif
+ }
+ 
+ // static
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_node.h b/third_party/blink/renderer/modules/webaudio/audio_node.h
 index 87708df18172458096920da594f2e542e8afdd55..10264bf58a21af04aabbb714f2f9ece17a978c6e 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_node.h
@@ -59336,10 +59379,10 @@ index dda62e570ddfc5cdf536af205c323b2948b19a7d..d04c6f2eb5ff6d27dd60f047018fa69f
  
    bool has_capacity_limit_ = false;
 diff --git a/third_party/blink/renderer/platform/exported/platform.cc b/third_party/blink/renderer/platform/exported/platform.cc
-index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c857646db5 100644
+index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..4e8b9c8c15af114157da64d7c8c30bd8cb14ad31 100644
 --- a/third_party/blink/renderer/platform/exported/platform.cc
 +++ b/third_party/blink/renderer/platform/exported/platform.cc
-@@ -30,9 +30,14 @@
+@@ -30,14 +30,21 @@
  
  #include "third_party/blink/public/platform/platform.h"
  
@@ -59347,14 +59390,21 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
  #include <memory>
  
  #include "base/notimplemented.h"
-+#include "base/command_line.h"
 +#include "base/logging.h"
 +#include "base/no_destructor.h"
 +#include "base/synchronization/lock.h"
  #include "base/task/sequenced_task_runner.h"
  #include "base/task/single_thread_task_runner.h"
  #include "base/threading/thread_checker.h"
-@@ -106,12 +111,24 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
+ #include "base/trace_event/memory_dump_manager.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "components/viz/common/gpu/raster_context_provider.h"
+ #include "gpu/ipc/client/gpu_channel_host.h"
+ #include "media/base/media_log.h"
+@@ -106,12 +113,24 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
                         base::OnceClosure task,
                         base::TimeDelta delay) override {
      DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
@@ -59379,7 +59429,7 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
    }
  
   protected:
-@@ -123,9 +140,76 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
+@@ -123,9 +142,76 @@ class IdleDelayedTaskHelper : public base::SingleThreadTaskRunner {
  
  }  // namespace
  
@@ -59392,7 +59442,7 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
 +
 +struct PlatformStateRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, PlatformProcessState> states;
++  std::map<uint64_t, PlatformProcessState> states;
 +};
 +
 +PlatformStateRegistry& GetPlatformStateRegistry() {
@@ -59400,10 +59450,10 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
 +  return *registry;
 +}
 +
-+const base::CommandLine* GetCurrentProcessIdentity() {
-+  return base::CommandLine::InitializedForCurrentProcess()
-+             ? base::CommandLine::ForCurrentProcess()
-+             : nullptr;
++uint64_t GetCurrentProcessIdentity() {
++  // A retained state must not attach to a new renderer when an old command-line
++  // allocation address is reused after native child shutdown.
++  return base::aros::CurrentProcessIdentity();
 +}
 +
 +PlatformProcessState GetCurrentPlatformState() {
@@ -59458,7 +59508,7 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
  
  Platform::Platform() = default;
  
-@@ -137,35 +221,35 @@ WebThemeEngine* Platform::ThemeEngine() {
+@@ -137,35 +223,35 @@ WebThemeEngine* Platform::ThemeEngine() {
  
  void Platform::InitializeBlink(
      std::optional<cppgc::StackStartMarker> stack_start_marker) {
@@ -59501,7 +59551,7 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
    MainThread::SetMainThread(std::move(main_thread));
  
    ThreadState* thread_state = ThreadState::Current();
-@@ -207,13 +291,23 @@ void Platform::InitializeMainThreadCommon(
+@@ -207,13 +293,23 @@ void Platform::InitializeMainThreadCommon(
    // This relies on being called prior to
    // PartitionAllocSupport::ReconfigureAfterTaskRunnerInit, which would start
    // memory reclaimer with a regular task runner. The first one prevails.
@@ -59526,7 +59576,7 @@ index 10bb2014026a2cdd06af05823dd5fcd7e3ceb3e2..ade6b129cd6bc70182ed67e2cd8445c8
  }
  
  void Platform::CreateMainThreadForTesting() {
-@@ -234,7 +328,7 @@ void Platform::UnsetMainThreadTaskRunnerForTesting() {
+@@ -234,7 +330,7 @@ void Platform::UnsetMainThreadTaskRunnerForTesting() {
  }
  
  Platform* Platform::Current() {

@@ -235,3 +235,10 @@ Final source snapshot adds renderer-owned extension client/dispatcher, extension
 
 
 Final renderer-extension-state complete archives pass on both x64 (full3) and ARM (full3). Native links are in progress. Host-only watcher regressions reject incomplete child counts and mismatched allocator addresses, including the retained actual run100 interleaved log. These parser checks are not native runtime proof.
+
+
+### Native101 DOM storage ownership and native clock contract
+
+Both renderer-extension-state native links pass. Native101 reaches blank first paint in both windows, then localStorage.setItem uses a Mojo endpoint on the wrong sequence. Exact symbols identify StorageAreaProxy::GetAll, CachedStorageArea::EnsureLoaded and the V8 storage callback. The engine-global StorageController held renderer heap roots, namespaces and Mojo state. New snapshot scopes it per renderer without disabling sequence checks. Multi-app content/isolation/shutdown checks have not passed. Strict allocator parsing correctly reports unknown because one entry was interleaved.
+
+The native x64 SDK clock probe requests100ms monotonic deadlines: NULL/default realtime attributes return after1082us, explicit monotonic attributes after100077us. Both SDK timeout calls return normally. Chromium had selected default attributes while computing monotonic deadlines; the new snapshot enables its existing monotonic attribute path on AROS. This is a Chromium adapter fix, not a direct Exec lock migration or explanation of ARM stalls. Native102 wrapper validation remains pending. The separate platform registry change replaces recycled CommandLine pointer identities with monotonic native owner IDs.
