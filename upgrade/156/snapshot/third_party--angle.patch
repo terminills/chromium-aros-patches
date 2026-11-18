@@ -906,6 +906,21 @@ index 1d89bf7b0b31a8de81e2b7446ccd03d419788b89..69f968e70ac7056a6afdbcda1cd30a3e
    gl_backend_sources += [
      "egl/ContextEGL.cpp",
      "egl/ContextEGL.h",
+diff --git a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+index a0cb7f93ecc2592c51b2673f1648b45ab68a4eb1..95f0a4a44a8ea50970dd2afa00160d6b74b15776 100644
+--- a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+@@ -29,7 +29,9 @@
+ // unavailable (e.g. the ChromeOS wgpu build) CreateWgpuWindowSurface is stubbed out below and no
+ // EGL_WINDOW_BIT config is advertised. Unlike the rest of the backend, X11 vs Wayland is chosen at
+ // runtime (see DisplayWgpu::initialize) because a single Linux build commonly enables both.
+-#if defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)
++// AROS has no Dawn window-surface adapter yet; do not advertise EGL_WINDOW_BIT.
++#if (defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)) || \
++    defined(ANGLE_PLATFORM_AROS)
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 0
+ #else
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 1
 diff --git a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp b/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
 index bd7c8a9cd1e255da88020418db78f3c95d75041c..df4e59889e3fdfdcdbc681c723e45550bb032eb4 100644
 --- a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp

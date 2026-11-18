@@ -5,6 +5,32 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
+## Current validation status — 2026-11-18 UTC
+
+Both architectures have produced complete CEF archives; further desktop
+dependency fixes are rebuilding. A usable native CEF module has **not** linked.
+An earlier zero-exit build produced a nine-byte invalid file after the linker
+crashed. The host collector now propagates child signals, validates ELF output,
+checks inspection-tool failures, and avoids rescanning whole archives already
+included in its first stage. The corrected link exposes unresolved dependencies
+and fails correctly. No native browser-window success is claimed.
+
+Both native V8 modules now include the Exec worker backend and shared code
+arena. The controlled x86-64 test reduced the second application's measured
+incremental allocation to 560,627,664 bytes, still unacceptable, and did not
+complete its lifecycle test. Traces identified a separate 256 MiB dispatch-table
+reservation per isolate. The current AROS-only candidate shares that backing
+reservation while retaining separate isolate tables, spaces and freelists.
+It compiles for both architectures; full rebuild and native memory/lifecycle
+validation are pending. The original 2 MiB PartitionAlloc policy remains.
+
+Desktop integration is incomplete. Native screen-lock notifications and
+Workbench shortcut creation are unavailable; shortcut calls report failure.
+External Vulkan buffer imports have no native handle contract, and the ANGLE
+WebGPU backend has no AROS window adapter. These paths must not advertise
+capabilities they cannot provide. Native Vulkan swapchain rendering remains
+separately validated; browser-level Vulkan integration is pending.
+
 Pinned inputs:
 
 | Input | Revision |

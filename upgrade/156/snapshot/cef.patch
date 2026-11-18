@@ -1,8 +1,8 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca62c16ae87 100644
+index 2018b0dc0401765f44d94a61a8947072519ad413..23d407373e441a4e5f4fa8b0f23b18fdc32429ec 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -926,6 +926,20 @@ source_set("libcef_static") {
+@@ -926,6 +926,23 @@ source_set("libcef_static") {
      "//chrome/app/chrome_main_delegate.h",
    ]
  
@@ -17,13 +17,16 @@ index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca6
 +    # Crashpad is not available on AROS. crash_reporting.cc keeps the public
 +    # CEF hooks as no-ops, so do not pull the Crashpad client implementation
 +    # (and its unsupported platform base) into the resident archive.
-+    sources -= [ "libcef/common/crash_reporter_client.cc" ]
++    sources -= [
++      "libcef/common/crash_reporter_client.cc",
++      "libcef/browser/crashpad_runner.cc",
++    ]
 +  }
 +
    configs += [
      "libcef/features:config",
      "//build/config:precompiled_headers",
-@@ -1017,7 +1031,6 @@ source_set("libcef_static") {
+@@ -1017,7 +1034,6 @@ source_set("libcef_static") {
      "//third_party/blink/public:blink",
      "//third_party/brotli:dec",
      "//third_party/cld_3/src/src:cld_3",
@@ -31,7 +34,7 @@ index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca6
      "//third_party/hunspell",
      "//third_party/leveldatabase",
      "//third_party/libxml:libxml",
-@@ -1041,6 +1054,10 @@ source_set("libcef_static") {
+@@ -1041,6 +1057,10 @@ source_set("libcef_static") {
      "//v8",
    ]
  
@@ -42,7 +45,7 @@ index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca6
    if (is_win) {
      sources += includes_win + [
        "libcef/browser/native/browser_platform_delegate_native_win.cc",
-@@ -1098,6 +1115,24 @@ source_set("libcef_static") {
+@@ -1098,6 +1118,24 @@ source_set("libcef_static") {
      }
    }
  
@@ -67,7 +70,7 @@ index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca6
    if (is_mac) {
      sources += includes_mac + [
        "libcef/browser/chrome/chrome_content_browser_client_cef_mac.mm",
-@@ -1720,6 +1755,11 @@ action("make_config_header") {
+@@ -1720,6 +1758,11 @@ action("make_config_header") {
    outputs = [ "$root_gen_dir/cef/include/cef_config.h" ]
  
    args = rebase_path(outputs + inputs, root_build_dir)
@@ -79,7 +82,7 @@ index 2018b0dc0401765f44d94a61a8947072519ad413..15b4560cf282d07200562011569daca6
  }
  
  # Generate cef_color_ids.h.
-@@ -1942,10 +1982,21 @@ if (is_mac) {
+@@ -1942,10 +1985,21 @@ if (is_mac) {
      info_plist_target = ":cef_framework_plist"
    }
  } else {

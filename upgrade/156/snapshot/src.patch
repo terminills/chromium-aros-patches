@@ -20005,7 +20005,7 @@ index 2b3ed5cf2e01569c71e7dd6872b630983956f419..059ffb20f277f8d18b7706f0a71e9fb5
  
    // Initialize features and field trials, either from command line or from
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe592579687789dfcce4 100644
+index 5aa5b0447d68508bd5224b84ec040617c9a136ac..baf484f66e0edd2b4c5526a0661629f0ee0a6f65 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -527,7 +527,11 @@ if (!is_win && !is_android) {
@@ -20021,7 +20021,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
      deps = [
        ":process_singleton",
        ":process_singleton_internal",
-@@ -1608,6 +1612,18 @@ source_set("core") {
+@@ -1608,6 +1612,20 @@ source_set("core") {
      ]
    }
  
@@ -20033,14 +20033,16 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
 +      "platform_util_aros.cc",
 +      "shell_integration_aros.cc",
 +    ]
-+    deps += [ ":fullscreen", "//components/os_crypt/async/browser:aros_key_provider",
++    deps += [ ":fullscreen", "//chrome/browser/sensor",
++              "//chrome/browser/headless:headless_extra_parts",
++              "//components/os_crypt/async/browser:aros_key_provider",
 +              "//components/os_crypt/browser:posix_key_provider" ]
 +  }
 +
    if (is_linux || is_chromeos) {
      sources += [
        "chrome_browser_main_linux.cc",
-@@ -1848,7 +1864,6 @@ source_set("core") {
+@@ -1848,7 +1866,6 @@ source_set("core") {
      deps += [
        "//chrome/browser/screen_ai:screen_ai_downloader",
        "//chrome/browser/screen_ai:screen_ai_install_state",
@@ -20048,7 +20050,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
      ]
    }
  
-@@ -1892,6 +1907,10 @@ source_set("core") {
+@@ -1892,6 +1909,10 @@ source_set("core") {
      deps += [ "//chrome/browser/ui/webui/skills" ]
    }
  
@@ -20059,7 +20061,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
    if (enable_pdf) {
      deps += [
        "//chrome/browser/pdf",
-@@ -1989,7 +2008,7 @@ source_set("core") {
+@@ -1989,7 +2010,7 @@ source_set("core") {
      ]
    }
  
@@ -20068,7 +20070,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
      sources += [ "//chrome/app/chrome_crash_reporter_client.cc" ]
      deps += [
        "//chrome/app:chrome_crash_reporter_client",
-@@ -2078,6 +2097,7 @@ source_set("browser") {
+@@ -2078,6 +2099,7 @@ source_set("browser") {
      ":unexpire_flags",
      "//base",
      "//cc",
@@ -20076,7 +20078,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
      "//chrome:extra_resources",
      "//chrome/browser/accessibility:impl",
      "//chrome/browser/account_settings",
-@@ -2535,6 +2555,10 @@ source_set("browser") {
+@@ -2535,6 +2557,10 @@ source_set("browser") {
      ]
    }
  
@@ -20087,7 +20089,7 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
    if (is_android) {
      deps += [
        "//chrome/browser/android",
-@@ -2608,7 +2632,6 @@ source_set("browser") {
+@@ -2608,7 +2634,6 @@ source_set("browser") {
        "//chrome/browser/profile_resetter:impl",
        "//chrome/browser/record_replay",
        "//chrome/browser/record_replay:impl",
@@ -20095,6 +20097,16 @@ index 5aa5b0447d68508bd5224b84ec040617c9a136ac..2d7a6054dd149a4e609ebe5925796877
        "//chrome/browser/sharing_hub",
        "//chrome/browser/sharing_hub:impl",
        "//chrome/browser/smart_card",
+@@ -3152,7 +3177,8 @@ source_set("browser") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos || is_desktop_android) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_desktop_android ||
++      is_aros) {
+     deps += [ "//chrome/browser/ui/webui/ai_overlay_dialog:impl" ]
+   }
+ 
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 index 3bd06fa95993f6060b6b1992c66bbed30cdc2f1b..830df141c5da80903c9f1cd7d4f6a86249f9bcbd 100644
 --- a/chrome/browser/about_flags.cc
@@ -22838,7 +22850,7 @@ index 0000000000000000000000000000000000000000..cc0bf9d9fc5a2f696c222f78b1527d72
 +
 +}  // namespace platform_util
 diff --git a/chrome/browser/policy/BUILD.gn b/chrome/browser/policy/BUILD.gn
-index 2bb59d3e6217e3e126ab73b331940b2f66cdb7ff..ab676bd4b42c4a74020c85d46c3695d3f428ec6f 100644
+index 2bb59d3e6217e3e126ab73b331940b2f66cdb7ff..5105f84040fd5699fda69e408c18100839a85b76 100644
 --- a/chrome/browser/policy/BUILD.gn
 +++ b/chrome/browser/policy/BUILD.gn
 @@ -22,12 +22,15 @@ source_set("path_parser") {
@@ -22857,6 +22869,15 @@ index 2bb59d3e6217e3e126ab73b331940b2f66cdb7ff..ab676bd4b42c4a74020c85d46c3695d3
    ]
  
    if (is_mac) {
+@@ -1541,7 +1544,7 @@ source_set("impl") {
+     }
+   }
+ 
+-  if (is_linux || is_win || is_mac || is_chromeos) {
++  if (is_linux || is_win || is_mac || is_chromeos || is_aros) {
+     sources += [ "battery_saver_policy_handler.cc" ]
+   }
+ 
 @@ -1557,6 +1560,13 @@ source_set("impl") {
      ]
    }
@@ -24978,6 +24999,21 @@ index 0000000000000000000000000000000000000000..d8029161529aee1278f687cbd3559ffb
 +
 +}  // namespace internal
 +}  // namespace shell_integration
+diff --git a/chrome/browser/shortcuts/BUILD.gn b/chrome/browser/shortcuts/BUILD.gn
+index bdb19c1837b290193f3ff6d1c8363e2149833919..501f3e40649f010b97b946564de24bd53b4d2a88 100644
+--- a/chrome/browser/shortcuts/BUILD.gn
++++ b/chrome/browser/shortcuts/BUILD.gn
+@@ -58,6 +58,10 @@ source_set("shortcuts") {
+     deps += [ "//chrome/common:non_code_constants" ]
+   }
+ 
++  if (is_aros) {
++    sources += [ "shortcut_creator_aros.cc" ]
++  }
++
+   friend = [
+     ":browser_tests",
+     ":test_support",
 diff --git a/chrome/browser/shortcuts/icon_badging.cc b/chrome/browser/shortcuts/icon_badging.cc
 index 35cd2cb10bf55167b95372a08df6bf20f0f10fb2..2b7a0fb266d73785484d3f6f46d9fea6b4c7f212 100644
 --- a/chrome/browser/shortcuts/icon_badging.cc
@@ -24991,6 +25027,44 @@ index 35cd2cb10bf55167b95372a08df6bf20f0f10fb2..2b7a0fb266d73785484d3f6f46d9fea6
  constexpr ShortcutSize kSizesNeededForShortcutCreation[] = {ShortcutSize::k32,
                                                              ShortcutSize::k128};
  #elif BUILDFLAG(IS_WIN)
+diff --git a/chrome/browser/shortcuts/shortcut_creator_aros.cc b/chrome/browser/shortcuts/shortcut_creator_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..e7e70ad3992b171b3148443fdcd922a71958af5b
+--- /dev/null
++++ b/chrome/browser/shortcuts/shortcut_creator_aros.cc
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/shortcuts/shortcut_creator.h"
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/task/thread_pool.h"
++
++namespace shortcuts {
++
++void CreateShortcutOnUserDesktop(ShortcutMetadata shortcut_metadata,
++                                 ShortcutCreatorCallback complete) {
++  CHECK(shortcut_metadata.IsValid());
++  // Workbench does not expose a filesystem desktop directory (AROS's
++  // DIR_USER_DESKTOP is unavailable). Until native icon/leave-out integration
++  // exists, report the operation as failed rather than publish an unusable
++  // Linux .desktop file or report a shortcut that was never created.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(std::move(complete), base::FilePath(),
++                               ShortcutCreatorResult::kError));
++}
++
++scoped_refptr<base::SequencedTaskRunner> GetShortcutsTaskRunner() {
++  return base::ThreadPool::CreateSequencedTaskRunner(
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
++}
++
++}  // namespace shortcuts
 diff --git a/chrome/browser/shutdown_signal_handlers_posix.cc b/chrome/browser/shutdown_signal_handlers_posix.cc
 index c3094309b7ad7a05dc777707f4065e62a0fb2e5f..94a2fc31bb21dbc697ac5b13bb6328d47f72f14b 100644
 --- a/chrome/browser/shutdown_signal_handlers_posix.cc
@@ -25206,6 +25280,37 @@ index 4624ffb7a55625936a6e8b5d47aae67783eea2ee..ff16bb3c4fe42520eea46903292ed46e
  // True if the user has explicitly disabled syncing history, tabs or saved tab
  // groups through the settings. The primary account must be set (this crashes
  // otherwise).
+diff --git a/chrome/browser/supervised_user/BUILD.gn b/chrome/browser/supervised_user/BUILD.gn
+index ce58290ec6285475e1bf64902a9153698ffb19b0..137f959d1495886637f17374972cd6ce0028249e 100644
+--- a/chrome/browser/supervised_user/BUILD.gn
++++ b/chrome/browser/supervised_user/BUILD.gn
+@@ -53,7 +53,7 @@ source_set("supervised_user") {
+     public += [ "desktop/supervised_user_service_platform_delegate.h" ]
+   }
+ 
+-  if (is_linux || is_mac || is_win) {
++  if (is_linux || is_mac || is_win || is_aros) {
+     public += [
+       "linux_mac_windows/parent_access_dialog_result_observer.h",
+       "linux_mac_windows/parent_access_view.h",
+@@ -198,7 +198,7 @@ source_set("impl") {
+     ]
+   }
+ 
+-  if (is_linux || is_mac || is_win) {
++  if (is_linux || is_mac || is_win || is_aros) {
+     sources += [
+       "linux_mac_windows/parent_access_dialog_result_observer.cc",
+       "linux_mac_windows/parent_access_view.cc",
+@@ -288,7 +288,7 @@ source_set("unit_tests") {
+     ]
+   }
+ 
+-  if (is_linux || is_mac || is_win) {
++  if (is_linux || is_mac || is_win || is_aros) {
+     sources += [ "linux_mac_windows/supervised_user_extensions_metrics_delegate_impl_unittest.cc" ]
+   }
+ 
 diff --git a/chrome/browser/supervised_user/supervised_user_browser_utils.cc b/chrome/browser/supervised_user/supervised_user_browser_utils.cc
 index 8f6655459d0d7cf9f3972b618324f9262bfa7301..0a3c5d72bede3c46aae7f4bab47688a2369d844f 100644
 --- a/chrome/browser/supervised_user/supervised_user_browser_utils.cc
@@ -26696,6 +26801,28 @@ index 909760e08cf432e48a92eff23eb80d2b11ee08d9..044684c6fc691ee3ad06c221c8f86a0e
  
  source_set("exclusive_access") {
    sources = [
+diff --git a/chrome/browser/ui/extensions/BUILD.gn b/chrome/browser/ui/extensions/BUILD.gn
+index 7d3f03ae3d9ad911cbe8376c6ebb40826527723f..7cf7e0b077611db5324d03750acb4d5864c35948 100644
+--- a/chrome/browser/ui/extensions/BUILD.gn
++++ b/chrome/browser/ui/extensions/BUILD.gn
+@@ -70,7 +70,7 @@ source_set("extensions") {
+     public_deps += [ "//components/messages/android" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "extension_install_ui_desktop.h" ]
+   }
+   public_deps += [
+@@ -217,7 +217,7 @@ source_set("impl") {
+     "//ui/strings",
+   ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "extension_install_ui_desktop.cc" ]
+     deps += [
+       "//chrome/app:generated_resources",
 diff --git a/chrome/browser/ui/extensions/extension_dialog_utils_views.cc b/chrome/browser/ui/extensions/extension_dialog_utils_views.cc
 index 12c3bc947ddb641a538f18bb742a69ca00ef6ec4..e28ef5223c966f24d8745dac756ea646f685553e 100644
 --- a/chrome/browser/ui/extensions/extension_dialog_utils_views.cc
@@ -27050,6 +27177,28 @@ index dfa099796f9f360f3d6d7b64976c9d794b2907d5..9090ef7e85788919ceacb3a8cb79034a
  
  source_set("page_info") {
    sources = [
+diff --git a/chrome/browser/ui/passwords/BUILD.gn b/chrome/browser/ui/passwords/BUILD.gn
+index ea77a80943b51efdd9724483d1ad9d0c367eeabc..02d82a049fe22220848b3d4b819f12fd567e435a 100644
+--- a/chrome/browser/ui/passwords/BUILD.gn
++++ b/chrome/browser/ui/passwords/BUILD.gn
+@@ -53,7 +53,7 @@ source_set("passwords") {
+     deps += [ "//chrome/browser/ui/toasts/api:toasts" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "password_cross_domain_confirmation_popup_controller_impl.h",
+       "password_cross_domain_confirmation_popup_controller_interface.h",
+@@ -170,7 +170,7 @@ source_set("impl") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "password_cross_domain_confirmation_popup_controller_impl.cc" ]
+   }
+ 
 diff --git a/chrome/browser/ui/pdf/BUILD.gn b/chrome/browser/ui/pdf/BUILD.gn
 index 6543e88e211719d421531684f87cf8c8e2237362..37e4c047d66a68d3890126e101b882b6c4127d50 100644
 --- a/chrome/browser/ui/pdf/BUILD.gn
@@ -30852,6 +31001,19 @@ index 50e546251e9f8021683a6929593205daefbb0596..57c9e8d4659ddab00fc3cd30be8af5f3
    ToolbarView(const ToolbarView&) = delete;
    ToolbarView& operator=(const ToolbarView&) = delete;
    ~ToolbarView() override;
+diff --git a/chrome/browser/ui/views/web_apps/BUILD.gn b/chrome/browser/ui/views/web_apps/BUILD.gn
+index 007cd118004523ac09aaa8f385e315b113371045..8ba574de180b1703269ab793f466981bf0e26277 100644
+--- a/chrome/browser/ui/views/web_apps/BUILD.gn
++++ b/chrome/browser/ui/views/web_apps/BUILD.gn
+@@ -62,7 +62,7 @@ source_set("web_apps") {
+     "//url",
+   ]
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     public += [
+       "deprecated_apps_dialog_view.h",
+       "force_installed_deprecated_apps_dialog_view.h",
 diff --git a/chrome/browser/ui/web_applications/web_app_dialogs.h b/chrome/browser/ui/web_applications/web_app_dialogs.h
 index a854ba3c7443437268e33e4fb453798472f4ada9..9c2fce90a9bdc854750778b31911879f59fdd136 100644
 --- a/chrome/browser/ui/web_applications/web_app_dialogs.h
@@ -31688,6 +31850,28 @@ index 4c523d48d8f8537042a9483e4fd0c6d163c8de52..35a8e8de47893687e3a11a762c7101a3
  
  #if BUILDFLAG(IS_MAC)
    html_source->AddString(version_ui::kOSType, base::mac::GetOSDisplayName());
+diff --git a/chrome/browser/ui/webui/whats_new/BUILD.gn b/chrome/browser/ui/webui/whats_new/BUILD.gn
+index c43f8490ee17c43c0b6a742b5a439554c4e84006..d5a7ac07c761ca028d987d8c26fe41cd90ec07be 100644
+--- a/chrome/browser/ui/webui/whats_new/BUILD.gn
++++ b/chrome/browser/ui/webui/whats_new/BUILD.gn
+@@ -24,7 +24,7 @@ source_set("whats_new") {
+     "//url",
+   ]
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "whats_new_fetcher.h",
+       "whats_new_handler.h",
+@@ -73,7 +73,7 @@ source_set("impl") {
+     "//url",
+   ]
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_aros) {
+     sources += [
+       "whats_new_fetcher.cc",
+       "whats_new_handler.cc",
 diff --git a/chrome/browser/ui/window_feature_controller/window_feature_controller.cc b/chrome/browser/ui/window_feature_controller/window_feature_controller.cc
 index ec7bd3ea6cd00a5093b9bac2cfca9fe1a0bc4bfb..ec531f37cd4a3fa404f85dd98ca56451339226b7 100644
 --- a/chrome/browser/ui/window_feature_controller/window_feature_controller.cc
@@ -31900,6 +32084,19 @@ index 467440fac1ff59f8de623e9b6875d6ad2c518b76..2d51ab259cefc3bc898acf5d0b2b1992
    if (is_linux) {
      # Desktop linux, doesn't count ChromeOS.
      sources += [
+diff --git a/chrome/browser/web_applications/icons/icon_masker.cc b/chrome/browser/web_applications/icons/icon_masker.cc
+index 43955fc25677cd7a7c89f38301375cc4ec71bec5..345998aa36e7c3e2a4d6357be22416ac99a5edc5 100644
+--- a/chrome/browser/web_applications/icons/icon_masker.cc
++++ b/chrome/browser/web_applications/icons/icon_masker.cc
+@@ -12,7 +12,7 @@
+ 
+ namespace web_app {
+ 
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_AROS)
+ void MaskIconOnOs(SkBitmap input_bitmap, MaskedIconCallback masked_callback) {
+   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE,
 diff --git a/chrome/browser/web_applications/os_integration/web_app_stubs.cc b/chrome/browser/web_applications/os_integration/web_app_stubs.cc
 index b0d7706507e21635e9ad3dfcc71df78740e390a8..b00c36ebcdef5d44dc4ae7e61843af82e2332309 100644
 --- a/chrome/browser/web_applications/os_integration/web_app_stubs.cc
@@ -32240,7 +32437,7 @@ index 226c91dd847f533d800407fb95cf2d7b56917e6e..ad2d86dfd8a04e4a67eee7533a7289d5
        source_patterns +=
            [ "${root_gen_dir}/extensions/strings/extensions_strings_" ]
 diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
-index 582f9b21931b8bbb7a95d887a18036ba9609bacb..09e3d3ed57bcddc4a2a093979f300ed527745761 100644
+index 582f9b21931b8bbb7a95d887a18036ba9609bacb..927b3ea0991611b9b20fff7276e98a142655b075 100644
 --- a/chrome/common/BUILD.gn
 +++ b/chrome/common/BUILD.gn
 @@ -270,7 +270,6 @@ static_library("common_lib") {
@@ -32261,6 +32458,15 @@ index 582f9b21931b8bbb7a95d887a18036ba9609bacb..09e3d3ed57bcddc4a2a093979f300ed5
  
    if (is_mac || is_win || is_linux || is_chromeos) {
      deps += [ "//components/webapps/isolated_web_apps:scheme" ]
+@@ -310,7 +312,7 @@ static_library("common_lib") {
+     ]
+ 
+     # Add controlled frame dependencies on platforms that support it.
+-    if (is_win || is_mac || is_linux || is_chromeos) {
++    if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+       assert(enable_extensions)
+       deps += [
+         "//chrome/common/apps/platform_apps",
 @@ -628,6 +630,9 @@ static_library("constants") {
    if (is_chromeos) {
      deps += [ "//ash/constants" ]
@@ -33405,6 +33611,19 @@ index 3fafa49b31258e680ab6e344d9d8f6d35ebeb737..2cad21498f435ace153af40d4120a410
      ActualArgs&&... args) {
    if (!bad_message::CheckArgs(args...) ||
        !bad_message::CheckFrameNotPrerendering(source.render_frame_host())) {
+diff --git a/components/autofill/core/browser/BUILD.gn b/components/autofill/core/browser/BUILD.gn
+index 060518d152d2317c739148b5eab55b3234364248..ce4dfa3d7e85923127dd9bc7a9c5090fe1d11030 100644
+--- a/components/autofill/core/browser/BUILD.gn
++++ b/components/autofill/core/browser/BUILD.gn
+@@ -1586,7 +1586,7 @@ static_library("browser") {
+     deps += [ "//components/autofill/ios/common" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos || is_android) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_android || is_aros) {
+     sources += [
+       "metrics/cross_tab_copy_paste_tracker.cc",
+       "metrics/cross_tab_copy_paste_tracker.h",
 diff --git a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h b/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
 index 493cbf8533604210b09f0f59da33481d76d2af91..a240f45dcfe776c27e3586b044299eca8607cfd1 100644
 --- a/components/autofill/core/browser/strike_databases/payments/credit_card_save_strike_database.h
@@ -36027,6 +36246,19 @@ index 9e68561526825cef2670938bdf075be8cda47137..d7cc64a2910bf0fe900668754f55d44b
    <if expr="is_macosx">
      <message name="IDS_PASSWORD_MANAGER_FILLING_REAUTH" desc="Shown after 'Google Chrome is trying to ' (or in some languages, 'Google Chrome wants to ') in a dialog message. Text appears in the password autofill reauthentication popup, asking user to authenticate using biometric before filling.">
        fill your password on <ph name="APP_NAME">$1<ex>google.com</ex></ph>
+diff --git a/components/payments/content/browser_binding/BUILD.gn b/components/payments/content/browser_binding/BUILD.gn
+index af911d600ac9464f23eb5242d121ead9d888ebfa..101075cdde412eb79f1b1297a73cfb3968470505 100644
+--- a/components/payments/content/browser_binding/BUILD.gn
++++ b/components/payments/content/browser_binding/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-is_desktop = is_mac || is_win || is_linux || is_chromeos || is_fuchsia
++is_desktop = is_mac || is_win || is_linux || is_chromeos || is_fuchsia || is_aros
+ 
+ source_set("browser_binding") {
+   visibility = [
 diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
 index f331f4df78737cdef2b06fb5807ac3b4d59302b1..5184975559d6ea7a2d0406b7e4d0ee31e01f2d76 100644
 --- a/components/permissions/permission_request_manager.cc
@@ -39318,7 +39550,7 @@ index 5b05de02f0ca0225d6bc1be9e219bce38cbff5d3..4f11b7dc1289f6bc26bedf279884848b
    return
        [self acceptsMouseEventsOption] > AcceptMouseEvents::kWhenInActiveWindow;
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index 3162721b67d5b744c2c1d7021656a862eea2c2c5..7378d27b244c480589d3aea1098984d6088bc553 100644
+index 3162721b67d5b744c2c1d7021656a862eea2c2c5..398de304def8935602bf492e78110f760169bd4c 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
 @@ -2560,6 +2560,13 @@ source_set("browser") {
@@ -39353,6 +39585,15 @@ index 3162721b67d5b744c2c1d7021656a862eea2c2c5..7378d27b244c480589d3aea1098984d6
    if (is_win) {
      sources -=
          [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]
+@@ -3448,7 +3466,7 @@ source_set("browser") {
+   # NOTE: Fuchsia depends on this class, but probably shouldn't, as it doesn't
+   # support extensions.
+   if (is_win || is_apple || is_linux || is_chromeos || is_desktop_android ||
+-      is_fuchsia) {
++      is_fuchsia || is_aros) {
+     sources += [
+       "service_worker/service_worker_usb_delegate_observer.cc",
+       "service_worker/service_worker_usb_delegate_observer.h",
 diff --git a/content/browser/browser_child_process_host_impl.cc b/content/browser/browser_child_process_host_impl.cc
 index 7bda27d794fe2a5d45ce9405a4291b6d8db2307b..569c816df0e3ba6a29166a5c0517f54cd6481f99 100644
 --- a/content/browser/browser_child_process_host_impl.cc
@@ -44071,6 +44312,28 @@ index fafc2d9ec209882d20f6b2e849c7fc75cd9b9c37..968a496074bfa9c82ba00e0f86406294
    GpuChannelManager* manager = channel_->gpu_channel_manager();
    DCHECK(manager);
    memory_tracker_ = CreateMemoryTracker();
+diff --git a/gpu/ipc/service/gpu_init.cc b/gpu/ipc/service/gpu_init.cc
+index 710d5de3d8d0080b96cb875bfa635e737daf9529..e55ca7c4b7f388c19eb0b3bb3a128bf42e9811b2 100644
+--- a/gpu/ipc/service/gpu_init.cc
++++ b/gpu/ipc/service/gpu_init.cc
+@@ -57,7 +57,7 @@
+ #endif
+ 
+ #if BUILDFLAG(IS_OZONE)
+-#if BUILDFLAG(ENABLE_VULKAN)
++#if BUILDFLAG(ENABLE_VULKAN) && !BUILDFLAG(IS_AROS)
+ #include "gpu/command_buffer/service/drm_modifiers_filter_vulkan.h"
+ #endif
+ #include "ui/ozone/public/drm_modifiers_filter.h"
+@@ -992,7 +992,7 @@ bool GpuInit::InitializeAndStartSandbox(base::CommandLine* command_line,
+   [[maybe_unused]] auto* factory =
+       ui::OzonePlatform::GetInstance()->GetSurfaceFactoryOzone();
+   bool filter_set = false;
+-#if BUILDFLAG(ENABLE_VULKAN)
++#if BUILDFLAG(ENABLE_VULKAN) && !BUILDFLAG(IS_AROS)
+   if (gpu_feature_info_.status_values[GPU_FEATURE_TYPE_VULKAN] ==
+           kGpuFeatureStatusEnabled &&
+       factory->SupportsDrmModifiersFilter()) {
 diff --git a/gpu/ipc/service/image_transport_surface_aros.cc b/gpu/ipc/service/image_transport_surface_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..875b597fda4e86d9d069b165d8b51c09ed1028ed
@@ -44121,15 +44384,16 @@ index 0000000000000000000000000000000000000000..875b597fda4e86d9d069b165d8b51c09
 +
 +}  // namespace gpu
 diff --git a/gpu/vulkan/BUILD.gn b/gpu/vulkan/BUILD.gn
-index 4a97b2ad2e0f5edf166d71c730d5b0fa13b583c2..9180d6007b682381bfb3e82b59c7b45935a1cea9 100644
+index 4a97b2ad2e0f5edf166d71c730d5b0fa13b583c2..c45841c13d20fc9ada0935daa79c52f7294899dc 100644
 --- a/gpu/vulkan/BUILD.gn
 +++ b/gpu/vulkan/BUILD.gn
-@@ -147,6 +147,10 @@ if (enable_vulkan) {
+@@ -147,6 +147,11 @@ if (enable_vulkan) {
  
      data_deps = []
  
 +    if (is_aros) {
 +      libs = [ "vulkan" ]
++      sources += [ "vulkan_image_aros.cc" ]
 +    }
 +
      if (is_posix) {
@@ -44148,6 +44412,36 @@ index a8eef7f635009d1c4b28358a1d5270ef92adf057..d228dd6e1ddb53467f3dbcafd5b96dd8
  
    # Enable swiftshader vulkan. Disabling it can save build time, however
    # --use-vulkan=swiftshader and some tests which use swiftshader vulkan will
+diff --git a/gpu/vulkan/vulkan_image_aros.cc b/gpu/vulkan/vulkan_image_aros.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..807120df3cbea78fa3c4d3b0702e3ee2482df3db
+--- /dev/null
++++ b/gpu/vulkan/vulkan_image_aros.cc
+@@ -0,0 +1,24 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "gpu/vulkan/vulkan_image.h"
++
++namespace gpu {
++
++bool VulkanImage::InitializeFromGpuMemoryBufferHandle(
++    VulkanDeviceQueue* device_queue,
++    gfx::GpuMemoryBufferHandle gmb_handle,
++    const gfx::Size& size,
++    VkFormat format,
++    VkImageUsageFlags usage,
++    VkImageCreateFlags flags,
++    VkImageTiling image_tiling,
++    uint32_t queue_family_index) {
++  // AROS buffers are not Linux dma-buf handles. Ordinary Vulkan allocations
++  // and swapchain images use the common implementation; external-buffer
++  // imports require a separate native handle contract.
++  return false;
++}
++
++}  // namespace gpu
 diff --git a/gpu/vulkan/vulkan_instance.cc b/gpu/vulkan/vulkan_instance.cc
 index 6e0a6b816d000e9f3965cd0f90036690ccf0220f..4bce5f4ab6060c681d0a13fda4d1de9f240b5f62 100644
 --- a/gpu/vulkan/vulkan_instance.cc
@@ -46865,6 +47159,20 @@ index b5305162c8bb957e6195c4145ba158dbd382dc87..1f41a6da8d11b5e4c303fc9253feff68
  #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
    buffer_usage = gfx::BufferUsage::SCANOUT_VEA_CPU_READ;
  #elif BUILDFLAG(IS_LINUX)
+diff --git a/media/media_options.gni b/media/media_options.gni
+index f3313ea46763209530a589af52038ea2811b991d..b5cec2f13da920ed417069af156a4a4daeef5c40 100644
+--- a/media/media_options.gni
++++ b/media/media_options.gni
+@@ -131,7 +131,8 @@ declare_args() {
+   # Determines if a GpuChannel is needed between media capture utility process
+   # and gpu process for a given platform.
+   enable_gpu_channel_media_capture =
+-      is_linux || is_win || is_chromeos || is_apple || is_android || is_fuchsia
++      is_linux || is_win || is_chromeos || is_apple || is_android || is_fuchsia ||
++      is_aros
+ }
+ 
+ # Use another declare_args() to allow dependence on args defined above.
 diff --git a/media/webrtc/helpers.cc b/media/webrtc/helpers.cc
 index 2be0defec93b90474e274d3246a6194a1b696424..0c20385c534ca7a88fa449cfaf5e437602f727b9 100644
 --- a/media/webrtc/helpers.cc
@@ -52602,6 +52910,28 @@ index b6eccdade4f4d6d72acc975b097843e7f64b003a..9826a8f27911145478357b9d366e23a0
 +  }
    return g_broker_services->GetPolicyDiagnostics(std::move(receiver));
  }
+ 
+diff --git a/services/audio/public/cpp/BUILD.gn b/services/audio/public/cpp/BUILD.gn
+index 88dec31cc49eb28999de34baa88f1e1e5a377daa..668d96df8a14343381b27431bc5343345b1161fc 100644
+--- a/services/audio/public/cpp/BUILD.gn
++++ b/services/audio/public/cpp/BUILD.gn
+@@ -18,7 +18,7 @@ component("cpp") {
+     "output_device.h",
+   ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [
+       "sounds/audio_stream_handler.cc",
+       "sounds/audio_stream_handler.h",
+@@ -55,7 +55,7 @@ source_set("test_support") {
+     "fake_system_info.h",
+   ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_aros) {
+     sources += [ "sounds/test_data.h" ]
+   }
  
 diff --git a/services/data_decoder/xml/dom_builder.h b/services/data_decoder/xml/dom_builder.h
 index 6271857b1ef617fce72a93a5ec18947aec67590d..56e0b125e77202ff4f16a862f11ce87364419dd6 100644
@@ -60185,10 +60515,10 @@ index ad99568afe73b478db6bb5f0ff469d4e6a3a56bd..9a5067a0eeb4486cf27aeb8c7852ac5f
      deps += [ "//ui/display" ]
 diff --git a/ui/base/idle/idle_aros.cc b/ui/base/idle/idle_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..1a45d4aed04a9b6ba2b17188c8f7075bad746dcd
+index 0000000000000000000000000000000000000000..897e757adc3b1751d0e9ce9c486776dc4fc7ff29
 --- /dev/null
 +++ b/ui/base/idle/idle_aros.cc
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,23 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -60196,6 +60526,12 @@ index 0000000000000000000000000000000000000000..1a45d4aed04a9b6ba2b17188c8f7075b
 +#include "ui/base/idle/idle.h"
 +
 +namespace ui {
++
++base::CallbackListSubscription AddScreenLockCallback(
++    base::RepeatingCallback<void(bool)> callback) {
++  // AROS currently has no system screen-lock notification service.
++  return {};
++}
 +
 +int CalculateIdleTime() {
 +  return 0;
@@ -60557,6 +60893,19 @@ index 300c89806d400dfb91834c19d9867dac93ec593a..6dd6c1dbc865b744937dfe79305bd8ca
  };
  
  }  // namespace ui
+diff --git a/ui/compositor/BUILD.gn b/ui/compositor/BUILD.gn
+index fd1a3dfec2438c7f9e6da37d39bade033e84eeeb..18103868abc1aa227b468e4bd3a8ebf8c4e174a9 100644
+--- a/ui/compositor/BUILD.gn
++++ b/ui/compositor/BUILD.gn
+@@ -109,7 +109,7 @@ component("compositor") {
+     ]
+   }
+ 
+-  if (is_linux || is_fuchsia) {
++  if (is_linux || is_fuchsia || is_aros) {
+     sources += [
+       "external_begin_frame_adapter.cc",
+       "external_begin_frame_adapter.h",
 diff --git a/ui/compositor/compositor.h b/ui/compositor/compositor.h
 index 8a8a9d14d52d821205d7dd76e7e1df78c534e7b0..01e5d3c63e02385f0b78b9b3aeace5eb9b07d4fa 100644
 --- a/ui/compositor/compositor.h
