@@ -262,3 +262,7 @@ ARM28 preceding DOM-storage/clock candidate PASS local workers, rendering, clean
 ### Native103 reporter candidate
 
 Both native engine links passed. Native103 no longer records the reporter Mojo fatal, but independently reproduces the first renderer teardown fault at RunLoop::RemoveNestingObserverOnCurrentThread+0x25; the stack caller resolves to SequenceManagerImpl destruction. Current-delegate lifetime diagnosis remains open. No isolation or shutdown pass is claimed. All five complete child allocator records match the host. Native clock and actual PartitionAlloc callback-object probes pass on x64 and ARM; they do not force OOM or qualify the reporter owner lookup under memory exhaustion. ARM29 browser acceptance is still pending. An unpublished diagnostic candidate adds AROS delegate/sequence-manager lifecycle logs without weakening checks.
+
+### ARM29 reporter candidate PASS
+
+Native local JavaScript/Wasm workers, paint, close, CEF teardown, and script return zero all pass, together with clock and actual PA callback-object probes. The retained worker screenshot shows the native browser and About AROS (aarch64-raspi ABI_V1, bfdbbd7c). Whole-guest used memory is 1197.93 MiB at first paint and 1156.24 MiB after close. These are not per-process RSS or reclamation measurements; network and native multi-app acceptance remain unproven. The delayed startup completed within its existing 1200-second test window; no scheduler change was made.

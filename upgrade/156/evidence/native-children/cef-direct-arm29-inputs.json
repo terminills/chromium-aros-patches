@@ -1,0 +1,40 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "3b03087b306e359182bcba75dfaf6fbfb6128c5f016c8eeb7c7e5ed9ed34482b",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "7863a66d26e9b9bc222dcb392515135158e180c9e887cf0aca51ce4c687ccd38",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "a0affb5ec3a8baf2b590f73d51f16cb0602b34939b732a8c846202e4300eb86c"
+  },
+  "web_test_client_sha256": "29321648535f3c7ba88410ab0e360fc3d5d682097ce62b730b3dc4499f60b771",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm29.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM29-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-18T23:24:04.752714+00:00",
+    "validation": "Native102 DOM-storage candidate triggers second renderer CrashMemoryMetricsReporterImpl::Bind replacing engine-global Mojo receiver; exact symbols retained. New candidate owns reporter per monotonic identity using immutable published entries, existing-only OOM lookup and nonblocking identity query, plus once-only atomic callback publication on AROS. No allocation introduced in OOM dispatch. Native102 also records a first-renderer RunLoop nesting-observer null fault after the fatal; cause not yet proven. Complete final builds and runtime103 pending. ARM28 preceding DOM-storage candidate PASS workers, paint/close, teardown and RC0.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "d0cbe4877bb9ccda436584a01376e8a9a80f7c397b6c291292f26c4bd7194434",
+        "applied_tree": "e93c760ef7afbed6f978739e1707eabc7f3b8eba",
+        "bytes": 2976798
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "388154f7b205dcc23d19d9a68fb235e71fdcca9a6160f587a674c2ecb8f124f6",
+        "applied_tree": "7b7af44f39610741dda0e5e073d6526c686ca10f",
+        "bytes": 62059
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
