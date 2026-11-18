@@ -724,6 +724,48 @@ index a124902743e11e3d288da8602b820bbd452b4659..7c5c6802fa843f7c886bac37a8fc0124
  #if defined(PA_IS_LINUX)
  #define PA_BUILDFLAG_INTERNAL_IS_LINUX() (1)
  #else
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/internal/reservation_offset_table_internal.h b/base/allocator/partition_allocator/src/partition_alloc/internal/reservation_offset_table_internal.h
+index 0c78ce42a8c5e9af77274987f906d3ecf8007015..ad8bd9791cb8bc24744090729b07002c14994ad0 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/internal/reservation_offset_table_internal.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/internal/reservation_offset_table_internal.h
+@@ -89,6 +89,13 @@ PA_ALWAYS_INLINE void ReservationOffsetTable::SetNotAllocatedTag(
+     size_t reservation_size) const {
+   PA_DCHECK((reservation_start & kSuperPageOffsetMask) == 0);
+   PA_DCHECK(reservation_size > 0);
++#if PA_BUILDFLAG(IS_AROS)
++  PA_CHECK(reservation_size > 0);
++  PA_CHECK(reservation_start < kReservationOffsetTableLength * kSuperPageSize);
++  PA_CHECK(reservation_size <=
++           kReservationOffsetTableLength * kSuperPageSize - reservation_start);
++  PA_CHECK(((reservation_size - 1) >> kSuperPageShift) < kOffsetTagNormalBuckets);
++#endif
+   uint16_t* offset_ptr = GetOffsetPointer(reservation_start);
+ 
+   PA_DCHECK((reservation_size - 1) >> kSuperPageShift <=
+@@ -114,6 +121,13 @@ PA_ALWAYS_INLINE void ReservationOffsetTable::SetDirectMapReservationStart(
+     size_t reservation_size) const {
+   PA_DCHECK((reservation_start & kSuperPageOffsetMask) == 0);
+   PA_DCHECK(reservation_size > 0);
++#if PA_BUILDFLAG(IS_AROS)
++  PA_CHECK(reservation_size > 0);
++  PA_CHECK(reservation_start < kReservationOffsetTableLength * kSuperPageSize);
++  PA_CHECK(reservation_size <=
++           kReservationOffsetTableLength * kSuperPageSize - reservation_start);
++  PA_CHECK(((reservation_size - 1) >> kSuperPageShift) < kOffsetTagNormalBuckets);
++#endif
+   uint16_t* offset_ptr = GetOffsetPointer(reservation_start);
+ 
+   PA_DCHECK((reservation_size - 1) >> kSuperPageShift <=
+@@ -218,6 +232,9 @@ PA_ALWAYS_INLINE uint16_t* ReservationOffsetTable::GetOffsetPointer(
+   size_t table_index = offset_lookup_.GetOffset(address) >> kSuperPageShift;
+ #else
+   size_t table_index = address >> kSuperPageShift;
++#if PA_BUILDFLAG(IS_AROS)
++  PA_CHECK(table_index < kReservationOffsetTableLength);
++#endif
+ #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+   uint16_t* offset_ptr = &PA_UNSAFE_TODO(table_begin_[table_index]);
+ #if PA_BUILDFLAG(DCHECKS_ARE_ON)
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h b/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h
 index 266ce80a76d9b8d71e7fba750e5ef1a02fef776f..b0cb70cf7fc2ea29ef4cc54eb836db802ce59839 100644
 --- a/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h
@@ -1868,6 +1910,47 @@ index 09934e6fa6cef9f32b9ccee73c2f808705daf7bf..de720111475514914a1f55940d9a0b31
      PA_BUILDFLAG(IS_CHROMEOS) && PA_BUILDFLAG(PA_ARCH_CPU_ARM64) || \
      PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
  constexpr size_t kPoolMaxSize = 8 * kGiB;
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/reservation_offset_table.h b/base/allocator/partition_allocator/src/partition_alloc/reservation_offset_table.h
+index 24d43aec1c687adabe6369fa146c2372638b49f3..127487f94e8363d4c29c1febefc08fe5de2e8c7d 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/reservation_offset_table.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/reservation_offset_table.h
+@@ -91,21 +91,33 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) ReservationOffsetTable {
+       kThreadIsolatedOffsetTableLength * sizeof(uint16_t);
+ #endif  // PA_BUILDFLAG(ENABLE_THREAD_ISOLATION)
+ #else
+-  // The size of the reservation offset table should cover the entire 32-bit
+-  // address space, one element per super page.
++  // One element per super page in the non-pool address space. AROS uses
++  // on-demand super pages even with native 64-bit pointers.
+   static constexpr uint64_t kGiB = 1024 * 1024 * 1024ull;
+   static constexpr size_t kReservationOffsetTableLength =
++#if PA_BUILDFLAG(IS_AROS)
++      256 * kGiB / kSuperPageSize;
++#else
+       4 * kGiB / kSuperPageSize;
++#endif
++#if !PA_BUILDFLAG(IS_AROS)
+   static_assert(kReservationOffsetTableLength < kOffsetTagNormalBuckets,
+                 "Offsets should be smaller than kOffsetTagNormalBuckets.");
++#endif  // !PA_BUILDFLAG(IS_AROS)
+ #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+ 
++#if !PA_BUILDFLAG(HAS_64_BIT_POINTERS) && PA_BUILDFLAG(IS_AROS)
++  static_assert(kReservationOffsetTableLength == 131072);
++#endif
++
+   template <size_t length, size_t padding_size = 0>
+   struct _ReservationOffsetTable {
+     // The number of table elements is less than MAX_UINT16, so the element type
+     // can be uint16_t.
++    // Entries encode offsets within one reservation, not absolute table
++    // indices. The AROS table spans more than UINT16_MAX super pages.
+     static_assert(
+-        length <= std::numeric_limits<uint16_t>::max(),
++        PA_BUILDFLAG(IS_AROS) || length <= std::numeric_limits<uint16_t>::max(),
+         "Length of the reservation offset table must be less than MAX_UINT16");
+     uint16_t offsets[length] = {};
+ #if defined(__clang__)
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc b/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc
 index 3ca168d68f069e311acab891b2048f2168272e63..f03741b5c343e54d911546d0ebdadd9385258481 100644
 --- a/base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.cc
@@ -58543,6 +58626,36 @@ index f4e51bfcfc4dbad4b70a39e7db0f22c3b32cc399..e27c4bec9598581062713a123d80abfc
  
    configs -= [ "//build/config/compiler:chromium_code" ]
    configs += [ "//build/config/compiler:no_chromium_code" ]
+diff --git a/third_party/cpuinfo/BUILD.gn b/third_party/cpuinfo/BUILD.gn
+index 1fd7f0fa7bb6adbf98f702a869e2c9a4355ae088..c0e1121f80df4aa1b528ecb05af97f06356fb96c 100644
+--- a/third_party/cpuinfo/BUILD.gn
++++ b/third_party/cpuinfo/BUILD.gn
+@@ -169,6 +169,10 @@ source_set("x86_cache") {
+ }
+ 
+ source_set("cpu_and_os_specific") {
++  if (is_aros && (current_cpu == "arm" || current_cpu == "arm64")) {
++    sources = [ "aros_isa.c" ]
++  }
++
+   if ((is_linux || is_chromeos) &&
+       (current_cpu == "x86" || current_cpu == "x64")) {
+     sources = [
+diff --git a/third_party/cpuinfo/aros_isa.c b/third_party/cpuinfo/aros_isa.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..18a840eb2af3e0187ba5e649a6c5c8616b387bba
+--- /dev/null
++++ b/third_party/cpuinfo/aros_isa.c
+@@ -0,0 +1,9 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#include <cpuinfo.h>
++
++// AROS has no cpuinfo topology/ISA provider yet. Keep the optional ISA query
++// storage available and false; cpuinfo_initialize continues to report failure.
++// Do not advertise instructions or successful discovery without a provider.
++struct cpuinfo_arm_isa cpuinfo_isa;
 diff --git a/third_party/crashpad/crashpad/client/prune_crash_reports.cc b/third_party/crashpad/crashpad/client/prune_crash_reports.cc
 index 927ed6010f36e61abaaad3c32f37bf3a94b0cb0b..1a36ae5d41d1fc7192168bfcbd9d2c7ee224b2e0 100644
 --- a/third_party/crashpad/crashpad/client/prune_crash_reports.cc
