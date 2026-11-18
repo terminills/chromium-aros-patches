@@ -6655,10 +6655,10 @@ index 2208550e769060da46f7cd3100a2124b0e55168f..9b04c095670393350da99831a285f069
    static PlatformSharedMemoryRegion Take(ScopedFD handle,
 diff --git a/base/memory/platform_shared_memory_region_aros.cc b/base/memory/platform_shared_memory_region_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..e71582212f631a0201814959d36f5f1b9a5899f8
+index 0000000000000000000000000000000000000000..f430e2f38be03143363e128b314653c0e35bd296
 --- /dev/null
 +++ b/base/memory/platform_shared_memory_region_aros.cc
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,345 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -6917,7 +6917,8 @@ index 0000000000000000000000000000000000000000..e71582212f631a0201814959d36f5f1b
 +  delete found;
 +}
 +
-+PlatformSharedMemoryRegion PlatformSharedMemoryRegion::Take(
++expected<PlatformSharedMemoryRegion, PlatformSharedMemoryRegion::TakeError>
++PlatformSharedMemoryRegion::TakeOrFail(
 +    ScopedArosSharedMemoryHandle handle,
 +    Mode mode,
 +    size_t size,
@@ -6926,8 +6927,10 @@ index 0000000000000000000000000000000000000000..e71582212f631a0201814959d36f5f1b
 +      size > GetArosSharedMemorySize(handle.get()) || !guid) {
 +    return {};
 +  }
-+  CHECK(CheckPlatformHandlePermissionsCorrespondToMode(handle.get(), mode,
-+                                                        size));
++  auto permissions =
++      CheckPlatformHandlePermissionsCorrespondToMode(handle.get(), mode, size);
++  if (!permissions.has_value())
++    return unexpected(permissions.error());
 +  return PlatformSharedMemoryRegion(std::move(handle), mode, size, guid);
 +}
 +
@@ -27486,6 +27489,28 @@ index 95823e23bd0aeb46ef96ba461c4164c7837b3694..a5599d095164c0ffa7f3f66570edcfb9
    return active_contents->GetColorProvider();
  }
  
+diff --git a/chrome/browser/ui/task_manager/BUILD.gn b/chrome/browser/ui/task_manager/BUILD.gn
+index 539d51d7855bd031396b500e9474323a9db18206..5a7fce305029adf4584414078e58503338a59669 100644
+--- a/chrome/browser/ui/task_manager/BUILD.gn
++++ b/chrome/browser/ui/task_manager/BUILD.gn
+@@ -30,11 +30,16 @@ if (!is_android) {
+       "//content/public/common:result_codes",
+       "//skia",
+       "//third_party/icu:icui18n",
+-      "//third_party/icu:icui18n_hidden_visibility",
+       "//third_party/icu:icuuc_public",
+       "//ui/color",
+       "//ui/gfx",
+     ]
++    # AROS links the complete CEF closure into one resident module. The normal
++    # ICU dependency above supplies these symbols; a second visibility variant
++    # would duplicate ICU code and process-wide state in that same module.
++    if (!is_aros) {
++      deps += [ "//third_party/icu:icui18n_hidden_visibility" ]
++    }
+   }
+ 
+   source_set("unit_tests") {
 diff --git a/chrome/browser/ui/toasts/BUILD.gn b/chrome/browser/ui/toasts/BUILD.gn
 index 9879f682e771b36bce60a0b92f7a7cbcbf109185..120fd556c64f46e639f662b93785e630e6c0a2d6 100644
 --- a/chrome/browser/ui/toasts/BUILD.gn
