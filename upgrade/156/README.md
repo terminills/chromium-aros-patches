@@ -16,12 +16,13 @@ separate deferred investigation.
 Native x86-64 HTTP/HTTPS and single-browser tests passed in earlier retained
 runs. Both applications now repeatedly pass independent cookie/localStorage,
 DOM and worker checks through the shared resident engine. Full multi-app
-lifecycle now completes functionally in native118: A exits, B continues its
-checks, B exits, all six native children return0, and host shutdown returns.
-Its strict result remains failed because one allocator-address record was
-interleaved; exact-fragment recovery is retained separately, and native119
-is a clean replay. Stale task-runner warnings still need investigation.
-See `evidence/native-children/README.md` for exact inputs and qualifications.
+lifecycle passes the complete original watcher in native119: A exits, B
+continues its checks, B exits, all six native children return0, and host
+shutdown returns. All six allocator records are complete and agree on the
+shared addresses. This controlled QEMU lane uses one CPU; it does not prove
+sandbox security, final task disappearance or full memory reclamation.
+Stale task-runner warnings still need investigation. See
+`evidence/native-children/README.md` for exact inputs and qualifications.
 Full Chrome UI, Node/Electron/Zune consumers and
 broad hardware qualification remain outside the completed evidence.
 
