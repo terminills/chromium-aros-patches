@@ -391,3 +391,5 @@ Native116 repeats both applications storage, DOM and worker PASS, with complete 
 The next snapshot scopes Blink AllPages/OrdinaryPages Persistent roots, local/remote frame-token maps, empty ChromeClient and WebView instance registry to each logical renderer, preserving sharing within the renderer and existing CHECKs. Both architecture compilations are in progress; native117/ARM40 are pending. No heap reclamation claim.
 
 ARM38 used the new direct V8 import table, passed local JS/Wasm workers and paint/close, but timed out during final teardown without fatal/native alert. First-paint whole guest usage 1178.32 MiB; not engine RSS, network or multi-app acceptance. ARM39 separately tests the preceding frame-map snapshot.
+
+ARM39 completes the preceding frame-map candidate with full local JS/Wasm worker, paint/close, final teardown and clock/OOM callback probe PASS. First-paint whole guest 1174.26 MiB; after library close 1143.28 MiB. Screenshot includes native aarch64 About AROS. This is QEMU local single-browser evidence, not network, hardware, multi-app or full-browser acceptance.
