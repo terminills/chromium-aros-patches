@@ -557,3 +557,27 @@ invalid harness source. ARM54 gives every child distinct NIL input/output/error
 handles; all four workers complete 200 rounds of four file opens, writes, delayed
 readbacks and closes (3200 opens total), with no alert. This bounded pass does not
 prove absence of a rare descriptor race or solve the browser's separate EBADF.
+
+
+The native SQLite lock adapter is supplied in
+`../../aros/sqlite-sandboxed-native-lock.patch`. Native149 no longer reports the
+DOM storage SQLite errors and writes the synthetic profile. Native150 then
+**reads the matching cookie and localStorage after OS restart**, and both
+case-distinct application/profile identities remain empty. The offline149 image
+contains the LocalStorage database. This proves bounded data durability, not
+a complete clean lifecycle: the149 storage utility did not return, and150 also
+retains a utility cleanup stall. Original overall failures remain unchanged.
+
+Exact149 symbols and saved task stacks show the utility main in
+TaskTracker::CompleteShutdown and two database workers in synchronous
+DirectoryProxy::DeleteFile from SQLite pager_end_transaction. The native child
+stops its I/O thread before draining BLOCK_SHUTDOWN workers; a separate order
+correction is under test. The original149 watcher missed both the utility's
+interleaved entry and its absent exit; future151/152 acceptance independently
+cross-checks launch/detail IDs, with fourteen host predicate regression cases.
+
+The149 auxiliary FAT contention probe still fails because opening the same FAT
+file through multiple write handles is refused. Native150 validates the shared,
+exclusive, upgrade and downgrade flock behavior on RAM, while its profile data
+durability is tested independently on FAT. ARM55 visibly paints Chrome's worker
+PASS page and About AROS; cleanup acceptance is still pending.
