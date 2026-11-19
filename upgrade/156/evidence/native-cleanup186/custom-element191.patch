@@ -1,0 +1,29 @@
+--- a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc
++++ b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc
+@@ -12,7 +12,12 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++// Renderer main threads share this library, but never their reaction scopes.
++thread_local CEReactionsScope* CEReactionsScope::top_of_stack_ = nullptr;
++#else
+ CEReactionsScope* CEReactionsScope::top_of_stack_ = nullptr;
++#endif
+ 
+ // static
+ CEReactionsScope* CEReactionsScope::Current() {
+--- a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h
++++ b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h
+@@ -35,7 +35,11 @@
+                              CustomElementReaction&);
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local CEReactionsScope* top_of_stack_;
++#else
+   static CEReactionsScope* top_of_stack_;
++#endif
+   CustomElementReactionStack* stack_ = nullptr;
+   CEReactionsScope* prev_;
+   v8::TryCatch try_catch_;

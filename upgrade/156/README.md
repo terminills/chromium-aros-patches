@@ -13,14 +13,18 @@ normal and selected appearance, double-click startup, two tabs, navigation,
 clean closure and reopening with the same resident engine. The drawer title
 corruption observed after closure remains under investigation. AArch64 icon
 launch is not yet qualified.
-The x64 ten-cycle run184 completes twenty heap retirements and all 22 child
-returns; both strict serial accounting and independent native child-file pairs
-pass. Whole-guest memory still rises from 1699.02 to 1833.32 MiB across cycles 1–10.
-ARM69 paints the worker test but fails its bounded shutdown check; it is not a
-successful lifecycle result. No RC is published yet.
-See [native icon and launcher evidence](evidence/native-icons188/interactive188-result.json)
-and [current RC gates](evidence/native-icons188/release-candidate-gates.json).
-The validated source snapshot below remains directory158 until final replay.
+The x64 ten-cycle run186 completes twenty heap retirements and all 22 child
+returns, confirmed by strict serial and independent native child files. Memory
+still rises from 1692.88 to 1823.15 MiB across cycles 1–10. ARM70 paints the
+worker test but fails bounded host exit; its utility child has no exit record.
+Installed-resource tests189/190 expose a custom-element constructor crash.
+An AROS-only per-task scope candidate reproduces/fixes the shared-global error
+in a controlled host test; native qualification is pending. No RC is published.
+See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
+[native icons](evidence/native-icons188/interactive188-result.json), and
+[current RC gates](evidence/native-cleanup186/release-candidate-gates.json).
+The validated source snapshot remains directory158; the complete186v2 candidate
+is separately replay-checked in evidence/native-worker-tls186-v2/source.
 
 
 The current directory-enumeration candidate passes native x86-64 writer158 and
