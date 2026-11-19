@@ -1,0 +1,95 @@
+--- a/third_party/blink/public/platform/scheduler/web_thread_scheduler.h
++++ b/third_party/blink/public/platform/scheduler/web_thread_scheduler.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ 
++#include "base/functional/callback.h"
+ #include "base/message_loop/message_pump.h"
+ #include "base/task/sequence_manager/sequence_manager.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -42,6 +43,11 @@
+   // queues. After this call any work posted to the task runners will be
+   // silently dropped.
+   virtual void Shutdown() = 0;
++#if BUILDFLAG(IS_AROS)
++  // Release queued owners first, then run synchronous isolate cleanup while
++  // scheduler clocks and helpers remain available to Oilpan finalizers.
++  virtual void ShutdownWithCleanup(base::OnceClosure cleanup);
++#endif
+ 
+   static std::unique_ptr<WebThreadScheduler> CreateMainThreadScheduler(
+       std::unique_ptr<base::MessagePump> message_pump);
+--- a/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc
++++ b/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc
+@@ -34,6 +34,12 @@
+ }  // namespace
+ 
+ WebThreadScheduler::~WebThreadScheduler() = default;
++
++#if BUILDFLAG(IS_AROS)
++void WebThreadScheduler::ShutdownWithCleanup(base::OnceClosure cleanup) {
++  NOTREACHED();  // Only the renderer main scheduler supports isolate cleanup.
++}
++#endif
+ 
+ // static
+ std::unique_ptr<WebThreadScheduler>
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h
+@@ -209,6 +209,9 @@
+ 
+   // WebThreadScheduler and ThreadScheduler implementation:
+   void Shutdown() override;
++#if BUILDFLAG(IS_AROS)
++  void ShutdownWithCleanup(base::OnceClosure cleanup) override;
++#endif
+ 
+   // MainThreadScheduler implementation:
+   scoped_refptr<base::SingleThreadTaskRunner> NonWakingTaskRunner() override;
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
+@@ -708,6 +708,12 @@
+ }
+ 
+ void MainThreadSchedulerImpl::Shutdown() {
++#if BUILDFLAG(IS_AROS)
++  ShutdownWithCleanup(base::OnceClosure());
++}
++
++void MainThreadSchedulerImpl::ShutdownWithCleanup(base::OnceClosure cleanup) {
++#endif
+   if (was_shutdown_)
+     return;
+   base::TimeTicks now = NowTicks();
+@@ -717,6 +723,10 @@
+   ThreadSchedulerBase::Shutdown();
+ 
+   ShutdownAllQueues();
++#if BUILDFLAG(IS_AROS)
++  if (cleanup)
++    std::move(cleanup).Run();
++#endif
+ 
+   // Shut down |helper_| first, so that the ForceUpdatePolicy() call
+   // from |idle_helper_| early-outs and doesn't do anything.
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -723,12 +723,12 @@
+   }
+   if (main_thread_scheduler_) {
+     LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
+-    main_thread_scheduler_->Shutdown();
++    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([] {
++      // Queue deletion must precede isolate retirement; clocks and helper
++      // state must survive the synchronous Oilpan finalizers it triggers.
++      blink::RetireMainThreadIsolateForAros();
++    }));
+     LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
+-    // Queue teardown destroys deferred extension ScriptContexts and their V8
+-    // handles. Retire only after those deletes, while the scheduler object
+-    // and compositor still exist for synchronous Oilpan finalizers.
+-    blink::RetireMainThreadIsolateForAros();
+   }
+   // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.
+   // Their ProxyMain::Stop posts to the compositor and waits synchronously,

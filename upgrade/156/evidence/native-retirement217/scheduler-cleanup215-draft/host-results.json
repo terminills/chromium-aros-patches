@@ -1,0 +1,13 @@
+{
+  "results": {
+    "before": {
+      "exit_code": 42,
+      "output": "invalid_handles=0 invalid_clock=1 retirements=1 final_clock_alive=0\n"
+    },
+    "candidate": {
+      "exit_code": 0,
+      "output": "invalid_handles=0 invalid_clock=0 retirements=1 final_clock_alive=0\n"
+    }
+  },
+  "scope": "Actual scheduler shutdown body, mocked queue destruction/clock/retirement. Verifies queue deletes before retirement, live clock during retirement, helpers close after, repeated shutdown does not retire twice. Not native Oilpan finalizer qualification."
+}

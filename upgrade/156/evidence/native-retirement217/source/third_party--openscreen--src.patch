@@ -1,0 +1,57 @@
+diff --git a/platform/BUILD.gn b/platform/BUILD.gn
+index 1f2772139c7daae6d27f05951b4b949c12103fbd..59d28fb4686b6b24fd7aa106857b73126075158d 100644
+--- a/platform/BUILD.gn
++++ b/platform/BUILD.gn
+@@ -9,6 +9,9 @@ visibility = [ "./*" ]
+ 
+ # Source files that depend on nothing (all your base/ are belong to us).
+ openscreen_source_set("base") {
++  if (is_aros) {
++    deps = [ "//base" ]
++  }
+   defines = []
+   visibility += [ "*" ]
+   public = [
+diff --git a/platform/base/ip_address.cc b/platform/base/ip_address.cc
+index 75fdfc1a654c8c27f1611608cfb653036c7a7497..c78b1d9c7762629f0574281c64717f2b9131ca77 100644
+--- a/platform/base/ip_address.cc
++++ b/platform/base/ip_address.cc
+@@ -19,7 +19,9 @@
+ 
+ #include "build/build_config.h"
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#elif BUILDFLAG(IS_POSIX)
+ #include <net/if.h>
+ #endif
+ 
+@@ -134,7 +136,17 @@ ErrorOr<IPAddress> ParseV6(std::string_view s) {
+   if (scope_pos != std::string::npos) {
+     address_part = s.substr(0, scope_pos);
+     std::string_view scope_name = s.substr(scope_pos + 1);
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_AROS)
++    std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++    if (base::aros::GetNetworkInterfaces(&interfaces)) {
++      for (const auto& interface : interfaces) {
++        if (interface.name == scope_name) {
++          scope_id = interface.index;
++          break;
++        }
++      }
++    }
++#elif BUILDFLAG(IS_POSIX)
+     scope_id = if_nametoindex(std::string(scope_name).c_str());
+ #endif
+     if (scope_id == 0) {
+@@ -308,7 +320,7 @@ std::ostream& operator<<(std::ostream& out, const IPAddress& address) {
+     out << std::setw(value_width) << static_cast<int>(bytes[i]);
+   }
+   if (address.IsLinkLocal() && address.GetScopeId() != 0) {
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+     char ifname[IF_NAMESIZE];
+     if (if_indextoname(address.GetScopeId(), ifname)) {
+       out << '%' << ifname;

@@ -17,17 +17,17 @@ The x64 ten-cycle run186 completes twenty heap retirements and all 22 child
 returns, confirmed by strict serial and independent native child files. Memory
 still rises from 1692.88 to 1823.15 MiB across cycles 1–10. ARM70 paints the
 worker test but fails bounded host exit; its utility child has no exit record.
-Installed-resource197 passes icon metadata checks and launches from the drawer,
-then faults during first-page layout. ARM71 paints the JS/Wasm/worker page but
-faults during queued extension cleanup at shutdown. Combined203 addresses the
-layout stack pointers, DevTools loop ownership and isolate retirement order.
-Focused host regressions and cross objects pass; full native acceptance is pending.
-[Exact failures, candidates and source replay](evidence/native-scopes203/README.md)
-are retained. No RC is published.
+Installed-resource203 paints four tabs and chrome://version and drains their
+browser close callbacks, but renderer teardown and reopening still fault.
+Candidate217 preserves scheduler clocks through isolate cleanup and separates
+the calculation-value handle map by renderer. It also includes the audited
+scope corrections204–210. Focused host regressions and cross objects pass;
+full native217 acceptance is pending. [Exact failure evidence and replayable
+source](evidence/native-retirement217/README.md) are retained. No RC is published.
 See [installed191 results and exact source](evidence/native-installed191/README.md).
 See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
 [native icons](evidence/native-icons188/interactive188-result.json), and
-[current RC gates](evidence/native-scopes203/release-candidate-gates.json).
+[current RC gates](evidence/native-retirement217/release-candidate-gates.json).
 [Compact-image and DevTools ownership experiments](evidence/compact-image198/README.md)
 now include matched native cold-load evidence: packed build 191 reduces whole-guest
 resident use from 871.59 to 646.89 MiB. Packed browser behavior, long-run memory

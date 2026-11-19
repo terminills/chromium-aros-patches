@@ -1,0 +1,35 @@
+diff --git a/include/share/compat.h b/include/share/compat.h
+index d9ab51d41fc346a0dce3ad01356786858376be13..10633f212ee20e5fb7b453fbae57c7ea7e390c8c 100644
+--- a/include/share/compat.h
++++ b/include/share/compat.h
+@@ -115,7 +115,7 @@
+ #include <sys/utime.h> /* for utime() */
+ #endif
+ #else
+-#if defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L)
++#if !defined(__AROS__) && defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L)
+ #include <fcntl.h>
+ #else
+ #include <sys/types.h> /* some flavors of BSD (like OS X) require this to get time_t */
+@@ -197,7 +197,7 @@
+ #define flac_rename rename
+ #define flac_stat stat
+ 
+-#if defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L)
++#if !defined(__AROS__) && defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L)
+ #define flac_utime(a, b) utimensat(AT_FDCWD, a, *b, 0)
+ #else
+ #define flac_utime utime
+diff --git a/src/libFLAC/metadata_iterators.c b/src/libFLAC/metadata_iterators.c
+index 168a3fbc24a2697f02b10722d0fe09f673714a81..709b9e5b9296b6f5537e9be8632b4d68c735f2f0 100644
+--- a/src/libFLAC/metadata_iterators.c
++++ b/src/libFLAC/metadata_iterators.c
+@@ -3460,7 +3460,7 @@ FLAC__bool get_file_stats_(const char *filename, struct flac_stat_s *stats)
+ 
+ void set_file_stats_(const char *filename, struct flac_stat_s *stats)
+ {
+-#if defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L) && !defined(_WIN32)
++#if !defined(__AROS__) && defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200809L) && !defined(_WIN32)
+ 	struct timespec srctime[2] = {};
+ 	srctime[0].tv_sec = stats->st_atime;
+ 	srctime[1].tv_sec = stats->st_mtime;

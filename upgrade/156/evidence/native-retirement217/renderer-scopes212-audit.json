@@ -1,0 +1,38 @@
+{
+  "scope": "Bounded production RAII scope static-state audit, not a complete Blink global-state audit",
+  "applied203": [
+    "LayoutShiftTracker::ReattachHookScope::top_",
+    "LayoutShiftTracker::ContainingBlockScope::top_",
+    "ClientMessageLoopAdapter::instance_"
+  ],
+  "queued212": [
+    "DisableLayoutSideEffectsScope",
+    "PrePaintDisableSideEffectsScope",
+    "SuggestionMarkerReplacementScope",
+    "IgnorePaintTimingScope",
+    "CustomLayoutScope",
+    "RangeUpdateScope",
+    "PaintLayerScrollableArea::FreezeScrollbarsScope",
+    "PaintLayerScrollableArea::DelayScrollOffsetClampScope",
+    "StyleAttributeMutationScope",
+    "RequestFullscreenScope",
+    "CheckAncestorPositionVisibilityScope",
+    "XMLDocumentParserScope"
+  ],
+  "already_task_local": [
+    "ScriptForbiddenScope::g_main_thread_counter_",
+    "ScriptForbiddenScope::g_blink_lifecycle_counter_",
+    "CEReactionsScope",
+    "CustomElementConstructionStackScope",
+    "PostStyleUpdateScope"
+  ],
+  "debug_only_remaining": [
+    "EventDispatchForbiddenScope::count_ (DCHECK_IS_ON)",
+    "PhysicalBoxFragment::AllowPostLayoutScope::allow_count_ (DCHECK_IS_ON)"
+  ],
+  "excluded": [
+    "test-only custom_element_test_helpers",
+    "method names returning TreeScope or WorkerGlobalScope are not static scope state"
+  ],
+  "ownership_rationale": "Pointers refer to native renderer stack/DOM owner; counters and active flags must follow matching per-renderer state. Delayed-clamp pending vector already uses Persistent singleton ownership. XML callback globals use libxml thread state; only Blink current_document pointer changed. No SDK or global POSIX changes."
+}

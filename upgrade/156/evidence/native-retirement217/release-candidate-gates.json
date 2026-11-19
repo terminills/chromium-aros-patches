@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "x64186 strict serial and independent native file ledger PASS:10cycles,20complete/0deferred retirements,22children exit0. ARM70 fails bounded host exit: utility67 exit missing in offline ledger,3complete/1deferred retirement. ARM71 four complete/zero deferred retirements then queued ScriptContext deletion accesses destroyed isolate; exact native stack captured.203 shutdown-order candidate passes focused host cases and both cross objects, native pending. 203 closure fails after browser callbacks drained. Browser callbacks alone are not complete child/isolate acceptance.",
+    "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
+    "persistent_profiles": "Native writer158/reader159 passes; final candidate replay pending",
+    "memory": "Not accepted for long-run growth:186 cycles1692.88->1823.15MiB. Independent matched native191 cold-load packing comparison PASS:871.59->646.89MiB whole guest,224.70MiB reduction. Packed browser/lifecycle proof pending.",
+    "native_browser_ui": "203 actual icon launch, New Tab, four tabs, chrome://version and four browser close callbacks pass. Same host reused for session2, but teardown/reopen FAIL: LazyNow clock null (2tasks), then calculation handle map null. Exact symbols/section match retained.217 corrects scheduler cleanup point and per-renderer calculation map; build pending.",
+    "production_launcher": "Companion6499b2e supports explicit installed resource directory SYS:System/CEF; installed191 firstpaint/fourtabs pass. Full navigation acceptance fails compositor scope issue; ARM optional argument checks pending.",
+    "packaging": "Required: exact libraries/helpers/resources, required OS baseline, install/start scripts, licenses and manifest; no user profile or credentials",
+    "source_reproducibility": "Complete21-repository native-scopes217-all-snapshot replay passed. Native217 validation pending. Validated directory158 separate.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "x64188 exact five native metadata records PASS; normal/selected appearance and drawer label reviewed; actual double-click launch PASS. ARM runtime check pending. x64197 five metadata checks and actual icon launch pass, browser native fault follows. ARM72 stage queued after203 symbol archive. ARM72 five native metadata checks and drawer imagery PASS; QMP USB mouse produces no visible movement, browser not launched in72.73 input.device diagnostic underway, not USB qualification."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}

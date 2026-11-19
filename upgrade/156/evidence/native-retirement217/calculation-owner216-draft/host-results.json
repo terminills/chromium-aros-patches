@@ -1,0 +1,13 @@
+{
+  "results": {
+    "before": {
+      "exit_code": 42,
+      "output": "distinct=0 owners=0 sibling_survives_retirement=0 same_owner=1 new_owner_fresh=0\n"
+    },
+    "candidate": {
+      "exit_code": 0,
+      "output": "distinct=1 owners=1 sibling_survives_retirement=1 same_owner=1 new_owner_fresh=1\n"
+    }
+  },
+  "scope": "Actual CalcHandles getter and ProcessLocalValue template, mocked GC-owning wrapper and locks/static wrapper. Checks distinct owner, sibling after root retirement, same-owner reuse and new owner. Not native Oilpan qualification."
+}

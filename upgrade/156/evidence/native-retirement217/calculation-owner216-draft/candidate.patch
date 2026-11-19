@@ -1,0 +1,30 @@
+--- a/third_party/blink/renderer/platform/geometry/length.cc
++++ b/third_party/blink/renderer/platform/geometry/length.cc
+@@ -27,6 +27,10 @@
+ 
+ #include <array>
+ 
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "third_party/blink/renderer/platform/geometry/blend.h"
+ #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+@@ -149,8 +153,16 @@
+ 
+ static CalculationValueHandleMap& CalcHandles() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  // The wrapper owns an Oilpan Persistent internally, so the generic
++  // Persistent-only static trait cannot infer its renderer ownership.
++  struct CalculationValueHandlesOwnerTag;
++  return base::aros::ProcessLocalValue<CalculationValueHandleMap,
++                                      CalculationValueHandlesOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(CalculationValueHandleMap, handle_map, ());
+   return handle_map;
++#endif
+ }
+ 
+ Length::Length(const CalculationValue* calc)
