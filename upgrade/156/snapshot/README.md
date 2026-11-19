@@ -1,9 +1,29 @@
 # Chromium 156 AROS migration snapshot
 
-This directory contains the in-progress Chromium 156.0.8078.96 / CEF 8078 migration. It is not a release-ready engine. The repository root patch queues and PINS still describe the retained Chromium 124 baseline.
+This is the in-progress Chromium 156.0.8078.96 / CEF 8078 source snapshot. It is not
+release-ready. The repository root queues retain the Chromium 124 baseline;
+use this directory for the 156 branch.
 
-`PINS` and `manifest.json` record the exact upstream commits for this snapshot. Each patch was replayed against its base in an isolated Git index; the manifest records its SHA-256 and resulting Git tree. Patches include the required current CEF upstream changes as well as AROS adaptations.
+A live inventory checked 169 Git repositories. The manifest covers all 21 modified
+repositories, including Chromium, CEF, V8 and patched dependencies. Each patch
+was replayed against its exact recorded commit in an independent Git index;
+SHA-256 values and resulting Git trees are recorded. Unchanged dependencies
+follow Chromium DEPS. CEF is an additional checkout at src/cef.
 
-To reproduce the source snapshot, obtain the Chromium checkout and dependencies at these pins, then run `git apply` with the corresponding patch inside each repository listed in the manifest. Do not apply the root Chromium 124 queue on top. Unchanged dependencies follow Chromium DEPS. The CEF repository is an additional checkout under src/cef.
+Obtain the recorded sources, then apply each manifest patch in its corresponding
+repository. Do not layer the Chromium 124 root queues or the explanatory patches
+in ../aros on top: this snapshot already includes their current changes.
 
-Native x86-64 and AArch64 CEF fixtures now initialize, paint a local page, close the browser, and return from CEFShutdown. Both use one resident V8 code arena and retain 2 MiB PartitionAlloc superpages. These bounded QEMU results do not establish full Chrome UI, networking, media, graphics acceleration, profile isolation, or multi-application acceptance. See adjacent upgrade evidence, including `shared-code-arena-memory.md`, for exact limits and retained failures.
+Current candidate includes the native SQLite lock adapter, worker draining before
+child I/O teardown, and directory creation through open(O_DIRECTORY)+fdopendir.
+Temporary storage diagnostics have been removed. The prior diagnostics-free
+build completes native x64 saved cookie and localStorage tests across a clean guest restart with case-distinct app
+and profile isolation; all helper IDs and host returns are accounted for. The
+new directory path passes standalone 4,000-operation native x64 and ARM controls.
+Full engine validation of the latest directory change is still running.
+
+The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
+Bounded QEMU results do not establish release readiness, full browser/media/DRM
+coverage, accelerated graphics or physical-device qualification. Only modules
+from the same build may be loaded. See ../evidence/native-children for exact
+inputs, retained failures, harness corrections, screenshots and test limits.

@@ -5024,7 +5024,7 @@ index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..7bdfe8e513bb9a0bda2fe750f3d2dc94
  using FeatureStateCache = base::Feature::FeatureStateCache;
  using base::internal::RuntimeMutabilityResult;
 diff --git a/base/files/file_enumerator_posix.cc b/base/files/file_enumerator_posix.cc
-index ea0f65383ff106ce6f81b0f7abf575fec11bae14..b6a0cfa4f78892b5d5455756fbd3ad9718c66749 100644
+index ea0f65383ff106ce6f81b0f7abf575fec11bae14..024c1d11e51c9eca95972983793a2ebb01aed329 100644
 --- a/base/files/file_enumerator_posix.cc
 +++ b/base/files/file_enumerator_posix.cc
 @@ -6,7 +6,9 @@
@@ -5037,11 +5037,44 @@ index ea0f65383ff106ce6f81b0f7abf575fec11bae14..b6a0cfa4f78892b5d5455756fbd3ad97
  #include <stdint.h>
  #include <string.h>
  
-@@ -23,14 +25,86 @@
+@@ -15,6 +17,12 @@
+ #include "base/threading/scoped_blocking_call.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <fcntl.h>
++#include "base/files/scoped_file.h"
++#include "base/posix/eintr_wrapper.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/android/content_uri_utils.h"
+ #include "base/files/file_util.h"
+@@ -23,14 +31,106 @@
  namespace base {
  namespace {
  
 +#if BUILDFLAG(IS_AROS)
++DIR* OpenDirectoryForEnumeration(const FilePath& path) {
++  // AROS opendir selects a free descriptor before acquiring the descriptor
++  // table lock. Another worker can claim that number, and opendir can then
++  // replace its live file. open selects and reserves under the table lock;
++  // fdopendir adopts the already-owned descriptor without allocating another.
++  ScopedFD descriptor(HANDLE_EINTR(
++      open(path.value().c_str(), O_RDONLY | O_DIRECTORY)));
++  if (!descriptor.is_valid())
++    return nullptr;
++  DIR* directory = fdopendir(descriptor.get());
++  if (directory) {
++    descriptor.release();  // closedir now owns the descriptor.
++    return directory;
++  }
++  const int saved_errno = errno;
++  descriptor.reset();
++  errno = saved_errno;
++  return nullptr;
++}
++
 +bool MatchPattern(const char* pattern, const char* value) {
 +  while (*pattern) {
 +    if (*pattern == '*') {
@@ -5124,7 +5157,19 @@ index ea0f65383ff106ce6f81b0f7abf575fec11bae14..b6a0cfa4f78892b5d5455756fbd3ad97
      UNSAFE_TODO(memset(st, 0, sizeof(*st)));
      return false;
    }
-@@ -325,8 +399,13 @@ FileEnumerator::FileInfo FileEnumerator::GetInfo() const {
+@@ -212,7 +312,11 @@ FilePath FileEnumerator::Next() {
+     }
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++    DIR* dir = OpenDirectoryForEnumeration(root_path_);
++#else
+     DIR* dir = opendir(root_path_.value().c_str());
++#endif
+     if (!dir) {
+       if (errno == 0 || error_policy_ == ErrorPolicy::IGNORE_ERRORS) {
+         continue;
+@@ -325,8 +429,13 @@ FileEnumerator::FileInfo FileEnumerator::GetInfo() const {
  }
  
  bool FileEnumerator::IsPatternMatched(const FilePath& path) const {
@@ -5996,7 +6041,7 @@ index f6205d4f2361ce041f687533cb4935bdd0d02657..5ac7aa2e516af39712353b08a5cbe543
  
  int File::Mkdir(const FilePath& path, mode_t mode) {
 diff --git a/base/files/file_util_posix.cc b/base/files/file_util_posix.cc
-index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae654b768be 100644
+index 3c9b141c66da18cd56bb2384597366d2a6914a91..010430e27830203f973d3abb77073930d1253c8a 100644
 --- a/base/files/file_util_posix.cc
 +++ b/base/files/file_util_posix.cc
 @@ -12,7 +12,9 @@
@@ -6214,14 +6259,9 @@ index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae6
  }
  
  bool CreateTemporaryDirInDir(const FilePath& base_dir,
-@@ -1270,7 +1413,15 @@ bool CreateDirectoryAndGetError(const FilePath& full_path, File::Error* error) {
-     // two processes are trying to create the same file system tree at the same
+@@ -1271,6 +1414,10 @@ bool CreateDirectoryAndGetError(const FilePath& full_path, File::Error* error) {
      // time. Check to see if it exists and make sure it is a directory.
      int saved_errno = errno;
-+#if BUILDFLAG(IS_AROS)
-+    if (saved_errno == EEXIST)
-+      continue;
-+#endif
      if (!DirectoryExists(subpath)) {
 +#if BUILDFLAG(IS_AROS)
 +      LOG(ERROR) << "[Chromium:AROS:Files] mkdir failed for '"
@@ -6230,7 +6270,7 @@ index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae6
        if (error) {
          *error = File::OSErrorToFileError(saved_errno);
        }
-@@ -1369,9 +1520,10 @@ FILE* OpenFile(const FilePath& filename, base::cstring_view mode) {
+@@ -1369,9 +1516,10 @@ FILE* OpenFile(const FilePath& filename, base::cstring_view mode) {
      return fdopen(fd, mode.c_str());
    }
  #endif
@@ -6242,7 +6282,7 @@ index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae6
    const char* the_mode = mode.c_str();
  #else
    std::string mode_with_e(AppendModeCharacter(mode, 'e'));
-@@ -1504,6 +1656,13 @@ bool AllocateFileRegion(File* file, int64_t offset, size_t size) {
+@@ -1504,6 +1652,13 @@ bool AllocateFileRegion(File* file, int64_t offset, size_t size) {
      return false;
    }
  
@@ -6256,7 +6296,7 @@ index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae6
    // Realize the extent of the file so that it can't fail (and crash) later
    // when trying to write to a memory page that can't be created. This can
    // fail if the disk is full and the file is sparse.
-@@ -1545,17 +1704,29 @@ bool AllocateFileRegion(File* file, int64_t offset, size_t size) {
+@@ -1545,17 +1700,29 @@ bool AllocateFileRegion(File* file, int64_t offset, size_t size) {
        static_cast<size_t>(original_file_len), static_cast<size_t>(block_size)));
    for (int64_t i = extension_start; i < new_file_len; i += block_size) {
      char existing_byte;
@@ -6286,7 +6326,7 @@ index 3c9b141c66da18cd56bb2384597366d2a6914a91..787026dd244db25d1482e5b9c1381ae6
    }
  
    return true;
-@@ -1675,6 +1846,11 @@ int GetMaximumPathComponentLength(const FilePath& path) {
+@@ -1675,6 +1842,11 @@ int GetMaximumPathComponentLength(const FilePath& path) {
    // Return a value we do not expect anyone ever to reach, but which is small
    // enough to guard against e.g. bugs causing multi-megabyte paths.
    return 1024;
@@ -38618,6 +38658,98 @@ index a364565f4ee4b693323d7c113ee3460ddae472e8..be54c03a7af11f9cd882446d129ba606
  }  // namespace storage
 +
 +#undef AROS_ALLOW_HOSTED_STORAGE_SYNC_CALL
+diff --git a/components/services/storage/sandboxed_vfs_file_impl.cc b/components/services/storage/sandboxed_vfs_file_impl.cc
+index d177b77bdcd1d92d44e549664ea5e2b95729d765..07986f49c3a60de5fe0a22247e846577048471d8 100644
+--- a/components/services/storage/sandboxed_vfs_file_impl.cc
++++ b/components/services/storage/sandboxed_vfs_file_impl.cc
+@@ -13,7 +13,34 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "sql/sandboxed_vfs.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <errno.h>
++#include <sys/file.h>
++#include "base/posix/eintr_wrapper.h"
++#endif
++
+ namespace storage {
++namespace {
++
++base::File::Error SetVfsFileLock(
++    base::File& file, std::optional<base::File::LockMode> mode) {
++#if BUILDFLAG(IS_AROS)
++  // The sandboxed VFS owns this open description until Close(). Use AROS's
++  // description-scoped lock registry; the SDK does not implement F_SETLK.
++  // Keep base::File's record-lock contract unchanged for other consumers.
++  const int operation = !mode ? LOCK_UN
++      : ((*mode == base::File::LockMode::kShared ? LOCK_SH : LOCK_EX) | LOCK_NB);
++  if (HANDLE_EINTR(flock(file.GetPlatformFile(), operation)) == 0) {
++    return base::File::FILE_OK;
++  }
++  return base::File::GetLastFileError();
++#else
++  return mode ? file.Lock(*mode) : file.Unlock();
++#endif
++}
++
++}  // namespace
++
+ 
+ SandboxedVfsFileImpl::SandboxedVfsFileImpl(base::File file,
+                                            base::FilePath file_path,
+@@ -244,7 +271,7 @@ int SandboxedVfsFileImpl::Lock(int mode) {
+   // an exclusive lock. This implementation prioritizes the simplicity of no
+   // platform-specific code over being faster in high contention cases.
+   if (sqlite_lock_mode_ != SQLITE_LOCK_NONE) {
+-    base::File::Error error = file_.Unlock();
++    base::File::Error error = SetVfsFileLock(file_, std::nullopt);
+     if (error != base::File::FILE_OK) {
+       vfs_->SetLastError(base::File::GetLastFileError());
+       return SQLITE_IOERR_LOCK;
+@@ -252,7 +279,7 @@ int SandboxedVfsFileImpl::Lock(int mode) {
+     sqlite_lock_mode_ = SQLITE_LOCK_NONE;
+   }
+ 
+-  base::File::Error error = file_.Lock(file_lock_mode);
++  base::File::Error error = SetVfsFileLock(file_, file_lock_mode);
+   if (error != base::File::FILE_OK) {
+     vfs_->SetLastError(base::File::GetLastFileError());
+     return SQLITE_IOERR_LOCK;
+@@ -284,7 +311,7 @@ int SandboxedVfsFileImpl::Unlock(int mode) {
+   // a shared lock. SQLite's unix VFS takes advantage of this. This
+   // implementation prioritizes the simplicity of no platform-specific code over
+   // being faster in high contention cases.
+-  base::File::Error error = file_.Unlock();
++  base::File::Error error = SetVfsFileLock(file_, std::nullopt);
+   if (error != base::File::FILE_OK) {
+     vfs_->SetLastError(base::File::GetLastFileError());
+     return SQLITE_IOERR_UNLOCK;
+@@ -296,7 +323,7 @@ int SandboxedVfsFileImpl::Unlock(int mode) {
+   }
+ 
+   DCHECK_EQ(mode, SQLITE_LOCK_SHARED);
+-  error = file_.Lock(base::File::LockMode::kShared);
++  error = SetVfsFileLock(file_, base::File::LockMode::kShared);
+   if (error == base::File::FILE_OK) {
+     sqlite_lock_mode_ = mode;
+     return SQLITE_OK;
+@@ -330,14 +357,14 @@ int SandboxedVfsFileImpl::CheckReservedLock(int* has_reserved_lock) {
+   // SQLite unix VFS takes advantage of this. On Windows, this isn't the case.
+   // Follow the strategy of the Windows VFS, which checks by trying to get an
+   // exclusive lock on the file.
+-  base::File::Error error = file_.Lock(base::File::LockMode::kShared);
++  base::File::Error error = SetVfsFileLock(file_, base::File::LockMode::kShared);
+   if (error != base::File::FILE_OK) {
+     *has_reserved_lock = 1;
+     return SQLITE_OK;
+   }
+ 
+   *has_reserved_lock = 0;
+-  if (file_.Unlock() == base::File::FILE_OK) {
++  if (SetVfsFileLock(file_, std::nullopt) == base::File::FILE_OK) {
+     return SQLITE_OK;
+   }
+ 
 diff --git a/components/sessions/core/session_service_commands.cc b/components/sessions/core/session_service_commands.cc
 index 6832a5e8f4d53fdcf3995a469491ff54f5cbd176..927953a3ffbc364f0c0e64b0ed9e008ed92e1eb3 100644
 --- a/components/sessions/core/session_service_commands.cc
@@ -43685,7 +43817,7 @@ index 654fb9d77d1678dd5bd31692a94c14d644d0775a..f3fadcb127f5ad5380196426da1ceb8b
    virtual ~WebContentsView() = default;
  
 diff --git a/content/child/child_process.cc b/content/child/child_process.cc
-index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..1e8542a4965e4ef66bbd96dc19735b4fda08b7bc 100644
+index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0beb868496 100644
 --- a/content/child/child_process.cc
 +++ b/content/child/child_process.cc
 @@ -6,8 +6,11 @@
@@ -43771,9 +43903,23 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..1e8542a4965e4ef66bbd96dc19735b4f
      } else {
        // Leak the main_thread_. See a comment in
        // RenderThreadImpl::ShouldBeDestroyed.
-@@ -179,15 +215,31 @@ ChildProcess::~ChildProcess() {
+@@ -178,15 +214,40 @@ ChildProcess::~ChildProcess() {
+     }
    }
  
++#if BUILDFLAG(IS_AROS)
++  // Native children return through their main function instead of exiting the
++  // whole process. SQLite cleanup on BLOCK_SHUTDOWN workers can still make
++  // synchronous filesystem calls over the child I/O thread. Drain those tasks
++  // before stopping I/O, so replies or pipe disconnects can release the callers.
++  if (initialized_thread_pool_) {
++    DCHECK(base::ThreadPoolInstance::Get());
++    LOG(INFO) << "[Chromium:AROS:ChildTeardown] draining workers before I/O stop";
++    base::ThreadPoolInstance::Get()->Shutdown();
++    LOG(INFO) << "[Chromium:AROS:ChildTeardown] worker drain completed";
++  }
++#endif
++
    if (io_thread_) {
 +#if BUILDFLAG(IS_AROS)
 +    VLOG(1) << "[Chromium:AROS:ChildTeardown] IO Stop begin";
@@ -43785,25 +43931,20 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..1e8542a4965e4ef66bbd96dc19735b4f
      io_thread_.reset();
    }
  
++#if !BUILDFLAG(IS_AROS)
    if (initialized_thread_pool_) {
-+#if BUILDFLAG(IS_AROS)
-+    VLOG(1) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown begin";
-+#endif
      DCHECK(base::ThreadPoolInstance::Get());
      base::ThreadPoolInstance::Get()->Shutdown();
-+#if BUILDFLAG(IS_AROS)
-+    VLOG(1) << "[Chromium:AROS:ChildTeardown] ThreadPool Shutdown end";
-+#endif
    }
- 
++#endif
++
 +#if BUILDFLAG(IS_AROS)
 +  VLOG(1) << "[Chromium:AROS:UtilityShutdown] ChildProcess destructor end";
 +#endif
-+
+ 
  #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
    // Flush the profiling data to disk. Doing this manually (vs relying on this
-   // being done automatically when the process exits) will ensure that this data
-@@ -225,13 +277,22 @@ void ChildProcess::AddRefProcess() {
+@@ -225,13 +286,22 @@ void ChildProcess::AddRefProcess() {
    DCHECK(!main_thread_.get() ||  // null in unittests.
           main_thread_->main_thread_runner()->BelongsToCurrentThread());
    ref_count_++;
@@ -43827,7 +43968,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..1e8542a4965e4ef66bbd96dc19735b4f
      return;
  
    if (main_thread_)  // null in unittests.
-@@ -242,6 +303,14 @@ ChildProcess* ChildProcess::current() {
+@@ -242,6 +312,14 @@ ChildProcess* ChildProcess::current() {
    return child_process;
  }
  
