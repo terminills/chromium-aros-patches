@@ -1,0 +1,52 @@
+{
+  "files": {
+    "Libs/v8.library": "67d2636a3dde7fd61e97619114f93bb0a9c95995318a753c629fcf4bae2fd7dd",
+    "Libs/cef-blink.library": "d8a654dce001aa8f55e65d14409b0a0cea7f44bc42a03a78ea7207cb189b702d",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "c7d4957b1f468b24ecd2977758c22b1d05dba7243c954ee0c6a7679f014e1171",
+    "C/CEFSubprocess": "f90b3cc1f128121f8d0e7a210f72003973a1075298aa10672bccc6cec9d2a9e6",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28",
+    "C/CEFChromeBrowser": "72df59e143d39aa87ada7112a55288229614a7a891ececea814a910cfa8a73e5",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f"
+  },
+  "web_commit": "2993a1f9ebc68361618ca596e287962639d66456",
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nWait 150\nC:CEFHostProbe stats\nType RAM:CEF-host.log >DEBUG:\nC:CEFHostProbe stop\nType RAM:CEF-appA.log >DEBUG:\nEcho Shared-browser-test-finished\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T06:39:20.098899+00:00",
+    "validation": "Adjacent Blink ownership candidate: renderer-local Persistent roots for AllPages, OrdinaryPages, local/remote frame-token maps and empty ChromeClient, plus WebView instance registry. Preserves per-renderer sharing and lazy GC allocation. Prior frame-map candidate116/ARM39 retains separate staged inputs. Exact-base replay checked; native117/ARM40 runtime pending. No heap reclamation or full-browser acceptance claim.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "df39947c3187ebe9749389d0a9732d56409a489596dd049e25888d9ede915a3b",
+        "applied_tree": "73955a1add03ce24388680c7257e5e6e4879d0e5",
+        "bytes": 3016434
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "c813d901e27912f1c31eda7e2ae004750e4eb53ca90398612d8bb4a5b01e90b4",
+    "tools/CEFHost/CEFSubprocess.c": "46ef11a6002fc4235bfd45d8715205ab2a29a4482a98fa834c07a8859583361e",
+    "libs/cef/test_cef_host_browser.c": "300b01ee233c312876d9be8019d94adca35730fc8415350640a5bd61f7c38a56",
+    "libs/cef/test_cef_chrome_host.c": "691d37d71a565b55a9f8e1f1372a63a7318c673e4df194161bcb43b1bc2c648b",
+    "libs/cef/test_cef_browser.c": "06846be916eecb12da84fddba3a82408dc2ee285957356921c95c42a9947d240",
+    "libs/v8/v8findenginesymbol.c": "157d99744cb4057bc1385b3c529a57b228b77860c97dd4b97ea0bcd41f0f5642",
+    "libs/v8/mmakefile.src": "ac4588f55d0d4a96374be83d41993da3df67df347a9592588fb246ff08e8fc89",
+    "build/v8-import-table.py": "0e2f692d0fe09c35488d3107383225f971441da11cd1b42886e7e30f57826744"
+  },
+  "fixture_sha256": "47d01c33e577881fd0417de4f167cd656af0d734fac8530e545b71c4aff5a6d8"
+}

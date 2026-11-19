@@ -407,3 +407,7 @@ Native Chrome-window probe2993a1f builds on x64 and ARM, requesting CEF Chrome r
 ## Native119 clean full two-app regression PASS
 
 Unchanged replay passes the original strict watcher: all6 complete allocator records agree; both apps pass independent cookie/localStorage, DOM and workers; A callbacks drain/exits; B continues passing afterward; B drains/exits; all3renderer+2utility+1GPU return0; host shutdown returns. Native callback/clock probes pass, no fatal or alert. No forensic repair required. Controlled x64 QEMU1CPU lane, not sandbox security, task-disappearance, memory-reclamation, two-core CEF or full-browser acceptance. Native120 separately probes Chrome UI using same engine, pending.
+
+## Native Chrome120: window created, rendering NOT accepted
+
+The native Chrome-style client2993a1f opens an Intuition/Ozone window with Chromium title and starts fixture navigation, but screenshots are grey. Renderer CHECK fires in BeforeCallEnteredCallback -> WebUIExtension::Install -> frame document commit: ScriptForbiddenScope main/lifecycle counters are resident globals. New AROS-only candidate makes those counters native TLS, matching the existing thread-local worker counter, while retaining CHECKs and non-AROS storage. Cross-renderer contamination is the ownership defect addressed; the runtime fix is not yet verified. Full archives compiling x64/ARM, native121 Chrome-window and ARM42 queued. Full symbols match117 engine hashes. No visual rendering pass claimed.

@@ -60234,6 +60234,59 @@ index 160a98c6f74a60e0e8353c98ca1da931b0b67f71..b3dff5b7ad5bfdcb117975f9ee072e16
  }
  
  ParkableStringManager::~ParkableStringManager() = default;
+diff --git a/third_party/blink/renderer/platform/bindings/script_forbidden_scope.cc b/third_party/blink/renderer/platform/bindings/script_forbidden_scope.cc
+index 4066219869d48a2a051d5e4c7c7f5609da58b255..ae60f0be9fb54233ad8836f9ad7fd02bac745177 100644
+--- a/third_party/blink/renderer/platform/bindings/script_forbidden_scope.cc
++++ b/third_party/blink/renderer/platform/bindings/script_forbidden_scope.cc
+@@ -6,8 +6,14 @@
+ 
+ namespace blink {
+ 
++#if BUILDFLAG(IS_AROS)
++constinit thread_local unsigned ScriptForbiddenScope::g_main_thread_counter_ = 0;
++constinit thread_local unsigned ScriptForbiddenScope::g_blink_lifecycle_counter_ =
++    0;
++#else
+ unsigned ScriptForbiddenScope::g_main_thread_counter_ = 0;
+ unsigned ScriptForbiddenScope::g_blink_lifecycle_counter_ = 0;
++#endif
+ 
+ constinit thread_local unsigned script_forbidden_counter = 0;
+ 
+diff --git a/third_party/blink/renderer/platform/bindings/script_forbidden_scope.h b/third_party/blink/renderer/platform/bindings/script_forbidden_scope.h
+index 1f8fbdc3ca82c4debcc8cbe3e1f4d8be880ddc8c..a39c807500ec3797e114fdc73ca793e4dd21c056 100644
+--- a/third_party/blink/renderer/platform/bindings/script_forbidden_scope.h
++++ b/third_party/blink/renderer/platform/bindings/script_forbidden_scope.h
+@@ -8,6 +8,7 @@
+ #include <optional>
+ 
+ #include "base/auto_reset.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
+ #include "third_party/blink/renderer/platform/platform_export.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+@@ -116,11 +117,21 @@ class PLATFORM_EXPORT ScriptForbiddenScope final {
+ 
+   static unsigned& GetMutableCounter();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Each native renderer main thread has its own script/lifecycle scopes,
++  // even when all renderers execute the same resident Blink image.
++  static thread_local unsigned g_main_thread_counter_;
++#else
+   static unsigned g_main_thread_counter_;
++#endif
+ 
+   // TODO(https://crbug.com/1196853): Remove once
+   // BlinkLifecycleScopeWillBeScriptForbidden can be removed.
++#if BUILDFLAG(IS_AROS)
++  static thread_local unsigned g_blink_lifecycle_counter_;
++#else
+   static unsigned g_blink_lifecycle_counter_;
++#endif
+ 
+   // V8GCController is exceptionally allowed to call Enter/Exit.
+   friend class V8GCController;
 diff --git a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc b/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
 index 6580983ed4acaf309f5da7a659f1afb61bc430ed..ae527428a2bdb0d7f1c04b522ea3568076a638ba 100644
 --- a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
