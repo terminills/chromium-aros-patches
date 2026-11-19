@@ -4,16 +4,16 @@
   "release_repository": "terminills/chromium-aros-patches",
   "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
   "gates": {
-    "shared_engine_lifecycle": "x64180 and181 strict reviewed accounting pass 10 cycles/22 child exits. Worker isolation184 currently testing with independent native child files. ARM68 failed host join; ARM69 running.",
+    "shared_engine_lifecycle": "x64184 strict raw and independent file-ledger PASS:10cycles,20retirements,22child exits0. ARM68 failed join; ARM69 remains pending.",
     "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
     "persistent_profiles": "Native writer158/reader159 passes; final candidate replay pending",
     "memory": "Not accepted:181 whole-guest mean growth14.91MiB/cycle. Worker exit cache measurement only4.76MiB total across observed exits; TLS186 candidate crosscompiled/host tested, unapplied.",
-    "native_browser_ui": "ARM67 and68 screenshots reviewed; interactive tabs/navigation/close final candidate pending",
-    "production_launcher": "Persistent client and shared-host launcher crosslinked both architectures, companion6cbbb4b; interactive185 native icon/launch test prepared.",
+    "native_browser_ui": "x64188 interactive tabs/navigation/closure/reopen PASS. Drawer title corruption after first browser close retained for investigation. ARM69 local worker content screenshot reviewed; terminal acceptance pending.",
+    "production_launcher": "x64 native188 double-click launch, two tabs, navigation, callback drain and reopen with same host PASS; companion24b0ddc. ARM and optional argument cases pending.",
     "packaging": "Required: exact libraries/helpers/resources, required OS baseline, install/start scripts, licenses and manifest; no user profile or credentials",
     "source_reproducibility": "Validated snapshot158 retained; final candidate export/replay required",
     "release_upload": "Authorized, pending acceptance and archives",
-    "native_icons": "Native TOOL/PROJECT/IconX/DRAWER icons generated,1MiB stack and correct tooltypes; parent drawers generated from stock AROS artwork. Native metadata, selected appearance and actual double-click test185 pending."
+    "native_icons": "x64188 exact five native metadata records PASS; normal/selected appearance and drawer label reviewed; actual double-click launch PASS. ARM runtime check pending."
   },
   "known_limits": {
     "security": "Shared address space is not a sandbox security boundary",
