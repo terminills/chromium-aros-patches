@@ -1,0 +1,52 @@
+--- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h
++++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h
+@@ -224,7 +224,11 @@
+     static bool ScrollbarsAreFrozen() { return count_; }
+ 
+    private:
++#if defined(__AROS__)
++    static thread_local int count_;
++#else
+     static int count_;
++#endif
+   };
+ 
+   // Possible root for scrollbar freezing. When established, the root box itself
+@@ -269,7 +273,11 @@
+     static void ClampScrollableAreas();
+     static HeapVector<Member<PaintLayerScrollableArea>>& NeedsClampList();
+ 
++#if defined(__AROS__)
++    static thread_local int count_;
++#else
+     static int count_;
++#endif
+   };
+ 
+   // FIXME: We should pass in the LayoutBox but this opens a window
+--- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
++++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+@@ -3051,7 +3051,11 @@
+   visitor->Trace(v_bar_);
+ }
+ 
++#if defined(__AROS__)
++thread_local int PaintLayerScrollableArea::FreezeScrollbarsScope::count_ = 0;
++#else
+ int PaintLayerScrollableArea::FreezeScrollbarsScope::count_ = 0;
++#endif
+ 
+ PaintLayerScrollableArea::FreezeScrollbarsRootScope::FreezeScrollbarsRootScope(
+     const LayoutBox& box,
+@@ -3072,7 +3076,11 @@
+     scrollable_area_->ClearScrollbarRoot();
+ }
+ 
++#if defined(__AROS__)
++thread_local int PaintLayerScrollableArea::DelayScrollOffsetClampScope::count_ = 0;
++#else
+ int PaintLayerScrollableArea::DelayScrollOffsetClampScope::count_ = 0;
++#endif
+ 
+ PaintLayerScrollableArea::DelayScrollOffsetClampScope::
+     DelayScrollOffsetClampScope() {

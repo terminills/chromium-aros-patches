@@ -1,0 +1,58 @@
+--- a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h
++++ b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h
+@@ -53,10 +53,26 @@
+  private:
+   void Initialize(Element*);
+ 
++#if defined(__AROS__)
++  static thread_local unsigned scope_count_;
++#else
+   static unsigned scope_count_;
++#endif
++#if defined(__AROS__)
++  static thread_local Element* current_element_;
++#else
+   static Element* current_element_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool should_notify_inspector_;
++#else
+   static bool should_notify_inspector_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool should_deliver_;
++#else
+   static bool should_deliver_;
++#endif
+ 
+   MutationObserverInterestGroup* mutation_recipients_ = nullptr;
+   MutationRecord* mutation_ = nullptr;
+--- a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc
++++ b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc
+@@ -44,10 +44,26 @@
+ 
+ }  // namespace
+ 
++#if defined(__AROS__)
++thread_local unsigned StyleAttributeMutationScope::scope_count_ = 0;
++#else
+ unsigned StyleAttributeMutationScope::scope_count_ = 0;
++#endif
++#if defined(__AROS__)
++thread_local Element* StyleAttributeMutationScope::current_element_ = nullptr;
++#else
+ Element* StyleAttributeMutationScope::current_element_ = nullptr;
++#endif
++#if defined(__AROS__)
++thread_local bool StyleAttributeMutationScope::should_notify_inspector_ = false;
++#else
+ bool StyleAttributeMutationScope::should_notify_inspector_ = false;
++#endif
++#if defined(__AROS__)
++thread_local bool StyleAttributeMutationScope::should_deliver_ = false;
++#else
+ bool StyleAttributeMutationScope::should_deliver_ = false;
++#endif
+ 
+ StyleAttributeMutationScope::StyleAttributeMutationScope(
+     AbstractPropertySetCSSStyleDeclaration* decl) {

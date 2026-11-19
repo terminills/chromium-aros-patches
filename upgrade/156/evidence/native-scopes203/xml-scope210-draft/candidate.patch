@@ -1,0 +1,28 @@
+--- a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h
++++ b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h
+@@ -46,7 +46,11 @@
+   XMLDocumentParserScope& operator=(const XMLDocumentParserScope&) = delete;
+   ~XMLDocumentParserScope();
+ 
++#if defined(__AROS__)
++  static thread_local Document* current_document_;
++#else
+   static Document* current_document_;
++#endif
+ 
+  private:
+   Document* old_document_;
+--- a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc
++++ b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc
+@@ -27,7 +27,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local Document* XMLDocumentParserScope::current_document_ = nullptr;
++#else
+ Document* XMLDocumentParserScope::current_document_ = nullptr;
++#endif
+ 
+ XMLDocumentParserScope::XMLDocumentParserScope(Document* document)
+     : old_document_(current_document_),

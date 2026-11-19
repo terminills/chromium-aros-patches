@@ -1,0 +1,49 @@
+--- a/third_party/blink/renderer/core/fullscreen/fullscreen.cc
++++ b/third_party/blink/renderer/core/fullscreen/fullscreen.cc
+@@ -412,10 +412,18 @@
+   static bool RunningRequestFullscreen() { return running_request_fullscreen_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool running_request_fullscreen_;
++#else
+   static bool running_request_fullscreen_;
++#endif
+ };
+ 
++#if defined(__AROS__)
++thread_local bool RequestFullscreenScope::running_request_fullscreen_ = false;
++#else
+ bool RequestFullscreenScope::running_request_fullscreen_ = false;
++#endif
+ 
+ // Walks the frame tree and returns the first local ancestor frame, if any.
+ LocalFrame* NextLocalAncestor(Frame& frame) {
+--- a/third_party/blink/renderer/core/paint/paint_layer.h
++++ b/third_party/blink/renderer/core/paint/paint_layer.h
+@@ -869,7 +869,11 @@
+   static bool ShouldCheck() { return should_check_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool should_check_;
++#else
+   static bool should_check_;
++#endif
+   base::AutoReset<bool> reset_;
+ };
+ 
+--- a/third_party/blink/renderer/core/paint/paint_layer.cc
++++ b/third_party/blink/renderer/core/paint/paint_layer.cc
+@@ -2895,7 +2895,11 @@
+   DisplayItemClient::Trace(visitor);
+ }
+ 
++#if defined(__AROS__)
++thread_local bool CheckAncestorPositionVisibilityScope::should_check_ = false;
++#else
+ bool CheckAncestorPositionVisibilityScope::should_check_ = false;
++#endif
+ 
+ }  // namespace blink
+ 
