@@ -511,3 +511,12 @@ by the immediate-exit path entering stdc without a valid exit frame. Exact ARM50
 engine symbols resolve the retained stack to EnsureConnected and
 TerminateCurrentProcessImmediately. No worker PASS or full lifecycle is claimed;
 this is not attributed to the separate intermittent ARM OS stalls.
+
+
+Native145 loads the rebuilt filesystem boot package and passes all forty
+simultaneous file writes, directory creation while those files remain open,
+and complete per-file byte-pattern readback (zero failures). The private OS fix
+is `91c96ef9`, supplied in `../../aros/fat-idle-file-cache-pins.patch`. It releases
+file data range pins after packet I/O has copied the data, while retaining cached
+contents and directory-entry pin lifetimes. Both architecture handler builds pass;
+this runtime result is x64 QEMU only. Chromium disk persistence remains pending.

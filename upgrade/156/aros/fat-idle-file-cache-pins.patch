@@ -1,0 +1,60 @@
+From 91c96ef9a1c89b7b871107821fb2a6d381c07467 Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 19 Nov 2026 05:09:41 -0600
+Subject: [PATCH] fat: release idle file data cache pins after packet I/O
+
+---
+ rom/filesys/fat/ops.c | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/rom/filesys/fat/ops.c b/rom/filesys/fat/ops.c
+index b2ec3b2d..3b6709d5 100644
+--- a/rom/filesys/fat/ops.c
++++ b/rom/filesys/fat/ops.c
+@@ -992,6 +992,20 @@ create_failed:
+     return err;
+ }
+ 
++/* Packet reads and writes copy all data before returning. Keep the range
++ * cached, but do not pin it for the lifetime of an idle open file: otherwise
++ * a finite cache imposes a hard limit on simultaneously open files. Directory
++ * handles retain their separate pin until their entry has been consumed. */
++static VOID ReleaseFileDataBlock(struct IOHandle *ioh)
++{
++    if (ioh->block != NULL)
++    {
++        Cache_FreeBlock(ioh->sb->cache, ioh->block);
++        ioh->block = NULL;
++        ioh->data = NULL;
++    }
++}
++
+ LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want,
+     ULONG *read, struct Globals *glob)
+ {
+@@ -1015,7 +1029,9 @@ LONG OpRead(struct ExtFileLock *lock, UBYTE *data, ULONG want,
+             " adjusted want to %ld bytes\n", want));
+     }
+ 
+-    if ((err = ReadFileChunk(&(lock->ioh), lock->pos, want, data, read)) == 0)
++    err = ReadFileChunk(&(lock->ioh), lock->pos, want, data, read);
++    ReleaseFileDataBlock(&lock->ioh);
++    if (err == 0)
+     {
+         lock->pos += *read;
+         D(bug("[fat] read %ld bytes, new file pos is %ld\n", *read,
+@@ -1062,8 +1078,9 @@ LONG OpWrite(struct ExtFileLock *lock, UBYTE *data, ULONG want,
+     if (lock->ioh.first_cluster == 0xffffffff)
+         update_entry = TRUE;
+ 
+-    if ((err = WriteFileChunk(&(lock->ioh), lock->pos, want, data,
+-        written)) == 0)
++    err = WriteFileChunk(&(lock->ioh), lock->pos, want, data, written);
++    ReleaseFileDataBlock(&lock->ioh);
++    if (err == 0)
+     {
+         ULONG size;
+ 
+-- 
+2.53.0
+
