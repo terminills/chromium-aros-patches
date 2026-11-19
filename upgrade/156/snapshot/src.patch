@@ -10384,14 +10384,16 @@ index 205200021c674a6cc943c30d73d36963ab4052b4..af76f4132f2d92b499c2595114e05f4b
  }
  
 diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
-index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e3890a135 100644
+index 79638efa0621efba6ed39b37db68c765b3576235..584f92adbeb2564a26d4164a7357a0ca601b4440 100644
 --- a/base/process/process_posix.cc
 +++ b/base/process/process_posix.cc
-@@ -25,6 +25,11 @@
+@@ -25,6 +25,13 @@
  #include "base/trace_event/trace_event.h"
  #include "build/build_config.h"
  
 +#if BUILDFLAG(IS_AROS)
++#include "base/debug/stack_trace.h"
++extern "C" void ArosExitKPrintF(const char*, ...) asm("KPrintF");
 +#include <exec/tasks.h>
 +#include <proto/exec.h>
 +#endif
@@ -10399,7 +10401,7 @@ index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e
  #if BUILDFLAG(IS_MAC)
  #include <sys/event.h>
  #endif
-@@ -39,6 +44,14 @@
+@@ -39,6 +46,14 @@
  
  namespace {
  
@@ -10414,7 +10416,7 @@ index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e
  #if !BUILDFLAG(IS_IOS) || (BUILDFLAG(IS_IOS) && TARGET_OS_SIMULATOR)
  bool WaitpidWithTimeout(base::ProcessHandle handle,
                          int* status,
-@@ -193,6 +206,64 @@ bool WaitForSingleNonChildProcess(base::ProcessHandle handle,
+@@ -193,6 +208,64 @@ bool WaitForSingleNonChildProcess(base::ProcessHandle handle,
  }
  #endif  // BUILDFLAG(IS_MAC)
  
@@ -10479,7 +10481,23 @@ index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e
  }  // namespace
  
  namespace base {
-@@ -304,12 +375,20 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
+@@ -241,6 +314,15 @@ Process Process::OpenWithExtraPrivileges(ProcessId pid) {
+ 
+ // static
+ void Process::TerminateCurrentProcessImmediately(int exit_code) {
++#if BUILDFLAG(IS_AROS)
++  // Preserve the requested termination behavior while retaining its caller.
++  // A native child must not silently jump through another task's CRT frame.
++  ArosExitKPrintF("[AROS-IMMEDIATE-EXIT] task=%p id=%lu code=%ld\n",
++                  FindTask(nullptr),
++                  static_cast<unsigned long>(GetETaskID(FindTask(nullptr))),
++                  static_cast<long>(exit_code));
++  base::debug::StackTrace().Print();
++#endif
+ #if BUILDFLAG(CLANG_PROFILING)
+   WriteClangProfilingProfile();
+ #endif
+@@ -304,12 +386,20 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
    if (maybe_compromised) {
      // Forcibly terminate the process immediately.
      const bool was_killed = kill(process_, SIGKILL) == 0;
@@ -10500,7 +10518,7 @@ index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e
      DPLOG(ERROR) << "Unable to terminate process " << process_;
      return false;
    }
-@@ -318,6 +397,10 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
+@@ -318,6 +408,10 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
      return true;
    }
    if (kill(process_, SIGKILL) != 0) {
@@ -10511,7 +10529,7 @@ index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e
      DPLOG(ERROR) << "Unable to kill process " << process_;
      return false;
    }
-@@ -400,7 +483,14 @@ bool Process::WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
+@@ -400,7 +494,14 @@ bool Process::WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
  
  int Process::GetOSPriority() const {
    DCHECK(IsValid());

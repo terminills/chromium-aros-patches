@@ -339,3 +339,11 @@ Native109 uses the same engine, facade, and fixture hashes as108 with the server
 Read-only audits retain follow-up contracts for path-cache ownership and main-isolate destruction. No renderer-heap reclamation change or memory-reduction claim is included. The source snapshot is replay-checked against its pinned bases and remains in progress.
 
 The completed native110 timing comparison did not qualify app content: both HTTP requests succeeded, B produced a paint callback, but neither app emitted its JS/content checks and A aborted at tick6001. A later utility hit a native stdc exit-frame alert; no Chromium caller stack was emitted, so its cause is unresolved. Native111 will test the coordinator ownership fix.
+
+### Exit and page-lifecycle diagnostics
+
+The renderer coordinator fix passed both complete archives/native links. ARM34 passed local workers, painting/close, teardown and contract probes (whole guest1195.10MiB first paint,1155.84MiB after close). Native111 reached B script-start and both paint/callback-close records, then returned from host shutdown without a fatal/alert. It still failed strict acceptance: no app content/worker checks and incomplete child returns (1/3 renderers,1/2 utilities,1/1 GPU). Its survivor screenshot is black, not proof of useful rendering.
+
+The new source snapshot adds immediate-exit task/Exec-ID/code and caller stack diagnostics on AROS while preserving termination behavior. Companion aros-web36a12a8 adds request-handler document/renderer callbacks and cross-builds on both architectures. A separate fixture adds cookie/local-storage phase markers, with acceptance unchanged. Diagnostic candidate112/ARM35 native links and runtime are pending.
+
+A separate read-only audit identifies ServiceBinderImpl resident optional storage holding the first utility main runner and IO factory across helpers. A per-owner draft exists locally but is not included in this snapshot. A worker-generation audit is also deferred; neither is claimed as a measured cause of the current blank page or exit alert.
