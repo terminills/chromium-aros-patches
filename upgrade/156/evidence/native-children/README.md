@@ -488,3 +488,26 @@ ARM50 reaches cold-start readiness and Chrome controls but times out without
 worker PASS or child exit records; it does not qualify the cleanup fix on ARM.
 ARM51 retains the exact engine, adds the published host profile fix, and uses a
 longer hold/startup window for another bounded replay.
+
+
+Native136 stopped at a missing PROFILE: assign in the test script. Native137
+writes successfully and completes the first host lifetime, but a second host
+initialization is deliberately refused by the resident engine's one-shot lifecycle
+guard. Neither run proves persistence across a clean OS boot.
+
+Native138's original page-level WRITE PASS is **not disk-persistence proof**:
+CEF explicitly rejected the cache directory and fell back to memory. The original
+result is preserved with a supplemental rejection audit. Native140 standalone
+DOS/mkdir/stat/stat64 checks pass on FAT and RAM for directory names up to 81 bytes.
+Native143 isolates a filesystem failure without Chromium: fourteen held-open files
+succeed, the fifteenth open and another directory creation fail with DOS error103;
+closing the files restores directory creation. The FAT cache retains one range per
+open file and this small volume has sixteen ranges. A private packet-I/O cache-pin
+fix is under test. Native144 accidentally retained the old boot-package handler;
+its failure is preserved as a packaging error, not validation of the new handler.
+
+ARM51's longer replay ends in a storage utility IPC connection timeout, followed
+by the immediate-exit path entering stdc without a valid exit frame. Exact ARM50
+engine symbols resolve the retained stack to EnsureConnected and
+TerminateCurrentProcessImmediately. No worker PASS or full lifecycle is claimed;
+this is not attributed to the separate intermittent ARM OS stalls.
