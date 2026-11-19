@@ -7,26 +7,37 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-19 UTC
 
-Native AArch64 passes local CEF browser JavaScript/Wasm workers, painting,
-closing and final teardown in ARM39 and ARM40. ARM40 whole-guest first-paint
-usage is 1176.28 MiB and after library close is 1143.97 MiB; neither is engine
-RSS or proof of complete heap reclamation. Intermittent ARM stalls remain a
-separate deferred investigation.
+The current directory-enumeration candidate passes native x86-64 writer158 and
+clean reader159: cookies/localStorage survive a fresh OS session, case-distinct
+application and profile identities stay separate, and every started child and
+the host return successfully. The Chromium-local directory fix avoids the SDK's
+unsafe descriptor selection path without changing the SDK. Temporary storage
+tracing has been removed. The replay-checked snapshot contains all21 modified
+repositories; use its own PINS and manifest, not the historical root124 queue.
 
-Native x86-64 HTTP/HTTPS and single-browser tests passed in earlier retained
-runs. Both applications now repeatedly pass independent cookie/localStorage,
-DOM and worker checks through the shared resident engine. Full multi-app
-lifecycle passes the complete original watcher in native119: A exits, B
-continues its checks, B exits, all six native children return0, and host
-shutdown returns. All six allocator records are complete and agree on the
-shared addresses. This controlled QEMU lane uses one CPU; it does not prove
-sandbox security, final task disappearance or full memory reclamation.
-Stale task-runner warnings still need investigation. See
-`evidence/native-children/README.md` for exact inputs and qualifications.
-Native121 now renders the Chrome window, tab strip, address bar and test page
-through the same resident engine, with complete local fixture/lifecycle PASS.
-Interactive tabs/profiles/sign-in/media, Node/Electron/Zune consumers and broad
-hardware qualification remain outside the completed evidence.
+Native AArch64 ARM58 paints the full Chrome window and local JavaScript/Wasm
+worker PASS page, then returns all six native child tasks and the host. Its
+reviewed screenshot includes About AROS identifying aarch64-raspi. This is QEMU
+validation, not physical Raspberry Pi qualification. Intermittent ARM stalls
+remain a separate deferred investigation.
+
+![Native ARM Chrome and About AROS](evidence/native-children/cef-chrome-arm58-content.png)
+
+Native x86-64 memory164 completes ten browser create/render/close cycles in one
+resident host: ten page checks, all22 child returns, and host completion pass.
+Memory acceptance does **not** pass: whole-guest usage grows from1706.72 MiB
+after cycle1 to1949.76 MiB after cycle10, about27.00 MiB per additional cycle,
+and remains1753.80 MiB after host exit. These are OS-plus-resident-engine totals,
+not peak RSS or evidence of copied engine images. Renderer heap retirement
+remains active work; successful task return alone is not memory reclamation.
+See [the measured baseline](evidence/native-children/cef-memory164-analysis.json).
+
+Earlier native HTTP/HTTPS, multi-app DOM/cookie/worker isolation and sibling
+survival evidence remains retained, including native119 and full Chrome121.
+The controlled x64 lane uses one CPU. Interactive tabs/profiles/sign-in/media,
+Node/Electron/Zune consumers, browser Vulkan/CDM integration, sandbox security
+and broad hardware qualification remain outside the completed evidence. Exact
+inputs and limitations are in [native validation](evidence/native-children/README.md).
 
 ## Earlier initialization evidence — 2026-11-18 UTC
 
