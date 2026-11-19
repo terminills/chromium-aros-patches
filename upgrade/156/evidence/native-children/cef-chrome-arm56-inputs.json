@@ -1,0 +1,52 @@
+{
+  "files": {
+    "Libs/v8.library": "695d9860de339f2c44d6b59f0c43e28e5eda4ccd282fca21c722938d98ba3d1a",
+    "Libs/cef-blink.library": "e4553bb66e3ed46d5a8b8d6cb98c27a3566a1e13273e46cad109d14bf5f84d1c",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFHost": "798bd2b356a138e0c064cc5ca857c44210589366defd30f517672a4e93f54ae2",
+    "C/CEFSubprocess": "25e85cf5c9e5c66040818e64c2e87584210c086bfcc08a63cf0d897d3a4fcba3",
+    "C/CEFHostProbe": "c533acc1e83face296a33c7cc3c5c7c7818e902020701e0fbf9325b4f3fb47ae",
+    "C/CEFChromeBrowser": "17f311f93811c49c2a04214fa13e00ced0ac3506706a452a461272487b2825f6",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFWaitFile": "3380d3815c6b1a3eb73c8ad22d3554f8e71127048dceae283e9fe6f577ec56c4",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "C/CEFEngineLoadProbe": "aea62c23adc281378c81eec4876922e7af4fb116a6a2ab4e9a8840001b1dce96",
+    "C/CEFHostPortWait": "56be2b10f9d1514e142af9f63bde66a526c5ccbb7a97bcf586b83f7f3a4916b0",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "a57e0673a75d43a46f62676bf215efecc997e102fe9d0c5fdfa4d639b2df0215",
+    "S/CEFHost-Run": "0b50323101e0d7c9a217f1d9e2f9c3fe971be9481777ad37f7449687f7986f8e",
+    "S/CEF-AppA": "84cc298bba57d4d4b53601f0c2ae7aad7e62358ce36294107c5197acb461858a",
+    "S/CEF-StartupMonitor": "1546b44a102e5f47390f67b2736d4302720989e7030f6d85b00370e7aaec562f"
+  },
+  "diagnostic_child_ipc_timeout_seconds": 120,
+  "diagnostic_host_source_sha256": "659cb7bdd633a6b9a8b1d145ad75156792f2bc309a28e8d9a1a8093f65e9faf2",
+  "web_commit": "4053eb391eb956f34b37e67f5ac2d2ad01286274",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nRun >NIL: Execute S:CEF-StartupMonitor\nEcho ARM56-host-command-start >DEBUG:\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nEcho ARM56-host-run-returned:$RC >DEBUG:\nC:CEFHostProbe wait\nIf WARN\nEcho ARM56-probe-wait-failed >DEBUG:\nQuit 20\nEndIf\nEcho ARM56-native-port-probe-returned:0 >DEBUG:\nEcho ARM56-probe-wait-returned:0 >DEBUG:\nType RAM:CEF-host.log >DEBUG:\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nEcho ARM56-client-run-returned:$RC >DEBUG:\nWait 90\nRun SYS:System/About\nEcho ARM56-About-launched >DEBUG:\nC:Avail >DEBUG:\nType RAM:CEF-host.log >DEBUG:\nType RAM:CEF-appA.log >DEBUG:\nC:CEFWaitFile T:CEFClient56.done 1800\nIf WARN\nEcho ARM56-client-exit-timeout >DEBUG:\nQuit 20\nEndIf\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nEcho ARM56-stop-returned:$RC >DEBUG:\nC:CEFWaitFile T:CEFHost56.done 600\nIf WARN\nEcho ARM56-host-exit-timeout >DEBUG:\nQuit 20\nEndIf\nType RAM:CEF-host.log >DEBUG:\nType RAM:CEF-appA.log >DEBUG:\nEcho ARM56-test-finished >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T12:06:25.690980+00:00",
+    "validation": "Native151 candidate: native child drains BLOCK_SHUTDOWN workers while I/O remains alive;149 stacks show pending SQLite journal deletion blocked after I/O stop. Retains sandboxed VFS flock correction and temporary diagnostics. Clean lifecycle plus reboot persistence pending.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "555c851bff9c0809de9dd4ef17591c453061e513369708b3c9bbf8f102bda464",
+        "applied_tree": "a529f2c861a891260195be3d04ffbb875e9d3026",
+        "bytes": 3037970
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Ordered widget-cancellation cleanup, cold host startup, native port readiness before client opens CEF, no preload; local workers, not network or full product acceptance"
+}

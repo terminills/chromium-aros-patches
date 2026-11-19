@@ -1,0 +1,56 @@
+diff --git a/base/files/file_enumerator_posix.cc b/base/files/file_enumerator_posix.cc
+index b6a0cfa4f7..024c1d11e5 100644
+--- a/base/files/file_enumerator_posix.cc
++++ b/base/files/file_enumerator_posix.cc
+@@ -17,6 +17,12 @@
+ #include "base/threading/scoped_blocking_call.h"
+ #include "build/build_config.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <fcntl.h>
++#include "base/files/scoped_file.h"
++#include "base/posix/eintr_wrapper.h"
++#endif
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/android/content_uri_utils.h"
+ #include "base/files/file_util.h"
+@@ -26,6 +32,26 @@ namespace base {
+ namespace {
+ 
+ #if BUILDFLAG(IS_AROS)
++DIR* OpenDirectoryForEnumeration(const FilePath& path) {
++  // AROS opendir selects a free descriptor before acquiring the descriptor
++  // table lock. Another worker can claim that number, and opendir can then
++  // replace its live file. open selects and reserves under the table lock;
++  // fdopendir adopts the already-owned descriptor without allocating another.
++  ScopedFD descriptor(HANDLE_EINTR(
++      open(path.value().c_str(), O_RDONLY | O_DIRECTORY)));
++  if (!descriptor.is_valid())
++    return nullptr;
++  DIR* directory = fdopendir(descriptor.get());
++  if (directory) {
++    descriptor.release();  // closedir now owns the descriptor.
++    return directory;
++  }
++  const int saved_errno = errno;
++  descriptor.reset();
++  errno = saved_errno;
++  return nullptr;
++}
++
+ bool MatchPattern(const char* pattern, const char* value) {
+   while (*pattern) {
+     if (*pattern == '*') {
+@@ -286,7 +312,11 @@ FilePath FileEnumerator::Next() {
+     }
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++    DIR* dir = OpenDirectoryForEnumeration(root_path_);
++#else
+     DIR* dir = opendir(root_path_.value().c_str());
++#endif
+     if (!dir) {
+       if (errno == 0 || error_policy_ == ErrorPolicy::IGNORE_ERRORS) {
+         continue;

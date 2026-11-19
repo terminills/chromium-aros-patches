@@ -1,0 +1,9 @@
+{
+  "runtime_error": "close(68) EBADF in NoVarySearch cache journal writer destruction",
+  "preceding_errors": "ExNext and UnLock report bogus FileLock on Chromium workers",
+  "code_candidate": "SDK opendir calls __getfdslot(__getfirstfd(3)); first-free selection occurs outside FD_LOCK. Concurrent open can occupy selected number, and __getfdslot closes an occupied requested slot. Chromium CallOpen serializes file opens but FileEnumerator opendir does not participate.",
+  "root_cause_confirmed": false,
+  "next_test": "CEFFdDirectoryStress uses native Exec workers with shared CRT state; compare concurrent open/opendir against one common admission semaphore.",
+  "sdk_modified": false,
+  "engine_sha256": "e4553bb66e3ed46d5a8b8d6cb98c27a3566a1e13273e46cad109d14bf5f84d1c"
+}

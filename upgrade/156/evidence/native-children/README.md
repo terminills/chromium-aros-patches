@@ -605,3 +605,26 @@ ARM55 painted the worker PASS page and returned the browser client, but its test
 script exhausted stop attempts before that client completed. Its watcher was
 explicitly ended with raw logs retained; no host-cleanup pass is claimed.
 ARM56 uses completion files to order client completion, stop, and host completion.
+
+
+ARM56 reproduces invalid ExNext/UnLock handles and close(68) EBADF in the
+NoVarySearch journal writer. Native155, a standalone eight-Exec-worker probe,
+reproduces invalid directory handles and a posixc write fault. The SDK opendir
+selects a free descriptor outside the descriptor-table lock; another open can
+claim it before opendir requests that slot, replacing a live descriptor.
+Native156 serializes open/opendir admission and passes4000 operations. Native157
+uses open(O_DIRECTORY)+fdopendir with no extra admission lock and passes4000.
+`../../aros/native-directory-descriptor.patch` applies that existing ownership
+contract only to Chromium's AROS directory enumerator; the SDK is unchanged.
+Full engine/browser validation of this candidate remains pending.
+
+ARM57 omitted the engine's native task.resource emulated-TLS adapter and hit an
+uninitialized-semaphore alert. That probe is incomplete harness evidence, not a
+confirmed new OS defect. ARM59 links the same native TLS adapter as the engine
+and passes4000 file/directory operations with the fdopendir path. Its result is
+standalone native QEMU evidence, not full browser acceptance.
+
+The diagnostics-free153 writer completed, but its154 reader suffered host QEMU
+SIGSEGV before finishing all checks. The host kernel record and original result
+are retained;160 repeats the same engine. Do not treat154 as a guest pass or
+attribute the host crash to a proven guest defect.
