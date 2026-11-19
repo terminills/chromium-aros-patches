@@ -8,13 +8,18 @@ and patch queues still describe the retained Chromium 124 baseline.
 ## Current validation status — 2026-11-19 UTC
 
 Release-candidate preparation is now authorized, including binary releases and
-proper native AROS icons. The persistent launcher and optional per-child file
-ledger cross-link for x86-64 and AArch64; native launch qualification is pending.
-The latest x64 ten-cycle run completes all twenty heap retirements and all child
-returns after an exact, retained serial-interleaving audit. Memory still grows
-about 14.91 MiB per cycle. ARM68 paints the worker test but times out joining
-the host; it is not a successful shutdown result. No RC is published yet.
-See [current RC preparation and limitations](evidence/rc-preparation184/status.json).
+proper native AROS icons. Native x64 test188 verifies icon types/stack settings,
+normal and selected appearance, double-click startup, two tabs, navigation,
+clean closure and reopening with the same resident engine. The drawer title
+corruption observed after closure remains under investigation. AArch64 icon
+launch is not yet qualified.
+The x64 ten-cycle run184 completes twenty heap retirements and all22 child
+returns; both strict serial accounting and independent native child-file pairs
+pass. Whole-guest memory still rises from1699.02 to1833.32MiB across cycles1–10.
+ARM69 paints the worker test but fails its bounded shutdown check; it is not a
+successful lifecycle result. No RC is published yet.
+See [native icon and launcher evidence](evidence/native-icons188/interactive188-result.json)
+and [current RC gates](evidence/native-icons188/release-candidate-gates.json).
 The validated source snapshot below remains directory158 until final replay.
 
 
