@@ -1,0 +1,13 @@
+{
+  "results": {
+    "before": {
+      "exit_code": 42,
+      "output": "pending_page=0 invalid_handle_resets=2 retired=1 scheduler_object_alive=1\npending_page=1 invalid_handle_resets=0 retired=0 scheduler_object_alive=1\n"
+    },
+    "candidate": {
+      "exit_code": 0,
+      "output": "pending_page=0 invalid_handle_resets=0 retired=1 scheduler_object_alive=1\npending_page=1 invalid_handle_resets=0 retired=1 scheduler_object_alive=1\n"
+    }
+  },
+  "scope": "Actual RenderThreadImpl::Shutdown body with mocked GPU, scheduler queue deletes, isolate and compositor. Tests pending extension handles and pending page release; does not prove all Oilpan finalizers tolerate a stopped scheduler. Native replay required."
+}

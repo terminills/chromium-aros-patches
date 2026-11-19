@@ -1,0 +1,27 @@
+--- a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc
++++ b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local CustomLayoutScope* CustomLayoutScope::current_scope_ = nullptr;
++#else
+ CustomLayoutScope* CustomLayoutScope::current_scope_ = nullptr;
++#endif
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h
++++ b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h
+@@ -62,7 +62,11 @@
+   CustomLayoutToken* Token() { return token_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local CustomLayoutScope* current_scope_;
++#else
+   static CustomLayoutScope* current_scope_;
++#endif
+ 
+   CustomLayoutScope* prev_scope_;
+   CustomLayoutWorkQueue queue_;

@@ -1,0 +1,22 @@
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -717,8 +717,6 @@
+ #if BUILDFLAG(IS_AROS)
+   // viz::Gpu destruction reports channel loss through the current renderer
+   // task runner.  Release it before shutting that runner down.
+-  if (main_thread_scheduler_)
+-    blink::RetireMainThreadIsolateForAros();
+   if (gpu_) {
+     LOG(INFO) << "[Chromium:shutdown] releasing AROS renderer GPU channel";
+     gpu_.reset();
+@@ -727,6 +725,10 @@
+     LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
+     main_thread_scheduler_->Shutdown();
+     LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
++    // Queue teardown destroys deferred extension ScriptContexts and their V8
++    // handles. Retire only after those deletes, while the scheduler object
++    // and compositor still exist for synchronous Oilpan finalizers.
++    blink::RetireMainThreadIsolateForAros();
+   }
+   // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.
+   // Their ProxyMain::Stop posts to the compositor and waits synchronously,

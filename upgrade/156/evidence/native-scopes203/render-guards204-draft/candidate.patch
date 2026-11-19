@@ -1,0 +1,119 @@
+--- a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h
++++ b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h
+@@ -27,7 +27,11 @@
+   static bool IsDisabled() { return count_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local unsigned count_;
++#else
+   static unsigned count_;
++#endif
+ };
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc
++++ b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local unsigned DisableLayoutSideEffectsScope::count_ = 0;
++#else
+ unsigned DisableLayoutSideEffectsScope::count_ = 0;
++#endif
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h
++++ b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h
+@@ -29,7 +29,11 @@
+   static bool IsDisabled() { return count_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local unsigned count_;
++#else
+   static unsigned count_;
++#endif
+ };
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc
++++ b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local unsigned PrePaintDisableSideEffectsScope::count_ = 0;
++#else
+ unsigned PrePaintDisableSideEffectsScope::count_ = 0;
++#endif
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h
++++ b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h
+@@ -24,7 +24,11 @@
+   static bool CurrentlyInScope();
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool currently_in_scope_;
++#else
+   static bool currently_in_scope_;
++#endif
+ };
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc
++++ b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc
+@@ -6,7 +6,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local bool SuggestionMarkerReplacementScope::currently_in_scope_ = false;
++#else
+ bool SuggestionMarkerReplacementScope::currently_in_scope_ = false;
++#endif
+ 
+ SuggestionMarkerReplacementScope::SuggestionMarkerReplacementScope() {
+   DCHECK(!currently_in_scope_);
+--- a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h
++++ b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h
+@@ -46,8 +46,16 @@
+  private:
+   base::AutoReset<int> reset_ignore_depth_;
+   base::AutoReset<bool> reset_is_document_element_invisible_;
++#if defined(__AROS__)
++  static thread_local int ignore_depth_;
++#else
+   static int ignore_depth_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool is_document_element_invisible_;
++#else
+   static bool is_document_element_invisible_;
++#endif
+ };
+ 
+ }  // namespace blink
+--- a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc
+@@ -6,7 +6,15 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local int IgnorePaintTimingScope::ignore_depth_ = 0;
++#else
+ int IgnorePaintTimingScope::ignore_depth_ = 0;
++#endif
++#if defined(__AROS__)
++thread_local bool IgnorePaintTimingScope::is_document_element_invisible_ = false;
++#else
+ bool IgnorePaintTimingScope::is_document_element_invisible_ = false;
++#endif
+ 
+ }  // namespace blink

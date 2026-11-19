@@ -17,14 +17,17 @@ The x64 ten-cycle run186 completes twenty heap retirements and all 22 child
 returns, confirmed by strict serial and independent native child files. Memory
 still rises from 1692.88 to 1823.15 MiB across cycles 1–10. ARM70 paints the
 worker test but fails bounded host exit; its utility child has no exit record.
-Installed-resource191 passes initial New Tab and four-tab paint after the
-custom-element scope fix, then fails a compositor bounds check while navigating
-the fourth tab. Four related renderer-scope corrections are host-tested and
-cross-compiled for subsequent197 validation. No RC is published.
+Installed-resource197 passes icon metadata checks and launches from the drawer,
+then faults during first-page layout. ARM71 paints the JS/Wasm/worker page but
+faults during queued extension cleanup at shutdown. Combined203 addresses the
+layout stack pointers, DevTools loop ownership and isolate retirement order.
+Focused host regressions and cross objects pass; full native acceptance is pending.
+[Exact failures, candidates and source replay](evidence/native-scopes203/README.md)
+are retained. No RC is published.
 See [installed191 results and exact source](evidence/native-installed191/README.md).
 See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
 [native icons](evidence/native-icons188/interactive188-result.json), and
-[current RC gates](evidence/compact-image198/release-candidate-gates.json).
+[current RC gates](evidence/native-scopes203/release-candidate-gates.json).
 [Compact-image and DevTools ownership experiments](evidence/compact-image198/README.md)
 now include matched native cold-load evidence: packed build 191 reduces whole-guest
 resident use from 871.59 to 646.89 MiB. Packed browser behavior, long-run memory

@@ -1,0 +1,47 @@
+--- a/third_party/blink/renderer/core/layout/layout_shift_tracker.cc
++++ b/third_party/blink/renderer/core/layout/layout_shift_tracker.cc
+@@ -37,10 +37,18 @@
+ namespace blink {
+ 
+ using ReattachHookScope = LayoutShiftTracker::ReattachHookScope;
++#if defined(__AROS__)
++thread_local ReattachHookScope* ReattachHookScope::top_ = nullptr;
++#else
+ ReattachHookScope* ReattachHookScope::top_ = nullptr;
++#endif
+ 
+ using ContainingBlockScope = LayoutShiftTracker::ContainingBlockScope;
++#if defined(__AROS__)
++thread_local ContainingBlockScope* ContainingBlockScope::top_ = nullptr;
++#else
+ ContainingBlockScope* ContainingBlockScope::top_ = nullptr;
++#endif
+ 
+ namespace {
+ 
+--- a/third_party/blink/renderer/core/layout/layout_shift_tracker.h
++++ b/third_party/blink/renderer/core/layout/layout_shift_tracker.h
+@@ -117,7 +117,11 @@
+ 
+    private:
+     ReattachHookScope* outer_;
++#if defined(__AROS__)
++    static thread_local ReattachHookScope* top_;
++#else
+     static ReattachHookScope* top_;
++#endif
+     struct Geometry {
+       PhysicalOffset paint_offset;
+       PhysicalSize size;
+@@ -156,7 +160,11 @@
+    private:
+     friend class LayoutShiftTracker;
+     ContainingBlockScope* outer_;
++#if defined(__AROS__)
++    static thread_local ContainingBlockScope* top_;
++#else
+     static ContainingBlockScope* top_;
++#endif
+     PhysicalSize old_size_;
+     PhysicalSize new_size_;
+     PhysicalRect old_rect_;

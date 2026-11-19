@@ -1,0 +1,41 @@
+--- a/third_party/blink/renderer/core/dom/range.cc
++++ b/third_party/blink/renderer/core/dom/range.cc
+@@ -117,22 +117,38 @@
+   }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local int scope_count_;
++#else
+   static int scope_count_;
++#endif
+ #if DCHECK_IS_ON()
+   // This raw pointer is safe because
+   //  - s_currentRange has a valid pointer only if RangeUpdateScope instance is
+   //  live.
+   //  - RangeUpdateScope is used only in Range member functions.
++#if defined(__AROS__)
++  static thread_local Range* current_range_;
++#else
+   static Range* current_range_;
++#endif
+ #endif
+   Range* range_ = nullptr;
+   Document* old_document_ = nullptr;
+ 
+ };
+ 
++#if defined(__AROS__)
++thread_local int RangeUpdateScope::scope_count_ = 0;
++#else
+ int RangeUpdateScope::scope_count_ = 0;
++#endif
+ #if DCHECK_IS_ON()
++#if defined(__AROS__)
++thread_local Range* RangeUpdateScope::current_range_;
++#else
+ Range* RangeUpdateScope::current_range_;
++#endif
+ #endif
+ 
+ Range::Range(Document& owner_document)

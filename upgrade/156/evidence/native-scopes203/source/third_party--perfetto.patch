@@ -1,0 +1,772 @@
+diff --git a/gn/perfetto.gni b/gn/perfetto.gni
+index 32429b383f619b55ec0377258fdb9adb943aa74e..5671a8df8d9e97497bafb7b7ec6b48ccf1e0a4b5 100644
+--- a/gn/perfetto.gni
++++ b/gn/perfetto.gni
+@@ -171,8 +171,9 @@ declare_args() {
+   # For now the IPC layer is conservatively not enabled on Chromium+Windows
+   # builds.
+   enable_perfetto_ipc =
+-      !is_nacl && (perfetto_build_standalone || perfetto_build_with_android ||
+-                   (build_with_chromium && !is_win) || is_fuchsia)
++      !is_nacl && !is_aros &&
++      (perfetto_build_standalone || perfetto_build_with_android ||
++       (build_with_chromium && !is_win) || is_fuchsia)
+ 
+   # Makes the heap profiling daemon target reachable. It works only on Android,
+   # but is built on Linux as well for test/compiler coverage.
+@@ -312,7 +313,7 @@ declare_args() {
+   # Note that on Android platform (non-standalone) builds this flag is ignored
+   # and the Android flag "use_lockfree_taskrunner" is used instead (see
+   # perfetto_flags.aconfig)
+-  enable_perfetto_lockfree_taskrunner = true
++  enable_perfetto_lockfree_taskrunner = !is_aros
+ }
+ 
+ declare_args() {
+diff --git a/include/perfetto/base/build_config.h b/include/perfetto/base/build_config.h
+index 0c519a313b8fb77931653358ea6582f7f941fb78..686166cf1383647c350602db0008b67ad32ecd18 100644
+--- a/include/perfetto/base/build_config.h
++++ b/include/perfetto/base/build_config.h
+@@ -38,6 +38,21 @@
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_QNX() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE_TVOS() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FREEBSD() 0
++#elif defined(__AROS__)
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WIN() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_MAC() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_IOS() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_WASM() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FUCHSIA() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_NACL() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_AROS() 1
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_QNX() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE_TVOS() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_FREEBSD() 0
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX_BUT_NOT_QNX() 0
+ #elif defined(__APPLE__)
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_ANDROID() 0
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_APPLE() 1
+@@ -166,6 +181,10 @@
+ #error OS not supported (see build_config.h)
+ #endif
+ 
++#if !defined(PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_AROS)
++#define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_AROS() 0
++#endif
++
+ #if defined(__clang__)
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_CLANG() 1
+ #define PERFETTO_BUILDFLAG_DEFINE_PERFETTO_COMPILER_GCC() 0
+diff --git a/include/perfetto/base/thread_utils.h b/include/perfetto/base/thread_utils.h
+index 0cc0803ff36a6534b76d3f4195743b6026e512c1..4f1e680b53c4683801698a071d0a6acd86cb1f94 100644
+--- a/include/perfetto/base/thread_utils.h
++++ b/include/perfetto/base/thread_utils.h
+@@ -84,6 +84,9 @@ using PlatformThreadId = uint64_t;
+ inline PlatformThreadId GetThreadId() {
+   return static_cast<uint64_t>(pthread_getthreadid_np());
+ }
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++using PlatformThreadId = intptr_t;
++PERFETTO_EXPORT_COMPONENT PlatformThreadId GetThreadId();
+ #else  // Default to pthreads in case no OS is set.
+ using PlatformThreadId = pthread_t;
+ inline PlatformThreadId GetThreadId() {
+diff --git a/include/perfetto/base/time.h b/include/perfetto/base/time.h
+index f7057d8c47bf6cde09ac4093e19136e44b837789..27c1f5986d0c5d9c2b6584db45a04fda823d8d2e 100644
+--- a/include/perfetto/base/time.h
++++ b/include/perfetto/base/time.h
+@@ -237,6 +237,20 @@ inline TimeNanos GetBootTimeNs() {
+   return TimeNanos(0);
+ }
+ 
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++
++constexpr clockid_t kWallTimeClockSource = CLOCK_MONOTONIC;
++inline TimeNanos GetTimeInternalNs(clockid_t clk_id) {
++  struct timespec ts = {};
++  PERFETTO_CHECK(clock_gettime(clk_id, &ts) == 0);
++  return FromPosixTimespec(ts);
++}
++inline TimeNanos GetBootTimeNs() { return GetTimeInternalNs(CLOCK_MONOTONIC); }
++inline TimeNanos GetWallTimeNs() { return GetTimeInternalNs(CLOCK_MONOTONIC); }
++inline TimeNanos GetWallTimeRawNs() { return GetTimeInternalNs(CLOCK_MONOTONIC); }
++inline TimeNanos GetThreadCPUTimeNs() { return TimeNanos(0); }
++inline TimeNanos GetProcessCPUTimeNs() { return TimeNanos(0); }
++
+ #elif PERFETTO_BUILDFLAG(PERFETTO_OS_QNX)
+ 
+ constexpr clockid_t kWallTimeClockSource = CLOCK_MONOTONIC;
+@@ -348,6 +362,8 @@ inline int64_t TimeGm(struct tm* tms) {
+   if (tms)  // Kinda if (true), but avoids "mark as noreturn" errors.
+     PERFETTO_FATAL("timegm not supported");
+   return -1;
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  return static_cast<int64_t>(mktime(tms));
+ #else
+   return static_cast<int64_t>(timegm(tms));
+ #endif
+diff --git a/include/perfetto/ext/base/lock_free_task_runner.h b/include/perfetto/ext/base/lock_free_task_runner.h
+index c5afd7ecc850090b4ad32643d218837e3fe9203d..5c35603850376872294126840abb0c214e36ae79 100644
+--- a/include/perfetto/ext/base/lock_free_task_runner.h
++++ b/include/perfetto/ext/base/lock_free_task_runner.h
+@@ -26,7 +26,7 @@
+ #include "perfetto/ext/base/scoped_file.h"
+ #include "perfetto/ext/base/unix_task_runner.h"
+ 
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <poll.h>
+ #endif
+ 
+@@ -38,6 +38,7 @@
+ namespace perfetto {
+ namespace base {
+ 
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ namespace task_runner_internal {
+ class ScopedRefcount;
+ struct Slab;
+@@ -272,6 +273,10 @@ using MaybeLockFreeTaskRunner =
+     std::conditional_t<PERFETTO_FLAGS(USE_LOCKFREE_TASKRUNNER),
+                        LockFreeTaskRunner,
+                        UnixTaskRunner>;
++#else
++// Native AROS uses its condition-variable-backed task runner.
++using MaybeLockFreeTaskRunner = UnixTaskRunner;
++#endif
+ 
+ }  // namespace base
+ }  // namespace perfetto
+diff --git a/include/perfetto/ext/base/paged_memory.h b/include/perfetto/ext/base/paged_memory.h
+index e907976101f8e99bd8cf815d60c6543f782e94b2..8aaa13f99d93c74a58d6843248495e87b57606bf 100644
+--- a/include/perfetto/ext/base/paged_memory.h
++++ b/include/perfetto/ext/base/paged_memory.h
+@@ -94,6 +94,11 @@ class PagedMemory {
+   // the system page size.
+   size_t size_ = 0;
+ 
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  void* allocation_base_ = nullptr;
++  size_t allocation_size_ = 0;
++#endif
++
+ #if TRACK_COMMITTED_SIZE()
+   size_t committed_size_ = 0u;
+ #endif  // TRACK_COMMITTED_SIZE()
+diff --git a/include/perfetto/ext/base/unix_task_runner.h b/include/perfetto/ext/base/unix_task_runner.h
+index 6769673124ad671156622cbd2b08873b0b1365a5..838f61c54834dafe624dd643c6d3f62fb1f7e449 100644
+--- a/include/perfetto/ext/base/unix_task_runner.h
++++ b/include/perfetto/ext/base/unix_task_runner.h
+@@ -28,12 +28,14 @@
+ #include "perfetto/ext/base/thread_checker.h"
+ 
+ #include <chrono>
++#include <condition_variable>
+ #include <deque>
+ #include <map>
+ #include <mutex>
+ #include <vector>
+ 
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <poll.h>
+ #endif
+ 
+@@ -99,16 +101,21 @@ class UnixTaskRunner : public TaskRunner {
+   ThreadChecker thread_checker_;
+   std::atomic<PlatformThreadId> created_thread_id_ = GetThreadId();
+ 
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   EventFd event_;
++#endif
+ 
+ // The array of fds/handles passed to poll(2) / WaitForMultipleObjects().
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   std::vector<PlatformHandle> poll_fds_;
+-#else
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   std::vector<struct pollfd> poll_fds_;
+ #endif
+ 
+   base::MaybeRtMutex lock_;
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  std::condition_variable_any wake_condition_;
++#endif
+ 
+   std::deque<std::function<void()>> immediate_tasks_ PERFETTO_GUARDED_BY(lock_);
+   std::multimap<TimeMillis, std::function<void()>> delayed_tasks_
+@@ -124,7 +131,7 @@ class UnixTaskRunner : public TaskRunner {
+     // polling it again until the queued task runs. On Windows we can't do that.
+     // Instead we keep track of its state here.
+     bool pending = false;
+-#else
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+     size_t poll_fd_index;  // Index into |poll_fds_|.
+ #endif
+   };
+diff --git a/src/base/BUILD.gn b/src/base/BUILD.gn
+index ac91ad429d0ea68896d18972c3400a3774b9c764..613878dc501f12d6d4efd65379d964ca9c9df964 100644
+--- a/src/base/BUILD.gn
++++ b/src/base/BUILD.gn
+@@ -73,9 +73,16 @@ perfetto_component("base") {
+     "weak_runner.cc",
+   ]
+ 
++  if (is_aros) {
++    sources += [ "aros_utils.cc" ]
++  }
++
++  if (!is_nacl && !is_aros) {
++    sources += [ "lock_free_task_runner.cc" ]
++  }
++
+   if (!is_nacl) {
+     sources += [
+-      "lock_free_task_runner.cc",
+       "thread_task_runner.cc",
+       "unix_task_runner.cc",
+     ]
+diff --git a/src/base/aros_utils.cc b/src/base/aros_utils.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5973817b49782eb82571ddf5c07e323ccc7d7f4
+--- /dev/null
++++ b/src/base/aros_utils.cc
+@@ -0,0 +1,27 @@
++/*
++ * Copyright (C) 2026 The AROS Development Team. All rights reserved.
++ */
++
++#include "src/base/aros_utils.h"
++
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <aros/kernel.h>
++#pragma pop_macro("SCHED_RR")
++#include <proto/exec.h>
++#include <proto/kernel.h>
++
++namespace perfetto {
++namespace base {
++
++uint32_t GetConfiguredCpuCount() {
++  APTR KernelBase = OpenResource("kernel.resource");
++  if (!KernelBase)
++    return 1;
++
++  const uint32_t count = KrnGetCPUCount();
++  return count > 0 ? count : 1;
++}
++
++}  // namespace base
++}  // namespace perfetto
+diff --git a/src/base/aros_utils.h b/src/base/aros_utils.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d2e3e39f4f5b1986b1b949d0497fd9b3e9e59c8
+--- /dev/null
++++ b/src/base/aros_utils.h
+@@ -0,0 +1,18 @@
++/*
++ * Copyright (C) 2026 The AROS Development Team. All rights reserved.
++ */
++
++#ifndef SRC_BASE_AROS_UTILS_H_
++#define SRC_BASE_AROS_UTILS_H_
++
++#include <stdint.h>
++
++namespace perfetto {
++namespace base {
++
++uint32_t GetConfiguredCpuCount();
++
++}  // namespace base
++}  // namespace perfetto
++
++#endif  // SRC_BASE_AROS_UTILS_H_
+diff --git a/src/base/clock_snapshots.cc b/src/base/clock_snapshots.cc
+index 937e7e6fdb86714bc597645a7c40872514a0b061..cf58ac4d355554cc0507f498ce09ee09430f3e9f 100644
+--- a/src/base/clock_snapshots.cc
++++ b/src/base/clock_snapshots.cc
+@@ -24,7 +24,23 @@ namespace perfetto::base {
+ 
+ ClockSnapshotVector CaptureClockSnapshots() {
+   ClockSnapshotVector snapshot_data;
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) &&   \
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  const auto monotonic_ns =
++      static_cast<uint64_t>(base::GetBootTimeNs().count());
++  snapshot_data.push_back(
++      ClockReading(protos::pbzero::BUILTIN_CLOCK_BOOTTIME, monotonic_ns));
++  snapshot_data.push_back(
++      ClockReading(protos::pbzero::BUILTIN_CLOCK_MONOTONIC, monotonic_ns));
++
++  struct timespec realtime = {};
++  if (clock_gettime(CLOCK_REALTIME, &realtime) == 0) {
++    snapshot_data.push_back(ClockReading(
++        protos::pbzero::BUILTIN_CLOCK_REALTIME,
++        static_cast<uint64_t>(base::FromPosixTimespec(realtime).count())));
++  } else {
++    PERFETTO_DLOG("clock_gettime failed for CLOCK_REALTIME");
++  }
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) &&   \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) &&     \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) && \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) &&    \
+diff --git a/src/base/logging.cc b/src/base/logging.cc
+index 579d549f6ff003f77d5fb73c12eb82d4e0919354..32c716285855073df7a324b677220e78eb3d6f95 100644
+--- a/src/base/logging.cc
++++ b/src/base/logging.cc
+@@ -34,6 +34,10 @@
+ #include "perfetto/ext/base/string_view.h"
+ #include "src/base/log_ring_buffer.h"
+ 
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++extern "C" void ArosKPutStr(const char*) asm("KPutStr");
++#endif
++
+ #if PERFETTO_ENABLE_LOG_RING_BUFFER() && PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+ #include <android/set_abort_message.h>
+ #endif
+@@ -181,6 +185,13 @@ void LogMessage(LogLev level,
+   t_sec = t_sec % 1000;
+   StackString<32> timestamp("[%03u.%03u] ", t_sec, t_ms);
+ 
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  ArosKPutStr(timestamp.c_str());
++  ArosKPutStr(file_and_line.c_str());
++  ArosKPutStr(" ");
++  ArosKPutStr(log_msg);
++  ArosKPutStr("\n");
++#else
+   if (use_colors) {
+     fprintf(stderr, "%s%s%s%s %s%s%s\n", kLightGray, timestamp.c_str(),
+             file_and_line.c_str(), kReset, color, log_msg, kReset);
+@@ -188,6 +199,7 @@ void LogMessage(LogLev level,
+     fprintf(stderr, "%s%s %s\n", timestamp.c_str(), file_and_line.c_str(),
+             log_msg);
+   }
++#endif
+ 
+ #if PERFETTO_ENABLE_LOG_RING_BUFFER()
+   // Append the message to the ring buffer for crash reporting postmortems.
+@@ -225,6 +237,10 @@ void MaybeSerializeLastLogsForCrashReporting() {
+   // NOTE: android_set_abort_message() can be called only once. This should
+   // be called only when we are sure we are about to crash.
+   android_set_abort_message(g_crash_buf);
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  ArosKPutStr("\n-----BEGIN PERFETTO PRE-CRASH LOG-----\n");
++  ArosKPutStr(g_crash_buf);
++  ArosKPutStr("\n-----END PERFETTO PRE-CRASH LOG-----\n");
+ #else
+   // Print out the message on stderr on Linux/Mac/Win.
+   fputs("\n-----BEGIN PERFETTO PRE-CRASH LOG-----\n", stderr);
+diff --git a/src/base/paged_memory.cc b/src/base/paged_memory.cc
+index cfb5ddfd0682f987970a7f18dd947efa482fdd3a..0b5e70feb9516f6b8a23c57f224a6e8aff3fc150 100644
+--- a/src/base/paged_memory.cc
++++ b/src/base/paged_memory.cc
+@@ -19,9 +19,14 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstddef>
++#include <cstdint>
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <windows.h>
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#include <exec/memory.h>
++#include <proto/exec.h>
++#undef Allocate
+ #else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <sys/mman.h>
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+@@ -61,6 +66,18 @@ PagedMemory PagedMemory::Allocate(size_t req_size, int flags) {
+     return PagedMemory();
+   PERFETTO_CHECK(ptr);
+   char* usable_region = reinterpret_cast<char*>(ptr) + GuardSize();
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  const size_t allocation_size = outer_size + GetSysPageSize() - 1;
++  void* allocation_base =
++      AllocMem(allocation_size, MEMF_PUBLIC | MEMF_CLEAR);
++  if (!allocation_base && (flags & kMayFail))
++    return PagedMemory();
++  PERFETTO_CHECK(allocation_base);
++  uintptr_t aligned =
++      (reinterpret_cast<uintptr_t>(allocation_base) + GetSysPageSize() - 1) &
++      ~(static_cast<uintptr_t>(GetSysPageSize()) - 1);
++  void* ptr = reinterpret_cast<void*>(aligned);
++  char* usable_region = reinterpret_cast<char*>(ptr) + GuardSize();
+ #else   // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   void* ptr = mmap(nullptr, outer_size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+@@ -74,6 +91,10 @@ PagedMemory PagedMemory::Allocate(size_t req_size, int flags) {
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ 
+   auto memory = PagedMemory(usable_region, req_size);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  memory.allocation_base_ = allocation_base;
++  memory.allocation_size_ = allocation_size;
++#endif
+ #if TRACK_COMMITTED_SIZE()
+   size_t initial_commit = req_size;
+   if (flags & kDontCommit)
+@@ -110,6 +131,9 @@ PagedMemory::~PagedMemory() {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   BOOL res = VirtualFree(start, 0, MEM_RELEASE);
+   PERFETTO_CHECK(res != 0);
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  ignore_result(start);
++  FreeMem(allocation_base_, allocation_size_);
+ #else   // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   const size_t outer_size = RoundUpToSysPageSize(size_) + GuardSize() * 2;
+   int res = munmap(start, outer_size);
+@@ -122,7 +146,9 @@ bool PagedMemory::AdviseDontNeed(void* p, size_t size) {
+   PERFETTO_DCHECK(p_);
+   PERFETTO_DCHECK(p >= p_);
+   PERFETTO_DCHECK(static_cast<char*>(p) + size <= p_ + size_);
+-#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) ||    \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) ||  \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   // Discarding pages on Windows has more CPU cost than is justified for the
+   // possible memory savings.
+   return false;
+diff --git a/src/base/temp_file.cc b/src/base/temp_file.cc
+index 890227354cdac9467763ba94d9ffd1cd8fec43d8..98cc19fd7488d4e771b7333343c2d7dfc38e42ca 100644
+--- a/src/base/temp_file.cc
++++ b/src/base/temp_file.cc
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <errno.h>
+ 
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <windows.h>
+@@ -29,6 +30,7 @@
+ #include <fileapi.h>
+ #include <io.h>
+ #else
++#include <sys/stat.h>
+ #include <unistd.h>
+ #endif
+ 
+@@ -137,6 +139,21 @@ TempDir TempDir::Create() {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   temp_dir.path_ = GetTempFilePathWin();
+   PERFETTO_CHECK(_mkdir(temp_dir.path_.c_str()) == 0);
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  bool created = false;
++  for (int attempt = 0; attempt < 100 && !created; ++attempt) {
++    temp_dir.path_ = GetSysTempDir() + "/perfetto-XXXXXXXX";
++    int fd = mkstemp(&temp_dir.path_[0]);
++    PERFETTO_CHECK(fd >= 0);
++    PERFETTO_CHECK(close(fd) == 0);
++    PERFETTO_CHECK(unlink(temp_dir.path_.c_str()) == 0);
++    if (mkdir(temp_dir.path_.c_str(), 0700) == 0) {
++      created = true;
++    } else {
++      PERFETTO_CHECK(errno == EEXIST);
++    }
++  }
++  PERFETTO_CHECK(created);
+ #else
+   temp_dir.path_ = GetSysTempDir() + "/perfetto-XXXXXXXX";
+   PERFETTO_CHECK(mkdtemp(&temp_dir.path_[0]));
+diff --git a/src/base/test/vm_test_utils.cc b/src/base/test/vm_test_utils.cc
+index 16ac2780a1c13aa2f205d058d24f1ae6119b1069..346765d9d69c6c1ee6da88d9ff685466f83daf7d 100644
+--- a/src/base/test/vm_test_utils.cc
++++ b/src/base/test/vm_test_utils.cc
+@@ -30,7 +30,7 @@
+ #include <windows.h>
+ 
+ #include <Psapi.h>
+-#else  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#elif !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #endif  // PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+@@ -92,8 +92,9 @@ bool IsMapped(void* start, size_t size) {
+   // Fuchsia doesn't yet support paging (b/119503290).
+   ignore_result(page_size);
+   return true;
+-#elif PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
+-  // mincore isn't available on NaCL.
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  // mincore isn't available on NaCl or AROS.
+   ignore_result(page_size);
+   return true;
+ #else
+diff --git a/src/base/thread_utils.cc b/src/base/thread_utils.cc
+index d91f210431cd537436ba9de6cd845ff056ccbf92..7b00c05e395e6b7d6f5c78c3596a3f3dd1313a1b 100644
+--- a/src/base/thread_utils.cc
++++ b/src/base/thread_utils.cc
+@@ -25,11 +25,19 @@
+ #include <zircon/types.h>
+ #elif PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+ #include <windows.h>
++#elif PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#include <proto/exec.h>
+ #endif
+ 
+ namespace perfetto {
+ namespace base {
+ 
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++PlatformThreadId GetThreadId() {
++  return reinterpret_cast<intptr_t>(FindTask(nullptr));
++}
++#endif
++
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA)
+ static PlatformThreadId ResolveThreadId() {
+   zx_info_handle_basic_t basic;
+diff --git a/src/base/unix_task_runner.cc b/src/base/unix_task_runner.cc
+index 66e460703586f69191ae10f5cfda38f3e9122726..2bf43c300b375dd4cf3815d6f615df8db484f7de 100644
+--- a/src/base/unix_task_runner.cc
++++ b/src/base/unix_task_runner.cc
+@@ -39,16 +39,22 @@ namespace perfetto {
+ namespace base {
+ 
+ UnixTaskRunner::UnixTaskRunner() {
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+   AddFileDescriptorWatch(event_.fd(), [] {
+     // Not reached -- see PostFileDescriptorWatches().
+     PERFETTO_DFATAL("Should be unreachable.");
+   });
++#endif
+ }
+ 
+ UnixTaskRunner::~UnixTaskRunner() = default;
+ 
+ void UnixTaskRunner::WakeUp() {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  wake_condition_.notify_one();
++#else
+   event_.Notify();
++#endif
+ }
+ 
+ void UnixTaskRunner::Run() {
+@@ -59,6 +65,19 @@ void UnixTaskRunner::Run() {
+     quit_ = false;
+   }
+   for (;;) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++    std::unique_lock<base::MaybeRtMutex> lock(lock_);
++    if (quit_)
++      return;
++    int poll_timeout_ms = GetDelayMsToNextTaskLocked();
++    if (poll_timeout_ms < 0) {
++      wake_condition_.wait(lock);
++    } else if (poll_timeout_ms > 0) {
++      wake_condition_.wait_for(lock,
++                               std::chrono::milliseconds(poll_timeout_ms));
++    }
++    lock.unlock();
++#else
+     int poll_timeout_ms;
+     {
+       std::lock_guard<base::MaybeRtMutex> lock(lock_);
+@@ -88,6 +107,7 @@ void UnixTaskRunner::Run() {
+     platform::AfterMaybeBlockingSyscall();
+     PERFETTO_CHECK(ret >= 0);
+     PostFileDescriptorWatches(0 /*ignored*/);
++#endif
+ #endif
+ 
+     // To avoid starvation we always interleave all types of tasks -- immediate,
+@@ -119,6 +139,9 @@ void UnixTaskRunner::AdvanceTimeForTesting(uint32_t ms) {
+ 
+ void UnixTaskRunner::UpdateWatchTasksLocked() {
+   PERFETTO_DCHECK_THREAD(thread_checker_);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  return;
++#else
+ #if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+   if (!watch_tasks_changed_)
+     return;
+@@ -136,6 +159,7 @@ void UnixTaskRunner::UpdateWatchTasksLocked() {
+     poll_fds_.push_back({handle, POLLIN | POLLHUP, 0});
+ #endif
+   }
++#endif
+ }
+ 
+ void UnixTaskRunner::RunImmediateAndDelayedTask() {
+@@ -168,6 +192,10 @@ void UnixTaskRunner::RunImmediateAndDelayedTask() {
+ 
+ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
+   PERFETTO_DCHECK_THREAD(thread_checker_);
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(windows_wait_result);
++  PERFETTO_DFATAL("File descriptor watches are not supported on AROS");
++#else
+   for (size_t i = 0; i < poll_fds_.size(); i++) {
+ #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+     const PlatformHandle handle = poll_fds_[i];
+@@ -213,9 +241,14 @@ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
+     poll_fds_[i].fd = -poll_fds_[i].fd;
+ #endif
+   }
++#endif
+ }
+ 
+ void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd);
++  PERFETTO_DFATAL("File descriptor watches are not supported on AROS");
++#else
+   std::function<void()> task;
+   {
+     std::lock_guard<base::MaybeRtMutex> lock(lock_);
+@@ -244,6 +277,7 @@ void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
+   }
+   errno = 0;
+   RunTaskWithWatchdogGuard(task);
++#endif
+ }
+ 
+ int UnixTaskRunner::GetDelayMsToNextTaskLocked() const {
+@@ -282,6 +316,10 @@ void UnixTaskRunner::PostDelayedTask(std::function<void()> task,
+ 
+ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
+                                             std::function<void()> task) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd, task);
++  PERFETTO_FATAL("File descriptor watches are not supported on AROS");
++#else
+   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
+   {
+     std::lock_guard<base::MaybeRtMutex> lock(lock_);
+@@ -296,9 +334,14 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
+     watch_tasks_changed_ = true;
+   }
+   WakeUp();
++#endif
+ }
+ 
+ void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++  base::ignore_result(fd);
++  PERFETTO_FATAL("File descriptor watches are not supported on AROS");
++#else
+   PERFETTO_DCHECK(PlatformHandleChecker::IsValid(fd));
+   {
+     std::lock_guard<base::MaybeRtMutex> lock(lock_);
+@@ -307,6 +350,7 @@ void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {
+     watch_tasks_changed_ = true;
+   }
+   // No need to schedule a wake-up for this.
++#endif
+ }
+ 
+ bool UnixTaskRunner::RunsTasksOnCurrentThread() const {
+diff --git a/src/tracing/core/shared_memory_abi.cc b/src/tracing/core/shared_memory_abi.cc
+index 6063561eeed7aac16323452bc6809fc857ce4b85..2cc67e41e7b4ab523bfe311e834ce1aa95ba7167 100644
+--- a/src/tracing/core/shared_memory_abi.cc
++++ b/src/tracing/core/shared_memory_abi.cc
+@@ -18,7 +18,8 @@
+ #include "perfetto/base/build_config.h"
+ #include "perfetto/base/time.h"
+ 
+-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ #include <sys/mman.h>
+ #endif
+ 
+diff --git a/src/tracing/platform_posix.cc b/src/tracing/platform_posix.cc
+index c45d9bcde1d92e3ebff15c3d21d0e64de2cc9d58..5941bf7b28a39a236bbb9816546b571ebf2c82de 100644
+--- a/src/tracing/platform_posix.cc
++++ b/src/tracing/platform_posix.cc
+@@ -20,7 +20,8 @@
+     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA) || \
+     PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
+-    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
++    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ 
+ #include "perfetto/ext/base/file_utils.h"
+ #include "perfetto/ext/base/thread_task_runner.h"
+@@ -133,4 +134,4 @@ Platform* Platform::GetDefaultPlatform() {
+ }
+ 
+ }  // namespace perfetto
+-#endif  // OS_LINUX || OS_ANDROID || OS_APPLE || OS_FUCHSIA
++#endif  // OS_LINUX || OS_ANDROID || OS_APPLE || OS_FUCHSIA || OS_AROS
+diff --git a/src/tracing/service/tracing_service_impl.cc b/src/tracing/service/tracing_service_impl.cc
+index 6765c2a00b9c994ac2c7c6343ad8df56c811a997..9ac9c5052a4a6eb932a62607fea24c89629a2a49 100644
+--- a/src/tracing/service/tracing_service_impl.cc
++++ b/src/tracing/service/tracing_service_impl.cc
+@@ -102,6 +102,9 @@
+ #include "src/android_stats/perfetto_atoms.h"
+ #include "src/android_stats/statsd_logging_helper.h"
+ #include "src/protovm/vm.h"
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#include "src/base/aros_utils.h"
++#endif
+ #include "src/protozero/filtering/message_filter.h"
+ #include "src/protozero/filtering/message_filter_config.h"
+ #include "src/protozero/filtering/string_filter.h"
+@@ -192,16 +195,20 @@ constexpr size_t kMaxLifecycleEventsListedDataSources = 32;
+ 
+ constexpr uint32_t kTracePacketSystemInfoFieldId = 45;
+ 
+-#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || PERFETTO_BUILDFLAG(PERFETTO_OS_NACL)
++#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) || \
++    PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
+ struct iovec {
+   void* iov_base;  // Address
+   size_t iov_len;  // Block size
+ };
++#endif
+ 
+ // Simple implementation of writev. Note that this does not give the atomicity
+ // guarantees of a real writev, but we don't depend on these (we aren't writing
+ // to the same file from another thread).
+-ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
++ssize_t WriteV(int fd, const struct iovec* iov, int iovcnt) {
+   ssize_t total_size = 0;
+   for (int i = 0; i < iovcnt; ++i) {
+     ssize_t current_size = base::WriteAll(fd, iov[i].iov_base, iov[i].iov_len);
+@@ -212,12 +219,22 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+   return total_size;
+ }
+ 
++#ifndef IOV_MAX
+ #define IOV_MAX 1024  // Linux compatible limit.
++#endif
++
++#define PERFETTO_WRITEV WriteV
+ 
+ #elif PERFETTO_BUILDFLAG(PERFETTO_OS_QNX)
+ #define IOV_MAX 1024  // Linux compatible limit.
+ #endif
+ 
++#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_NACL) && \
++    !PERFETTO_BUILDFLAG(PERFETTO_OS_AROS)
++#define PERFETTO_WRITEV writev
++#endif
++
+ void SerializeAndAppendPacket(std::vector<TracePacket>* packets,
+                               const std::vector<uint8_t>& packet) {
+   Slice slice = Slice::Allocate(packet.size());
+@@ -3056,7 +3073,8 @@ bool TracingServiceImpl::WriteIntoFile(TracingSession* tracing_session,
+   constexpr size_t kIOVMax = IOV_MAX;
+   for (size_t i = 0; i < num_iovecs; i += kIOVMax) {
+     int iov_batch_size = static_cast<int>(std::min(num_iovecs - i, kIOVMax));
+-    ssize_t wr_size = PERFETTO_EINTR(writev(fd, &iovecs[i], iov_batch_size));
++    ssize_t wr_size =
++        PERFETTO_EINTR(PERFETTO_WRITEV(fd, &iovecs[i], iov_batch_size));
+     if (wr_size <= 0) {
+       PERFETTO_PLOG("writev() failed");
+       stop_writing_into_file = true;
