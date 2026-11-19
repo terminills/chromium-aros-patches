@@ -1,0 +1,39 @@
+--- a/src/compiler-dispatcher/optimizing-compile-dispatcher.cc
++++ b/src/compiler-dispatcher/optimizing-compile-dispatcher.cc
+@@ -258,10 +258,23 @@
+ 
+ OptimizingCompileDispatcher::OptimizingCompileDispatcher(
+     Isolate* isolate, OptimizingCompileTaskExecutor* task_executor)
+-    : isolate_(isolate), task_executor_(task_executor) {}
++    : isolate_(isolate), task_executor_(task_executor) {
++#if V8_OS_AROS
++  // A resident V8 image serves independent native process owners. The group's
++  // first isolate may retire its worker pool while other isolates remain.
++  // Keep compiler jobs within the isolate's owning pool and lifetime; shared
++  // executable code and read-only group data remain in the resident engine.
++  task_executor_ = new OptimizingCompileTaskExecutor;
++  task_executor_->EnsureStarted();
++#endif
++}
+ 
+ OptimizingCompileDispatcher::~OptimizingCompileDispatcher() {
+   DCHECK_EQ(output_queue_.size(), 0);
++#if V8_OS_AROS
++  task_executor_->Stop();
++  delete task_executor_;
++#endif
+ }
+ 
+ void OptimizingCompileDispatcher::QueueFinishedJob(
+--- a/src/init/isolate-group.cc
++++ b/src/init/isolate-group.cc
+@@ -357,7 +357,9 @@
+     main_isolate_ = isolate;
+   }
+ 
++#if !V8_OS_AROS
+   optimizing_compile_task_executor_->EnsureStarted();
++#endif
+ 
+   if (v8_flags.shared_heap) {
+     if (!global_safepoint_) {
