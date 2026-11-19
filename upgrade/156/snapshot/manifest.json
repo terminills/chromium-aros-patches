@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-19T06:09:19.832941+00:00",
-  "validation": "Mojo ownership candidate passes native114 both-app storage, DOM and worker checks; closure exposes raster pool cross-owner job handles and a V8 import absent from debug enumeration despite its native ELF definition. This additional candidate isolates CategorizedWorkerPool by logical renderer owner. Companion aros-web direct import table avoids debug SHN_XINDEX omission; preserves absent-import failure. Exact-base replay checked; native115/ARM38 validation pending. No heap reclamation claim.",
+  "recorded_utc": "2026-11-19T06:23:24.858048+00:00",
+  "validation": "Native115 with raster-owner/V8 direct imports passes both-app storage/DOM/worker checks, then fails FrameDetached map membership CHECK during closure. This candidate scopes FrameMap LazyInstance wrapper by logical renderer while preserving normal AtExit destruction and all checks. Exact-base replay checked; native116/ARM39 runtime pending. No renderer heap reclamation claim.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
       "patch": "src.patch",
-      "sha256": "bfe854dec52f5416c2bfa04e4a47031fcdc416fb1c3e5fdd6eac9d3c2f2a5590",
-      "applied_tree": "b7b018daac1ae5abb591d354f1a1f114eb378f10",
-      "bytes": 3006619
+      "sha256": "0c294bc3745a0161a57c580acdc71f00e82bf86a59aa401c24ce69225489517f",
+      "applied_tree": "6e91a40e8a015229d066df1d372690239e06a43e",
+      "bytes": 3010449
     },
     {
       "path": "cef",

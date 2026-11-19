@@ -44670,10 +44670,65 @@ index 301e9935c7538cce5af312ff72120474a21cfbd1..db8b468dc15b27749dac678bc12fd63f
  }  // namespace
  
 diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
-index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..b8f7f88639774a9b765b7675e8bbb50ab25919b5 100644
+index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6e27447e9 100644
 --- a/content/renderer/render_frame_impl.cc
 +++ b/content/renderer/render_frame_impl.cc
-@@ -2307,6 +2307,10 @@ void RenderFrameImpl::Unload(
+@@ -57,6 +57,9 @@
+ #include "base/uuid.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "cc/base/switches.h"
+ #include "content/common/associated_interfaces.mojom.h"
+ #include "content/common/content_navigation_policy.h"
+@@ -328,8 +331,22 @@ constexpr base::TimeDelta kDelaySecondsForContentStateSyncHidden =
+ constexpr base::TimeDelta kDelaySecondsForContentStateSync = base::Seconds(1);
+ 
+ using FrameMap = absl::flat_hash_map<blink::WebFrame*, RenderFrameImpl*>;
+-base::LazyInstance<FrameMap>::DestructorAtExit g_frame_map =
+-    LAZY_INSTANCE_INITIALIZER;
++using FrameMapInstance = base::LazyInstance<FrameMap>::DestructorAtExit;
++#if !BUILDFLAG(IS_AROS)
++FrameMapInstance g_frame_map = LAZY_INSTANCE_INITIALIZER;
++#endif
++
++FrameMapInstance& GetFrameMapInstance() {
++#if BUILDFLAG(IS_AROS)
++  // Keep normal AtExit destruction local to the renderer that owns the frames.
++  // A sibling task's exit must not clear another renderer's live frame map.
++  struct RenderFrameMapOwnerTag;
++  return base::aros::ProcessLocalValue<FrameMapInstance,
++                                      RenderFrameMapOwnerTag>();
++#else
++  return g_frame_map;
++#endif
++}
+ 
+ // Please keep in sync with "RendererBlockedURLReason" in
+ // tools/metrics/histograms/metadata/navigation/enums.xml. These values are
+@@ -2007,7 +2024,7 @@ RenderFrame* RenderFrame::FromWebFrame(blink::WebLocalFrame* web_frame) {
+ // static
+ void RenderFrame::ForEach(RenderFrameVisitor* visitor) {
+   DCHECK(RenderThread::IsMainThread());
+-  FrameMap* frames = g_frame_map.Pointer();
++  FrameMap* frames = GetFrameMapInstance().Pointer();
+   for (auto it = frames->begin(); it != frames->end(); ++it) {
+     if (!visitor->Visit(it->second)) {
+       return;
+@@ -2018,8 +2035,8 @@ void RenderFrame::ForEach(RenderFrameVisitor* visitor) {
+ // static
+ RenderFrameImpl* RenderFrameImpl::FromWebFrame(blink::WebFrame* web_frame) {
+   DCHECK(RenderThread::IsMainThread());
+-  auto iter = g_frame_map.Get().find(web_frame);
+-  if (iter != g_frame_map.Get().end()) {
++  auto iter = GetFrameMapInstance().Get().find(web_frame);
++  if (iter != GetFrameMapInstance().Get().end()) {
+     return iter->second;
+   }
+   return nullptr;
+@@ -2307,6 +2324,10 @@ void RenderFrameImpl::Unload(
    task_runner->PostTask(FROM_HERE, std::move(send_unload_ack));
  }
  
@@ -44684,7 +44739,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..b8f7f88639774a9b765b7675e8bbb50a
  void RenderFrameImpl::Delete(mojom::FrameDeleteIntention intent) {
    TRACE_EVENT(
        "navigation", "RenderFrameImpl::Delete", [&](perfetto::EventContext ctx) {
-@@ -2353,6 +2357,15 @@ void RenderFrameImpl::Delete(mojom::FrameDeleteIntention intent) {
+@@ -2353,6 +2374,15 @@ void RenderFrameImpl::Delete(mojom::FrameDeleteIntention intent) {
        // main frame when a commit (and ownership transfer) is imminent.
        // TODO(dcheng): This is the case of https://crbug.com/838348.
        DCHECK(is_main_frame_);
@@ -44700,7 +44755,39 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..b8f7f88639774a9b765b7675e8bbb50a
  #if !BUILDFLAG(IS_ANDROID)
        CHECK(!in_frame_tree_);
  #else
-@@ -7134,6 +7147,9 @@ WebView* RenderFrameImpl::CreateNewWindow(
+@@ -3585,7 +3615,7 @@ void RenderFrameImpl::BindToFrame(blink::WebNavigationControl* frame) {
+   DCHECK(!frame_);
+ 
+   std::pair<FrameMap::iterator, bool> result =
+-      g_frame_map.Get().emplace(frame, this);
++      GetFrameMapInstance().Get().emplace(frame, this);
+   CHECK(result.second) << "Inserting a duplicate item.";
+ 
+   frame_ = frame;
+@@ -3903,7 +3933,7 @@ blink::WebLocalFrame* RenderFrameImpl::CreateChildFrame(
+ 
+ blink::WebFrame* RenderFrameImpl::FindFrame(const blink::WebString& name) {
+   if (GetBlinkPreferences().renderer_wide_named_frame_lookup) {
+-    for (const auto& it : g_frame_map.Get()) {
++    for (const auto& it : GetFrameMapInstance().Get()) {
+       WebLocalFrame* frame = it.second->GetWebFrame();
+       if (frame->AssignedName() == name) {
+         return frame;
+@@ -3944,10 +3974,10 @@ void RenderFrameImpl::FrameDetached(blink::DetachReason detach_reason) {
+   // the RenderFrameImpl.  In contrast, the main frame is owned by its
+   // containing RenderViewHost (so that they have the same lifetime), so only
+   // removal from the map is needed and no deletion.
+-  auto it = g_frame_map.Get().find(frame_);
+-  CHECK(it != g_frame_map.Get().end());
++  auto it = GetFrameMapInstance().Get().find(frame_);
++  CHECK(it != GetFrameMapInstance().Get().end());
+   CHECK_EQ(it->second, this);
+-  g_frame_map.Get().erase(it);
++  GetFrameMapInstance().Get().erase(it);
+ 
+   // RenderAccessibilityManager keeps a reference to the RenderFrame that owns
+   // it, so we need to clear the pointer to prevent invalid access after the
+@@ -7134,6 +7164,9 @@ WebView* RenderFrameImpl::CreateNewWindow(
          pip_options->disallow_return_to_opener;
      pip_mojom_opts->prefer_initial_window_placement =
          pip_options->prefer_initial_window_placement;
