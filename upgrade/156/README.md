@@ -23,8 +23,10 @@ shared addresses. This controlled QEMU lane uses one CPU; it does not prove
 sandbox security, final task disappearance or full memory reclamation.
 Stale task-runner warnings still need investigation. See
 `evidence/native-children/README.md` for exact inputs and qualifications.
-Full Chrome UI, Node/Electron/Zune consumers and
-broad hardware qualification remain outside the completed evidence.
+Native121 now renders the Chrome window, tab strip, address bar and test page
+through the same resident engine, with complete local fixture/lifecycle PASS.
+Interactive tabs/profiles/sign-in/media, Node/Electron/Zune consumers and broad
+hardware qualification remain outside the completed evidence.
 
 ## Earlier initialization evidence — 2026-11-18 UTC
 
