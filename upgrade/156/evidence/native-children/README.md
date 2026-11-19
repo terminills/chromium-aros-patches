@@ -476,3 +476,15 @@ and host binaries to validate lifecycle separately.
 ARM49 proves cold host initialization and native-port readiness without preload,
 but times out without worker PASS or child returns. ARM50 tests the ordered widget
 cleanup with the same cold-start arrangement; acceptance remains pending.
+
+
+Native135 repeats the exact engine and host binaries without a host emulator
+crash. WRITE, READ, both EMPTY checks and host shutdown pass. The strict watcher
+records FAIL because the GPU exit record is split by renderer logging; the
+supplemental audit retains that exact fragment and reconstructs only GPU ID75,
+confirming all eleven child IDs returned zero. The original result remains
+unchanged. Native136 now checks profile data after complete host shutdown/restart.
+ARM50 reaches cold-start readiness and Chrome controls but times out without
+worker PASS or child exit records; it does not qualify the cleanup fix on ARM.
+ARM51 retains the exact engine, adds the published host profile fix, and uses a
+longer hold/startup window for another bounded replay.

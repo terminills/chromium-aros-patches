@@ -1,0 +1,49 @@
+{
+  "files": {
+    "Libs/v8.library": "695d9860de339f2c44d6b59f0c43e28e5eda4ccd282fca21c722938d98ba3d1a",
+    "Libs/cef-blink.library": "c128dc84313a0b9f639e42d6faed2966507697b2f07149838e6a4f38812213c5",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFHost": "50a50a692c7a4fbaba272db3d2850fa2285b29b2921d646c40de03f07c8aca5d",
+    "C/CEFSubprocess": "25e85cf5c9e5c66040818e64c2e87584210c086bfcc08a63cf0d897d3a4fcba3",
+    "C/CEFHostProbe": "c533acc1e83face296a33c7cc3c5c7c7818e902020701e0fbf9325b4f3fb47ae",
+    "C/CEFChromeBrowser": "17f311f93811c49c2a04214fa13e00ced0ac3506706a452a461272487b2825f6",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "C/CEFEngineLoadProbe": "aea62c23adc281378c81eec4876922e7af4fb116a6a2ab4e9a8840001b1dce96",
+    "C/CEFHostPortWait": "56be2b10f9d1514e142af9f63bde66a526c5ccbb7a97bcf586b83f7f3a4916b0",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "eaa5eb5af1003597fee307078ed1e5260d5be3fb1bc786e2e84970174874e655",
+    "S/CEFHost-Run": "a8410b153cebc5908c6ba188022eb6136aa357dc9519f082186e2ad7e4c86c3a",
+    "S/CEF-AppA": "24eabba555d53f1b748f1ecf3a72e774b6f91b7e6845d6725792dd5aada1c74e",
+    "S/CEF-StartupMonitor": "1546b44a102e5f47390f67b2736d4302720989e7030f6d85b00370e7aaec562f"
+  },
+  "web_commit": "a35ca65b13a9ea737b750f16d2bed61b7bb94d92",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nRun >NIL: Execute S:CEF-StartupMonitor\nEcho ARM50-host-command-start >DEBUG:\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nEcho ARM50-host-run-returned:$RC >DEBUG:\nC:CEFHostProbe wait\nIf WARN\nEcho ARM50-probe-wait-failed >DEBUG:\nQuit 20\nEndIf\nEcho ARM50-native-port-probe-returned:0 >DEBUG:\nEcho ARM50-probe-wait-returned:0 >DEBUG:\nType RAM:CEF-host.log >DEBUG:\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nEcho ARM50-client-run-returned:$RC >DEBUG:\nWait 90\nRun SYS:System/About\nEcho ARM50-About-launched >DEBUG:\nC:Avail >DEBUG:\nType RAM:CEF-host.log >DEBUG:\nType RAM:CEF-appA.log >DEBUG:\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nWait 30\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nIf NOT WARN\nSkip CEFStopDone\nEndIf\nLab CEFStopDone\nType RAM:CEF-host.log >DEBUG:\nType RAM:CEF-appA.log >DEBUG:\nEcho ARM50-test-finished >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T09:46:39.804304+00:00",
+    "validation": "AROS pending widget cleanup retains view-before-input-manager destruction even when scheduler discards the callback. Host cancellation ordering repro passes; ARM47 InputHandler shutdown fault retained. Includes native storage lock adapter; native runtime validation pending.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "93d4ca6b7ad12527a3eaf765ff93343a67523542a8afb41936324936b6c936aa",
+        "applied_tree": "527aed33b99bf04e5e29980f3dc68660d4c346fc",
+        "bytes": 3031287
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Ordered widget-cancellation cleanup, cold host startup, native port readiness before client opens CEF, no preload; local workers, not network or full product acceptance"
+}
