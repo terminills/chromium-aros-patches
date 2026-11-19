@@ -59450,6 +59450,50 @@ index 0000000000000000000000000000000000000000..177224d4408d86975c3f2b333f884810
 +}
 +
 +}  // namespace blink
+diff --git a/third_party/blink/renderer/core/loader/old_document_info_for_commit.cc b/third_party/blink/renderer/core/loader/old_document_info_for_commit.cc
+index 0c16dcbdc978d8ca2488aee762b09194e8f4c7e7..85830123ee98e9a4c3b3ec42db9590ba0222711a 100644
+--- a/third_party/blink/renderer/core/loader/old_document_info_for_commit.cc
++++ b/third_party/blink/renderer/core/loader/old_document_info_for_commit.cc
+@@ -17,8 +17,13 @@ void OldDocumentInfoForCommit::Trace(Visitor* visitor) const {
+   visitor->Trace(history_item);
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++constinit thread_local ScopedOldDocumentInfoForCommitCapturer*
++    ScopedOldDocumentInfoForCommitCapturer::current_capturer_ = nullptr;
++#else
+ ScopedOldDocumentInfoForCommitCapturer*
+     ScopedOldDocumentInfoForCommitCapturer::current_capturer_ = nullptr;
++#endif
+ 
+ ScopedOldDocumentInfoForCommitCapturer::
+     ~ScopedOldDocumentInfoForCommitCapturer() {
+diff --git a/third_party/blink/renderer/core/loader/old_document_info_for_commit.h b/third_party/blink/renderer/core/loader/old_document_info_for_commit.h
+index a0c570e298781c3acb17fab65ed4840b54984822..cb1b0c48d9f96b0e3dde48dfd93b70703e9f3cda 100644
+--- a/third_party/blink/renderer/core/loader/old_document_info_for_commit.h
++++ b/third_party/blink/renderer/core/loader/old_document_info_for_commit.h
+@@ -5,6 +5,7 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_OLD_DOCUMENT_INFO_FOR_COMMIT_H_
+ #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_OLD_DOCUMENT_INFO_FOR_COMMIT_H_
+ 
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/frame/user_activation_state.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/loader/history_item.h"
+@@ -67,7 +68,13 @@ class ScopedOldDocumentInfoForCommitCapturer {
+  private:
+   OldDocumentInfoForCommit* info_;
+   ScopedOldDocumentInfoForCommitCapturer* previous_capturer_;
++#if BUILDFLAG(IS_AROS)
++  // This points into a synchronous navigation stack. Resident renderers must
++  // never observe or restore another native thread's capturer.
++  static thread_local ScopedOldDocumentInfoForCommitCapturer* current_capturer_;
++#else
+   static ScopedOldDocumentInfoForCommitCapturer* current_capturer_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc b/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
 index 2a4949728745ed2e5e926676097d3c41f0c49ef3..c4d1db95c7276089409d2fbf40aed0df2443738d 100644
 --- a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
