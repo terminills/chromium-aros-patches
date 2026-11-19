@@ -62015,6 +62015,51 @@ index ba55faf452c2620a5c86ab4b3b09b14ff981e881..9fd5a6173d59f8526f6549b064295fc3
    // Unescape '/'; it's safe and much prettier.
    escaped.Replace("%2F", "/");
    return escaped;
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
+index 0a1ef6721b97e1c876c024a0bf59cf38c88dc550..840793c2ec6d6b13d65f413651c78fb0111b7734 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.cc
++++ b/third_party/blink/renderer/platform/widget/widget_base.cc
+@@ -337,6 +337,32 @@ void WidgetBase::Shutdown(bool delay_release) {
+       task_delay =
+           features::kDelayLayerTreeViewDeletionOnLocalSwapTaskDelayParam.Get();
+     }
++#if BUILDFLAG(IS_AROS)
++    // Native renderer shutdown also destroys tasks that never run. Keep the
++    // view ahead of its input manager on that cancellation path: BindOnce's
++    // tuple of independent captures does not guarantee this lifetime order.
++    struct PendingWidgetCleanup {
++      scoped_refptr<scheduler::WidgetScheduler> scheduler;
++      scoped_refptr<WidgetInputHandlerManager> manager;
++      std::unique_ptr<LayerTreeView> view;
++
++      ~PendingWidgetCleanup() {
++        view.reset();
++        manager.reset();
++      }
++    };
++    auto cleanup = std::unique_ptr<PendingWidgetCleanup>(new PendingWidgetCleanup{
++        std::move(widget_scheduler_), std::move(widget_input_handler_manager_),
++        std::move(layer_tree_view_)});
++    cleanup_runner->PostNonNestableDelayedTask(
++        FROM_HERE,
++        base::BindOnce([](std::unique_ptr<PendingWidgetCleanup> pending) {
++          pending->view.reset();
++          pending->manager.reset();
++          pending->scheduler->Shutdown();
++        }, std::move(cleanup)),
++        task_delay);
++#else
+     cleanup_runner->PostNonNestableDelayedTask(
+         FROM_HERE,
+         base::BindOnce(
+@@ -351,6 +377,7 @@ void WidgetBase::Shutdown(bool delay_release) {
+             std::move(widget_input_handler_manager_),
+             std::move(layer_tree_view_)),
+         task_delay);
++#endif
+   }
+ 
+   if (widget_compositor_) {
 diff --git a/third_party/blink/renderer/platform/wtf/BUILD.gn b/third_party/blink/renderer/platform/wtf/BUILD.gn
 index f0b99b5e06376a511fa676dc3e6541561fe36e5b..f322cc9da37cbc6894a4600201693666e0008d94 100644
 --- a/third_party/blink/renderer/platform/wtf/BUILD.gn

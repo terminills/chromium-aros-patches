@@ -1,0 +1,51 @@
+{
+  "files": {
+    "Libs/v8.library": "67d2636a3dde7fd61e97619114f93bb0a9c95995318a753c629fcf4bae2fd7dd",
+    "Libs/cef-blink.library": "e1556bd614bb2b2893c3ba528c04872686f82f95f49eedbc62d831e30c45edb3",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "39a5dd4ac62e0b6d2adaecda1d8989773e0037d1fae09d7ff624f5a3b5f4d322",
+    "C/CEFSubprocess": "9256cbe8cbd99e552f6b4d9a739a0339a6ca24d67e4f987e00f0688bd0c74102",
+    "C/CEFHostProbe": "4525ce9b8fe5b8daa1b33c2cb6e7640501e144c539e7948ba75d3ca2a95736d6",
+    "C/CEFHostBrowser": "a73a8927bb2476943616862cf5da55e79cb8e602b54cbe8c1aadeda1a4c0b7e2",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f"
+  },
+  "web_commit": "f47fc1e2b0b4c4d5e56d046595882b062047e16c",
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFClockContract\nC:CEFOomCallback\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nEcho PROFILE129-write-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=write&token=PROFILE129\" 1000 6000 primary\nEcho PROFILE129-write-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nEcho PROFILE129-read-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=read&token=PROFILE129\" 1000 6000 primary\nEcho PROFILE129-read-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nEcho PROFILE129-other-app-start >DEBUG:\nC:CEFHostBrowser B \"http://10.0.2.2:40255/profile-persistence.html?phase=empty&token=PROFILE129\" 1000 6000 primary\nEcho PROFILE129-other-app-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nEcho PROFILE129-other-profile-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=empty&token=PROFILE129\" 1000 6000 secondary\nEcho PROFILE129-other-profile-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nType RAM:CEF-host.log >DEBUG:\nEcho PROFILE129-finished >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T09:31:37.745580+00:00",
+    "validation": "Dedicated storage whole-file locking uses native AROS flock; both native contract probes pass. Base File POSIX record locking, SQLite VFS and SDK unchanged. Persistent-profile runtime acceptance pending.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "6049b49b92e96e22a92d958f697fb9ca7611555218ce76cb41fe8a944da3c727",
+        "applied_tree": "97443bf69db0bfa9ec097a0df4a5973f1830212a",
+        "bytes": 3029348
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "b8bfeee984cc4ea1278c1de74540bff278626fbd7c2abf7fd7d7adaf3381af61",
+    "tools/CEFHost/CEFSubprocess.c": "36bc9b366425b3a0e99a5c91866b0ae6aab5f5d097dc53e58f3c08a416db5ddc",
+    "libs/cef/test_cef_host_browser.c": "5167fdef3e4eb20d597a817cf00acddb2a2ed46e2d54fbcdec6a7dbb85e1c2aa",
+    "libs/cef/test_cef_browser.c": "37d8ba843ab7b8bbe93c04ca4594dac08fda63e5f5cdf351bea81a3d2df887ac",
+    "libs/v8/v8findenginesymbol.c": "157d99744cb4057bc1385b3c529a57b228b77860c97dd4b97ea0bcd41f0f5642",
+    "libs/v8/mmakefile.src": "ac4588f55d0d4a96374be83d41993da3df67df347a9592588fb246ff08e8fc89",
+    "build/v8-import-table.py": "0e2f692d0fe09c35488d3107383225f971441da11cd1b42886e7e30f57826744"
+  },
+  "fixture_sha256": "80ba9cb5dbccbc464f38914d7212e3f71bcf57c3ed1dec3cb5d81b6f5400acf9"
+}

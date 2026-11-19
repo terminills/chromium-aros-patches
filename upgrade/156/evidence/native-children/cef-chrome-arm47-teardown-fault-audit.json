@@ -1,0 +1,18 @@
+{
+  "runtime_module_text_base": "0x0921f000",
+  "runtime_pc": "0x0d066cc0",
+  "module_offset": "0x03e47cc0",
+  "lr_offset": "0x03f408a4",
+  "fault_address": "0x00a2d65c00000010",
+  "client_pointer_x0": "0x383bdf80",
+  "invalid_vtable_x2": "0x00a2d65c00000000",
+  "adjacent_arm48_symbol_resolution": [
+    "cc::InputHandler::WillShutdown",
+    "cc::LayerTreeHostImpl::DetachInputDelegateAndRenderFrameObserver",
+    "cc::LayerTreeHostImpl::~LayerTreeHostImpl"
+  ],
+  "instruction_match": "All8 fault-neighborhood words match retained ARM48 ELF at identical offset. ARM47 exact ELF unavailable; adjacent-build symbol provenance explicit.",
+  "source_lifetime_issue": "WidgetBase delayed cleanup orders view before manager only inside invoked lambda. Cancelled BindOnce default-destroys tuple captures, which can release manager before view. Source comment explicitly requires manager outlive view.",
+  "host_contract_repro": "Original tuple cancellation violates dependency; ordered owner preserves cancellation/invocation order. This is host C++ evidence, not native fix acceptance.",
+  "native_result": "Worker/page/UI PASS, client returns0; renderer teardown faults. Full lifecycle FAIL."
+}

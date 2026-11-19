@@ -1,0 +1,5 @@
+{
+  "reason": "ARM47 single stop request was correctly refused with active1; original run left intact. Hold counted posted20ms callbacks, not wall time, and cold page load progresses slowly under ARM emulation.",
+  "next_runs": "48 and49 hold3000 callbacks instead of15000. Up to20 stop attempts30s apart; each host request still refuses while clients are active. Same20-minute outer deadline and same worker/callback/child-ID acceptance.",
+  "qualification": "No runtime or kernel code change; no assumption that responsiveness or lifecycle is solved."
+}

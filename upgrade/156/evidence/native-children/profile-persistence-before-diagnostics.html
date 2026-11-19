@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><title>AROS profile persistence test</title>
+<style>body{font:24px sans-serif;background:#173449;color:white;margin:32px}#result{padding:18px;background:#294e67}</style>
+<h1>Profile persistence</h1><p>Controlled fixture data; no user credentials.</p><p id="result">Checking…</p>
+<script>
+(() => {
+  const p=new URLSearchParams(location.search), phase=p.get('phase'), token=p.get('token');
+  const node=document.querySelector('#result');
+  const fail=message=>{node.textContent=message;node.style.background='#8a2935';console.error('AROS_PROFILE_'+String(phase).toUpperCase()+'_FAIL '+message)};
+  if(!['write','read','empty'].includes(phase)||!token||!/^[a-zA-Z0-9_-]{1,40}$/.test(token)){fail('Invalid fixture parameters');return}
+  try {
+    const key='aros_profile_fixture';
+    if(phase==='write') {
+      localStorage.setItem(key,token);
+      document.cookie=key+'='+token+'; Max-Age=86400; Path=/; SameSite=Lax';
+    }
+    const stored=localStorage.getItem(key);
+    const cookie=document.cookie.split('; ').find(x=>x.startsWith(key+'='));
+    const value=cookie?cookie.substring(key.length+1):null;
+    const pass=phase==='empty'?stored===null&&value===null:stored===token&&value===token;
+    if(!pass){fail('Storage or cookie did not match expected profile state');return}
+    node.textContent=phase.toUpperCase()+' PASS — localStorage and cookie';node.style.background='#206341';
+    console.log('AROS_PROFILE_'+phase.toUpperCase()+'_PASS token='+token);
+  } catch(e) {fail(e.name+': '+e.message)}
+})();
+</script>
