@@ -1,0 +1,166 @@
+{
+  "scope": "Native shared-engine task runner mismatch during Mojo trap dispatch. Runtime result still pending.",
+  "symbols": {
+    "file": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/cef-host113-full-symbols.elf",
+    "sha256": "fbe2cde3982f08155351f54ae20ee2f980c34f752cfa6a34995d7bb9fac07a4c",
+    "bytes": 1155616560
+  },
+  "raw": "Stale pooled_task_runner_delegate_ - task not posted. This is\nalmost certainly caused by a previous test leaving a stale task\nrunner in a global object, and a subsequent test triggering the\n global object to post a task to the stale task runner.\n#0 0000000110ab0e82 cef-blink.library+0x45db82\n#1 0000000110a5452c cef-blink.library+0x40122c\n#2 0000000110a50e70 cef-blink.library+0x3fdb70\n#3 0000000110a4b854 cef-blink.library+0x3f8554\n#4 000000012a935ed9 cef-blink.library+0x139\n#5 0000000111574ae3 cef-blink.library+0xf217e3\n#6 0000000111575669 cef-blink.library+0xf22369\n#7 0000000111577542 cef-blink.library+0xf24242\n#8 00000001115bc894 cef-blink.library+0xf69594\n#9 00000001115bc978 cef-blink.library+0xf69678\n#10 00000001115b5fd6 cef-blink.library+0xf62cd6\n#11 00000001115a0c0a cef-blink.library+0xf4d90a\n#12 00000001115a2df2 cef-blink.library+0xf4faf2\n#13 00000001115a6619 cef-blink.library+0xf53319\n#14 000000011158b151 cef-blink.library+0xf37e51\n#15 000000011158b2da cef-blink.library+0xf37fda\n#16 000000011157a764 cef-blink.library+0xf27464\n#17 000000011156a9c6 cef-blink.library+0xf176c6\n#18 000000011156b611 cef-blink.library+0xf18311\n#19 0000000111580d90 cef-blink.library+0xf2da90\n#20 0000000110a20a0f cef-blink.library+0x3cd70f\n#21 0000000110a44fa6 cef-blink.library+0x3f1ca6\n#22 0000000110a46263 cef-blink.library+0x3f2f63\n#23 0000000110aeff37 cef-blink.library+0x49cc37\n#24 0000000110a43476 cef-blink.library+0x3f0176\n#25 00000001109f36c9 cef-blink.library+0x3a03c9\n#26 0000000110a79428 cef-blink.library+0x426128\n#27 000000011a81ceac cef-blink.library+0xa1c9bac\n#28 0000000110a799d9 cef-blink.library+0x4266d9\n#29 0000000110aa94c0 cef-blink.library+0x4561c0\n#30 0000000110aaf4a3 cef-blink.library+0x45c1a3\n#31 0000000001ca6366 dos.library CallEntry+0xa6\n#32 0000000001ca2e64 dos.library+0x2b64\n#33 0000000001aa74d0 Kickstart ELF TaskExitStub+0x0",
+  "frames": [
+    {
+      "offset": "0x45db82",
+      "function": "base::debug::StackTrace::StackTrace()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x40122c",
+      "function": "base::internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(base::internal::PooledTaskRunnerDelegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3fdb70",
+      "function": "base::internal::PooledSequencedTaskRunner::PostDelayedTask(base::Location const&, base::OnceCallback<void ()>, base::TimeDelta)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f8554",
+      "function": "base::TaskRunner::PostTask(base::Location const&, base::OnceCallback<void ()>)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x139",
+      "function": "CEFBlinkHeapFree",
+      "location": "cef_blink_engine_bridge.c:?"
+    },
+    {
+      "offset": "0xf217e3",
+      "function": "mojo::core::ipcz_driver::MojoTrap::DispatchEvent(MojoTrapEvent const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf22369",
+      "function": "mojo::core::ipcz_driver::MojoTrap::DispatchOrQueueEvent(mojo::core::ipcz_driver::MojoTrap::Trigger&, MojoTrapEvent const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf24242",
+      "function": "mojo::core::ipcz_driver::MojoTrap::HandleEvent(IpczTrapEvent const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf69594",
+      "function": "ipcz::TrapEventDispatcher::DispatchAll()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf69678",
+      "function": "ipcz::TrapEventDispatcher::~TrapEventDispatcher()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf62cd6",
+      "function": "ipcz::Router::AcceptInboundParcel(std::unique_ptr<ipcz::Parcel, std::default_delete<ipcz::Parcel> >)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf4d90a",
+      "function": "ipcz::NodeLink::AcceptCompleteParcel(ipcz::StrongAlias<ipcz::SublinkIdTag, unsigned long>, std::unique_ptr<ipcz::Parcel, std::default_delete<ipcz::Parcel> >)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf4faf2",
+      "function": "ipcz::NodeLink::OnAcceptParcel(ipcz::msg::AcceptParcel&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf53319",
+      "function": "ipcz::msg::NodeMessageListener::OnTransportMessage(ipcz::DriverTransport::RawMessage const&, ipcz::DriverTransport const&, unsigned long)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf37e51",
+      "function": "ipcz::DriverTransport::Notify(ipcz::DriverTransport::RawMessage const&, unsigned long)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf37fda",
+      "function": "ipcz::(anonymous namespace)::NotifyTransport(unsigned long, void const*, unsigned long, unsigned long const*, unsigned long, unsigned int, IpczTransportActivityOptions const*)",
+      "location": "driver_transport.cc:?"
+    },
+    {
+      "offset": "0xf27464",
+      "function": "mojo::core::ipcz_driver::Transport::OnChannelMessage(void const*, unsigned long, std::vector<mojo::PlatformHandle, std::allocator<mojo::PlatformHandle> >, scoped_refptr<mojo::core::ipcz_driver::Envelope>)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf176c6",
+      "function": "mojo::core::Channel::TryDispatchMessage(base::span<char const, 18446744073709551615ul, char const*>, std::optional<std::vector<mojo::PlatformHandle, std::allocator<mojo::PlatformHandle> > >, scoped_refptr<mojo::core::ipcz_driver::Envelope>, unsigned long*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf18311",
+      "function": "mojo::core::Channel::OnReadComplete(unsigned long, unsigned long*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xf2da90",
+      "function": "mojo::core::ChannelAros::ProcessPacket(mojo::ArosChannelPacket*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3cd70f",
+      "function": "base::TaskAnnotator::RunTaskImpl(base::PendingTask&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f1ca6",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f2f63",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWork()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x49cc37",
+      "function": "base::MessagePumpAROS::Run(base::MessagePump::Delegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f0176",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::Run(bool, base::TimeDelta)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3a03c9",
+      "function": "base::RunLoop::Run(base::Location const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x426128",
+      "function": "base::Thread::Run(base::RunLoop*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xa1c9bac",
+      "function": "content::(anonymous namespace)::ChildIOThread::Run(base::RunLoop*)",
+      "location": "child_process.cc:?"
+    },
+    {
+      "offset": "0x4266d9",
+      "function": "base::Thread::ThreadMain()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x4561c0",
+      "function": "base::(anonymous namespace)::CreateThread(unsigned long, bool, base::PlatformThreadBase::Delegate*, base::PlatformThreadHandle*, base::ThreadType, base::MessagePumpType)::{lambda(void*)#1}::_FUN(void*)",
+      "location": "platform_thread_posix.cc:?"
+    },
+    {
+      "offset": "0x45c1a3",
+      "function": "(anonymous namespace)::TaskEntry()",
+      "location": "aros_native_task.cc:?"
+    }
+  ]
+}

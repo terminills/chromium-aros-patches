@@ -50423,6 +50423,65 @@ index 0000000000000000000000000000000000000000..a7ffa62652ae69bfcdb4060171fc35ed
 +    return RunChild();
 +  return RunParent();
 +}
+diff --git a/mojo/core/configuration.cc b/mojo/core/configuration.cc
+index 07b771bca0bdcd0420dba857534495f2496c8c23..c169b04d08b92ba74160f7c2e840f0c3327d8563 100644
+--- a/mojo/core/configuration.cc
++++ b/mojo/core/configuration.cc
+@@ -4,11 +4,22 @@
+ 
+ #include "mojo/core/configuration.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace mojo {
+ namespace core {
+ namespace internal {
+ 
++#if BUILDFLAG(IS_AROS)
++Configuration& GetMutableConfiguration() {
++  struct ConfigurationOwnerTag;
++  return base::aros::ProcessLocalValue<Configuration, ConfigurationOwnerTag>();
++}
++#else
+ Configuration g_configuration;
++#endif
+ 
+ }  // namespace internal
+ }  // namespace core
+diff --git a/mojo/core/configuration.h b/mojo/core/configuration.h
+index e3ed7e75375ce4c5ada88c40e7361246466fd35c..0a9ed54aee9e7a46a8732e7587a1c0e47e829599 100644
+--- a/mojo/core/configuration.h
++++ b/mojo/core/configuration.h
+@@ -5,6 +5,7 @@
+ #ifndef MOJO_CORE_CONFIGURATION_H_
+ #define MOJO_CORE_CONFIGURATION_H_
+ 
++#include "build/build_config.h"
+ #include "mojo/core/embedder/configuration.h"
+ #include "mojo/core/system_impl_export.h"
+ 
+@@ -12,11 +13,19 @@ namespace mojo {
+ namespace core {
+ 
+ namespace internal {
++#if BUILDFLAG(IS_AROS)
++MOJO_SYSTEM_IMPL_EXPORT Configuration& GetMutableConfiguration();
++#else
+ MOJO_SYSTEM_IMPL_EXPORT extern Configuration g_configuration;
++#endif
+ }  // namespace internal
+ 
+ MOJO_SYSTEM_IMPL_EXPORT inline const Configuration& GetConfiguration() {
++#if BUILDFLAG(IS_AROS)
++  return internal::GetMutableConfiguration();
++#else
+   return internal::g_configuration;
++#endif
+ }
+ 
+ }  // namespace core
 diff --git a/mojo/core/core_ipcz.cc b/mojo/core/core_ipcz.cc
 index f7d034891daf1dd0a29a09daf23c6fbb25dad620..cffb0b1ba1f9b67c98f683b5dc547f5125df285a 100644
 --- a/mojo/core/core_ipcz.cc
@@ -50449,6 +50508,60 @@ index f7d034891daf1dd0a29a09daf23c6fbb25dad620..cffb0b1ba1f9b67c98f683b5dc547f51
    handles[0] = PlatformHandle(std::move(region_handle.fd));
    handles[1] = PlatformHandle(std::move(region_handle.readonly_fd));
  #else
+diff --git a/mojo/core/embedder/embedder.cc b/mojo/core/embedder/embedder.cc
+index cfaa689b7d083ee1bb856540da5346191f200988..0f2cb5ad88133422a5c306bac1d33fb70a32aeec 100644
+--- a/mojo/core/embedder/embedder.cc
++++ b/mojo/core/embedder/embedder.cc
+@@ -30,11 +30,23 @@
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+         // BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace mojo::core {
+ 
+ namespace {
+ 
+-bool g_enable_memv2 = false;
++bool& MemV2Enabled() {
++#if BUILDFLAG(IS_AROS)
++  struct MemV2OwnerTag;
++  return base::aros::ProcessLocalValue<bool, MemV2OwnerTag>();
++#else
++  static bool enabled = false;
++  return enabled;
++#endif
++}
+ 
+ }  // namespace
+ 
+@@ -58,18 +70,22 @@ void InitFeatures() {
+         // BUILDFLAG(IS_ANDROID)
+ #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+ 
+-  g_enable_memv2 = base::FeatureList::IsEnabled(kMojoIpczMemV2);
++  MemV2Enabled() = base::FeatureList::IsEnabled(kMojoIpczMemV2);
+ }
+ 
+ void Init(const Configuration& configuration) {
++#if BUILDFLAG(IS_AROS)
++  internal::GetMutableConfiguration() = configuration;
++#else
+   internal::g_configuration = configuration;
++#endif
+ 
+   CHECK(InitializeIpczNodeForProcess({
+       .is_broker = configuration.is_broker_process,
+       .use_local_shared_memory_allocation =
+           configuration.is_broker_process ||
+           configuration.force_direct_shared_memory_allocation,
+-      .enable_memv2 = g_enable_memv2,
++      .enable_memv2 = MemV2Enabled(),
+   }));
+   MojoEmbedderSetSystemThunks(GetMojoIpczImpl());
+ }
 diff --git a/mojo/core/invitation_aros_process_probe.cc b/mojo/core/invitation_aros_process_probe.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..dd8f89898a0edaee5fcff25f84eac34c651f4472
@@ -50645,6 +50758,87 @@ index 0000000000000000000000000000000000000000..dd8f89898a0edaee5fcff25f84eac34c
 +  ::Exit(result);
 +  __builtin_unreachable();
 +}
+diff --git a/mojo/core/ipcz_api.cc b/mojo/core/ipcz_api.cc
+index 0039c19099ea132ffe73a1b475e6a961d7824a3d..ee69793cf2530fb9293c87950f7df43e3fc57123 100644
+--- a/mojo/core/ipcz_api.cc
++++ b/mojo/core/ipcz_api.cc
+@@ -7,18 +7,35 @@
+ #include <vector>
+ 
+ #include "base/check_op.h"
++#include "build/build_config.h"
+ #include "mojo/core/ipcz_driver/driver.h"
+ #include "third_party/ipcz/include/ipcz/ipcz.h"
+ #include "third_party/ipcz/src/api.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace mojo::core {
+ 
+ namespace {
+ 
+ 
+-IpczHandle g_node = IPCZ_INVALID_HANDLE;
+-IpczNodeOptions g_options = {.is_broker = false,
+-                             .use_local_shared_memory_allocation = false};
++struct ProcessNodeState {
++  IpczHandle node = IPCZ_INVALID_HANDLE;
++  IpczNodeOptions options = {};
++};
++
++ProcessNodeState& GetProcessNodeState() {
++#if BUILDFLAG(IS_AROS)
++  // Each native child is a distinct Mojo participant in the resident engine.
++  struct ProcessNodeOwnerTag;
++  return base::aros::ProcessLocalValue<ProcessNodeState, ProcessNodeOwnerTag>();
++#else
++  static ProcessNodeState state;
++  return state;
++#endif
++}
+ 
+ }  // namespace
+ 
+@@ -27,11 +44,11 @@ const IpczAPI& GetIpczAPI() {
+ }
+ 
+ IpczHandle GetIpczNode() {
+-  return g_node;
++  return GetProcessNodeState().node;
+ }
+ 
+ bool InitializeIpczNodeForProcess(const IpczNodeOptions& options) {
+-  g_options = options;
++  GetProcessNodeState().options = options;
+   const IpczCreateNodeFlags flags =
+       options.is_broker ? IPCZ_CREATE_NODE_AS_BROKER : IPCZ_NO_FLAGS;
+   std::vector<IpczFeature> enabled_features;
+@@ -49,18 +66,18 @@ bool InitializeIpczNodeForProcess(const IpczNodeOptions& options) {
+       .num_enabled_features = enabled_features.size(),
+   };
+   IpczResult result = GetIpczAPI().CreateNode(&ipcz_driver::GetIpczDriver(),
+-                                              flags, &create_options, &g_node);
++      flags, &create_options, &GetProcessNodeState().node);
+   return result == IPCZ_RESULT_OK;
+ }
+ 
+ void DestroyIpczNodeForProcess() {
+-  CHECK(g_node);
+-  GetIpczAPI().Close(g_node, IPCZ_NO_FLAGS, nullptr);
+-  g_node = IPCZ_INVALID_HANDLE;
++  CHECK(GetProcessNodeState().node);
++  GetIpczAPI().Close(GetProcessNodeState().node, IPCZ_NO_FLAGS, nullptr);
++  GetProcessNodeState().node = IPCZ_INVALID_HANDLE;
+ }
+ 
+ const IpczNodeOptions& GetIpczNodeOptions() {
+-  return g_options;
++  return GetProcessNodeState().options;
+ }
+ 
+ }  // namespace mojo::core
 diff --git a/mojo/core/ipcz_driver/base_shared_memory_service.cc b/mojo/core/ipcz_driver/base_shared_memory_service.cc
 index 8c9678a2ec3ff51b0f588b155720d838fff9667f..3d713111ad89cb499aa741fa281d21f07a8b418c 100644
 --- a/mojo/core/ipcz_driver/base_shared_memory_service.cc
@@ -50686,6 +50880,60 @@ index 8c9678a2ec3ff51b0f588b155720d838fff9667f..3d713111ad89cb499aa741fa281d21f0
  }
  
  // static
+diff --git a/mojo/core/ipcz_driver/invitation.cc b/mojo/core/ipcz_driver/invitation.cc
+index 0814de89bcf440d7887b9c17213d8d02ab347b98..718a79798bf55ded82f6fc13cfcb8d5d61995501 100644
+--- a/mojo/core/ipcz_driver/invitation.cc
++++ b/mojo/core/ipcz_driver/invitation.cc
+@@ -28,11 +28,24 @@
+ #include "base/process/process_info.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace mojo::core::ipcz_driver {
+ 
+ namespace {
+ 
+-MojoDefaultProcessErrorHandler g_default_process_error_handler = nullptr;
++MojoDefaultProcessErrorHandler& DefaultProcessErrorHandler() {
++#if BUILDFLAG(IS_AROS)
++  struct DefaultErrorHandlerOwnerTag;
++  return base::aros::ProcessLocalValue<MojoDefaultProcessErrorHandler,
++                                      DefaultErrorHandlerOwnerTag>();
++#else
++  static MojoDefaultProcessErrorHandler handler = nullptr;
++  return handler;
++#endif
++}
+ 
+ // The Mojo attach/extract APIs originally took arbitrary string values to
+ // identify pipe attachments, and there are still application using that
+@@ -165,12 +178,12 @@ Invitation::~Invitation() {
+ // static
+ void Invitation::SetDefaultProcessErrorHandler(
+     MojoDefaultProcessErrorHandler handler) {
+-  g_default_process_error_handler = handler;
++  DefaultProcessErrorHandler() = handler;
+ }
+ 
+ // static
+ void Invitation::InvokeDefaultProcessErrorHandler(const std::string& error) {
+-  if (!g_default_process_error_handler) {
++  if (!DefaultProcessErrorHandler()) {
+     return;
+   }
+ 
+@@ -180,7 +193,7 @@ void Invitation::InvokeDefaultProcessErrorHandler(const std::string& error) {
+       .error_message = error.c_str(),
+       .flags = MOJO_PROCESS_ERROR_FLAG_NONE,
+   };
+-  g_default_process_error_handler(&details);
++  DefaultProcessErrorHandler()(&details);
+ }
+ 
+ MojoResult Invitation::Attach(base::span<const uint8_t> name,
 diff --git a/mojo/core/ipcz_driver/shared_buffer.cc b/mojo/core/ipcz_driver/shared_buffer.cc
 index 232760ed3932db0ac9488f7447fce7b761c3fad8..71df1ce9b075cc9b04a85629f9437ca121dc42b7 100644
 --- a/mojo/core/ipcz_driver/shared_buffer.cc
@@ -50717,6 +50965,36 @@ index 232760ed3932db0ac9488f7447fce7b761c3fad8..71df1ce9b075cc9b04a85629f9437ca1
    DCHECK_EQ(handles.size(), 1u);
    handles[0] = PlatformHandle(std::move(handle));
  #else
+diff --git a/mojo/core/ipcz_driver/transport.cc b/mojo/core/ipcz_driver/transport.cc
+index 0a22ccc139d5e2d06731c524f7c419cb56c150ba..f55c95765008791a9c5fabd4f01d8748d11ffae7 100644
+--- a/mojo/core/ipcz_driver/transport.cc
++++ b/mojo/core/ipcz_driver/transport.cc
+@@ -36,6 +36,10 @@
+ #include "mojo/public/cpp/platform/platform_handle_security_util_win.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace mojo::core::ipcz_driver {
+ 
+ namespace {
+@@ -234,8 +238,14 @@ std::optional<PlatformHandle> DecodeHandle(HandleData data,
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ scoped_refptr<base::SingleThreadTaskRunner>& GetIOTaskRunnerStorage() {
++#if BUILDFLAG(IS_AROS)
++  struct TransportIORunnerOwnerTag;
++  return base::aros::ProcessLocalValue<
++      scoped_refptr<base::SingleThreadTaskRunner>, TransportIORunnerOwnerTag>();
++#else
+   static base::NoDestructor<scoped_refptr<base::SingleThreadTaskRunner>> runner;
+   return *runner;
++#endif
+ }
+ 
+ }  // namespace
 diff --git a/mojo/core/platform_handle_utils.cc b/mojo/core/platform_handle_utils.cc
 index 652e75e19e41a794c1f80effc0e53ad2d003a78d..c30921965075c2d4089f6f346673627fdda1a004 100644
 --- a/mojo/core/platform_handle_utils.cc

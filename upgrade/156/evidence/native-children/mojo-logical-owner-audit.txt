@@ -1,0 +1,8 @@
+Native112 immediate-exit stack identifies ChildThreadImpl::EnsureConnected, not the reason its Ping lacked a reply.
+Read-only source audit for next candidate:
+- content/app/content_main_runner_impl.cc initializes Mojo for each child and browser.
+- mojo/core/ipcz_api.cc has one g_node and g_options; each Init creates a node and overwrites the same handle/options. OpenPortals and invitation ConnectNode consult that shared current handle.
+- mojo/core/ipcz_driver/transport.cc has one GetIOTaskRunnerStorage; every ScopedIPCSupport sets it. Transport member initialization captures GetIOTaskRunner(), so later transports can capture a sibling runner.
+- configuration and memv2 policy also overwrite engine-wide values; default process error callback is shared.
+Draft isolates these six files with existing monotonic logical-owner storage. Same-owner worker sharing remains. Bootstrap owner zero remains. No Node destruction or timeout-policy change; this does not claim resource reclamation or establish runtime causation.
+Current candidate113/ARM36 source is frozen while native links read archives. Draft only, not applied at audit time.
