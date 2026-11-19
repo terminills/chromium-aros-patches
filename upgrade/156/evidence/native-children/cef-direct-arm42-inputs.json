@@ -1,0 +1,42 @@
+{
+  "files": {
+    "Libs/v8.library": "695d9860de339f2c44d6b59f0c43e28e5eda4ccd282fca21c722938d98ba3d1a",
+    "Libs/cef-blink.library": "0f50f19b03d5a760da62f12e2d342310207458ed88c32d0bb2a69df6da91bc03",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "53caab6c9bc5591e9bd035d148300a597242162c62485e8b8fcbac3342cb6d26",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "e5d11d1e1a1b6347e5f938452ce0dd4446961f74baa183107ce2d35424fbba46"
+  },
+  "web_commit": "2993a1f9ebc68361618ca596e287962639d66456",
+  "web_test_client_sha256": "06846be916eecb12da84fddba3a82408dc2ee285957356921c95c42a9947d240",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm42.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM42-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T07:18:00.410082+00:00",
+    "validation": "AROS Blink script-forbidden and lifecycle counters use native thread-local storage, preserving checks and non-AROS globals. Native Chrome120 encountered the global counter check. Exact-base replay verified; native121 Chrome-window and ARM42 regression pending. No presentation success claimed.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "03d3dd1863a937d4b8eb523c6a3c3d5e0afdec2453fbd463683395e6650ee9e4",
+        "applied_tree": "527c270d47f55739ae135f48f3d79792f1316f43",
+        "bytes": 3018772
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
