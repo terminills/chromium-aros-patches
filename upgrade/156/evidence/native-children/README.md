@@ -305,3 +305,25 @@ under observation; no ARM31 result is claimed here.
 The original105 fixture and106 diagnostic fixture are both retained. Startup
 phase/error logging was added without weakening storage, DOM or worker checks.
 No two-app isolation, complete child retirement or reclamation PASS is claimed.
+
+## Native107 / ARM31–32 and retirement candidate
+
+ARM31 and ARM32 pass the local JS/Wasm worker, paint/close, CEF teardown and
+native-probe regression. Whole-guest first paint is1182.73MiB and1184.78MiB
+respectively; these are not process RSS or measured optimization gains.
+Native107 clears the ResourceBundle failure and records two renderer return0
+records, then the host fails ChromeProcessSingleton::GetInstance after child
+cleanup deleted the engine-global singleton. No app content/isolation PASS.
+
+The new snapshot scopes ChromeProcessSingleton and all four linked paint GC
+roots by native owner. It retains one paint-root family across a renderer's
+tasks. Failed native kill now checks task liveness instead of treating errno0
+as successful retirement. Helper command-line state retires after runner and
+delegate cleanup; Exec task IDs and null retired-owner entries prevent stale
+address reuse and accidental fallback to browser-parent state. A runtime CHECK
+verifies the retired helper no longer observes an initialized command line.
+
+Initial changed objects pass both architectures. Final edits crossed an
+in-flight archive verification; the coordinator was paused and frozen-source
+archive confirmation is being rerun before native linking. Native108/ARM33
+remain pending. Paint-root retention is not renderer heap reclamation proof.

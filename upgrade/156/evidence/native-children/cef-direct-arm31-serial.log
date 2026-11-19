@@ -1,0 +1,667 @@
+
+
+
+[BOOT] AROS Bootstrap/AArch64 ARMv8-A
+[BOOT] Booted on Raspberry Pi 4 Model B
+[BOOT] SoC platform id 0xc44
+[BOOT] local_intc points to /soc/interrupt-controller@40000000
+[BOOT] Mapping local interrupt area at 0000000040000000-00000000400000ff
+[BOOT] Configuring LEDs
+[BOOT] led-act: GPIO42 (00000007 0000002a 00000000)
+[BOOT] LED attached to gpio@7e200000
+[BOOT] GPFSEL=10, bit=6
+[BOOT] led-pwr: GPIO2 (0000000b 00000002 00000001)
+[BOOT] LED attached to gpio
+[BOOT] GPFSEL=0, bit=6
+[BOOT] DT memory usage: 107248
+[BOOT] no VideoCore firmware - running emulated
+[BOOT] Query system memory
+[BOOT] System memory range 0: 0000000000000000-000000003bffffff
+[BOOT] System memory range 1: 0000000040000000-000000007fffffff
+[BOOT] Query VC memory
+[BOOT] VC Base = 3c000000, Size = 04000000
+[BOOT] ARM clock: setpoint 700000000 Hz, max 700000000 Hz
+[BOOT] DTB @ 0000000008600000, size 132814
+[BOOT] Bootstrap @ 00080000-0013b2d8
+[BOOT] Topmost address for kernel: 000000003c000000
+[BOOT] BSP image: 08000000-08482c23
+[BOOT] mem_avail=147744
+[BOOT] Calculating core ELF size...
+[BOOT] Core: ro=210944 rw=706720
+[BOOT] Scanning BSP package at 0000000008000000 (size 4729892)...
+[BOOT] BSP magic: 50 4b 47 01
+[BOOT] PKG total_length=4729892, base=0000000008000000, file_end=0000000008482c24
+[BOOT] PKG module 1: elf_ro=24976 elf_rw=24 file=000000000800b79c
+[BOOT] PKG module 2: elf_ro=26720 elf_rw=24 file=0000000008017a88
+[BOOT] PKG module 3: elf_ro=95056 elf_rw=776 file=0000000008042494
+[BOOT] PKG module 50: elf_ro=9160 elf_rw=24 file=00000000083eec5c
+[BOOT] PKG scan done: 73 modules
+[BOOT] Total sizes: ro=4194304 rw=2097152
+[BOOT] Zeroing kernel memory at 000000003ba00000 (6291456 bytes)...
+[BOOT] Physical address of kernel: 000000003ba00000
+[BOOT] Virtual address of kernel: 00000000f8000000
+[BOOT] Device tree (size: 132814) moved to 00000000f83df920, phys 000000003bddf920
+[BOOT] Loading core ELF...
+[BOOT] Core loaded. Loading BSP modules...
+[BOOT] Kernel image is a package:
+[BOOT] Package size: 4619KB
+[BOOT]    00000000f8033784 hub.class
+[BOOT]    00000000f803992c hubss.class
+[BOOT]    00000000f80401a0 massstorage.class
+[BOOT]    00000000f80574ec bootkeyboard.class
+[BOOT]    00000000f805c51c bootmouse.class
+[BOOT]    00000000f8060f40 input.device
+[BOOT]    00000000f80639e0 gameport.device
+[BOOT]    00000000f80663a0 keyboard.device
+[BOOT]    00000000f80688d0 console.device
+[BOOT]    00000000f8071b7c sdcard.device
+[BOOT]    00000000f807f1a4 nvme.device
+[BOOT]    00000000f808987c usb2otg.device
+[BOOT]    00000000f809b8b8 pcixhci.device
+[BOOT]    00000000f80b0b5c con-handler
+[BOOT]    00000000f80b9e4c ram-handler
+[BOOT]    00000000f80c1318 cdrom-handler
+[BOOT]    00000000f80cdbc8 sfs-handler
+[BOOT]    00000000f80ef438 fat-handler
+[BOOT]    00000000f80fde00 afs-handler
+[BOOT]    00000000f810b3c4 pfs3-handler
+[BOOT]    00000000f8125704 hiddclass.hidd
+[BOOT]    00000000f81292b8 inputclass.hidd
+[BOOT]    00000000f812ba10 gfx.hidd
+[BOOT]    00000000f81601a0 keyboard.hidd
+[BOOT]    00000000f8162204 mouse.hidd
+[BOOT]    00000000f8164910 bus.hidd
+[BOOT]    00000000f8166490 storage.hidd
+[BOOT]    00000000f8168ff0 i2c.hidd
+[BOOT]    00000000f816d9cc i2c-bcm2708.hidd
+[BOOT]    00000000f81701d8 vcgfx.hidd
+[BOOT]    00000000f8192abc fbgfx.hidd
+[BOOT]    00000000f81964dc pci.hidd
+[BOOT]    00000000f819e200 pcibcm2711.hidd
+[BOOT]    00000000f81a2698 pcibcm2712.hidd
+[BOOT]    00000000f81a8034 pcirp1.hidd
+[BOOT]    00000000f81aa9bc aros.library
+[BOOT]    00000000f81ac5c8 partition.library
+[BOOT]    00000000f81b312c utility.library
+[BOOT]    00000000f81b6e2c oop.library
+[BOOT]    00000000f81bc1a0 graphics.library
+[BOOT]    00000000f81da6c8 layers.library
+[BOOT]    00000000f81e3e30 intuition.library
+[BOOT]    00000000f82188b4 keymap.library
+[BOOT]    00000000f821b8b8 dos.library
+[BOOT]    00000000f82356e8 dos64.library
+[BOOT]    00000000f8238df8 poseidon.library
+[BOOT]    00000000f8268a84 cgxbootpic.library
+[BOOT]    00000000f826cfd8 gadtools.library
+[BOOT]    00000000f827c51c lowlevel.library
+[BOOT]    00000000f827f5c0 fd.library
+[BOOT]    00000000f8281984 openfirmware.resource
+[BOOT]    00000000f8283820 misc.resource
+[BOOT]    00000000f8285278 bootloader.resource
+[BOOT]    00000000f8287644 dosboot.resource
+[BOOT]    00000000f8290980 lddemon.resource
+[BOOT]    00000000f8293340 usbromstartup.resource
+[BOOT]    00000000f8293d68 FileSystem.resource
+[BOOT]    00000000f82955ac shell.resource
+[BOOT]    00000000f829c48c shellcommands.resource
+[BOOT]    00000000f82a5a8c entropy.resource
+[BOOT]    00000000f82a9638 gpio.resource
+[BOOT]    00000000f82ab40c mbox.resource
+[BOOT]    00000000f82ad260 dma.resource
+[BOOT]    00000000f82af8ac sdio.resource
+[BOOT]    00000000f82b35a4 bwfm.resource
+[BOOT]    00000000f82b96b4 pl011bt.resource
+[BOOT]    00000000f82bc3a8 rp1.resource
+[BOOT]    00000000f82be378 pwrbutton.resource
+[BOOT]    00000000f82c0230 timer.device
+[BOOT]    00000000f82c39b4 expansion.library
+[BOOT]    00000000f82c6b4c debug.library
+[BOOT]    00000000f82ca534 processor.resource
+[BOOT]    00000000f82cdb4c battclock.resource
+[BOOT] All 73 BSP modules loaded
+[BOOT] Flushing cache...
+[BOOT] Cache flushed
+[BOOT] Loading MMU tables...
+[BOOT] MMU loaded
+[BOOT] Creating device tree in kernel area at 00000000f83c5620
+[BOOT] Kernel parameters @ 00000000f83e01c0: coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32
+[BOOT] Kernel taglist contains 25 entries
+[BOOT] Bootstrap wasted 114400 bytes of memory for kernels use
+[BOOT] Heading over to AROS kernel @ 00000000f8000000
+[Kernel] kernel_cstart entered
+[Kernel] calling cpu_Probe
+[Kernel] calling platform_Init
+[Kernel] platform_Init done
+[Kernel] stack @ 00000000f840c410, stack_super @ 00000000f845c410..00000000f84ac410 (SP_EL1 start 00000000f84ac3d0)
+[Kernel] AROS AArch64 Native Kernel built on Nov 18 2026
+[Kernel] Device: Raspberry Pi 4 Model B
+[Kernel] Entered kernel_cstart @ 0x00000000f80066b4, BootMsg @ 0x00000000000ef3f0
+[Kernel] Using PutChar implementation @ 00000000000863a8
+[Kernel] Boot CPU TLS @ 0x000000000013c000
+[Kernel] calling core_SetupIntr
+[Kernel] Platform initialised
+[Kernel] Preparing memory 0x000000000000d000 -> 0x000000003ba00000 (2 range(s))
+[Kernel] - protected area 0x0000000000080000 -> 0x000000000013d000)
+[Kernel] Preparing ExecBase (memheader @ 0x000000000000d000)
+[Kernel] SysBase @ 0x000000000000f900
+[Kernel] Added memory range 1: 0x0000000040000000 -> 0x0000000080000000
+[Kernel] InitCode(RTF_SINGLETASK) ... 
+[Kernel] Continuing at EL1 on the OS stack ... 
+[Kernel] InitCode(RTF_COLDSTART) ...
+[Exec] Exec_ARMCPUInit()
+[Exec] Exec_ARMCPUInit: launched from Exec BSP Bootstrap Task @ 0x0000000000014290
+[Exec] Exec_ARMCreateIdleTask: CPU #00 Idle Task created @ 0x000000000002aa00
+[Exec] Exec_ARMCreateIdleTask: CPU Affinity : 0002a900
+[Kernel:BCM27xx] bcm27xx_init()
+[Kernel:BCM27xx] Initialising Multicore System
+[Kernel:BCM27xx] bcm27xx_init: Copy SMP trampoline from 00000000f80025f0 to 0000000000035110 (240 bytes)
+[Kernel:BCM27xx] bcm27xx_init: Patching data for trampoline at offset 192
+[Kernel:BCM27xx] bcm27xx_init: Attempting to wake CPU #01 (spin-table)
+[Kernel:BCM27xx] bcm27xx_init: CPU #01 Stack @ 0x0000000000140010 (sp=0x000000000018ffd0)
+[Kernel:BCM27xx] bcm27xx_init: CPU #01 TLS @ 0x0000000000035210
+[Kernel:BCM27xx] bcm27xx_init: CPU #01 release @ 0x00000000000000e0
+[Kernel:01] Bootstrapping...
+[Kernel:01] TLS @ 0x0000000000035210
+[Kernel:01] KernelBase @ 0x0000000000010c98
+[Kernel:01] SysBase @ 0x000000000000f900
+[Kernel:01] Operational
+[Kernel:01] Waiting for interrupts
+[Kernel:01] Continuing at EL1t on the task stack ... 
+[processor.AArch64] Processor Details -:
+[processor.AArch64] #0 ARM Ltd. Cortex-A72 r0p3 (ARMv8-A)
+[processor.AArch64]   FP
+[processor.AArch64]   AdvSIMD
+[processor.AArch64]   Crypto extensions
+[processor.AArch64]   CRC32
+[processor.AArch64] Cache Info:
+[processor.AArch64]   L1 Data   : 32Kb
+[processor.AArch64[Ex]ec   L1 I]nstr. :  48ExKecb
+_AR[prMCoreacteIesdlseoTar.AArcshk: 6CPU4] # 01  L Id2 le    Ta s   k : cr10ea24teKb
+d @[p roces0xs000o0r00.00AA000r3c8h69c0
+4][Ex  ec]  LiEnxee c_sARMCize r:eat 6eIdleT4 askb:y CtePU As
+ffini[ptroyce s:sor .000AA388cr0c
+h64] #1 ARM Ltd. Cortex-A72 r0p3 (ARMv8-A)
+[processor.AArch64]   FP
+[processor.AArch64]   AdvSIMD
+[processor.AArch64]   Crypto extensions
+[processor.AArch64]   CRC32
+[processor.AArch64] Cache Info:
+[processor.AArch64]   L1 Data   : 32Kb
+[processor.AArch64]   L1 Instr. : 48Kb
+[processor.AArch64]   L2        : 1024Kb
+[processor.AArch64]   Line size : 64 bytes
+[PCIBcm2711] no usable brcm,bcm2711-pcie node in the device tree
+[PCIBcm2712] starting bring-up of /axi/pcie@1000110000
+[HW] HW__HW__AddDriver: Failed to instantiate Driver Object
+[PCIBcm2712] starting bring-up of /axi/pcie@1000120000
+[HW] HW__HW__AddDriver: Failed to instantiate Driver Object
+[SDCard--] SDCARD__Device__CommonInit()
+[SDCard--] SDCARD__Device__CommonInit: MemPool @ 00000000001ca6e0
+[SDBus00] controller has no ADMA2, transfers will use PIO
+[SDCard--] SDCARD__Device__RegisterBus(0x00000000001ca8a0)
+[SDCard--] SDCARD__Device__Scan()
+[SDBus00] clock: asked 400000 Hz, base 52000000 Hz, div 65 -> 400000 Hz [HCTRL 0x00]
+[SDBus00] SDCARD__SDBus__SetClock: Changing CLOCK_CONTROL [0x4000 -> 0x4100] (div 65)
+[SDBus00] SDCARD__SDBus__SetClock: Enabling clock...
+[SDBus00] SDCARD__SDBus__SetPowerLevel: Changing Power Lvl [0x0 -> 0xe]
+[SDCard--] SDCARD__Device__Scan: Launching Bus Task...
+[SDBus00] SDCARD__SDBus__BusTask: TaskSig: 18, MediaSig: 19
+[SDBus00] SDCARD__SDBus__BusTask: IRQHandle @ 0x00000000001d9f70 for IRQ#158
+[SDBus00] SDCARD__SDBus__RegisterUnit: Putting card into Idle state ...
+[SDBus00] controller interrupt is being delivered
+[SDBus00] SDCARD__SDBus__RegisterUnit: Querying Interface conditions [000001aa] ...
+[SDBus00] SDCARD__SDBus__RegisterUnit: Query Response = 000001aa
+[SDBus00] SDCARD__SDBus__RegisterUnit: SD2.0 Compliant Card .. publishing high-capacity support
+[SDBus00] SDCARD__SDBus__RegisterUnit: Preparing for Card App Command ...
+[SDBus00] SDCARD__SDBus__RegisterUnit: App Command Response = 00000120
+[SDBus00] SDCARD__SDBus__RegisterUnit: Querying Operating conditions [40300000] ...
+[SDBus00] SDCARD__SDBus__RegisterUnit: Query Response = c0ffff00
+[SDBus00] SDCARD__SDBus__RegisterUnit: Card OCR = 00ffff00
+[SDBus00] SDCARD__SDBus__RegisterUnit: Card is now operating in Identification Mode
+[SDBus00] SDCARD__SDBus__RegisterUnit: High Capacity Card detected
+[SDBus00] SDCARD__SDBus__RegisterUnit: Querying Card Identification Data ...
+[SDBus00] SDCARD__SDBus__RegisterUnit: # Card Identification Data (CID) Register
+[SDBus00] SDCARD__SDBus__RegisterUnit: # ======================================
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Manuafacturer ID (MID) : 0000aa
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Product Name (PNM) : QEMU!
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Product Revision (PRV) : 0.1
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Serial number (PSN) : deadbeef
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Manufacturing Date Code (MDT) : 2/6
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         CRC7 checksum (CRC7) : 0
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         Reserved : 0
+[SDBus00] SDCARD__SDBus__RegisterUnit: Querying Card Relative Address... 
+[SDBus00] SDCARD__SDBus__RegisterUnit: Card RCA = 8510
+[SDBus00] SDCARD__SDBus__RegisterUnit: Querying Card Specific Data [213e0000] ...
+[SDCard00] SDCARD__SDUnit__WaitStatus: State = 00000600
+[SDBus00] SDCARD__SDBus__RegisterUnit: # Card Specific Data (CSD) Register
+[SDBus00] SDCARD__SDBus__RegisterUnit: # =================================
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         CSD_STRUCTURE : 1 [SDHC/XC Card]
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         READ_BL_LEN : 128bytes
+[SDBus00] SDCARD__SDBus__RegisterUnit: #         C_SIZE : 4194304
+[SDBus00] MMC0: [4096MB Capacity]
+[SDBus00] SDCARD__SDBus__RegisterUnit:        StartCyl:0, EndCyl:4194303 ..
+[SDBus00] SDCARD__SDBus__RegisterUnit:        BlockSize:256, SectorsPerBlock:2 ..
+[SDBus00] SDCARD__SDBus__RegisterUnit: Unit detection complete
+[CgxBootPic] cgxbootpic_Init()
+[DOSBoot] dosboot_Init: GO GO GO!
+[DOSBoot] dosboot_Init: ExpansionBase 0x0000000000013e50
+[DOSBoot] Scanning for additional partitions/volumes...
+[DOSBoot:bootscan] CheckPartitions('MMC0')
+[DOSBoot:bootscan] CheckPartitions: handler seglist = 0, handler = (null)
+[SDCard00] SDCARD__SDUnit__WaitStatus: State = 00000800
+[SDCard00] SDCARD__SDBus__StartUnit: Selected card with RCA 8510 [select response 00000700]
+[SDCard00] SDCARD__SDBus__StartUnit: Card is now operating in Transfer Mode
+[SDBus00] clock: asked 50000000 Hz, base 52000000 Hz, div 1 -> 26000000 Hz [HCTRL 0x00]
+[SDBus00] SDCARD__SDBus__SetClock: Enabling high speed timing
+[SDBus00] SDCARD__SDBus__SetClock: Changing CLOCK_CONTROL [0x4100 -> 0x0100] (div 1)
+[SDBus00] SDCARD__SDBus__SetClock: Enabling clock...
+[SDCard00] SDCARD__SDBus__StartUnit: Switching to 4-bit bus width
+[SDCard00] SDCARD__SDBus__StartUnit: 4-bit bus width enabled
+[SDCard00] SDCARD__SDBus__StartUnit: Done.
+[DOSBoot:bootscan] CheckPartitions: checking sdcard.device:0
+[DOSBoot:bootscan] AddPartitionVolume()
+[DOSBoot:bootscan] AddPartitionVolume: MBR/EBR partition
+[DOSBoot:bootscan] AddPartitionVolume: Partition name: SDCARD0P0
+[DOSBoot:bootscan] AddPartitionVolume: AddBootNode(SDCARD0P0, 0, 0x0000000046415402, NULL)
+[DOSBoot] Prepairing initial device...
+[DOSBoot] Enabling devices
+[DOSBoot] 1 devices in mountlist (want 4 bytes)
+[DOSBoot] devices enabled list storage @ 0x00000000001dbf20
+[DOSBoot] ** Displaying bootmenu (if wanted) ...
+[DOSBoot] ** Prepairing to boot ...
+[DOSBoot] ** Attempting to boot ...
+[DOSBoot:bootstrap] dosboot_BootStrap: Device IO MsgPort @ 0x00000000001dbf10
+[DOSBoot:bootstrap] dosboot_BootStrap: Device IORequest @ 0x00000000001dbf80
+[DOSBoot:bootstrap] GetBootNodeDeviceUnit: (00000000001de650 == NULL) or invalid de_TableSize (00000010)
+[DOSBoot:bootstrap] dosboot_BootStrap: Attempting SDCARD0P0
+[DOSBoot:bootstrap] dosboot_BootStrap: Attempting SDCARD0P0 as BootPoint
+[DOSBoot:bootstrap] dosboot_BootStrap: Attempting SDCARD0P0 with DOS
+[DosInit] before INIT symbol set
+[DosInit] DOSBase 0x0000000000000000
+[DosInit] Creating dos.library...
+[DosInit] Adding "FastFileSystem" (00000000f810ab58) at 00000000001db334 to the resident list
+[DosInit] Adding "FastFileSystem" (00000000f810ab58) at 00000000001db334 to the resident list
+[DosInit] Adding "FileSystem" (00000000f810ab48) at 00000000001db334 to the resident list
+[DosInit] Adding "FileSystem" (00000000f810ab48) at 00000000001db334 to the resident list
+[DosInit] Adding "CDFileSystem" (00000000f80cd5c0) at 00000000001dae24 to the resident list
+[DosInit] Adding "sfs-handler" (00000000f80eda18) at 00000000001dafd4 to the resident list
+[DosInit] Adding "fat-handler" (00000000f80fd7c0) at 00000000001db104 to the resident list
+[DosInit] Adding "pfs3-handler" (00000000f8125410) at 00000000001dbce4 to the resident list
+[DosInit] Adding "cdrom-handler" (00000000f80cd5b0) at 00000000001dae24 to the resident list
+Dos/CliInit: MountList head: 0x00000000001de710
+Dos/CliInit: Mounting 0x00000000001de5e0 (SDCARD0P0)...
+Dos/CliInit: Looking for patches for DeviceNode 00000000001de5e0
+Dos/CliInit: found 0x00000000001db1b0 in FileSystem.resource
+Dos/CliInit: Added to DOS list, starting up handler...
+dn->dn_Task = 0x00000000001dd970
+Dos/CliInit: SDCARD0P0 (127) appears usable
+Dos/CliInit:   Attempt to Lock("SDCARD0P0:")... => 0x0000000000468de0
+Dos/CliInit: Proposed SYS: lock is: 0000000000468de0
+Dos/CliInit: Process returned Res1=-1, Res2=0
+Dos/CliInit: Assigns done, mount remaining handlers...
+Dos/CliInit: BootFlags 0x0 Flags 0x48
+Dos/CliInit: Mounting 0x00000000001de5e0 (SDCARD0P0)...
+Dos/CliInit: Found in DOS list, nothing to do
+Dos/CliInit: Calling InitCode(RTF_AFTERDOS, 0)
+Dos/CliInit: Calling __dos_Boot(00000000001dc620, 0x0, 0x48)
+Dos/CliInit: Boot sequence exited
+[CEF-CLOCK] monotonic_attr=0 timeout=1 elapsed_us=12344
+[CEF-CLOCK] monotonic_attr=1 timeout=1 elapsed_us=119472
+[CEF-CLOCK] legacy_rc=0 monotonic_rc=0 PASS
+CEF-clock-returned:0
+[CEF-OOM-CALLBACK] calls=1000 PASS
+CEF-oom-callback-returned:0
+[CEF-MEM] phase=before-cef-open total=000000007b9eeea0 free=0000000074bc38f0 used=0000000006e2b5b0 largest=000000003676cea0
+[Chromium:PA] trim-exec address=0000000001000000 len=2097152 released=0 allocation=0000000000fbd820+4194304
+[CEF-MEM] phase=after-cef-open total=000000007b9eeea0 free=000000005af94bd0 used=0000000020a5a2d0 largest=000000003676cea0
+[CEF-BROWSER] shared heap before install: 0
+[CEF-BROWSER] shared heap after install: 1
+[CEF-BROWSER] execute rc=-1
+[CEF-MEM] phase=before-initialize total=000000007b9eeea0 free=000000005af94300 used=0000000020a5aba0 largest=000000003676cea0
+[AROS-LOOP] bind delegate=0000000001104130 previous=0000000000000000 task=00000000009f1cb0
+[Chromium:PA] trim-exec address=0000000002400000 len=2097152 released=0 allocation=000000000225e160+4194304
+[AROS-LOOP] bind delegate=0000000001105330 previous=0000000000000000 task=0000000001e1a4d0
+[Chromium:PA] trim-exec address=0000000002e00000 len=2097152 released=0 allocation=0000000002c5e1a0+4194304
+[Chromium:base] shared memory backend: Exec allocation (kernel pages unavailable)
+[AROS-LOOP] bind delegate=0000000001104d30 previous=0000000000000000 task=0000000000f96240
+[AROS-LOOP] bind delegate=0000000001104430 previous=0000000000000000 task=0000000001e22da0
+[AROS-LOOP] bind delegate=0000000001105630 previous=0000000000000000 task=0000000001e23960
+[Chromium:PA] trim-exec address=0000000024400000 len=2097152 released=0 allocation=00000000242205f0+4194304
+[Chromium:Net] unable to open bsdsocket.library v4
+[AROS-LOOP] bind delegate=0000000002e98970 previous=0000000000000000 task=0000000001ec6ee0
+[AROS-LOOP] bind delegate=0000000002e98c30 previous=0000000000000000 task=0000000001ed1aa0
+[AROS-LOOP] bind delegate=0000000002e98ef0 previous=0000000000000000 task=0000000001ed2a20
+[AROS-LOOP] bind delegate=0000000002e991b0 previous=0000000000000000 task=0000000001edb410
+== ahi_pci_init 1
+== ahi_pci_init 2
+== ahi_pci_init 3
+== ahi_pci_init 4
+ahi_pci_find_device: prevdev = 0
+ahi_pci_find_device: found_dev = 0
+ahi_pci_find_device: prevdev = 0
+ahi_pci_find_device: found_dev = 0
+== ahi_pci_exit 1
+== ahi_pci_exit 2
+== ahi_pci_exit 3
+== ahi_pci_exit 4
+Opened config file
+
+Envy24HT DriverInit
+No Envy24HT found! :-(
+[AROS-LOOP] bind delegate=0000000002e99730 previous=0000000000000000 task=0000000001ed2520
+[AROS-LOOP] bind delegate=0000000002e999f0 previous=0000000000000000 task=0000000003291c50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] HaveOnlyLoopbackNetworkInterfaces: socket() failed errno=50
+[Chromium:PA] trim-exec address=0000000026000000 len=2097152 released=0 allocation=0000000025e206c0+4194304
+[Chromium:PA] trim-exec address=0000000026400000 len=2097152 released=0 allocation=00000000262206d0+4194304
+[Chromium:PA] trim-exec address=0000000028400000 len=2097152 released=0 allocation=00000000282207c0+4194304
+[AROS-LOOP] bind delegate=0000000002e9aff0 previous=0000000000000000 task=00000000033254e0
+[Chromium:PA] trim-exec address=0000000028800000 len=2097152 released=0 allocation=00000000286207d0+4194304
+[CEF-BROWSER] initialize rc=1
+[CEF-MEM] phase=after-initialize total=000000007b9eeea0 free=000000005307a640 used=0000000028974860 largest=000000003676cea0
+[CEF-BROWSER] create rc=1
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=0000000028c00000 len=2097152 released=0 allocation=0000000028a41820+4194304
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[CEF-BROWSER] browser created=0000000028c38920
+[Chromium:PA] trim-exec address=0000000029400000 len=2097152 released=0 allocation=000000002926bd50+4194304
+[Chromium:PA] trim-exec address=0000000029800000 len=2097152 released=0 allocation=00000000296f1f20+4194304
+[AROS:SkiaFont] directory=FONTS:TrueType families=19
+[Chromium:PA] trim-exec address=000000002a200000 len=2097152 released=0 allocation=000000002a0da830+4194304
+[V8-SYMBOL] index build begin DebugBase=0000000000014190
+[CEF-BROWSER] loading=1 tick=0
+[Chromium:PA] trim-exec address=000000002aa00000 len=2097152 released=0 allocation=000000002a9999e0+4194304
+[Chromium:PA] trim-exec address=000000002ae00000 len=2097152 released=0 allocation=000000002ad999f0+4194304
+[V8-SYMBOL] index build end visited=310262 indexed=272302 failed=0
+[AROS-LOOP] bind delegate=0000000002e9ffb0 previous=0000000000000000 task=00000000292681c0
+[Chromium:PA] trim-exec address=000000002a920000 len=131072 released=0 allocation=000000002a908f20+262144
+[AROS-LOOP] bind delegate=0000000002ea0270 previous=0000000000000000 task=000000002b19dbb0
+[Chromium:PA] trim-exec address=000000002a960000 len=131072 released=0 allocation=000000002a948f30+262144
+[Chromium:PA] trim-exec address=000000002c060000 len=131072 released=0 allocation=000000002c059a40+262144
+[Chromium:PA] trim-exec address=000000002c0a0000 len=131072 released=0 allocation=000000002c099a50+262144
+[Chromium:PA] trim-exec address=000000002c0e0000 len=131072 released=0 allocation=000000002c0d9a60+262144
+[Chromium:PA] trim-exec address=000000002c120000 len=131072 released=0 allocation=000000002c119a70+262144
+[Chromium:PA] pages allocator=kernel hint=0000000003976000 len=67108864 protection=0x0 available=1196925008 largest=913755808 result=0000000000000000 error=12
+[Chromium:PA] pages allocator=exec hint=0000000000000000 len=67108864 protection=0x0 available=1196925008 largest=913755808 result=000000003455a000 error=0
+[Chromium:PA] trim-exec address=000000003455a000 len=67108864 released=0 allocation=0000000034559a90+67112960
+[Chromium:PA] trim-exec address=0000000038780000 len=262144 released=0 allocation=0000000038759aa0+524288
+[Chromium:PA] trim-exec address=0000000038800000 len=262144 released=0 allocation=00000000387d9ab0+524288
+[Chromium:PA] trim-exec address=0000000038880000 len=262144 released=0 allocation=0000000038859ac0+524288
+[Chromium:PA] trim-exec address=0000000038900000 len=262144 released=0 allocation=00000000388d9ad0+524288
+[Chromium:PA] trim-exec address=0000000038980000 len=262144 released=0 allocation=0000000038959ae0+524288
+[Chromium:PA] trim-exec address=0000000038a00000 len=262144 released=0 allocation=00000000389d9af0+524288
+[Chromium:PA] trim-exec address=0000000038a80000 len=262144 released=0 allocation=0000000038a59b00+524288
+[Chromium:PA] trim-exec address=0000000038b00000 len=262144 released=0 allocation=0000000038ad9b10+524288
+[Chromium:PA] retained physical page suffix address=0000000038b36000 len=40960 logical=0000000038b00000+221184
+[Chromium:PA] trim-exec address=0000000038b80000 len=262144 released=0 allocation=0000000038b6ab30+524288
+[Chromium:PA] trim-exec address=0000000038c00000 len=262144 released=0 allocation=0000000038beab40+524288
+[Chromium:PA] trim-exec address=0000000038c80000 len=262144 released=0 allocation=0000000038c7bb60+524288
+[AROS-LOOP] bind delegate=0000000002ea1df0 previous=0000000000000000 task=000000002b19a0c0
+[Chromium:PA] trim-exec address=0000000039000000 len=2097152 released=0 allocation=0000000038efbb80+4194304
+[Chromium:PA] trim-exec address=0000000039300000 len=131072 released=0 allocation=00000000392fbb90+262144
+[Chromium:PA] trim-exec address=0000000039340000 len=131072 released=0 allocation=000000003933bba0+262144
+[Chromium:PA] trim-exec address=0000000039380000 len=131072 released=0 allocation=000000003937bbb0+262144
+[Chromium:PA] trim-exec address=00000000393c0000 len=131072 released=0 allocation=00000000393bbbc0+262144
+[Chromium:PA] trim-exec address=0000000039440000 len=262144 released=0 allocation=000000003940cbe0+524288
+[Chromium:PA] trim-exec address=00000000394c0000 len=262144 released=0 allocation=000000003948cbf0+524288
+[Chromium:PA] trim-exec address=0000000039540000 len=262144 released=0 allocation=000000003950cc00+524288
+[CEF-MEM] phase=first-paint total=000000007b9eeea0 free=0000000031b34600 used=0000000049eba8a0 largest=0000000025f6ce90
+[CEF-BROWSER] first paint 960x540 dirty=1
+[CEF-BROWSER] About AROS launch=0
+[CEF-BROWSER] load end status=200 tick=152
+[CEF-BROWSER] loading=0 tick=152
+[AROS-LOOP] bind delegate=0000000002e9deb0 previous=0000000000000000 task=000000002be0c6c0
+[Chromium:PA] trim-exec address=000000003a200000 len=2097152 released=0 allocation=000000003a022ab0+4194304
+[Chromium:PA] trim-exec address=000000003a440000 len=131072 released=0 allocation=000000003a422ac0+262144
+[Chromium:PA] trim-exec address=000000003a480000 len=262144 released=0 allocation=000000003a462ad0+524288
+[Chromium:PA] trim-exec address=000000003a500000 len=262144 released=0 allocation=000000003a4e2ae0+524288
+[Chromium:PA] trim-exec address=000000003a580000 len=131072 released=0 allocation=000000003a562af0+262144
+[Chromium:PA] trim-exec address=000000003a5c0000 len=262144 released=0 allocation=000000003a5a2b00+524288
+[Chromium:PA] trim-exec address=000000003a640000 len=131072 released=0 allocation=000000003a622b10+262144
+[Chromium:PA] trim-exec address=000000003a680000 len=131072 released=0 allocation=000000003a662b20+262144
+[Chromium:PA] trim-exec address=000000003a6c0000 len=131072 released=0 allocation=000000003a6a2b30+262144
+[AROS-LOOP] bind delegate=000000003a291470 previous=0000000000000000 task=000000002a873950
+[Chromium:PA] trim-exec address=000000003a900000 len=131072 released=0 allocation=000000003a8e2b50+262144
+[Chromium:PA] trim-exec address=000000003a940000 len=262144 released=0 allocation=000000003a922b60+524288
+[Chromium:PA] trim-exec address=000000003a9c0000 len=262144 released=0 allocation=000000003a9a2b70+524288
+[Chromium:PA] trim-exec address=000000003aa40000 len=131072 released=0 allocation=000000003aa22b80+262144
+[Chromium:PA] trim-exec address=000000003aa80000 len=262144 released=0 allocation=000000003aa62b90+524288
+[Chromium:PA] trim-exec address=000000003ab00000 len=131072 released=0 allocation=000000003aae2ba0+262144
+[Chromium:PA] trim-exec address=000000003ab40000 len=131072 released=0 allocation=000000003ab22bb0+262144
+[Chromium:PA] trim-exec address=000000003ab80000 len=131072 released=0 allocation=000000003ab62bc0+262144
+[Chromium:PA] trim-exec address=000000003ac00000 len=2097152 released=0 allocation=000000003aba2bd0+4194304
+[Chromium:PA] trim-exec address=000000003afc0000 len=262144 released=0 allocation=000000003afb3bf0+524288
+[Chromium:PA] trim-exec address=000000003b040000 len=262144 released=0 allocation=000000003b033c00+524288
+[Chromium:PA] trim-exec address=000000003b0c0000 len=262144 released=0 allocation=000000003b0b3c10+524288
+[Chromium:PA] trim-exec address=000000003b140000 len=262144 released=0 allocation=000000003b133c20+524288
+[Chromium:PA] trim-exec address=000000003b200000 len=262144 released=0 allocation=000000003b1c4c40+524288
+[Chromium:PA] trim-exec address=000000003b280000 len=262144 released=0 allocation=000000003b255c60+524288
+[Chromium:PA] trim-exec address=000000003b300000 len=262144 released=0 allocation=000000003b2d5c70+524288
+[AROS-LOOP] bind delegate=000000003a293db0 previous=0000000000000000 task=000000002be589e0
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=000000003b600000 len=2097152 released=0 allocation=000000003b555c90+4194304
+[Chromium:PA] trim-exec address=000000003b960000 len=131072 released=0 allocation=000000003b955ca0+262144
+[Chromium:PA] trim-exec address=0000000029080000 len=262144 released=0 allocation=000000002906b2c0+524288
+[Chromium:PA] trim-exec address=0000000029100000 len=262144 released=0 allocation=00000000290eb2d0+524288
+[Chromium:PA] trim-exec address=000000003b9c0000 len=131072 released=0 allocation=000000003b9a6cc0+262144
+[Chromium:PA] trim-exec address=0000000029180000 len=262144 released=0 allocation=000000002916b2e0+524288
+[Chromium:PA] trim-exec address=0000000029200000 len=131072 released=0 allocation=00000000291eb2f0+262144
+[Chromium:PA] trim-exec address=0000000040020000 len=131072 released=0 allocation=00000000400020f0+262144
+[Chromium:PA] trim-exec address=0000000040060000 len=131072 released=0 allocation=0000000040042100+262144
+[AROS-LOOP] destroy manager=000000003906df80 current=000000003906df80 controller=000000003a293c80 observer=1 task=000000002be589e0
+[AROS-LOOP] remove observer=000000003a293e10 current=000000003a293db0 task=000000002be589e0
+[AROS-LOOP] remove observer=000000003aca17d0 current=000000003a293db0 task=000000002be589e0
+[AROS-LOOP] destroy delegate=000000003a293db0 current=000000003a293db0 bound=1 task=000000002be589e0
+[Chromium:PA] trim-exec address=0000000029100000 len=262144 released=0 allocation=00000000290eb2d0+524288
+[Chromium:PA] trim-exec address=000000003b980000 len=262144 released=0 allocation=000000003b955ca0+524288
+[Chromium:PA] trim-exec address=000000003b380000 len=262144 released=0 allocation=000000003b355c80+524288
+[Chromium:PA] trim-exec address=000000003b400000 len=262144 released=0 allocation=000000003b3d5c90+524288
+[Chromium:PA] trim-exec address=000000003b480000 len=262144 released=0 allocation=000000003b455ca0+524288
+[Chromium:PA] trim-exec address=0000000040040000 len=262144 released=0 allocation=00000000400020f0+524288
+[Chromium:PA] trim-exec address=00000000400c0000 len=262144 released=0 allocation=0000000040082100+524288
+[Chromium:PA] trim-exec address=0000000040140000 len=262144 released=0 allocation=0000000040102110+524288
+[Chromium:PA] trim-exec address=00000000401c0000 len=262144 released=0 allocation=0000000040182120+524288
+[Chromium:PA] trim-exec address=0000000040240000 len=262144 released=0 allocation=0000000040202130+524288
+[Chromium:PA] trim-exec address=00000000402c0000 len=262144 released=0 allocation=0000000040282140+524288
+[Chromium:PA] trim-exec address=0000000040340000 len=262144 released=0 allocation=0000000040302150+524288
+[Chromium:PA] trim-exec address=00000000403c0000 len=262144 released=0 allocation=0000000040382160+524288
+[Chromium:PA] trim-exec address=0000000040440000 len=262144 released=0 allocation=0000000040402170+524288
+[Chromium:PA] trim-exec address=00000000404c0000 len=262144 released=0 allocation=0000000040482180+524288
+[Chromium:PA] trim-exec address=0000000040540000 len=262144 released=0 allocation=0000000040502190+524288
+[Chromium:PA] trim-exec address=00000000405c0000 len=262144 released=0 allocation=00000000405821a0+524288
+[Chromium:PA] trim-exec address=0000000040640000 len=262144 released=0 allocation=00000000406021b0+524288
+[Chromium:PA] trim-exec address=00000000406c0000 len=262144 released=0 allocation=00000000406821c0+524288
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:PA] trim-exec address=0000000040740000 len=262144 released=0 allocation=00000000407021d0+524288
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=00000000407c0000 len=262144 released=0 allocation=00000000407821e0+524288
+[Chromium:PA] trim-exec address=0000000040840000 len=262144 released=0 allocation=00000000408021f0+524288
+[Chromium:PA] trim-exec address=000000003b500000 len=200704 released=0 allocation=000000003b4d5cb0+462848
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=00000000408c0000 len=262144 released=0 allocation=0000000040882200+524288
+[Chromium:PA] trim-exec address=0000000040940000 len=262144 released=0 allocation=0000000040902210+524288
+[Chromium:PA] trim-exec address=00000000409c0000 len=200704 released=0 allocation=0000000040982220+462848
+[Chromium:PA] trim-exec address=0000000040a00000 len=262144 released=0 allocation=00000000409f4230+524288
+[Chromium:PA] trim-exec address=0000000040a80000 len=262144 released=0 allocation=0000000040a74240+524288
+[Chromium:PA] trim-exec address=0000000040b00000 len=262144 released=0 allocation=0000000040af4250+524288
+[Chromium:PA] trim-exec address=0000000040b80000 len=262144 rel[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+eased=0 allocation=0000000040b74260+524288
+[Chromium:PA] trim-exec address=0000000040c00000 len=262144 released=0 allocation=0000000040bf4270+524288
+[Chromium:PA] trim-exec address=0000000040c80000 len=262144 released=0 allocation=0000000040c74280+524288
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=0000000040d00000 len=262144 released=0 allocation=0000000040cf4290+524288
+[Chromium:PA] trim-exec address=0000000040d80000 len=262144 released=0 allocation=0000000040d742a0+524288
+[Chromium:PA] trim-exec address=0000000040e00000 len=262144 released=0 allocation=0000000040df42b0+524288
+[Chromium:PA] trim-exec address=0000000040e80000 len=262144 released=0 allocation=0000000040e742c0+524288
+[Chromium:PA] trim-exec address=0000000040f00000 len=262144 released=0 allocation=0000000040ef42d0+524288
+[Chromium:PA] trim-exec address=0000000040f80000 len=262144 released=0 allocation=0000000040f742e0+524288
+[Chromium:PA] trim-exec address=0000000041000000 len=262144 released=0 allocation=0000000040ff42f0+524288
+[Chromium:PA] trim-exec address=0000000041080000 len=262144 released=0 allocation=0000000041074300+524288
+[Chromium:PA] trim-exec address=0000000041100000 len=262144 released=0 allocation=00000000410f4310+524288
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:PA] trim-exec address=0000000041180000 len=262144 released=0 allocation=0000000041174320+524288
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:PA] trim-exec address=0000000041200000 len=262144 released=0 allocation=00000000411f4330+524288
+[Chromium:PA] trim-exec address=0000000041280000 len=262144 released=0 allocation=0000000041274340+524288
+[Chromium:PA] trim-exec address=0000000041300000 len=262144 released=0 allocation=00000000412f4350+524288
+[Chromium:PA] trim-exec address=0000000041380000 len=262144 released=0 allocation=0000000041374360+524288
+[Chromium:PA] trim-exec address=0000000041400000 len=2097152 released=0 allocation=00000000413f4370+4194304
+[Chromium:PA] trim-exec address=0000000029260000 len=8192 released=0 allocation=000000002925f830+12288
+[Chromium:PA] trim-exec address=0000000041800000 len=262144 released=0 allocation=00000000417f4380+524288
+[Chromium:PA] trim-exec address=0000000041880000 len=262144 released=0 allocation=0000000041874390+524288
+[AROS-LOOP] destroy manager=0000000002f28700 current=0000000002f28700 controller=0000000002e9dd80 observer=1 task=000000002be0c6c0
+[AROS-LOOP] remove observer=0000000002e9df10 current=0000000002e9deb0 task=000000002be0c6c0
+[AROS-LOOP] remove observer=0000000039169030 current=0000000002e9deb0 task=000000002be0c6c0
+[AROS-LOOP] destroy delegate=0000000002e9deb0 current=0000000002e9deb0 bound=1 task=000000002be0c6c0
+[Chromium:PA] trim-exec address=000000003a440000 len=131072 released=0 allocation=000000003a422ac0+262144
+[CEF-BROWSER] console AROS_JS_WASM_WORKERS_PASS
+[CEF-BROWSER] console-source data:text/html,%3Cbody%20bgcolor%3Dcyan%3E%3Ch1%3EJavaScript%20%2B%20WebAssembly%3C%2Fh1%3E%3Cscript%3Elet%20u%3DURL.createObjectURL%28new%20Blob%28%5B%22let%20x%2Cf%2Cw%3Bonmessage%3De%3D%3E%7Bif%28e.data%29%7Bx%3De.data%3Bf%3DArray.from%
+[CEF-BROWSER] console-line 1
+[AROS-LOOP] destroy manager=000000003906c480 current=000000003906c480 controller=000000003a291340 observer=1 task=000000002a873950
+[AROS-LOOP] remove observer=000000003a2914d0 current=000000003a291470 task=000000002a873950
+[AROS-LOOP] remove observer=000000003916b050 current=000000003a291470 task=000000002a873950
+[AROS-LOOP] destroy delegate=000000003a291470 current=000000003a291470 bound=1 task=000000002a873950
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[CEF-BROWSER] settled snapshot wrote T:cef-arm31.ppm 960x540
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] unable to open bsdsocket.library v4
+[Chromium:Net] GetNetworkInterfaces: socket() failed errno=50
+[Chromium:Net] unable to open bsdsocket.library v4
+[CEF-BROWSER] browser closed
+[CEF-BROWSER] PASS painted and closed cleanly
+[CEF-MEM] phase=before-shutdown total=000000007b9eeea0 free=000000002e73af80 used=000000004d2b3f20 largest=0000000025f6ce90
+[AROS-LOOP] destroy manager=0000000028d66400 current=0000000028d66400 controller=0000000002ea1cc0 observer=1 task=000000002b19a0c0
+[AROS-LOOP] remove observer=0000000002ea1e50 current=0000000002ea1df0 task=000000002b19a0c0
+[AROS-LOOP] remove observer=0000000039094950 current=0000000002ea1df0 task=000000002b19a0c0
+[AROS-LOOP] destroy delegate=0000000002ea1df0 current=0000000002ea1df0 bound=1 task=000000002b19a0c0
+[AROS-LOOP] destroy manager=0000000002f24800 current=0000000002f24800 controller=0000000002e9fe80 observer=1 task=00000000292681c0
+[AROS-LOOP] remove observer=0000000002ea0010 current=0000000002e9ffb0 task=00000000292681c0
+[AROS-LOOP] remove observer=000000002ae2ec40 current=0000000002e9ffb0 task=00000000292681c0
+[AROS-LOOP] destroy delegate=0000000002e9ffb0 current=0000000002e9ffb0 bound=1 task=00000000292681c0
+[AROS-LOOP] destroy manager=0000000002f27500 current=0000000002f27500 controller=0000000002ea0140 observer=1 task=000000002b19dbb0
+[AROS-LOOP] remove observer=0000000002ea02d0 current=0000000002ea0270 task=000000002b19dbb0
+[AROS-LOOP] remove observer=000000002ae2ee60 current=0000000002ea0270 task=000000002b19dbb0
+[AROS-LOOP] destroy delegate=0000000002ea0270 current=0000000002ea0270 bound=1 task=000000002b19dbb0
+[AROS-LOOP] destroy manager=0000000002f21b00 current=0000000002f21b00 controller=0000000002e998c0 observer=1 task=0000000003291c50
+[AROS-LOOP] remove observer=0000000002e99a50 current=0000000002e999f0 task=0000000003291c50
+[AROS-LOOP] remove observer=00000000244d23e0 current=0000000002e999f0 task=0000000003291c50
+[AROS-LOOP] destroy delegate=0000000002e999f0 current=0000000002e999f0 bound=1 task=0000000003291c50
+[AROS-LOOP] destroy manager=0000000002f21200 current=0000000002f21200 controller=0000000002e99080 observer=1 task=0000000001edb410
+[AROS-LOOP] remove observer=0000000002e99210 current=0000000002e991b0 task=0000000001edb410
+[AROS-LOOP] remove observer=000000002ae2d830 current=0000000002e991b0 task=0000000001edb410
+[AROS-LOOP] destroy delegate=0000000002e991b0 current=0000000002e991b0 bound=1 task=0000000001edb410
+[AROS-LOOP] destroy manager=0000000002f20d80 current=0000000002f20d80 controller=0000000002e98dc0 observer=1 task=0000000001ed2a20
+[AROS-LOOP] remove observer=0000000002e98f50 current=0000000002e98ef0 task=0000000001ed2a20
+[AROS-LOOP] remove observer=00000000244d0f70 current=0000000002e98ef0 task=0000000001ed2a20
+[AROS-LOOP] destroy delegate=0000000002e98ef0 current=0000000002e98ef0 bound=1 task=0000000001ed2a20
+[AROS-LOOP] destroy manager=0000000002f20480 current=0000000002f20480 controller=0000000002e98840 observer=1 task=0000000001ec6ee0
+[AROS-LOOP] remove observer=0000000002e989d0 current=0000000002e98970 task=0000000001ec6ee0
+[AROS-LOOP] remove observer=00000000244d0dd0 current=0000000002e98970 task=0000000001ec6ee0
+[AROS-LOOP] destroy delegate=0000000002e98970 current=0000000002e98970 bound=1 task=0000000001ec6ee0
+[AROS-LOOP] destroy manager=00000000010dca00 current=00000000010dca00 controller=0000000001104300 observer=1 task=0000000001e22da0
+[AROS-LOOP] remove observer=0000000001104490 current=0000000001104430 task=0000000001e22da0
+[AROS-LOOP] remove observer=00000000244d05c0 current=0000000001104430 task=0000000001e22da0
+[AROS-LOOP] destroy delegate=0000000001104430 current=0000000001104430 bound=1 task=0000000001e22da0
+[AROS-LOOP] destroy manager=00000000010df200 current=00000000010df200 controller=0000000001105200 observer=1 task=0000000001e1a4d0
+[AROS-LOOP] remove observer=0000000001105390 current=0000000001105330 task=0000000001e1a4d0
+[AROS-LOOP] destroy delegate=0000000001105330 current=0000000001105330 bound=1 task=0000000001e1a4d0
+[AROS-LOOP] destroy manager=0000000002f20900 current=0000000002f20900 controller=0000000002e98b00 observer=1 task=0000000001ed1aa0
+[AROS-LOOP] remove observer=0000000002e98c90 current=0000000002e98c30 task=0000000001ed1aa0
+[AROS-LOOP] destroy delegate=0000000002e98c30 current=0000000002e98c30 bound=1 task=0000000001ed1aa0
+[AROS-LOOP] destroy manager=00000000010df700 current=00000000010df700 controller=0000000001105500 observer=1 task=0000000001e23960
+[AROS-LOOP] remove observer=0000000001105690 current=0000000001105630 task=0000000001e23960
+[AROS-LOOP] remove observer=0000000002e04e20 current=0000000001105630 task=0000000001e23960
+[AROS-LOOP] destroy delegate=0000000001105630 current=0000000001105630 bound=1 task=0000000001e23960
+[AROS-LOOP] destroy manager=0000000002f21680 current=0000000002f21680 controller=0000000002e99600 observer=1 task=0000000001ed2520
+[AROS-LOOP] remove observer=0000000002e99790 current=0000000002e99730 task=0000000001ed2520
+[AROS-LOOP] destroy delegate=0000000002e99730 current=0000000002e99730 bound=1 task=0000000001ed2520
+[AROS-LOOP] destroy manager=00000000010dc500 current=00000000010dc500 controller=0000000001104000 observer=1 task=00000000009f1cb0
+[AROS-LOOP] remove observer=0000000001104190 current=0000000001104130 task=00000000009f1cb0
+[AROS-LOOP] remove observer=0000000002e06100 current=0000000001104130 task=00000000009f1cb0
+[AROS-LOOP] destroy delegate=0000000001104130 current=0000000001104130 bound=1 task=00000000009f1cb0
+[CEF-MEM] phase=after-shutdown total=000000007b9eeea0 free=0000000033927b30 used=00000000480c7370 largest=0000000025f6ce90
+[CEF-BROWSER] CEF teardown returned
+[CEF-MEM] phase=after-cef-close total=000000007b9eeea0 free=0000000033a30670 used=0000000047fbe830 largest=0000000025f6ce90
+ARM31-browser-returned:0

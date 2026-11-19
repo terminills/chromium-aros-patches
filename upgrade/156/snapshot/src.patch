@@ -4414,7 +4414,7 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb40678c807832 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df1755b868 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
 @@ -7,6 +7,13 @@
@@ -4458,7 +4458,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
  
  #if BUILDFLAG(IS_WIN)
  #include <windows.h>
-@@ -36,10 +54,55 @@
+@@ -36,10 +54,61 @@
  
  namespace base {
  
@@ -4472,10 +4472,12 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +
 +struct CommandLineProcessRegistry {
 +  Lock lock;
-+  std::map<struct Task*, CommandLine*> command_lines;
++  // Task addresses are reusable; Exec task IDs distinguish native lifetimes.
++  // A null owner entry is a retirement barrier against parent inheritance.
++  std::map<uint64_t, CommandLine*> command_lines;
 +  std::map<CommandLine*, uint64_t> process_identities;
 +  uint64_t next_identity = 1;
-+  std::map<struct Task*, CommandLine*> thread_bindings;
++  std::map<uint64_t, CommandLine*> thread_bindings;
 +  std::map<CommandLine*, std::unique_ptr<CommandLine>> initial_command_lines;
 +};
 +
@@ -4487,7 +4489,11 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +CommandLine* FindCommandLineForTask(
 +    const CommandLineProcessRegistry& registry,
 +    struct Task* task) {
-+  const auto bound = registry.thread_bindings.find(task);
++  const auto owner = registry.command_lines.find(GetETaskID(task));
++  if (owner != registry.command_lines.end()) {
++    return owner->second;
++  }
++  const auto bound = registry.thread_bindings.find(GetETaskID(task));
 +  if (bound != registry.thread_bindings.end()) {
 +    for (const auto& entry : registry.command_lines) {
 +      if (entry.second == bound->second) {
@@ -4497,8 +4503,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +  }
 +
 +  for (size_t depth = 0; task && depth < 64; ++depth) {
-+    const auto it = registry.command_lines.find(task);
-+    if (it != registry.command_lines.end() && it->second) {
++    const auto it = registry.command_lines.find(GetETaskID(task));
++    if (it != registry.command_lines.end()) {
 +      return it->second;
 +    }
 +
@@ -4514,7 +4520,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
  DuplicateSwitchHandler* g_duplicate_switch_handler = nullptr;
  
  constexpr CommandLine::CharType kSwitchTerminator[] = FILE_PATH_LITERAL("--");
-@@ -264,13 +327,29 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+@@ -264,13 +333,29 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(int argc, const char* const* argv) {
@@ -4522,7 +4528,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
 +  CommandLine*& command_line =
-+      registry.command_lines[FindTask(nullptr)];
++      registry.command_lines[GetETaskID(FindTask(nullptr))];
 +  if (command_line) {
 +#else
    if (current_process_commandline_) {
@@ -4544,7 +4550,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
    current_process_commandline_ = new CommandLine(NO_PROGRAM);
  #if BUILDFLAG(IS_WIN)
    current_process_commandline_->ParseFromString(::GetCommandLineW());
-@@ -279,6 +358,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -279,6 +364,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
    UNSAFE_BUFFERS(current_process_commandline_->InitFromArgv(argc, argv));
  #else
  #error Unsupported platform
@@ -4552,14 +4558,14 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
  #endif
  
    return true;
-@@ -286,35 +366,125 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -286,35 +372,132 @@ bool CommandLine::Init(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(const StringVector& argv) {
 +#if BUILDFLAG(IS_AROS)
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
-+  CommandLine*& command_line = registry.command_lines[FindTask(nullptr)];
++  CommandLine*& command_line = registry.command_lines[GetETaskID(FindTask(nullptr))];
 +  if (command_line) {
 +#else
    if (current_process_commandline_) {
@@ -4587,12 +4593,13 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +#if BUILDFLAG(IS_AROS)
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
-+  const auto it = registry.command_lines.find(FindTask(nullptr));
++  const auto it = registry.command_lines.find(GetETaskID(FindTask(nullptr)));
 +  DCHECK(it != registry.command_lines.end() && it->second);
 +  registry.initial_command_lines.erase(it->second);
 +  registry.process_identities.erase(it->second);
 +  delete it->second;
-+  registry.command_lines.erase(it);
++  // Late task cleanup must not fall through to the browser parent owner.
++  it->second = nullptr;
 +#else
    DCHECK(current_process_commandline_);
    delete current_process_commandline_;
@@ -4664,21 +4671,27 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..17fc71299a8d6cde3b8b7cba68fb4067
 +void CommandLine::ArosBindCurrentThread(CommandLine* command_line) {
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
-+  registry.thread_bindings[FindTask(nullptr)] = command_line;
++  // Explicit worker binding supersedes a retired entry if Exec IDs wrap.
++  const auto retired =
++      registry.command_lines.find(GetETaskID(FindTask(nullptr)));
++  if (retired != registry.command_lines.end() && !retired->second) {
++    registry.command_lines.erase(retired);
++  }
++  registry.thread_bindings[GetETaskID(FindTask(nullptr))] = command_line;
 +}
 +
 +// static
 +void CommandLine::ArosUnbindCurrentThread() {
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
-+  registry.thread_bindings.erase(FindTask(nullptr));
++  registry.thread_bindings.erase(GetETaskID(FindTask(nullptr)));
 +}
 +#endif
 +
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +608,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +621,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -10371,7 +10384,7 @@ index 205200021c674a6cc943c30d73d36963ab4052b4..af76f4132f2d92b499c2595114e05f4b
  }
  
 diff --git a/base/process/process_posix.cc b/base/process/process_posix.cc
-index 79638efa0621efba6ed39b37db68c765b3576235..1bc95948b5145e5844c1c4a356706ebccdccdca3 100644
+index 79638efa0621efba6ed39b37db68c765b3576235..055abb774e09c9f50e4e30643453042e3890a135 100644
 --- a/base/process/process_posix.cc
 +++ b/base/process/process_posix.cc
 @@ -25,6 +25,11 @@
@@ -10386,24 +10399,22 @@ index 79638efa0621efba6ed39b37db68c765b3576235..1bc95948b5145e5844c1c4a356706ebc
  #if BUILDFLAG(IS_MAC)
  #include <sys/event.h>
  #endif
-@@ -39,6 +44,16 @@
+@@ -39,6 +44,14 @@
  
  namespace {
  
 +#if BUILDFLAG(IS_AROS)
-+bool ArosKillFailureMeansProcessGone(int saved_errno) {
-+  // Hosted AROS can report an already-returned child task as ESRCH, ENOENT,
-+  // or through the current PosixC signal bridge as a failed kill() with errno
-+  // left at 0. All mean there is no signalable target left for Chromium to
-+  // retire.
-+  return saved_errno == ESRCH || saved_errno == ENOENT || saved_errno == 0;
++bool ArosProcessIsGone(base::ProcessHandle handle) {
++  // Native PosixC may not implement kill(). A failed signal call, including
++  // one that leaves errno unchanged, says nothing about target liveness.
++  return FindTaskByPID(static_cast<ULONG>(handle)) == nullptr;
 +}
 +#endif
 +
  #if !BUILDFLAG(IS_IOS) || (BUILDFLAG(IS_IOS) && TARGET_OS_SIMULATOR)
  bool WaitpidWithTimeout(base::ProcessHandle handle,
                          int* status,
-@@ -193,6 +208,64 @@ bool WaitForSingleNonChildProcess(base::ProcessHandle handle,
+@@ -193,6 +206,64 @@ bool WaitForSingleNonChildProcess(base::ProcessHandle handle,
  }
  #endif  // BUILDFLAG(IS_MAC)
  
@@ -10468,12 +10479,12 @@ index 79638efa0621efba6ed39b37db68c765b3576235..1bc95948b5145e5844c1c4a356706ebc
  }  // namespace
  
  namespace base {
-@@ -304,12 +377,20 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
+@@ -304,12 +375,20 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
    if (maybe_compromised) {
      // Forcibly terminate the process immediately.
      const bool was_killed = kill(process_, SIGKILL) == 0;
 +#if BUILDFLAG(IS_AROS)
-+    if (!was_killed && ArosKillFailureMeansProcessGone(errno))
++    if (!was_killed && ArosProcessIsGone(process_))
 +      return true;
 +#endif
      DPLOG_IF(ERROR, !was_killed) << "Unable to terminate process " << process_;
@@ -10483,24 +10494,24 @@ index 79638efa0621efba6ed39b37db68c765b3576235..1bc95948b5145e5844c1c4a356706ebc
    // Terminate process giving it a chance to clean up.
    if (kill(process_, SIGTERM) != 0) {
 +#if BUILDFLAG(IS_AROS)
-+    if (ArosKillFailureMeansProcessGone(errno))
++    if (ArosProcessIsGone(process_))
 +      return true;
 +#endif
      DPLOG(ERROR) << "Unable to terminate process " << process_;
      return false;
    }
-@@ -318,6 +399,10 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
+@@ -318,6 +397,10 @@ bool Process::TerminateInternal(int exit_code, bool wait) const {
      return true;
    }
    if (kill(process_, SIGKILL) != 0) {
 +#if BUILDFLAG(IS_AROS)
-+    if (ArosKillFailureMeansProcessGone(errno))
++    if (ArosProcessIsGone(process_))
 +      return true;
 +#endif
      DPLOG(ERROR) << "Unable to kill process " << process_;
      return false;
    }
-@@ -400,7 +485,14 @@ bool Process::WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
+@@ -400,7 +483,14 @@ bool Process::WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
  
  int Process::GetOSPriority() const {
    DCHECK(IsValid());
@@ -21559,6 +21570,39 @@ index 1c972e4e276b60cc4fb1501700725c99e45f2fe0..887f4f3095bf4abe14439ba4b9391813
    base::TimeTicks keepalive_deadline_;
  
    // Keeps the browser process and relevant profiles alive while browser-side
+diff --git a/chrome/browser/chrome_process_singleton.cc b/chrome/browser/chrome_process_singleton.cc
+index 4e1b0de17710092074a7eb68bc6260eb5edfb66d..a2c0d2153170a4eb9d4ab6008db571d72ab4febf 100644
+--- a/chrome/browser/chrome_process_singleton.cc
++++ b/chrome/browser/chrome_process_singleton.cc
+@@ -7,6 +7,9 @@
+ #include <utility>
+ 
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+@@ -19,7 +22,18 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct ChromeProcessSingletonOwnerTag;
++ChromeProcessSingleton*& CurrentChromeProcessSingleton() {
++  return base::aros::ProcessLocalValue<ChromeProcessSingleton*,
++                                     ChromeProcessSingletonOwnerTag>();
++}
++// Child ProcessExiting also calls DeleteInstance. Its empty owner slot must
++// not delete the resident browser's profile lock and notification endpoint.
++#define g_chrome_process_singleton_ CurrentChromeProcessSingleton()
++#else
+ ChromeProcessSingleton* g_chrome_process_singleton_ = nullptr;
++#endif
+ 
+ }  // namespace
+ 
 diff --git a/chrome/browser/chrome_resource_bundle_helper.cc b/chrome/browser/chrome_resource_bundle_helper.cc
 index 1b2a38a1b9877b73fc187e9baa2c22d59f1e9371..70dd8d8ee43eb9f4fa0b4171a11397f10ce477f0 100644
 --- a/chrome/browser/chrome_resource_bundle_helper.cc
@@ -60025,6 +60069,44 @@ index 6781015c43c451b9be03dcab46a9594a1cb0126e..445eb5bd5beb4f9a248c2487e422f2d7
    sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());
    SkFontConfigInterface::FontIdentity font_identity;
    font_identity.fID = config_id;
+diff --git a/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc b/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc
+index a18326420bd3aea0f8d95286a71a5a0722315a6d..66a7165899cef991e6585b8c83b870e2a2bcba21 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "third_party/blink/renderer/platform/geometry/infinite_int_rect.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
+@@ -39,9 +44,21 @@ ClipPaintPropertyNode::ClipPaintPropertyNode(RootTag)
+              FloatRoundedRect(InfiniteIntRect())) {}
+ 
+ const ClipPaintPropertyNode& ClipPaintPropertyNode::Root() {
++#if BUILDFLAG(IS_AROS)
++  // Preserve one root per renderer across its tasks, while keeping GC
++  // heap ownership and mutable paint bookkeeping separate from siblings.
++  struct RootOwnerTag;
++  auto& root = base::aros::ProcessLocalValue<Persistent<ClipPaintPropertyNode>,
++                                           RootOwnerTag>();
++  if (!root) {
++    root = MakeGarbageCollected<ClipPaintPropertyNode>(kRoot);
++  }
++  return *root;
++#else
+   DEFINE_STATIC_LOCAL(Persistent<ClipPaintPropertyNode>, root,
+                       (MakeGarbageCollected<ClipPaintPropertyNode>(kRoot)));
+   return *root;
++#endif
+ }
+ 
+ bool ClipPaintPropertyNodeOrAlias::Changed(
 diff --git a/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc b/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc
 index d27ea1979cc80f2c2141ec0889329b278e3cbfb5..4c03c329a805620243673c5e4e2a9e07500d0da0 100644
 --- a/third_party/blink/renderer/platform/graphics/paint/drawing_recorder.cc
@@ -60041,6 +60123,44 @@ index d27ea1979cc80f2c2141ec0889329b278e3cbfb5..4c03c329a805620243673c5e4e2a9e07
        client_.VisualRectOutsetForRasterEffects(),
        client_.GetPaintInvalidationReason());
  }
+diff --git a/third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.cc b/third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.cc
+index 8c1faf00c6ba46f1054fc8f69baca9645de1bce8..65330f8b2fe22a51ffe8c02556dc17a67b2a3de8 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/memory/values_equivalent.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
+@@ -140,9 +145,21 @@ EffectPaintPropertyNode::EffectPaintPropertyNode(RootTag)
+              &ClipPaintPropertyNode::Root()} {}
+ 
+ const EffectPaintPropertyNode& EffectPaintPropertyNode::Root() {
++#if BUILDFLAG(IS_AROS)
++  // Preserve one root per renderer across its tasks, while keeping GC
++  // heap ownership and mutable paint bookkeeping separate from siblings.
++  struct RootOwnerTag;
++  auto& root = base::aros::ProcessLocalValue<Persistent<EffectPaintPropertyNode>,
++                                           RootOwnerTag>();
++  if (!root) {
++    root = MakeGarbageCollected<EffectPaintPropertyNode>(kRoot);
++  }
++  return *root;
++#else
+   DEFINE_STATIC_LOCAL(Persistent<EffectPaintPropertyNode>, root,
+                       (MakeGarbageCollected<EffectPaintPropertyNode>(kRoot)));
+   return *root;
++#endif
+ }
+ 
+ bool EffectPaintPropertyNodeOrAlias::Changed(
 diff --git a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
 index b961b6642c7201277148cd67d4f68588e2dc1470..ccb383b2d41f1b19ad0c78913f2b7bb71bd92989 100644
 --- a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
@@ -60186,6 +60306,83 @@ index a4f0741229fb42790b4e81f6c8332625badcf439..8e97101b6739147584027c4b869e06fd
    // Tries to find the cached display item corresponding to the given
    // parameters. If found, appends the cached display item to the new display
    // list and returns true. Otherwise returns false.
+diff --git a/third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.cc b/third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.cc
+index 14bc95a8d7028dd9258e9199f934d56333a1e6cd..2775477f38292f30ad08b87194b77008e663b994 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "third_party/blink/renderer/platform/geometry/infinite_int_rect.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
+ #include "third_party/blink/renderer/platform/heap/persistent.h"
+@@ -64,9 +69,21 @@ ScrollPaintPropertyNode::ScrollPaintPropertyNode(RootTag)
+       state_{InfiniteIntRect(), InfiniteIntRect()} {}
+ 
+ const ScrollPaintPropertyNode& ScrollPaintPropertyNode::Root() {
++#if BUILDFLAG(IS_AROS)
++  // Preserve one root per renderer across its tasks, while keeping GC
++  // heap ownership and mutable paint bookkeeping separate from siblings.
++  struct RootOwnerTag;
++  auto& root = base::aros::ProcessLocalValue<Persistent<ScrollPaintPropertyNode>,
++                                           RootOwnerTag>();
++  if (!root) {
++    root = MakeGarbageCollected<ScrollPaintPropertyNode>(kRoot);
++  }
++  return *root;
++#else
+   DEFINE_STATIC_LOCAL(Persistent<ScrollPaintPropertyNode>, root,
+                       (MakeGarbageCollected<ScrollPaintPropertyNode>(kRoot)));
+   return *root;
++#endif
+ }
+ 
+ void ScrollPaintPropertyNode::ClearChangedToRoot(int sequence_number) const {
+diff --git a/third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.cc b/third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.cc
+index f5439ac5a6dd0f12d2492ad4e634f63e317ec657..b32ad749f7a0f388e5bb31c833634e373a6f4dca 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/memory/values_equivalent.h"
+ #include "cc/trees/sticky_position_constraint.h"
+ #include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
+@@ -115,10 +120,22 @@ TransformPaintPropertyNode::TransformPaintPropertyNode(RootTag)
+              .in_subtree_of_page_scale = false} {}
+ 
+ const TransformPaintPropertyNode& TransformPaintPropertyNode::Root() {
++#if BUILDFLAG(IS_AROS)
++  // Preserve one root per renderer across its tasks, while keeping GC
++  // heap ownership and mutable paint bookkeeping separate from siblings.
++  struct RootOwnerTag;
++  auto& root = base::aros::ProcessLocalValue<Persistent<TransformPaintPropertyNode>,
++                                           RootOwnerTag>();
++  if (!root) {
++    root = MakeGarbageCollected<TransformPaintPropertyNode>(kRoot);
++  }
++  return *root;
++#else
+   DEFINE_STATIC_LOCAL(
+       Persistent<TransformPaintPropertyNode>, root,
+       (MakeGarbageCollected<TransformPaintPropertyNode>(kRoot)));
+   return *root;
++#endif
+ }
+ 
+ PaintPropertyChangeType
 diff --git a/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc b/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc
 index 516364e434433a7eca878ea85c040ad0a751ce2e..4758130a6e29f2167452045d1927ad3b7141ad5d 100644
 --- a/third_party/blink/renderer/platform/graphics/parkable_image_manager.cc

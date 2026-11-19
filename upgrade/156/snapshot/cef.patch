@@ -563,10 +563,18 @@ index b2f30ae0a0a23593f035ab5029bec530831553fc..8a9c81fe5b3470635a356849a32b3d2a
        std::move(native_delegate), use_shared_texture, use_external_begin_frame);
  #endif
 diff --git a/libcef/browser/main_runner.cc b/libcef/browser/main_runner.cc
-index 367b389745a19674736df255ed967175e5c58006..2c3925d7e0fa7a1a3ed533ad09ce2f9a6dadeba5 100644
+index 367b389745a19674736df255ed967175e5c58006..f9eb2df80bc17f48fdc306b0aa32359bcc7fb408 100644
 --- a/libcef/browser/main_runner.cc
 +++ b/libcef/browser/main_runner.cc
-@@ -22,7 +22,9 @@
+@@ -6,6 +6,7 @@
+ #include "cef/libcef/browser/main_runner.h"
+ 
+ #include "base/base_switches.h"
++#include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/debug/debugger.h"
+ #include "base/memory/raw_ptr.h"
+@@ -22,7 +23,9 @@
  #include "chrome/chrome_elf/chrome_elf_main.h"
  #include "chrome/common/chrome_result_codes.h"
  #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
@@ -576,7 +584,7 @@ index 367b389745a19674736df255ed967175e5c58006..2c3925d7e0fa7a1a3ed533ad09ce2f9a
  #include "components/keep_alive_registry/keep_alive_types.h"
  #include "components/metrics/persistent_system_profile.h"
  #include "content/app/content_main_runner_impl.h"
-@@ -208,9 +210,11 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
+@@ -208,15 +211,29 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
      return CEF_RESULT_CODE_BAD_PROCESS_TYPE;
    }
  
@@ -588,6 +596,24 @@ index 367b389745a19674736df255ed967175e5c58006..2c3925d7e0fa7a1a3ed533ad09ce2f9a
  
    // Initialize the global command line before the delegate constructor calls
    // TimeTicks::Now(). On Windows, clock selection must read
+   // --force-high-res-timeticks on the first call to match the browser process.
+   BeforeMainInitialize(args);
+ 
++#if BUILDFLAG(IS_AROS)
++  // The engine remains resident after this helper returns. Retire its command
++  // line only after ContentMain and the delegate have finished all cleanup,
++  // so a later native task reusing this Exec address gets a new owner identity.
++  struct NativeCommandLineLifetime {
++    ~NativeCommandLineLifetime() {
++      base::CommandLine::Reset();
++      CHECK(!base::CommandLine::InitializedForCurrentProcess());
++    }
++  } command_line_lifetime;
++#endif
++
+   auto main_delegate = std::make_unique<ChromeMainDelegateCef>(
+       /*runner=*/nullptr, /*settings=*/nullptr, application);
+ 
 diff --git a/libcef/browser/native/browser_platform_delegate_native_aura.cc b/libcef/browser/native/browser_platform_delegate_native_aura.cc
 index a9637b8d795b8bc87ce125faaa4e6a4e8b6948f8..36743a54fa8649131c2568df5bea7f92e193c0ce 100644
 --- a/libcef/browser/native/browser_platform_delegate_native_aura.cc
