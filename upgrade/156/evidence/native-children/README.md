@@ -367,3 +367,12 @@ Native113 completed strict FAIL at its fixed deadline: both scripts completed co
 ARM35 passed its local JS/Wasm worker and native contract probes, but timed out during CEF teardown without a fatal/native alert. Whole-guest used memory was 1186.39 MiB at first paint and 1232.49 MiB before teardown; no post-close measurement exists. The worker screenshot visibly displays PASS and About AROS. ARM stalls remain a deferred OS investigation per the user, and do not block the next isolated engine candidate.
 
 The Mojo ownership candidate now passes complete archives on both architectures. Native114/ARM37 final links/runtime remain pending. Public source6d8ce6a is a work-in-progress snapshot, not a runtime acceptance claim.
+
+
+### Visible multi-app content pass; raster and V8 bridge follow-up
+
+Native114 with Mojo owner isolation renders both app windows and repeatedly passes independent cookie/localStorage, DOM and worker checks. The retained two-app screenshot shows real PASS content. Strict lifecycle acceptance still fails: closure exposes a shared raster pool job-handle mismatch, followed by a native alert at an unresolved cppgc write-barrier import. The exact ELF stack resolves the remaining task-pool rejection through CategorizedWorkerPoolJob::ScheduleTasks; its GetWorkerPool singleton retains the first renderer pool. The new snapshot isolates that storage by logical owner without weakening JobHandle validation.
+
+The missing write-barrier function exists in native v8.library at ELF section71929. AROS debug RegisterModule_ELF explicitly skips SHN_XINDEX symbols, explaining the lookup miss. Companion aros-webc5de7e8 generates a direct import-address table from the matching manifest and consults it before debug enumeration. Defined functions resolve through native linker relocations; optional absent legacy imports remain NULL and retain the existing failure path. Two host generator/linkage checks and both native V8 builds pass. Native115 explicitly stages the new V8 library and uses the ordinary logging mode, because verbose system output interleaved allocator records in114. ARM38 copies and SHA-verifies the new V8 library onto the stopped VM's SD image. Runtime validation remains pending.
+
+ARM36 passed its complete local worker/paint/close/teardown regression and native contract probes. Whole-guest used memory was1184.81MiB first paint and1151.78MiB after close. This is not multi-app ARM acceptance or reclaimed-renderer-heap proof.

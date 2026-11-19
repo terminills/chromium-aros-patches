@@ -1,0 +1,125 @@
+{
+  "symbols": {
+    "file": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/cef-host114-full-symbols.elf",
+    "sha256": "046b556dd7422f251c8b48315494d9fd545099a247ce06a0182b079ae8ed2965",
+    "bytes": 1155628336
+  },
+  "raw": "Stale pooled_task_runner_delegate_ - task not posted. This is\nalmost certainly caused by a previous test leaving a stale task\nrunner in a global object, and a subsequent test triggering the\n global object to post a task to the stale task runner.\n#0 0000000110ab0c82 cef-blink.library+0x45db82\n#1 0000000110a5432c cef-blink.library+0x40122c\n#2 0000000110a24932 cef-blink.library+0x3d1832\n#3 0000000115aef89f cef-blink.library+0x549c79f\n#4 0000000115b5c944 cef-blink.library+0x5509844\n#5 0000000115b59b1d cef-blink.library+0x5506a1d\n#6 0000000115b5b1a3 cef-blink.library+0x55080a3\n#7 0000000115ba8892 cef-blink.library+0x5555792\n#8 0000000115b67bb5 cef-blink.library+0x5514ab5\n#9 0000000115b69e1e cef-blink.library+0x5516d1e\n#10 0000000115b6a78c cef-blink.library+0x551768c\n#11 0000000115b13d2d cef-blink.library+0x54c0c2d\n#12 0000000115bf6ad1 cef-blink.library+0x55a39d1\n#13 000000012b65fa1b cef-blink.library+0x5b\n#14 0000000110a2080f cef-blink.library+0x3cd70f\n#15 0000000110a44da6 cef-blink.library+0x3f1ca6\n#16 0000000110a46063 cef-blink.library+0x3f2f63\n#17 0000000110aefd37 cef-blink.library+0x49cc37\n#18 0000000110a43276 cef-blink.library+0x3f0176\n#19 00000001109f34c9 cef-blink.library+0x3a03c9\n#20 000000011c89c4e6 cef-blink.library+0xc2493e6\n#21 0000000110aa92c0 cef-blink.library+0x4561c0\n#22 0000000110aaf2a3 cef-blink.library+0x45c1a3\n#23 0000000001ca6366 dos.library CallEntry+0xa6\n#24 0000000001ca2e64 dos.library+0x2b64\n#25 0000000001aa74d0 Kickstart ELF TaskExitStub+0x0",
+  "frames": [
+    {
+      "offset": "0x45db82",
+      "function": "base::debug::StackTrace::StackTrace()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x40122c",
+      "function": "base::internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(base::internal::PooledTaskRunnerDelegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3d1832",
+      "function": "base::JobHandle::NotifyConcurrencyIncrease()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x549c79f",
+      "function": "cc::CategorizedWorkerPoolJob::ScheduleTasks(cc::NamespaceToken, cc::TaskGraph*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5509844",
+      "function": "cc::TileTaskManagerImpl::ScheduleTasks(cc::TaskGraph*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5506a1d",
+      "function": "cc::TileManager::ScheduleTasks(cc::TileManager::PrioritizedWorkToSchedule)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x55080a3",
+      "function": "cc::TileManager::PrepareTiles(cc::GlobalStateThatImpactsTilePriority const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5555792",
+      "function": "cc::LayerTreeHostImpl::PrepareTiles()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5514ab5",
+      "function": "cc::ClientLayerTreeHostImpl::NotifyPendingTreeFullyPainted()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5516d1e",
+      "function": "cc::ClientLayerTreeHostImpl::UpdateSyncTreeAfterCommitOrImplSideInvalidation()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x551768c",
+      "function": "cc::ClientLayerTreeHostImpl::CommitComplete()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x54c0c2d",
+      "function": "cc::Scheduler::ProcessScheduledActions() [clone .part.0]",
+      "location": "scheduler.cc:?"
+    },
+    {
+      "offset": "0x55a39d1",
+      "function": "cc::ProxyImpl::NotifyReadyToCommitOnImpl(cc::CompletionEvent*, std::unique_ptr<cc::CommitState, std::default_delete<cc::CommitState> >, cc::ThreadUnsafeCommitState const*, base::TimeTicks, bool, cc::CommitTimestamps*, bool)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x5b",
+      "function": "CEFBlink_4_CEFBlink_ExtFuncLib",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3cd70f",
+      "function": "base::TaskAnnotator::RunTaskImpl(base::PendingTask&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f1ca6",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f2f63",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWork()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x49cc37",
+      "function": "base::MessagePumpAROS::Run(base::MessagePump::Delegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f0176",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::Run(bool, base::TimeDelta)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3a03c9",
+      "function": "base::RunLoop::Run(base::Location const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xc2493e6",
+      "function": "blink::scheduler::NonMainThreadImpl::SimpleThreadImpl::Run()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x4561c0",
+      "function": "base::(anonymous namespace)::CreateThread(unsigned long, bool, base::PlatformThreadBase::Delegate*, base::PlatformThreadHandle*, base::ThreadType, base::MessagePumpType)::{lambda(void*)#1}::_FUN(void*)",
+      "location": "platform_thread_posix.cc:?"
+    },
+    {
+      "offset": "0x45c1a3",
+      "function": "(anonymous namespace)::TaskEntry()",
+      "location": "aros_native_task.cc:?"
+    }
+  ]
+}

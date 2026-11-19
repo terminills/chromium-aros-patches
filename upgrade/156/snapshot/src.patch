@@ -19080,6 +19080,37 @@ index a01579c4776046c17b3c0e7059d19c99b35168df..d63446ffc2cf2ca2b944fac691b27980
      }
      wire.general_properties = std::move(general);
    }
+diff --git a/cc/raster/categorized_worker_pool.cc b/cc/raster/categorized_worker_pool.cc
+index 2a51a8183422d93094ad22f0dc94d31f742db61e..0015b193776c8520f0e1f2b33433862a959c9f8c 100644
+--- a/cc/raster/categorized_worker_pool.cc
++++ b/cc/raster/categorized_worker_pool.cc
+@@ -21,6 +21,9 @@
+ #include "base/threading/thread_restrictions.h"
+ #include "base/trace_event/typed_macros.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "cc/base/math_util.h"
+ #include "cc/base/switches.h"
+ #include "cc/raster/task_category.h"
+@@ -49,8 +52,16 @@ constexpr TaskCategory kBackgroundCategories[] = {
+     TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY};
+ 
+ scoped_refptr<CategorizedWorkerPool>& GetWorkerPool() {
++#if BUILDFLAG(IS_AROS)
++  // The job handles belong to the creating renderer's native thread pool.
++  // A sibling renderer shares engine code, not these scheduling handles.
++  struct RasterWorkerPoolOwnerTag;
++  return base::aros::ProcessLocalValue<scoped_refptr<CategorizedWorkerPool>,
++                                      RasterWorkerPoolOwnerTag>();
++#else
+   static base::NoDestructor<scoped_refptr<CategorizedWorkerPool>> worker_pool;
+   return *worker_pool;
++#endif
+ }
+ 
+ }  // namespace
 diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
 index 25b03b8bdec8d36dcce9a7c36111b859f373b8e3..7eef7b632208d3fb3ca97e07132310bad9a7e1c7 100644
 --- a/cc/scheduler/scheduler_state_machine.cc
