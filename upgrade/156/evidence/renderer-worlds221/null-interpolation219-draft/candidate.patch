@@ -1,0 +1,28 @@
+--- a/third_party/blink/renderer/core/animation/underlying_value_owner.cc
++++ b/third_party/blink/renderer/core/animation/underlying_value_owner.cc
+@@ -6,6 +6,10 @@
+ #include "third_party/blink/renderer/platform/heap/persistent.h"
+ 
+ #include <memory>
++
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace blink {
+ 
+@@ -38,7 +42,14 @@
+ }
+ 
+ const InterpolationValue& UnderlyingValueOwner::Value() const {
++#if defined(__AROS__)
++  // This wrapper contains a Persistent belonging to the creating Oilpan heap.
++  struct NullInterpolationOwnerTag;
++  auto& null_value_wrapper =
++      base::aros::ProcessLocalValue<NullValueWrapper, NullInterpolationOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(NullValueWrapper, null_value_wrapper, ());
++#endif
+   return *this ? *value_ : null_value_wrapper.value->underlying();
+ }
+ 

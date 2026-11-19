@@ -1,0 +1,106 @@
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
+@@ -29,6 +29,9 @@
+  */
+ 
+ #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #include <memory>
+ #include <optional>
+@@ -76,7 +79,11 @@
+ 
+ }  // namespace
+ 
++#if defined(__AROS__)
++thread_local unsigned DOMWrapperWorld::number_of_non_main_worlds_in_main_thread_ = 0;
++#else
+ unsigned DOMWrapperWorld::number_of_non_main_worlds_in_main_thread_ = 0;
++#endif
+ 
+ DOMWrapperWorld* DOMWrapperWorld::Create(v8::Isolate* isolate,
+                                          WorldType world_type,
+@@ -191,8 +198,13 @@
+     IsolatedWorldSecurityOriginMap;
+ static IsolatedWorldSecurityOriginMap& IsolatedWorldSecurityOrigins() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldSecurityOriginMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldSecurityOriginMap, IsolatedWorldSecurityOriginMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldSecurityOriginMap, map, ());
+   return map;
++#endif
+ }
+ 
+ static scoped_refptr<SecurityOrigin> GetIsolatedWorldSecurityOrigin(
+@@ -232,8 +244,13 @@
+ typedef HashMap<int, String> IsolatedWorldStableIdMap;
+ static IsolatedWorldStableIdMap& IsolatedWorldStableIds() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldStableIdMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldStableIdMap, IsolatedWorldStableIdMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldStableIdMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldStableId() const {
+@@ -252,8 +269,13 @@
+ typedef HashMap<int, String> IsolatedWorldHumanReadableNameMap;
+ static IsolatedWorldHumanReadableNameMap& IsolatedWorldHumanReadableNames() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldHumanReadableNameMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldHumanReadableNameMap, IsolatedWorldHumanReadableNameMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldHumanReadableNameMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldHumanReadableName() const {
+@@ -273,8 +295,13 @@
+ typedef HashMap<int, String> IsolatedWorldEmbedderWorldIdMap;
+ static IsolatedWorldEmbedderWorldIdMap& IsolatedWorldEmbedderWorldIds() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldEmbedderWorldIdMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldEmbedderWorldIdMap, IsolatedWorldEmbedderWorldIdMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldEmbedderWorldIdMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldEmbedderWorldId() const {
+@@ -306,7 +333,11 @@
+       NOTREACHED();
+     case WorldType::kInspectorIsolated: {
+       DCHECK(IsMainThread());
++#if defined(__AROS__)
++      static thread_local int next_devtools_isolated_world_id =
++#else
+       static int next_devtools_isolated_world_id =
++#endif
+           IsolatedWorldId::kDevToolsFirstIsolatedWorldId;
+       if (next_devtools_isolated_world_id >
+           IsolatedWorldId::kDevToolsLastIsolatedWorldId) {
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
+@@ -222,7 +222,11 @@
+   // out of DOMWrapperWorld.
+   static std::optional<int> GenerateWorldIdForType(WorldType);
+ 
++#if defined(__AROS__)
++  static thread_local unsigned number_of_non_main_worlds_in_main_thread_;
++#else
+   static unsigned number_of_non_main_worlds_in_main_thread_;
++#endif
+ 
+   const WorldType world_type_;
+   const int32_t world_id_;

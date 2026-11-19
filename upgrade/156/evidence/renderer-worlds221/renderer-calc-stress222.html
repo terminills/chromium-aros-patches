@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8"><title>AROS renderer isolation checks</title>
+<style>body{font:18px sans-serif;background:#18222f;color:#eee}#probe{height:24px;overflow:auto;background:#388ecb}pre{white-space:pre-wrap}</style>
+<h1>Renderer calculation and animation checks</h1><pre id="result">Running…</pre><div style="width:400px"><div id="probe"></div></div><div id="elements"></div>
+<script>
+(async()=>{
+ const owner=new URL(location.href).searchParams.get('owner')||'unknown';
+ if(!/^[AB]$/.test(owner))throw Error('Expected owner=A or owner=B');
+ const probe=document.getElementById('probe'),elements=document.getElementById('elements'),result=document.getElementById('result');
+ let connected=0,disconnected=0,attributes=0,mutations=0;
+ class OwnedElement extends HTMLElement {
+  static observedAttributes=['data-owner'];
+  connectedCallback(){connected++;}
+  disconnectedCallback(){disconnected++;}
+  attributeChangedCallback(name,oldValue,value){if(value!==owner)throw Error('Custom-element owner mismatch');attributes++;}
+ }
+ customElements.define('owned-element',OwnedElement);
+ const observer=new MutationObserver(records=>{mutations+=records.length;});
+ observer.observe(probe,{attributes:true,attributeFilter:['style']});
+ const check=(condition,message)=>{if(!condition)throw Error(message);};
+ try {
+  for(let iteration=0;iteration<500;iteration++){
+   const width=80+iteration%41;
+   probe.style.width='calc(50% - '+(200-width)+'px)';
+   await Promise.resolve();
+   check(mutations===iteration+1,'Style mutation lost at '+iteration);
+   check(probe.getBoundingClientRect().width===width,'Calc layout width mismatch');
+   const animation=probe.animate([{opacity:0.2},{opacity:0.8}],{duration:1000,fill:'both'});
+   animation.pause();animation.currentTime=500;
+   check(Math.abs(Number(getComputedStyle(probe).opacity)-0.5)<0.01,'Animation interpolation mismatch');
+   animation.cancel();check(getComputedStyle(probe).opacity==='1','Animation cancellation mismatch');
+   const node=document.createElement('owned-element');node.setAttribute('data-owner',owner);elements.append(node);node.remove();
+   check(connected===iteration+1&&disconnected===iteration+1&&attributes===iteration+1,'Custom element delivery mismatch');
+   const text=document.createTextNode(owner+'1234');probe.replaceChildren(text);
+   const range=document.createRange();range.setStart(text,1);range.setEnd(text,4);
+   text.insertData(0,'x');check(range.toString()==='123','DOM Range update mismatch');range.detach();
+   const xml=new DOMParser().parseFromString('<root owner="'+owner+'"><item>'+iteration+'</item></root>','text/xml');
+   check(xml.documentElement.getAttribute('owner')===owner&&xml.querySelector('item').textContent===String(iteration),'XML owner mismatch');
+   if(iteration%10===0){result.textContent='Owner '+owner+' — '+iteration+'/500';await new Promise(resolve=>setTimeout(resolve,0));}
+  }
+  observer.disconnect();result.textContent='PASS — owner '+owner+' — 500 calc, animation, mutation, custom-element, Range and XML checks';
+  console.log('AROS_RENDERER_CALC_'+owner+'_PASS iterations=500');
+ }catch(error){observer.disconnect();result.textContent='FAIL — owner '+owner+' — '+error.message;console.error('AROS_RENDERER_CALC_'+owner+'_FAIL '+error.stack);}
+})().catch(error=>{document.getElementById('result').textContent='FAIL '+error;console.error('AROS_RENDERER_CALC_SETUP_FAIL '+error.stack);});
+</script>
