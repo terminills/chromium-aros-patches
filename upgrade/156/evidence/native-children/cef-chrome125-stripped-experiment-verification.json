@@ -1,0 +1,28 @@
+{
+  "pass": true,
+  "checks": {
+    "allocated_sections": true,
+    "runtime_relocations": true,
+    "runtime_relocation_digest": true
+  },
+  "original": {
+    "file": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/cef-chrome125-full-symbols.elf",
+    "bytes": 1155678328,
+    "runtime_relocations": 11414176,
+    "runtime_relocation_digest": "88249519e6b57e5e61042ea67b16387fba8924ca272ab937100f1de5cb730978",
+    "symbol_count": 2420497,
+    "sections": 1045779
+  },
+  "candidate": {
+    "file": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/cef-chrome125-stripped-experiment.library",
+    "bytes": 1103222392,
+    "runtime_relocations": 11414176,
+    "runtime_relocation_digest": "88249519e6b57e5e61042ea67b16387fba8924ca272ab937100f1de5cb730978",
+    "symbol_count": 1652317,
+    "sections": 1045767
+  },
+  "qualification": "Host ELF packaging comparison only. No native loader, runtime or RAM-saving qualification. Full symbols retained separately.",
+  "existing_packaged_engine_bytes": 1103110832,
+  "candidate_minus_existing_bytes": 111560,
+  "decision": "Do not deploy: strip-unneeded does not improve the current already-stripped/section-name-compacted engine. Raw candidate also retains long section names. Future compact-image packaging needs separate design and runtime proof."
+}

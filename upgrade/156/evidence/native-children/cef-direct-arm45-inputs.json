@@ -1,0 +1,43 @@
+{
+  "files": {
+    "Libs/v8.library": "695d9860de339f2c44d6b59f0c43e28e5eda4ccd282fca21c722938d98ba3d1a",
+    "Libs/cef-blink.library": "4a160bd27de49ca040ac581f02082cb88a9c93a0bfa468ec7698fad4f3fc6dbc",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "53caab6c9bc5591e9bd035d148300a597242162c62485e8b8fcbac3342cb6d26",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "C/CEFFlockContract": "0f2df0e7a34277ac24ce2d910ca727ce993ef6e9cbf2120b09ea07457184adb9",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "95b4c72d7fcb362880f6cfa609017962e3ac80706c32becb35acbfdfca8ee516"
+  },
+  "web_commit": "f62cf1fc94f76244379b69aad812bdca29985442",
+  "web_test_client_sha256": "37d8ba843ab7b8bbe93c04ca4594dac08fda63e5f5cdf351bea81a3d2df887ac",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFFlockContract\nEcho CEF-flock-contract-returned:$RC >DEBUG:\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm45.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM45-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T08:25:34.919570+00:00",
+    "validation": "AROS default UA stylesheet and media evaluator GC roots scoped per logical renderer. Exact124 stack resolves new-tab selector fault through MatchUARules. Native125 and ARM45 pending; retain original lifecycle checks and existing native scope fix.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "c539c23ad32815a1570e2c9ee00d601c765c20e41263b159083373cd7796cd2e",
+        "applied_tree": "9f20b9845099e10c09fe943fc58f84ef0b51f017",
+        "bytes": 3023890
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}
