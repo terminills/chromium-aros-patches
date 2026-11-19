@@ -1,0 +1,15 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 5f01574301fffae21260c5701b8c02df2881b718..7d1a0fb5505b0f20163e795760ef032d075150e6 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -89,6 +89,10 @@ config("icu_code") {
+     "U_CHARSET_IS_UTF8=1",
+   ]
+ 
++  if (is_aros) {
++    defines += [ "U_HAVE_MMAP=0" ]
++  }
++
+   if (is_win) {
+     # Disable some compiler warnings.
+     cflags += [

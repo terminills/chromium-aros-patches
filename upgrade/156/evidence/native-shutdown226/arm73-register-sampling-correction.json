@@ -1,0 +1,7 @@
+{
+  "superseded_interpretation": "loading-registers-a/b do not sample all four CPUs: each info-registers reply says CPU#0. Separate HMP cpu selection did not persist across QMP calls.",
+  "correct_method": "human-monitor-command info registers with explicit cpu-index each call",
+  "evidence": "arm73-paint-registers-cpu-index.json",
+  "observed": "CPU0 kernel PC f80128ec; CPU1 PC17c60428; CPU2/3 PC30c EL2 boot wait. Boot log wakes only CPU1. Runtime window now opens, so prior sdcard-region samples are not proof of deadlock.",
+  "scope": "Read-only sampling; no OS change; no root-cause claim."
+}

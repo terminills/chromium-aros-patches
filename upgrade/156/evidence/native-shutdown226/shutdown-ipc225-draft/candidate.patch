@@ -1,0 +1,16 @@
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc
+@@ -194,6 +194,13 @@
+ void MainThreadTaskQueue::SetOnIPCTaskPosted(
+     base::RepeatingCallback<void(const base::sequence_manager::Task&)>
+         on_ipc_task_posted_callback) {
++#if BUILDFLAG(IS_AROS)
++  // Native renderer retirement runs Oilpan finalizers after queued V8 owners
++  // have been deleted. Removing the last PageScheduler can enable IPC tracking
++  // again, but a shut-down queue cannot accept a new task-posted handler.
++  if (!task_queue_)
++    return;
++#endif
+   // We use the frame_scheduler_ to track metrics so as to ensure that metrics
+   // are not tied to individual task queues.
+   on_ipc_task_posted_callback_handle_ = task_queue_->AddOnTaskPostedHandler(

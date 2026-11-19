@@ -1,0 +1,13 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index b42338476ea28f603784efe038a8d09d508b5b21..0fd155433fbe89df426b60e6daa391152c2a3b55 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -162,7 +162,7 @@ if (current_cpu == "x86" || current_cpu == "x64") {
+       }
+     } else if (is_mac || is_ios) {
+       defines += [ "MACHO" ]
+-    } else if (is_linux || is_android || is_fuchsia || is_chromeos) {
++    } else if (is_linux || is_android || is_fuchsia || is_chromeos || is_aros) {
+       defines += [ "ELF" ]
+     }
+   }

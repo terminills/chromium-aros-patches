@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "Native217 UI/four-tab close callbacks pass, two renderer finalizers then fault registering IPC on closed queue.225 guarded setter host before-fail/after-pass and both object compiles pass.226 full builds underway. Previous186 ten-cycle ledger pass does not qualify this current browser candidate.",
+    "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
+    "persistent_profiles": "Native writer158/reader159 passes; final candidate replay pending",
+    "memory": "Not accepted for long-run growth:186 cycles1692.88->1823.15MiB. Independent matched native191 cold-load packing comparison PASS:871.59->646.89MiB whole guest,224.70MiB reduction. Packed browser/lifecycle proof pending. Compact218 from217 is being tested separately for native initial browser rendering; known217 closure fault remains disqualifying.",
+    "native_browser_ui": "217 actual icon launch, NewTab, four tabs and chrome://version PASS; closure fails in SetOnIPCTaskPosted during SVG PageScheduler destruction. Native226 pending; no reopen pass claimed.",
+    "production_launcher": "Companion6499b2e supports explicit installed resource directory SYS:System/CEF; installed191 firstpaint/fourtabs pass. Full navigation acceptance fails compositor scope issue; ARM optional argument checks pending.",
+    "packaging": "x64 installed217 allowlisted22-file inventory passes exact hashes/ELF architecture/native icon magic and upstream credits; final candidate inventory, companion runtime notices and release archives still required.",
+    "source_reproducibility": "Complete21-repository226 replay passes.226 includes219/220 renderer metadata/root isolation and225 closed-queue guard. Native acceptance pending.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}
