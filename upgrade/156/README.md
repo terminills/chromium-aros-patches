@@ -26,8 +26,9 @@ See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
 [native icons](evidence/native-icons188/interactive188-result.json), and
 [current RC gates](evidence/compact-image198/release-candidate-gates.json).
 [Compact-image and DevTools ownership experiments](evidence/compact-image198/README.md)
-are host-only candidates; native loading, memory savings and debugger behavior
-remain unqualified.
+now include matched native cold-load evidence: packed build 191 reduces whole-guest
+resident use from 871.59 to 646.89 MiB. Packed browser behavior, long-run memory
+and the DevTools draft remain unqualified.
 The validated source snapshot remains directory158; the complete186v2 candidate
 is separately replay-checked in evidence/native-worker-tls186-v2/source.
 

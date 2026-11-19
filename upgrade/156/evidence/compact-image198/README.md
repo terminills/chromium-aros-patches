@@ -1,8 +1,19 @@
 # Private compact x86 image experiment and ownership audit
 
-This is host evidence, not an RC binary or native loading qualification.
+Native cold-load and host relocation checks pass. This is not an RC binary
+or full browser qualification.
 The immutable input is the retained native191 engine, which still fails
 multi-tab navigation. That failure remains recorded in native-installed191.
+
+A matched diskless native AROS test now loads both original and packed build 191
+successfully. Whole-guest memory after the probe closes its library references
+is **871.59 MiB original versus 646.89 MiB packed**, a **224.70 MiB reduction**.
+Both VMs start at 25.17 MiB and use one CPU and 4 GiB, the same OS, V8/facade libraries
+and probe. Input hashes differ only for the engine module and startup label.
+This measures cold-load resident memory, not a browser page, peak consumption
+or a fix for the ten-cycle growth. Both exact VMs were stopped after evidence
+capture; no profile disk was attached.
+
 
 The first two final links fail strict relocation-value verification in unwind
 records. Renaming the input .eh_frame section to .aros_unwind before final
