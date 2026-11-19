@@ -1,0 +1,96 @@
+{
+  "native_run": 112,
+  "exit_task_id": 180,
+  "exit_code": 0,
+  "elf": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/cef-host112-full-symbols.elf",
+  "elf_sha256": "1b0f67a6caa42827e55eebcb6a54235823a6ec9915ca429965b361cce9e1a6aa",
+  "frames": [
+    {
+      "offset": "0x45db82",
+      "function": "base::debug::StackTrace::StackTrace()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x48cac2",
+      "function": "base::Process::TerminateCurrentProcessImmediately(int)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0xa1d0935",
+      "function": "content::ChildThreadImpl::EnsureConnected(int)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3cd70f",
+      "function": "base::TaskAnnotator::RunTaskImpl(base::PendingTask&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f1ca6",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f2f63",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWork()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x49cc37",
+      "function": "base::MessagePumpAROS::Run(base::MessagePump::Delegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3f0176",
+      "function": "base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::Run(bool, base::TimeDelta)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x3a03c9",
+      "function": "base::RunLoop::Run(base::Location const&)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x10f1b342",
+      "function": "content::UtilityMain(content::MainFunctionParams)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x10f169f0",
+      "function": "content::RunOtherNamedProcessTypeMain(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, content::MainFunctionParams, content::ContentMainDelegate*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x10f16f08",
+      "function": "content::ContentMainRunnerImpl::Run()",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x10f1444a",
+      "function": "content::RunContentProcess(content::ContentMainParams, content::ContentMainRunner*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x10f14674",
+      "function": "content::ContentMain(content::ContentMainParams)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x1d9b29",
+      "function": "CefMainRunner::RunAsHelperProcess(CefMainArgs const&, scoped_refptr<CefApp>, void*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x1b3c66",
+      "function": "CefExecuteProcess(CefMainArgs const&, scoped_refptr<CefApp>, void*)",
+      "location": "??:?"
+    },
+    {
+      "offset": "0x753b",
+      "function": "cef_execute_process",
+      "location": "??:?"
+    }
+  ],
+  "confirmed_trigger": "ChildThreadImpl::EnsureConnected connection timeout invokes immediate exit on the utility main loop. Native stdc exit-frame alert follows.",
+  "not_proven": "The missing connection/Ping cause is not yet attributed. ServiceBinder resident singleton ownership defect is independently established by source and next candidate tests its correction; no timeout suppression or unconditional normal-return workaround applied."
+}

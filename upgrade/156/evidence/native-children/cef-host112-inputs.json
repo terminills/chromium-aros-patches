@@ -1,0 +1,46 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "2fabbdd43718b8236bc0944e70b0e2e8bac24628dfee5d8a9937d213c4d40d4a",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "3729fb2b605e5f4357b1bcf4c295f315b2de4c031fee5d2beebed1c25fca5a79",
+    "C/CEFSubprocess": "480eedcddfaee7f5881aac15ffe811e4b1ec1267850902924bc5f92b987aed40",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28",
+    "C/CEFHostBrowser": "183b3e7c4f3d6f5ebbb0d838bc11554b10ff5696c9658ea21c4f4f31622c0643",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f"
+  },
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nWait 3\nRun >RAM:CEF-appB.log Execute S:CEF-AppB\nWait 150\nC:CEFHostProbe stats\nWait 150\nC:CEFHostProbe stats\nType RAM:CEF-host.log >DEBUG:\nC:CEFHostProbe stop\nType RAM:CEF-appA.log >DEBUG:\nType RAM:CEF-appB.log >DEBUG:\nEcho Shared-browser-test-finished\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T05:18:11.997686+00:00",
+    "validation": "Renderer coordinator candidate complete archives and native links PASS x64/ARM; native111 and ARM34 running with immutable staged inputs. Native110 extended-startup comparison failed content acceptance and later hit utility stdc exit-frame alert without Chromium caller stack. This candidate adds AROS immediate-exit task/id/code and native stack diagnostics while preserving _exit behavior. Separate aros-web36a12a8 adds document/renderer lifecycle logging, cross-build PASS both. Candidate archives/runtime pending; no utility-exit or memory reclamation fix claimed.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "23b2734d9872902c5993d8240c7c52d01dd567841e696bf8c9d8453cbe120588",
+        "applied_tree": "9382337666908aa7c74fc7f7c0eb8f8dfe6cdc71",
+        "bytes": 2995782
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "b311dafd5ce8f1fdd0a4d947d8b303bae7cd39e3e17bd041f0c1a452ce6c94d8",
+    "tools/CEFHost/CEFSubprocess.c": "1537f20a8e9a20218f0b6261d94f65f6921fd24c3ff4495a86baf6c396d8e526",
+    "libs/cef/test_cef_host_browser.c": "beabb978e08d92a6156cc3244eafc49f27763b30f97bb9eb0f44555fdbb27f5f",
+    "libs/cef/test_cef_browser.c": "edcc207035605cfd6b63d4c2b595c0d0d7a2345a57f5fc41aed83082dbf28b74"
+  },
+  "fixture_sha256": "47d01c33e577881fd0417de4f167cd656af0d734fac8530e545b71c4aff5a6d8"
+}

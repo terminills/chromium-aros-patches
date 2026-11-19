@@ -347,3 +347,9 @@ The renderer coordinator fix passed both complete archives/native links. ARM34 p
 The new source snapshot adds immediate-exit task/Exec-ID/code and caller stack diagnostics on AROS while preserving termination behavior. Companion aros-web36a12a8 adds request-handler document/renderer callbacks and cross-builds on both architectures. A separate fixture adds cookie/local-storage phase markers, with acceptance unchanged. Diagnostic candidate112/ARM35 native links and runtime are pending.
 
 A separate read-only audit identifies ServiceBinderImpl resident optional storage holding the first utility main runner and IO factory across helpers. A per-owner draft exists locally but is not included in this snapshot. A worker-generation audit is also deferred; neither is claimed as a measured cause of the current blank page or exit alert.
+
+### Utility service-binder ownership candidate
+
+Native112 retained the previously opaque immediate-exit caller: utility task180 requests exit0 from ChildThreadImpl::EnsureConnected, through UtilityMain. The native stdc exit-frame alert follows. This establishes a connection-timeout trigger; it does not yet establish why the Ping/connection failed. Both fixture requests succeeded but the app content checks failed. ARM35 is still running its local regression.
+
+The new snapshot scopes ServiceBinderImpl optional storage by logical native owner. Its captured main runner, IO ServiceFactory, service count and WeakPtrFactory are no longer shared by different native utility processes. Same-owner sharing and existing reset semantics remain. Both archives passed; native link/runtime validation113/ARM36 is pending. Companion aros-web7d1a36a adds optional --debug-native host system logging and helper service subtype/Exec-ID records; both architectures cross-build. Native113 explicitly enables system logging. The immediate-exit diagnostic remains; neither timeouts nor failure checks are suppressed.

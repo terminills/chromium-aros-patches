@@ -45321,7 +45321,7 @@ index edf9a9cafaefe256dd25d5c7048d822fb0710d78..13ab582d869f641578922478bf3012b8
    if (utility_sub_type == on_device_model::mojom::OnDeviceModelService::Name_) {
      CHECK(on_device_model::Shutdown());
 diff --git a/content/utility/utility_thread_impl.cc b/content/utility/utility_thread_impl.cc
-index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182264f9c75 100644
+index c7525dbc6bedf92b92726d0739b6689e3d6f648a..a1621156bd4f298bff999e4878a1a1effb8ab1c6 100644
 --- a/content/utility/utility_thread_impl.cc
 +++ b/content/utility/utility_thread_impl.cc
 @@ -14,6 +14,7 @@
@@ -45332,7 +45332,34 @@ index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182
  #include "base/memory/scoped_refptr.h"
  #include "base/memory/weak_ptr.h"
  #include "base/no_destructor.h"
-@@ -110,6 +111,10 @@ class ServiceBinderImpl {
+@@ -21,6 +22,9 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "content/child/child_process.h"
+ #include "content/public/utility/content_utility_client.h"
+ #include "content/utility/browser_exposed_utility_interfaces.h"
+@@ -95,8 +99,16 @@ class ServiceBinderImpl {
+   }
+ 
+   static std::optional<ServiceBinderImpl>& GetInstanceStorage() {
++#if BUILDFLAG(IS_AROS)
++    // Each utility owns its main runner, service count and IO bindings. A
++    // resident image must not route a new utility through another one's loop.
++    struct UtilityServiceBinderOwnerTag;
++    return base::aros::ProcessLocalValue<std::optional<ServiceBinderImpl>,
++                                         UtilityServiceBinderOwnerTag>();
++#else
+     static base::NoDestructor<std::optional<ServiceBinderImpl>> storage;
+     return *storage;
++#endif
+   }
+ 
+  private:
+@@ -110,6 +122,10 @@ class ServiceBinderImpl {
    }
  
    void OnServiceTerminated() {
@@ -45343,7 +45370,7 @@ index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182
      if (--num_service_instances_ > 0)
        return;
  
-@@ -126,6 +131,9 @@ class ServiceBinderImpl {
+@@ -126,6 +142,9 @@ class ServiceBinderImpl {
    }
  
    static void ShutDownProcess() {
@@ -45353,7 +45380,7 @@ index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182
      UtilityThread::Get()->ReleaseProcess();
    }
  
-@@ -178,10 +186,16 @@ UtilityThreadImpl::UtilityThreadImpl(const InProcessChildThreadParams& params)
+@@ -178,10 +197,16 @@ UtilityThreadImpl::UtilityThreadImpl(const InProcessChildThreadParams& params)
  UtilityThreadImpl::~UtilityThreadImpl() = default;
  
  void UtilityThreadImpl::Shutdown() {
@@ -45370,7 +45397,7 @@ index c7525dbc6bedf92b92726d0739b6689e3d6f648a..891cb31c09dd48d19f520654e19dc182
    // Ensure all main-thread services are destroyed before releasing the process.
    // This limits the risk of services incorrectly attempting to post
    // shutdown-blocking tasks once shutdown has already begun.
-@@ -189,6 +203,9 @@ void UtilityThreadImpl::ReleaseProcess() {
+@@ -189,6 +214,9 @@ void UtilityThreadImpl::ReleaseProcess() {
  
    if (!IsInBrowserProcess()) {
      ChildProcess::current()->ReleaseProcess();
