@@ -1,0 +1,16 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "d544b7b2245f2ab486dd235250dc00ac4999ec87bbb7979a7134d7ed701eeb59",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "Libs/v8.library": "67d2636a3dde7fd61e97619114f93bb0a9c95995318a753c629fcf4bae2fd7dd",
+    "C/CEFHost": "32a5e82be739714b8a1ed672f66ec60f8ba7c72ff9a12beb928b6d75ea602d58",
+    "C/CEFHostBrowser": "a73a8927bb2476943616862cf5da55e79cb8e602b54cbe8c1aadeda1a4c0b7e2",
+    "C/CEFSubprocess": "9256cbe8cbd99e552f6b4d9a739a0339a6ca24d67e4f987e00f0688bd0c74102",
+    "C/CEFMemorySample": "1880b91fc29d037a91346d87236e67573b2faf0782f32cd497cb565ec2280ece",
+    "CEF-cycle-url.txt": "c80e4f85b768d5192597582a4ae2b1434811954896b1f39a17462f27cf42d254",
+    "S/Job0254-Probes": "ef647c8d0f37b103d4ee00e9ec7530f5a58e7cab85bee3875ff92928500dd3ac",
+    "S/CEFHost-Run": "b784a5f202da7dd0c6bf676f34ae86eaa610f0250472131a822da0812d9d42ea"
+  },
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nC:CEFMemorySample before-host\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nIf WARN\nEcho MEM171-host-unavailable >DEBUG:\nQuit 20\nEndIf\nC:CEFMemorySample host-ready\nEcho MEM171-cycle-start:1 >DEBUG:\nC:CEFHostBrowser A \"@SYS:CEF-cycle-url.txt\" 1000 2000 primary\nEcho MEM171-cycle-1-returned:$RC >DEBUG:\nWait 5\nC:CEFHostProbe stats\nC:CEFMemorySample cycle-01\nC:CEFHostProbe stop\nEcho MEM171-stop-returned:$RC >DEBUG:\nC:CEFWaitFile T:CEFHost171.done\nIf WARN\nEcho MEM171-host-exit-timeout >DEBUG:\nQuit 20\nEndIf\nC:CEFMemorySample host-exited\nEcho MEM171-finished >DEBUG:\nWait 3600\n",
+  "scope": "One local-page browser lifecycle in one resident host; same A/primary profile on private FAT; no network fixture. Whole guest memory, not engine-only allocation."
+}

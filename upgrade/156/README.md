@@ -12,8 +12,8 @@ clean reader159: cookies/localStorage survive a fresh OS session, case-distinct
 application and profile identities stay separate, and every started child and
 the host return successfully. The Chromium-local directory fix avoids the SDK's
 unsafe descriptor selection path without changing the SDK. Temporary storage
-tracing has been removed. The replay-checked snapshot contains all21 modified
-repositories; use its own PINS and manifest, not the historical root124 queue.
+tracing has been removed. The replay-checked snapshot contains all 21 modified
+repositories; use its own PINS and manifest, not the historical root Chromium 124 queue.
 
 Native AArch64 ARM58 paints the full Chrome window and local JavaScript/Wasm
 worker PASS page, then returns all six native child tasks and the host. Its
@@ -24,13 +24,16 @@ remain a separate deferred investigation.
 ![Native ARM Chrome and About AROS](evidence/native-children/cef-chrome-arm58-content.png)
 
 Native x86-64 memory164 completes ten browser create/render/close cycles in one
-resident host: ten page checks, all22 child returns, and host completion pass.
-Memory acceptance does **not** pass: whole-guest usage grows from1706.72 MiB
-after cycle1 to1949.76 MiB after cycle10, about27.00 MiB per additional cycle,
-and remains1753.80 MiB after host exit. These are OS-plus-resident-engine totals,
+resident host: ten page checks, all 22 child returns, and host completion pass.
+Memory acceptance does **not** pass: whole-guest usage grows from 1706.72 MiB
+after cycle 1 to 1949.76 MiB after cycle 10, about 27.00 MiB per additional cycle,
+and remains 1753.80 MiB after host exit. These are OS-plus-resident-engine totals,
 not peak RSS or evidence of copied engine images. Renderer heap retirement
 remains active work; successful task return alone is not memory reclamation.
 See [the measured baseline](evidence/native-children/cef-memory164-analysis.json).
+A one-cycle control retains 1492.41 MiB after host exit, versus 1753.80 MiB
+after ten cycles; the [controlled comparison](evidence/native-children/cef-memory164-vs171-analysis.json)
+records its limits and the separate child-entry fragment audit.
 
 Earlier native HTTP/HTTPS, multi-app DOM/cookie/worker isolation and sibling
 survival evidence remains retained, including native119 and full Chrome121.

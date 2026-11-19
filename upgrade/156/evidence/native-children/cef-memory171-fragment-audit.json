@@ -1,0 +1,82 @@
+{
+  "functional_pass": true,
+  "raw_result_preserved": true,
+  "raw_serial_sha256": "258573989fdad379325c28673a3d92f8e608bc5dca980f7b5e844c9d75d6eb5d",
+  "raw_interleaved_line": "[CEF-CHILD-EVENT] E 125 render[74:17503248:1119/135958.261187:INFO:base/process/launch_aros.cc:302] [Chromium:AROS:Launch] spawned pid=125 program='ISOIMAGE:C/CEFSubprocess' argc=23 type=renderer detail=4 stack=4194304 free-before=30989er",
+  "reconstruction": "One exact E125 record is split render + er by the matching parent launch log. Complete child DETAIL125 independently says renderer; all four unique child IDs have zero exits. No missing exit excused and generic strict parser remains unchanged.",
+  "native_child_accounting": {
+    "all_started_children_returned": true,
+    "observed_child_ids": [
+      "125",
+      "139",
+      "76",
+      "91"
+    ],
+    "entry_events": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "91",
+        "utility"
+      ],
+      [
+        "125",
+        "renderer"
+      ],
+      [
+        "139",
+        "renderer"
+      ]
+    ],
+    "entry_details": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "91",
+        "utility"
+      ],
+      [
+        "125",
+        "renderer"
+      ],
+      [
+        "139",
+        "renderer"
+      ]
+    ],
+    "entries": {
+      "76": "gpu-process",
+      "91": "utility",
+      "125": "renderer",
+      "139": "renderer"
+    },
+    "exits": [
+      [
+        "125",
+        "renderer",
+        "0"
+      ],
+      [
+        "139",
+        "renderer",
+        "0"
+      ],
+      [
+        "76",
+        "gpu-process",
+        "0"
+      ],
+      [
+        "91",
+        "utility",
+        "0"
+      ]
+    ],
+    "errors": [],
+    "method": "Every observed ID has child-emitted E or complete DETAIL entry and matching unique zero exit. Launch alone cannot supply entry. Conflicting types, duplicates, unknown exits, missing exits and additional verbose entries fail."
+  }
+}

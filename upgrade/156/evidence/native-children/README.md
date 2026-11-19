@@ -657,3 +657,14 @@ AROS and the resident image; they are neither peak RSS nor proof of duplicated
 engine code. Main-isolate and renderer-owner retirement remain active work.
 The162/163 harness omissions are retained separately;164 restores PROFILE and
 network service startup before measuring.
+
+
+A separate one-cycle control171 uses the same engine, page and profile identity.
+After full host exit it uses1492.41 MiB, compared with1753.80 MiB after the
+ten-cycle164 run:261.39 MiB additional whole-guest memory remains. Initial host
+readiness differs by7.30 MiB between the two boots. This supports investigating
+retention beyond active-host caches, but does not identify each allocation.
+The171 strict result is retained as false: one child entry was interleaved as
+`render` and `er` around its parent launch record. The separate exact-fragment
+audit matches the complete child DETAIL record and all four unique zero exits;
+it does not weaken the generic parser or excuse any missing return.
