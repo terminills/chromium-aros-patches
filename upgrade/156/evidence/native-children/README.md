@@ -520,3 +520,23 @@ is `91c96ef9`, supplied in `../../aros/fat-idle-file-cache-pins.patch`. It relea
 file data range pins after packet I/O has copied the data, while retaining cached
 contents and directory-entry pin lifetimes. Both architecture handler builds pass;
 this runtime result is x64 QEMU only. Chromium disk persistence remains pending.
+
+
+Native146 validates rejection of a named profile whose cache path is a regular
+file (aros-web `4053eb3`), then writes a valid profile and returns all four children
+and the host. Its strict watcher missed an interleaved renderer entry; the
+supplemental audit qualifies only that exact fragment using independent launcher
+and child-detail records. The original failure remains retained.
+
+Native147 clean OS reboot **fails persistence**: the cookie matches PROFILE146,
+but localStorage is absent. There is no CEF profile fallback. The offline writer
+disk snapshot contains Cookies but no LocalStorage database. The guest later
+completes both case-distinct EMPTY checks and host teardown; this does not repair
+the failed READ. SQLite recovery is under investigation. Native141 separately
+retains a pre-browser Wanderer kernel spinlock alert after FAT regression checks.
+
+ARM52 uses a private diagnostic host with a 120-second IPC connection budget.
+It later paints Chrome and the JS/Wasm worker PASS page with About AROS, but has
+an earlier EBADF fatal closing a fake disk-cache index file. The late screenshot
+is visual evidence only; overall ARM52 remains failed and its first result is
+unchanged. Production timeout defaults remain unchanged.
