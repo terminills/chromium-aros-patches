@@ -1,0 +1,54 @@
+{
+  "files": {
+    "Libs/v8.library": "67d2636a3dde7fd61e97619114f93bb0a9c95995318a753c629fcf4bae2fd7dd",
+    "Libs/cef-blink.library": "bccd3260c12c401d4060bf7a9423c9d20648b13c68fad71d660b9b2d88b8e354",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "b9316d7f6140c00c49974785a2b24af840ba699d411b54c0a35e0e621100ccde",
+    "C/CEFSubprocess": "9256cbe8cbd99e552f6b4d9a739a0339a6ca24d67e4f987e00f0688bd0c74102",
+    "C/CEFHostProbe": "91b9ba6f7fced067b721fbfbceac8b7609a511f4561c7b1a64c959d1c524dd3b",
+    "C/CEFHostBrowser": "a73a8927bb2476943616862cf5da55e79cb8e602b54cbe8c1aadeda1a4c0b7e2",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f",
+    "C/CEFProfilePathProbe": "f42d69855ecec06bb1d6da1dcf136eeae14b4445fd779b35b74d31fbdd3992c7",
+    "C/CEFRootCanonicalProbe": "c55cab0000d52a5e054e3038adf7ff9ba4282b9b2514ed7b41e55f3ee20df8ba"
+  },
+  "web_commit": "a35ca65b13a9ea737b750f16d2bed61b7bb94d92",
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFProfilePathProbe\nC:CEFRootCanonicalProbe\nC:CEFClockContract\nC:CEFOomCallback\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nEcho PROFILE133-write-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=write&token=PROFILE133\" 1000 6000 primary\nEcho PROFILE133-write-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nList T:CEFHostProfiles133 ALL >DEBUG:\nEcho PROFILE133-read-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=read&token=PROFILE133\" 1000 6000 primary\nEcho PROFILE133-read-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nList T:CEFHostProfiles133 ALL >DEBUG:\nEcho PROFILE133-other-app-start >DEBUG:\nC:CEFHostBrowser B \"http://10.0.2.2:40255/profile-persistence.html?phase=empty&token=PROFILE133\" 1000 6000 primary\nEcho PROFILE133-other-app-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nList T:CEFHostProfiles133 ALL >DEBUG:\nEcho PROFILE133-other-profile-start >DEBUG:\nC:CEFHostBrowser A \"http://10.0.2.2:40255/profile-persistence.html?phase=empty&token=PROFILE133\" 1000 6000 secondary\nEcho PROFILE133-other-profile-returned:$RC >DEBUG:\nWait 5\nC:Avail >DEBUG:\nList T:CEFHostProfiles133 ALL >DEBUG:\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nType RAM:CEF-host.log >DEBUG:\nEcho PROFILE133-finished >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T09:46:39.804304+00:00",
+    "validation": "AROS pending widget cleanup retains view-before-input-manager destruction even when scheduler discards the callback. Host cancellation ordering repro passes; ARM47 InputHandler shutdown fault retained. Includes native storage lock adapter; native runtime validation pending.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "93d4ca6b7ad12527a3eaf765ff93343a67523542a8afb41936324936b6c936aa",
+        "applied_tree": "527aed33b99bf04e5e29980f3dc68660d4c346fc",
+        "bytes": 3031287
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "a5c1ee22dae0a1a0bbe360535f6abf3f3005b9a91cf8587682146207231461ab",
+    "tools/CEFHost/profile_identity.h": "dc8138c670ed545d0a2f128667978463a146eab9cb56e121ec39afc6c793f11a",
+    "tools/CEFHost/CEFSubprocess.c": "36bc9b366425b3a0e99a5c91866b0ae6aab5f5d097dc53e58f3c08a416db5ddc",
+    "libs/cef/test_cef_host_browser.c": "5167fdef3e4eb20d597a817cf00acddb2a2ed46e2d54fbcdec6a7dbb85e1c2aa",
+    "libs/cef/test_cef_browser.c": "37d8ba843ab7b8bbe93c04ca4594dac08fda63e5f5cdf351bea81a3d2df887ac",
+    "libs/v8/v8findenginesymbol.c": "157d99744cb4057bc1385b3c529a57b228b77860c97dd4b97ea0bcd41f0f5642",
+    "libs/v8/mmakefile.src": "ac4588f55d0d4a96374be83d41993da3df67df347a9592588fb246ff08e8fc89",
+    "build/v8-import-table.py": "0e2f692d0fe09c35488d3107383225f971441da11cd1b42886e7e30f57826744"
+  },
+  "fixture_sha256": "ff64704f4bb8bfd79c21739c7b295062c99c7e21fb7cbeb24fa04fb25bcbd4e2"
+}

@@ -447,3 +447,32 @@ ARM47 partial milestone: sequential native V8+CEF load PASS, shared host and nat
 ARM47/48 both paint worker PASS and close the client, then fault during renderer teardown in InputHandler::WillShutdown reading an invalid client vtable. ARM48 exact symbols retained; ARM47 instruction-neighborhood comparison qualified separately. WidgetBase delayed cleanup orders view before input manager when invoked, but cancelled BindOnce captures do not preserve that dependency. Host tuple-cancellation reproduction confirms it. AROS-only pending cleanup owner now preserves that order on cancellation; both archives PASS, native130/ARM50 pending. ARM49 separately tests cold host startup using native port readiness without preloading.
 
 Native129 named profiles: write PASS, both other-app/profile empty PASS, same-profile reopen READ FAIL; all8 child IDs return0 and host shuts down. Terminal failure finalized before watcher deadline with original harness/audit retained. Cookie-versus-localStorage distinction not yet available; next fixture adds boolean diagnostics and lists synthetic profile files. This run does not establish reboot persistence.
+
+
+Native130 reproduces the named-profile read failure while the widget cancellation
+candidate completes guest teardown. Its strict child counter misses one split
+entry; the supplemental audit retains the exact interleaving and independently
+matches the renderer ID, giving eight zero child returns. Native131 uses a flat
+SHA256 application/profile identity: Chrome creates disk profiles, but reopening
+resolves `T:` to `RAM Disk:T`, mismatching the original root and reverting to
+in-memory storage. All eleven child IDs and host return in that failed profile run.
+
+Native132/133 retain failed root-canonicalization attempts. The native probe shows
+that `CreateDir` returns an exclusive lock (-1); `NameFromLock` on it incorrectly
+resolves to the boot volume. Reopening with a shared lock (-2) yields the correct
+native path. The host now creates root directories, reopens shared locks, resolves
+and verifies the result with `SameLock`, then consistently uses that canonical root.
+The public framework fix is aros-web `733a555`; both architecture builds and 259
+SHA256 identity checks pass. The SDK and Chrome profile constraints are unchanged.
+
+Native134 passes cookie/localStorage WRITE and same-host close/reopen READ, plus
+both other-application and other-profile EMPTY checks. The retained screenshot
+shows READ PASS. Complete lifecycle is **incomplete**: Linux reports the owned QEMU
+process1328471 segfaulting in host `libslirp` at10:25:57UTC, during guest teardown.
+Kernel evidence and exact watcher interruption audit are retained. This is neither
+an AROS exception nor reboot-persistence proof. Native135 repeats identical engine
+and host binaries to validate lifecycle separately.
+
+ARM49 proves cold host initialization and native-port readiness without preload,
+but times out without worker PASS or child returns. ARM50 tests the ordered widget
+cleanup with the same cold-start arrangement; acceptance remains pending.
