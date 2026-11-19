@@ -266,3 +266,9 @@ Both native engine links passed. Native103 no longer records the reporter Mojo f
 ### ARM29 reporter candidate PASS
 
 Native local JavaScript/Wasm workers, paint, close, CEF teardown, and script return zero all pass, together with clock and actual PA callback-object probes. The retained worker screenshot shows the native browser and About AROS (aarch64-raspi ABI_V1, bfdbbd7c). Whole-guest used memory is 1197.93 MiB at first paint and 1156.24 MiB after close. These are not per-process RSS or reclamation measurements; network and native multi-app acceptance remain unproven. The delayed startup completed within its existing 1200-second test window; no scheduler change was made.
+
+### Native104 and ThreadSpecific candidate
+
+Native104 is a failure, not an isolation pass. B reports storage and heap/worker checks after A callback drain, but A reports no content checks, the survivor screenshot shows black content and stale pooled task-runner warnings, and child returns are incomplete. Host shutdown returns. Exact fatal symbols identify BlobRegistryProxy::Register through BlobDataHandle and the JavaScript Blob constructor; a utility task also faults removing a RunLoop nesting observer. Normal LOG-based lifecycle diagnostics yielded no serial events.
+
+WTF ThreadSpecific selected an engine-global main_thread_storage_ cache on AROS even though the resident engine has multiple renderer main tasks. The current candidate selects the existing always-TLS branch on AROS, retaining all Mojo sequence checks. It also changes the temporary lifecycle diagnostics to direct KPrintF. x64 and ARM full rebuilds and native105/ARM30 tests are pending. No task-runner lifetime, clean child exit, or complete browser qualification is claimed.

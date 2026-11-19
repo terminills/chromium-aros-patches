@@ -10814,6 +10814,57 @@ index bf9a489b95f2eb4ffd43c900eeb7d3c2e3fe8b08..9631d700ff0c4f0177c8599ab8e231da
  double RandDoubleAvoidAllocation() {
    uint64_t number;
    RandBytesInternal(byte_span_from_ref(number),
+diff --git a/base/run_loop.cc b/base/run_loop.cc
+index 2512a00b34da9c84daf0228acca8b39c3ec9c69e..dff21011805398adb7f29db56ce93c8e4d015d16 100644
+--- a/base/run_loop.cc
++++ b/base/run_loop.cc
+@@ -13,6 +13,10 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/threading/platform_thread.h"
++extern "C" void ArosLoopKPrintF(const char*, ...) asm("KPrintF");
++#endif
+ #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
+ 
+ namespace base {
+@@ -50,6 +54,11 @@ RunLoop::Delegate::Delegate() {
+ }
+ 
+ RunLoop::Delegate::~Delegate() {
++#if BUILDFLAG(IS_AROS)
++  ArosLoopKPrintF("[AROS-LOOP] destroy delegate=%p current=%p bound=%ld task=%p\n",
++                 this, delegate, static_cast<long>(bound_),
++                 reinterpret_cast<void*>(PlatformThread::CurrentId().raw()));
++#endif
+   DCHECK_CALLED_ON_VALID_THREAD(bound_thread_checker_);
+   DCHECK(active_run_loops_.empty());
+   // A RunLoop::Delegate may be destroyed before it is bound, if so it may still
+@@ -82,6 +91,11 @@ void RunLoop::RegisterDelegateForCurrentThread(Delegate* new_delegate) {
+       << "Error: Multiple RunLoop::Delegates registered on the same thread.\n\n"
+          "Hint: You perhaps instantiated a second "
+          "MessageLoop/TaskEnvironment on a thread that already had one?";
++#if BUILDFLAG(IS_AROS)
++  ArosLoopKPrintF("[AROS-LOOP] bind delegate=%p previous=%p task=%p\n",
++                 new_delegate, delegate,
++                 reinterpret_cast<void*>(PlatformThread::CurrentId().raw()));
++#endif
+   delegate = new_delegate;
+   delegate->bound_ = true;
+ }
+@@ -240,6 +254,11 @@ void RunLoop::AddNestingObserverOnCurrentThread(NestingObserver* observer) {
+ 
+ // static
+ void RunLoop::RemoveNestingObserverOnCurrentThread(NestingObserver* observer) {
++#if BUILDFLAG(IS_AROS)
++  ArosLoopKPrintF("[AROS-LOOP] remove observer=%p current=%p task=%p\n",
++                 observer, delegate,
++                 reinterpret_cast<void*>(PlatformThread::CurrentId().raw()));
++#endif
+   DCHECK(delegate);
+   delegate->nesting_observers_.RemoveObserver(observer);
+ }
 diff --git a/base/scoped_observation.h b/base/scoped_observation.h
 index 7c7d54ac4bf57626def4b9a03b953f81d4b9daac..75f530ce093499bf8b870c1b2e4a153871a2c9e1 100644
 --- a/base/scoped_observation.h
@@ -11601,6 +11652,34 @@ index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..b41c6ec513895b20b38bcdfeb1ecb520
    static_assert(
        std::is_base_of_v<WatchableIOMessagePumpPosix, MessagePumpForUI>,
        "CurrentThreadForUI::WatchFileDescriptor is supported only"
+diff --git a/base/task/sequence_manager/sequence_manager_impl.cc b/base/task/sequence_manager/sequence_manager_impl.cc
+index a9384472895193fb5c97d3a155c6589cd681bd97..cc47515cd5fe7aa14887a3393057f5bf1f2e14c7 100644
+--- a/base/task/sequence_manager/sequence_manager_impl.cc
++++ b/base/task/sequence_manager/sequence_manager_impl.cc
+@@ -42,6 +42,10 @@
+ #include "base/trace_event/trace_event.h"
+ #include "build/blink_buildflags.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/threading/platform_thread.h"
++extern "C" void ArosLoopKPrintF(const char*, ...) asm("KPrintF");
++#endif
+ #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
+ 
+ namespace base::sequence_manager {
+@@ -177,6 +181,12 @@ SequenceManagerImpl::SequenceManagerImpl(
+ }
+ 
+ SequenceManagerImpl::~SequenceManagerImpl() {
++#if BUILDFLAG(IS_AROS)
++  ArosLoopKPrintF("[AROS-LOOP] destroy manager=%p current=%p controller=%p observer=%ld task=%p\n",
++                 this, GetCurrent(), controller_.get(),
++                 static_cast<long>(main_thread_only().nesting_observer_registered_),
++                 reinterpret_cast<void*>(PlatformThread::CurrentId().raw()));
++#endif
+   DCHECK_CALLED_ON_VALID_THREAD(associated_thread_->thread_checker);
+   TRACE_EVENT_INSTANT(
+       TRACE_DISABLED_BY_DEFAULT("sequence_manager"), "SequenceManager:deleted",
 diff --git a/base/task/single_thread_task_runner.cc b/base/task/single_thread_task_runner.cc
 index 9c438b2dd0cabd46befa5a8eda32d684d170bbf9..784efe3320ae3e13f2073ef90eba66b6a046d8e6 100644
 --- a/base/task/single_thread_task_runner.cc
@@ -60909,6 +60988,24 @@ index 3a0d6482c11eea055c84c0cb6eb12d846a632e9f..f80b660425104902542062b890b1f4cd
  #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
  
  #if DCHECK_IS_ON()
+diff --git a/third_party/blink/renderer/platform/wtf/thread_specific.h b/third_party/blink/renderer/platform/wtf/thread_specific.h
+index dd1cae0b5fede3e293da63aa151c53daeb62b524..be67cd0c9bfeb28209c38056f6309e35e203ba93 100644
+--- a/third_party/blink/renderer/platform/wtf/thread_specific.h
++++ b/third_party/blink/renderer/platform/wtf/thread_specific.h
+@@ -105,8 +105,11 @@ inline bool ThreadSpecific<T>::IsSet() {
+ template <typename T>
+ inline ThreadSpecific<T>::operator T*() {
+   T* off_thread_ptr;
+-#if defined(__GLIBC__) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FREEBSD)
+-  // TLS is fast on these platforms.
++#if defined(__GLIBC__) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FREEBSD) || \
++    BUILDFLAG(IS_AROS)
++  // AROS shares this object across renderer main tasks: the single cached
++  // main-thread value cannot represent their separate connections or heaps.
++  // TLS is fast on the other platforms selected here.
+   // TODO(csharrison): Qualify this statement for Android.
+   const bool kMainThreadAlwaysChecksTls = true;
+   T** ptr = &off_thread_ptr;
 diff --git a/third_party/blink/renderer/platform/wtf/type_traits.h b/third_party/blink/renderer/platform/wtf/type_traits.h
 index b00d71494969a44318c4000e981857687c20a49d..cbece3fa40eb927e9c1dceb398f06447cb5531d0 100644
 --- a/third_party/blink/renderer/platform/wtf/type_traits.h
