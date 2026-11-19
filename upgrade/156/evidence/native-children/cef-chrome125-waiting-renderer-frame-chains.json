@@ -1,0 +1,173 @@
+{
+  "qualification": "Monotonically increasing frame-pointer pairs recovered from saved waiting task stack; entry BP not directly obtained from scheduler context. Runtime text base cross-checked against both CEFBlinkHeapAlloc/Free native pointers and exact ELF offsets.",
+  "longest_chain": [
+    {
+      "bp": "0x8663a440",
+      "next_bp": "0x8663a5e0",
+      "pc": "0x1239a4807",
+      "function": "_pthread_cond_timedwait.part.0"
+    },
+    {
+      "bp": "0x8663a5e0",
+      "next_bp": "0x8663a650",
+      "pc": "0x110aa9066",
+      "function": "base::ConditionVariable::Wait(base::Location const&)"
+    },
+    {
+      "bp": "0x8663a650",
+      "next_bp": "0x8663a830",
+      "pc": "0x110af3f59",
+      "function": "base::WaitableEvent::TimedWaitImpl(base::TimeDelta)"
+    },
+    {
+      "bp": "0x8663a830",
+      "next_bp": "0x8663a900",
+      "pc": "0x110a1b033",
+      "function": "base::WaitableEvent::TimedWait(base::TimeDelta, base::Location const&)"
+    },
+    {
+      "bp": "0x8663a900",
+      "next_bp": "0x8663a9a0",
+      "pc": "0x115bfd238",
+      "function": "cc::ProxyMain::Stop()"
+    },
+    {
+      "bp": "0x8663a9a0",
+      "next_bp": "0x8663aa20",
+      "pc": "0x115b972b7",
+      "function": "cc::LayerTreeHost::~LayerTreeHost()"
+    },
+    {
+      "bp": "0x8663aa20",
+      "next_bp": "0x8663aa40",
+      "pc": "0x115b97858",
+      "function": "cc::LayerTreeHost::~LayerTreeHost()"
+    },
+    {
+      "bp": "0x8663aa40",
+      "next_bp": "0x8663aa90",
+      "pc": "0x11c18e329",
+      "function": "blink::LayerTreeView::~LayerTreeView()"
+    },
+    {
+      "bp": "0x8663aa90",
+      "next_bp": "0x8663aab0",
+      "pc": "0x11c18e478",
+      "function": "blink::LayerTreeView::~LayerTreeView()"
+    },
+    {
+      "bp": "0x8663aab0",
+      "next_bp": "0x8663aad0",
+      "pc": "0x11c1cfdd6",
+      "function": "base::internal::BindState<false, false, false, blink::WidgetBase::Shutdown(bool)::{lambda(scoped_refptr<blink::scheduler::WidgetScheduler>, scoped_refptr<blink::WidgetInputHandlerManager>, std::unique_ptr<blink::LayerTreeView, std::default_delete<blink::LayerTreeView> >)#1}, scoped_refptr<blink::scheduler::WidgetScheduler>, scoped_refptr<blink::WidgetInputHandlerManager>, std::unique_ptr<blink::LayerTreeView, std::default_delete<blink::LayerTreeView> > >::Destroy(base::internal::BindStateBase const*)"
+    },
+    {
+      "bp": "0x8663aad0",
+      "next_bp": "0x8663ab20",
+      "pc": "0x110a479dc",
+      "function": "std::deque<base::sequence_manager::Task, std::allocator<base::sequence_manager::Task> >::_M_destroy_data_aux(std::_Deque_iterator<base::sequence_manager::Task, base::sequence_manager::Task&, base::sequence_manager::Task*>, std::_Deque_iterator<base::sequence_manager::Task, base::sequence_manager::Task&, base::sequence_manager::Task*>) [clone .isra.0]"
+    },
+    {
+      "bp": "0x8663ab20",
+      "next_bp": "0x8663ab90",
+      "pc": "0x110a47cac",
+      "function": "base::sequence_manager::internal::WorkQueue::~WorkQueue()"
+    },
+    {
+      "bp": "0x8663ab90",
+      "next_bp": "0x8663ad30",
+      "pc": "0x110a3a974",
+      "function": "base::sequence_manager::internal::TaskQueueImpl::UnregisterTaskQueue()"
+    },
+    {
+      "bp": "0x8663ad30",
+      "next_bp": "0x8663ae00",
+      "pc": "0x110a2e366",
+      "function": "base::sequence_manager::internal::SequenceManagerImpl::UnregisterTaskQueueImpl(std::unique_ptr<base::sequence_manager::internal::TaskQueueImpl, std::default_delete<base::sequence_manager::internal::TaskQueueImpl> >)"
+    },
+    {
+      "bp": "0x8663ae00",
+      "next_bp": "0x8663ae60",
+      "pc": "0x110a31759",
+      "function": "base::sequence_manager::TaskQueue::Handle::reset()"
+    },
+    {
+      "bp": "0x8663ae60",
+      "next_bp": "0x8663aed0",
+      "pc": "0x11c881917",
+      "function": "blink::scheduler::MainThreadSchedulerImpl::ShutdownAllQueues()"
+    },
+    {
+      "bp": "0x8663aed0",
+      "next_bp": "0x8663aef0",
+      "pc": "0x11c881d09",
+      "function": "blink::scheduler::MainThreadSchedulerImpl::Shutdown() [clone .part.0]"
+    },
+    {
+      "bp": "0x8663aef0",
+      "next_bp": "0x8663b0b0",
+      "pc": "0x11a91e7cf",
+      "function": "content::RenderThreadImpl::Shutdown()"
+    },
+    {
+      "bp": "0x8663b0b0",
+      "next_bp": "0x8663b280",
+      "pc": "0x11a81ed19",
+      "function": "content::ChildProcess::~ChildProcess()"
+    },
+    {
+      "bp": "0x8663b280",
+      "next_bp": "0x8663b2a0",
+      "pc": "0x11a910e10",
+      "function": "content::RenderProcessImpl::~RenderProcessImpl()"
+    },
+    {
+      "bp": "0x8663b2a0",
+      "next_bp": "0x8663b450",
+      "pc": "0x11a925685",
+      "function": "content::RendererMain(content::MainFunctionParams)"
+    },
+    {
+      "bp": "0x8663b450",
+      "next_bp": "0x8663b8f0",
+      "pc": "0x121570b70",
+      "function": "content::RunOtherNamedProcessTypeMain(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, content::MainFunctionParams, content::ContentMainDelegate*)"
+    },
+    {
+      "bp": "0x8663b8f0",
+      "next_bp": "0x8663bb40",
+      "pc": "0x121571088",
+      "function": "content::ContentMainRunnerImpl::Run()"
+    },
+    {
+      "bp": "0x8663bb40",
+      "next_bp": "0x8663bd10",
+      "pc": "0x12156e5ca",
+      "function": "content::RunContentProcess(content::ContentMainParams, content::ContentMainRunner*)"
+    },
+    {
+      "bp": "0x8663bd10",
+      "next_bp": "0x8663bee0",
+      "pc": "0x12156e7f4",
+      "function": "content::ContentMain(content::ContentMainParams)"
+    },
+    {
+      "bp": "0x8663bee0",
+      "next_bp": "0x8663bff0",
+      "pc": "0x11082d1e9",
+      "function": "CefMainRunner::RunAsHelperProcess(CefMainArgs const&, scoped_refptr<CefApp>, void*)"
+    },
+    {
+      "bp": "0x8663bff0",
+      "next_bp": "0x8663c020",
+      "pc": "0x110807326",
+      "function": "CefExecuteProcess(CefMainArgs const&, scoped_refptr<CefApp>, void*)"
+    },
+    {
+      "bp": "0x8663c020",
+      "next_bp": "0x8663c060",
+      "pc": "0x11065abfb",
+      "function": "cef_execute_process"
+    }
+  ]
+}
