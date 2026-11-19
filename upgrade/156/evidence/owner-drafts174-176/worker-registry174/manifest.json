@@ -1,0 +1,31 @@
+{
+  "applied": false,
+  "baseline_sha256": "5ca8fe4ce16c9d75cdcd31fd21f13bc182d6c5908a1eb59b92cb0d247210d811",
+  "draft_sha256": "c2f1f0a4b17ff6088b17d9699cedd9add7d9f0bcc7f95a2049e78e2418401761",
+  "scope": "Scope active and initializing worker registries per logical renderer; retain existing lock and unique worker ID generator.",
+  "reason": "WorkerThreadCount and CallOnAllWorkerThreads currently see all shared-engine renderers. This can defer A isolate retirement due to B workers and dispatch renderer operations across owners.",
+  "native_validation": "pending; keep candidate172 frozen",
+  "host_validation": {
+    "results": {
+      "baseline": {
+        "returncode": -6,
+        "output": "FAIL 2\nbaseline-host: /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/worker-registry174-draft/baseline-host.cc:36: int main(): Assertion `check(W::WorkerThreadCount()==0)' failed.\n"
+      },
+      "candidate": {
+        "returncode": 0,
+        "output": "PASS 8 registry ownership checks\n"
+      }
+    },
+    "scope": "Exact four getter/count definitions extracted from baseline/candidate, production ProcessLocalValue and singleton header; mocked locks and std set. ASan/UBSan; not native worker lifecycle proof."
+  },
+  "cross_compilation": {
+    "x64": {
+      "returncode": 0,
+      "scope": "Isolated draft object; no live build mutation or native execution"
+    },
+    "arm": {
+      "returncode": 0,
+      "scope": "Isolated draft object; no live build mutation or native execution"
+    }
+  }
+}

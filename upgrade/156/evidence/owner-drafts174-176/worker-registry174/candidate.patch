@@ -1,0 +1,42 @@
+--- a/third_party/blink/renderer/core/workers/worker_thread.cc
++++ b/third_party/blink/renderer/core/workers/worker_thread.cc
+@@ -41,6 +41,9 @@
+ #include "base/threading/thread_restrictions.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -396,13 +399,29 @@
+ }
+ 
+ HashSet<WorkerThread*>& WorkerThread::InitializingWorkerThreads() {
++#if BUILDFLAG(IS_AROS)
++  // A resident engine contains multiple logical renderer processes.
++  // Count and enumerate only this renderer's workers; worker tasks inherit
++  // the same monotonic owner identity as their creating renderer.
++  struct InitializingWorkersOwnerTag;
++  return base::aros::ProcessLocalValue<HashSet<WorkerThread*>, InitializingWorkersOwnerTag>();
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<WorkerThread*>, threads, ());
+   return threads;
++#endif
+ }
+ 
+ HashSet<WorkerThread*>& WorkerThread::WorkerThreads() {
++#if BUILDFLAG(IS_AROS)
++  // A resident engine contains multiple logical renderer processes.
++  // Count and enumerate only this renderer's workers; worker tasks inherit
++  // the same monotonic owner identity as their creating renderer.
++  struct ActiveWorkersOwnerTag;
++  return base::aros::ProcessLocalValue<HashSet<WorkerThread*>, ActiveWorkersOwnerTag>();
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<WorkerThread*>, threads, ());
+   return threads;
++#endif
+ }
+ 
+ bool WorkerThread::IsForciblyTerminated() {

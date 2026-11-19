@@ -1,0 +1,91 @@
+{
+  "applied": false,
+  "files": [
+    {
+      "file": "third_party/blink/renderer/core/workers/worklet_thread_holder.h",
+      "baseline_sha256": "3201f1b095b43fc4fd8d9dcdad922b6bc250a4df3538501ae8cacbe22ebfca7e",
+      "draft_sha256": "da9903b9f7d3881bf120fd7ee7a96f9c203ce454783ab1460a73c55d0213aba3"
+    },
+    {
+      "file": "third_party/blink/renderer/modules/worklet/animation_and_paint_worklet_thread.cc",
+      "baseline_sha256": "fa17ec2a131bc249e14abb0208aadae03ebf1bf1d891385b9b9e0ef77d6157db",
+      "draft_sha256": "c6d353c883636508520fbe6015fff98a75e942cb71e17c2b6783d8a7a8b1e67a"
+    },
+    {
+      "file": "third_party/blink/renderer/modules/webaudio/offline_audio_worklet_thread.cc",
+      "baseline_sha256": "3870ee1c3536b589c4923f9e657929ba5917707f9f49cf72100c7fd1d67bf07f",
+      "draft_sha256": "fece46c54deb575d5f8b88b031c3fa51dd0a6e8daa7ac1980bc8b08821ce935d"
+    },
+    {
+      "file": "third_party/blink/renderer/modules/webaudio/semi_realtime_audio_worklet_thread.cc",
+      "baseline_sha256": "929a5f8a4b9125fec7f29b5ec846f12984b14f5b6c33a276d5c2dfabf0c01231",
+      "draft_sha256": "b41f592818437c1bbb2c47da31ddd669ff0cb8e9e9027d0bc2890c45ed1db46d"
+    },
+    {
+      "file": "third_party/blink/renderer/modules/webaudio/realtime_audio_worklet_thread.cc",
+      "baseline_sha256": "21cceffdcfe66e94ffc5bd389850349046bd44721d4f26892ce189dfdb2f37ed",
+      "draft_sha256": "2759cd64ce49f3c870f02a4654ac5dc59f866dbecd73fed0332c6275363ea2c3"
+    }
+  ],
+  "scope": "Pair per-renderer worklet holder pointers with all owning reference counts and realtime pool counters. Existing holder lock retained; ordinary engine code remains shared.",
+  "validation": "8 draft object compilations pass; 10 holder ownership checks pass, baseline fails expected owner separation check. Native pending.",
+  "cross_compilation": {
+    "x64": {
+      "scope": "Isolated draft cross compile; no live build mutation or native runtime",
+      "results": [
+        {
+          "source": "third_party/blink/renderer/modules/worklet/animation_and_paint_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/offline_audio_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/realtime_audio_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/semi_realtime_audio_worklet_thread.cc",
+          "returncode": 0
+        }
+      ],
+      "pass": true
+    },
+    "arm": {
+      "scope": "Isolated draft cross compile; no live build mutation or native runtime",
+      "results": [
+        {
+          "source": "third_party/blink/renderer/modules/worklet/animation_and_paint_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/offline_audio_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/realtime_audio_worklet_thread.cc",
+          "returncode": 0
+        },
+        {
+          "source": "third_party/blink/renderer/modules/webaudio/semi_realtime_audio_worklet_thread.cc",
+          "returncode": 0
+        }
+      ],
+      "pass": true
+    }
+  },
+  "holder_host_validation": {
+    "results": {
+      "baseline": {
+        "returncode": -6,
+        "output": "FAIL 3\nbaseline-host: /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/worklet176-draft/baseline-host.cc:125: int main(): Assertion `check(A::GetInstance()==nullptr)' failed.\n"
+      },
+      "candidate": {
+        "returncode": 0,
+        "output": "PASS 10 worklet holder ownership checks\n"
+      }
+    },
+    "scope": "Exact holder template, production owner map; fake backing thread and queued task dispatch. Tests reuse, owner/type separation, A shutdown preserving B, final cleanup. Does not execute native audio/paint or validate all refcount call sites."
+  }
+}

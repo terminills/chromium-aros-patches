@@ -1,0 +1,30 @@
+{
+  "applied": false,
+  "baseline_sha256": "f522ff8887e16cc7589cbb18bdbf43bdfebbdb4316a185a18077be5adcf547eb",
+  "draft_sha256": "9a31cc6f1809628be86688041c4b6a7dac792fc48ad341c1dc07710de5ff6467",
+  "scope": "Per-logical-renderer worker isolate sets, foreground exemptions, priority and saver flags; existing lock preserved.",
+  "native_validation": "pending; worklet shared thread holders require separate ownership audit before claiming general worklet isolation.",
+  "host_validation": {
+    "results": {
+      "baseline": {
+        "returncode": -6,
+        "output": "FAIL 2\nbaseline-host: /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/worker-isolate175-draft/baseline-host.cc:113: int main(): Assertion `check(b.priority==P::kUserBlocking && !b.battery && !b.memory)' failed.\n"
+      },
+      "candidate": {
+        "returncode": 0,
+        "output": "PASS 12 worker isolate ownership checks\n"
+      }
+    },
+    "scope": "Extracted production getters and update methods, production owner registry; fake V8 isolate counters and host locks. Not native V8 or policy proof."
+  },
+  "cross_compilation": {
+    "x64": {
+      "returncode": 0,
+      "scope": "Draft cross compile only"
+    },
+    "arm": {
+      "returncode": 0,
+      "scope": "Draft cross compile only"
+    }
+  }
+}
