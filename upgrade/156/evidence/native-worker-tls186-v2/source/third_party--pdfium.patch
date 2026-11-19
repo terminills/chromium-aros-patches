@@ -1,0 +1,111 @@
+diff --git a/core/fxcrt/mapped_data_bytes.cpp b/core/fxcrt/mapped_data_bytes.cpp
+index fb7693a720b2319705cedd7002e765c91b994bb9..66763fa9f514d332331c5051e865482d2abd2939 100644
+--- a/core/fxcrt/mapped_data_bytes.cpp
++++ b/core/fxcrt/mapped_data_bytes.cpp
+@@ -5,7 +5,14 @@
+ #include "core/fxcrt/mapped_data_bytes.h"
+ 
+ #include <fcntl.h>
++#include "build/build_config.h"
++#if !BUILDFLAG(IS_AROS)
+ #include <sys/mman.h>
++#endif
++#include <cerrno>
++#include <climits>
++#include <cstdlib>
++#include <limits>
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
+@@ -37,11 +44,35 @@ std::unique_ptr<MappedDataBytes> MappedDataBytes::Create(
+   if (sb.st_size == 0) {
+     return result;
+   }
++  if (sb.st_size < 0 || static_cast<uintmax_t>(sb.st_size) >
++                            std::numeric_limits<size_t>::max()) {
++    return nullptr;
++  }
++#if BUILDFLAG(IS_AROS)
++  // AROS has no SDK mmap API. This read-only consumer owns a file snapshot.
++  const size_t length = static_cast<size_t>(sb.st_size);
++  void* ptr = std::malloc(length);
++  if (!ptr) return nullptr;
++  size_t total = 0;
++  while (total < length) {
++    const size_t remaining = length - total;
++    const size_t chunk = remaining > static_cast<size_t>(SSIZE_MAX)
++                             ? static_cast<size_t>(SSIZE_MAX) : remaining;
++    const ssize_t count = read(fd, static_cast<uint8_t*>(ptr) + total, chunk);
++    if (count < 0 && errno == EINTR) continue;
++    if (count <= 0) {
++      std::free(ptr);
++      return nullptr;
++    }
++    total += static_cast<size_t>(count);
++  }
++#else
+   void* ptr = mmap(nullptr, static_cast<size_t>(sb.st_size), PROT_READ,
+                    MAP_PRIVATE, fd, 0);
+   if (ptr == MAP_FAILED) {
+     return nullptr;
+   }
++#endif
+   result->mapping_ = UNSAFE_BUFFERS(pdfium::span(
+       static_cast<const uint8_t*>(ptr), static_cast<size_t>(sb.st_size)));
+   return result;
+@@ -53,7 +84,11 @@ MappedDataBytes::MappedDataBytes(int fd) : fd_(fd) {
+ 
+ MappedDataBytes::~MappedDataBytes() {
+   if (!mapping_.empty()) {
++#if BUILDFLAG(IS_AROS)
++    std::free(const_cast<uint8_t*>(mapping_.data()));
++#else
+     munmap(const_cast<uint8_t*>(mapping_.data()), mapping_.size());
++#endif
+   }
+   close(fd_);
+ }
+diff --git a/core/fxge/BUILD.gn b/core/fxge/BUILD.gn
+index 4743d2216fc9329970f9fafe598784c2098f9943..407c8af2f86de0df81cfeb8479d1855c898793a1 100644
+--- a/core/fxge/BUILD.gn
++++ b/core/fxge/BUILD.gn
+@@ -171,7 +171,7 @@ source_set("fxge") {
+     ]
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_linux || is_chromeos || is_aros) {
+     sources += [ "linux/fx_linux_impl.cpp" ]
+   }
+ 
+diff --git a/core/fxge/linux/fx_linux_impl.cpp b/core/fxge/linux/fx_linux_impl.cpp
+index 3cf0a2cf3e5d2c292688fa819bb4a2e4b8600e05..b707edb9a077e6f3063e2474ed7e4c58d978311f 100644
+--- a/core/fxge/linux/fx_linux_impl.cpp
++++ b/core/fxge/linux/fx_linux_impl.cpp
+@@ -18,7 +18,8 @@
+ #include "core/fxge/fx_font.h"
+ #include "core/fxge/systemfontinfo_iface.h"
+ 
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)
++#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && \
++    !BUILDFLAG(IS_AROS) && !defined(OS_ASMJS)
+ #error "Included on the wrong platform"
+ #endif
+ 
+@@ -170,10 +171,16 @@ class CLinuxPlatform : public CFX_GEModule::PlatformIface {
+         pInfo->AddPath(path);
+       }
+     } else {
++#if BUILDFLAG(IS_AROS)
++      // A boot-time multi-assign may hide the system TrueType directory.
++      pInfo->AddPath("FONTS:TrueType");
++      pInfo->AddPath("SYS:Fonts/TrueType");
++#else
+       pInfo->AddPath("/usr/share/fonts");
+       pInfo->AddPath("/usr/share/X11/fonts/Type1");
+       pInfo->AddPath("/usr/share/X11/fonts/TTF");
+       pInfo->AddPath("/usr/local/share/fonts");
++#endif
+     }
+     return pInfo;
+   }

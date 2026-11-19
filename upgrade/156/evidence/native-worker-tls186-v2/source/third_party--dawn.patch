@@ -1,0 +1,438 @@
+diff --git a/scripts/dawn_features.gni b/scripts/dawn_features.gni
+index 9605846a7f07a2e29eb6ffe6504a8cf8d724d0e4..6f45afd573f55c115e3f9e0602f6abfd50d47cf4 100644
+--- a/scripts/dawn_features.gni
++++ b/scripts/dawn_features.gni
+@@ -93,7 +93,7 @@ if (is_android || is_ios) {
+   declare_args() {
+     # Enables SwiftShader as the fallback adapter. Requires dawn_swiftshader_dir
+     # to be set to take effect.
+-    dawn_use_swiftshader = true
++    dawn_use_swiftshader = !is_aros
+   }
+ }
+ 
+@@ -158,7 +158,7 @@ declare_args() {
+ 
+   # Enables the compilation of Dawn's Vulkan backend
+   # Disables vulkan when compiling for UWP, since UWP only supports d3d
+-  dawn_enable_vulkan = dawn_maximal != false || is_linux || is_chromeos ||
++  dawn_enable_vulkan = dawn_maximal != false || is_aros || is_linux || is_chromeos ||
+                        (is_win && !dawn_is_winuwp) || is_fuchsia ||
+                        is_android || dawn_use_swiftshader
+ 
+diff --git a/src/dawn/common/BUILD.gn b/src/dawn/common/BUILD.gn
+index b940fb13adcddf2730ef5f6ea4c3ca6ced7b9d85..62b70a3eeb925c43e15f578932ab4ecd756a0bfd 100644
+--- a/src/dawn/common/BUILD.gn
++++ b/src/dawn/common/BUILD.gn
+@@ -153,7 +153,7 @@ dawn_generator("dawn_gpu_info_gen") {
+ # all of Chromium's OSes so we explicitly make the target visible only on
+ # systems we know Dawn is able to compile on.
+ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
+-    is_ios || is_wasm) {
++    is_ios || is_wasm || is_aros) {
+   static_library("common") {
+     sources = [
+       "Algebra.h",
+diff --git a/src/dawn/common/DynamicLib.cpp b/src/dawn/common/DynamicLib.cpp
+index d155e490debca52a1a676b9f3fdcda7678fe8de6..4c2eb5ba6b082e3c75d09aa01d495eecb84d8616 100644
+--- a/src/dawn/common/DynamicLib.cpp
++++ b/src/dawn/common/DynamicLib.cpp
+@@ -37,6 +37,8 @@
+ #if DAWN_PLATFORM_IS(WINUWP)
+ #include "src/dawn/common/WindowsUtils.h"
+ #endif
++#elif DAWN_PLATFORM_IS(AROS)
++// Native AROS libraries use vector tables, not dlfcn.
+ #elif DAWN_PLATFORM_IS(POSIX)
+ #include <dlfcn.h>
+ #else
+@@ -100,6 +102,10 @@ bool DynamicLib::Open(const std::string& filename, std::string* error) {
+         *error =
+             "DynamicLib.Open: " + filename + " Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic library loading is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     mHandle = dlopen(filename.c_str(), RTLD_NOW);
+ 
+@@ -124,6 +130,10 @@ bool DynamicLib::OpenLoaded(const std::string& filename, std::string* error) {
+         *error = "DynamicLib.OpenLoaded: " + filename +
+                  " Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic library loading is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     mHandle = dlopen(filename.c_str(), RTLD_NOW | RTLD_NOLOAD);
+ 
+@@ -165,6 +175,8 @@ void DynamicLib::Close() {
+         // In ASAN builds, we have to leak the DLL instead in case it gets loaded again later.
+         FreeLibrary(static_cast<HMODULE>(mHandle));
+ #endif
++#elif DAWN_PLATFORM_IS(AROS)
++        // Open and OpenLoaded cannot create a handle on this platform.
+ #elif DAWN_PLATFORM_IS(POSIX)
+         dlclose(mHandle);
+ #else
+@@ -185,6 +197,10 @@ void* DynamicLib::GetProc(const std::string& procName, std::string* error) const
+     if (proc == nullptr && error != nullptr) {
+         *error = "Windows Error: " + std::to_string(GetLastError());
+     }
++#elif DAWN_PLATFORM_IS(AROS)
++    if (error != nullptr) {
++        *error = "Dynamic symbol lookup is unavailable on AROS.";
++    }
+ #elif DAWN_PLATFORM_IS(POSIX)
+     proc = reinterpret_cast<void*>(dlsym(mHandle, procName.c_str()));
+ 
+diff --git a/src/dawn/common/SystemUtils.cpp b/src/dawn/common/SystemUtils.cpp
+index 79b728d3df189103fd003a7a936d1d6c6ba866c3..5c094be0431644c20dec7b19209cf3630dc099b4 100644
+--- a/src/dawn/common/SystemUtils.cpp
++++ b/src/dawn/common/SystemUtils.cpp
+@@ -149,6 +149,10 @@ std::optional<std::string> GetExecutablePath() {
+     // UNIMPLEMENTED
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetExecutablePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetExecutablePath() {
+     return {};
+@@ -203,6 +207,10 @@ std::optional<std::string> GetModulePath() {
+ std::optional<std::string> GetModulePath() {
+     return {};
+ }
++#elif DAWN_PLATFORM_IS(AROS)
++std::optional<std::string> GetModulePath() {
++    return {};
++}
+ #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+ std::optional<std::string> GetModulePath() {
+     return {};
+diff --git a/src/dawn/native/ArosSystemEvent.h b/src/dawn/native/ArosSystemEvent.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5e70892f5b5f6849d6ce76a28aa607cb167d1f33
+--- /dev/null
++++ b/src/dawn/native/ArosSystemEvent.h
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Dawn & Tint Authors
++// Use of this source code is governed by a BSD-style license.
++#ifndef SRC_DAWN_NATIVE_AROSSYSTEMEVENT_H_
++#define SRC_DAWN_NATIVE_AROSSYSTEMEVENT_H_
++
++#include <algorithm>
++#include <chrono>
++#include <condition_variable>
++#include <cstdint>
++#include <limits>
++#include <mutex>
++
++namespace dawn::native {
++// One-shot state shared by sender and receiver. The wait-set mutex protects it.
++struct ArosSystemEventState {
++    bool signaled = false;
++};
++
++class ArosSystemEventWaitSet {
++  public:
++    void Signal(ArosSystemEventState& event) {
++        {
++            std::lock_guard<std::mutex> lock(mMutex);
++            event.signaled = true;
++        }
++        mCondition.notify_all();
++    }
++
++    template <typename Predicate>
++    bool Wait(uint64_t nanoseconds, Predicate ready) {
++        std::unique_lock<std::mutex> lock(mMutex);
++        if (ready()) return true;
++        if (nanoseconds == 0) return false;
++        if (nanoseconds == std::numeric_limits<uint64_t>::max()) {
++            mCondition.wait(lock, ready);
++            return true;
++        }
++        using Clock = std::chrono::steady_clock;
++        const auto now = Clock::now();
++        const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(
++            Clock::time_point::max() - now).count();
++        const auto duration = std::chrono::nanoseconds(
++            std::min(nanoseconds, static_cast<uint64_t>(remaining)));
++        return mCondition.wait_until(lock, now + duration, ready);
++    }
++
++  private:
++    std::mutex mMutex;
++    std::condition_variable mCondition;
++};
++
++inline ArosSystemEventWaitSet& GetArosSystemEventWaitSet() {
++    static ArosSystemEventWaitSet waitSet;
++    return waitSet;
++}
++}  // namespace dawn::native
++#endif
+diff --git a/src/dawn/native/BUILD.gn b/src/dawn/native/BUILD.gn
+index dbc686236c9da869d19a836d26d800640ff8d550..df3b3d0084bcfe566ebae0f1dfab9b5dd3e24579 100644
+--- a/src/dawn/native/BUILD.gn
++++ b/src/dawn/native/BUILD.gn
+@@ -426,6 +426,7 @@ source_set("sources") {
+     "SwapChain.h",
+     "SystemEvent.cpp",
+     "SystemEvent.h",
++    "ArosSystemEvent.h",
+     "TexelBufferView.cpp",
+     "TexelBufferView.h",
+     "Texture.cpp",
+@@ -905,6 +906,9 @@ source_set("sources") {
+   }
+ 
+   if (dawn_enable_vulkan) {
++    if (is_aros) {
++      libs += [ "vulkan" ]
++    }
+     configs += [ ":vulkan_utility_libraries_include" ]
+     public_deps += [ "${dawn_vulkan_headers_dir}:vulkan_headers" ]
+     sources += [
+@@ -1048,7 +1052,7 @@ source_set("sources") {
+     }
+ 
+     # These backends can make use of RenderDoc's API
+-    if (dawn_enable_d3d12 || (dawn_enable_vulkan && !is_fuchsia)) {
++    if (!is_aros && (dawn_enable_d3d12 || (dawn_enable_vulkan && !is_fuchsia))) {
+       defines += [ "DAWN_ENABLE_RENDERDOC" ]
+       include_dirs += [ "$dawn_root/third_party/renderdoc" ]
+       sources += [
+diff --git a/src/dawn/native/SystemEvent.cpp b/src/dawn/native/SystemEvent.cpp
+index a2dadad790365808aaad3f67fb0069dda5bf497f..a27b046e875a348c526acdf8e1ec1a076c8c46bb 100644
+--- a/src/dawn/native/SystemEvent.cpp
++++ b/src/dawn/native/SystemEvent.cpp
+@@ -37,7 +37,7 @@
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ #include <poll.h>
+ #include <unistd.h>
+-#elif DAWN_PLATFORM_IS(POSIX)
++#elif DAWN_PLATFORM_IS(POSIX) && !DAWN_PLATFORM_IS(AROS)
+ #include <sys/poll.h>
+ #include <unistd.h>
+ #endif
+@@ -73,16 +73,23 @@ const SystemHandle& SystemEventReceiver::GetPrimitive() const {
+ SystemEventPipeSender::~SystemEventPipeSender() {
+     // Make sure it's been Signaled (or is empty) before being dropped.
+     // Dropping this would "leak" the receiver (it'll never get signalled).
+-    DAWN_ASSERT(!mPrimitive.IsValid());
++    DAWN_ASSERT(!IsValid());
+ }
+ 
+ bool SystemEventPipeSender::IsValid() const {
++#if DAWN_PLATFORM_IS(AROS)
++    return mArosEvent != nullptr;
++#else
+     return mPrimitive.IsValid();
++#endif
+ }
+ 
+ void SystemEventPipeSender::Signal() && {
+-    DAWN_ASSERT(mPrimitive.IsValid());
+-#if DAWN_PLATFORM_IS(WINDOWS)
++    DAWN_ASSERT(IsValid());
++#if DAWN_PLATFORM_IS(AROS)
++    GetArosSystemEventWaitSet().Signal(*mArosEvent);
++    mArosEvent.reset();
++#elif DAWN_PLATFORM_IS(WINDOWS)
+     {
+         bool success = SetEvent(mPrimitive.Get());
+         DAWN_CHECK(success);
+@@ -103,7 +110,14 @@ void SystemEventPipeSender::Signal() && {
+ }
+ 
+ std::pair<SystemEventPipeSender, SystemEventReceiver> CreateSystemEventPipe() {
+-#if DAWN_PLATFORM_IS(WINDOWS)
++#if DAWN_PLATFORM_IS(AROS)
++    auto event = std::make_shared<ArosSystemEventState>();
++    SystemEventReceiver receiver;
++    receiver.mArosEvent = event;
++    SystemEventPipeSender sender;
++    sender.mArosEvent = std::move(event);
++    return std::make_pair(std::move(sender), std::move(receiver));
++#elif DAWN_PLATFORM_IS(WINDOWS)
+     SystemHandle event = SystemHandle::Acquire(
+         CreateEvent(nullptr, /*bManualReset=*/true, /*bInitialState=*/false, nullptr));
+     DAWN_CHECK(event.IsValid());
+diff --git a/src/dawn/native/SystemEvent.h b/src/dawn/native/SystemEvent.h
+index a514c951c5e834a11ac81ad2cab3d6df25343843..797c407bf59bbd69529ca5d1b9efd219ad911e48 100644
+--- a/src/dawn/native/SystemEvent.h
++++ b/src/dawn/native/SystemEvent.h
+@@ -29,6 +29,7 @@
+ #define SRC_DAWN_NATIVE_SYSTEMEVENT_H_
+ 
+ #include <optional>
++#include <memory>
+ #include <utility>
+ 
+ #include "src/dawn/common/MutexProtected.h"
+@@ -36,6 +37,9 @@
+ #include "src/dawn/common/SystemHandle.h"
+ #include "src/dawn/common/Time.h"
+ #include "src/utils/non_copyable.h"
++#if DAWN_PLATFORM_IS(AROS)
++#include "src/dawn/native/ArosSystemEvent.h"
++#endif
+ #include "src/utils/platform.h"
+ #include "src/utils/span.h"
+ 
+@@ -67,6 +71,9 @@ class SystemEventReceiver final : NonCopyable {
+                                    Nanoseconds timeout);
+     friend std::pair<SystemEventPipeSender, SystemEventReceiver> CreateSystemEventPipe();
+     SystemHandle mPrimitive;
++#if DAWN_PLATFORM_IS(AROS)
++    std::shared_ptr<ArosSystemEventState> mArosEvent;
++#endif
+ };
+ 
+ // See CreateSystemEventPipe.
+@@ -83,6 +90,9 @@ class SystemEventPipeSender final : NonCopyable {
+   private:
+     friend std::pair<SystemEventPipeSender, SystemEventReceiver> CreateSystemEventPipe();
+     SystemHandle mPrimitive;
++#if DAWN_PLATFORM_IS(AROS)
++    std::shared_ptr<ArosSystemEventState> mArosEvent;
++#endif
+ };
+ 
+ // CreateSystemEventPipe provides an SystemEventReceiver that can be signalled by Dawn code. This is
+diff --git a/src/dawn/native/WaitAnySystemEvent.cpp b/src/dawn/native/WaitAnySystemEvent.cpp
+index ece869bc98db7e2faad92bf759fe43f5a94648bf..932e745bf240d40d9a99835b68ee6c02afb091af 100644
+--- a/src/dawn/native/WaitAnySystemEvent.cpp
++++ b/src/dawn/native/WaitAnySystemEvent.cpp
+@@ -32,7 +32,7 @@
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ #include <poll.h>
+ #include <unistd.h>
+-#elif DAWN_PLATFORM_IS(POSIX)
++#elif DAWN_PLATFORM_IS(POSIX) && !DAWN_PLATFORM_IS(AROS)
+ #include <sys/poll.h>
+ #include <unistd.h>
+ #endif
+@@ -48,7 +48,17 @@ bool WaitAnySystemEvent(Span<std::pair<const SystemEventReceiver&, bool*>> event
+     if (events.empty()) {
+         return false;
+     }
+-#if DAWN_PLATFORM_IS(WINDOWS)
++#if DAWN_PLATFORM_IS(AROS)
++    return GetArosSystemEventWaitSet().Wait(uint64_t{timeout}, [&] {
++        bool any = false;
++        for (auto [event, ready] : events) {
++            DAWN_CHECK(event.mArosEvent != nullptr);
++            *ready = event.mArosEvent->signaled;
++            any |= *ready;
++        }
++        return any;
++    });
++#elif DAWN_PLATFORM_IS(WINDOWS)
+     absl::InlinedVector<HANDLE, 4 /* avoid heap allocation for small waits */> handles;
+     handles.reserve(events.size());
+     for (const auto& [systemEvent, _] : events) {
+diff --git a/src/dawn/native/vulkan/BackendVk.cpp b/src/dawn/native/vulkan/BackendVk.cpp
+index 2f190505658a98e2aa6256e3a71dde14a3fc7434..d947f9ac5fc780b113364cf9d1b897036da1eeeb 100644
+--- a/src/dawn/native/vulkan/BackendVk.cpp
++++ b/src/dawn/native/vulkan/BackendVk.cpp
+@@ -67,6 +67,8 @@ constexpr char kVulkanLibName[] = "libvulkan.so.1";
+ constexpr char kVulkanLibName[] = "vulkan-1.dll";
+ #elif DAWN_PLATFORM_IS(MACOS)
+ constexpr char kVulkanLibName[] = "libvulkan.dylib";
++#elif DAWN_PLATFORM_IS(AROS)
++constexpr char kVulkanLibName[] = "vulkan.library";
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ constexpr char kVulkanLibName[] = "libvulkan.so";
+ #else
+@@ -361,11 +363,19 @@ MaybeError VulkanInstance::Initialize(const InstanceBase* instance, ICD icd) {
+     const std::vector<std::string>& searchPaths = instance->GetRuntimeSearchPaths();
+ 
+     auto LoadVulkan = [&](const char* libName) -> MaybeError {
++#if DAWN_PLATFORM_IS(AROS)
++        // libvulkan.a binds the native resident library. Resolve dispatch
++        // through its real loader; do not route it through POSIX dlopen.
++        (void)libName;
++        (void)searchPaths;
++        return {};
++#else
+         std::string error;
+         if (mVulkanLib.Open(libName, searchPaths, &error)) {
+             return {};
+         }
+         return DAWN_FORMAT_INTERNAL_ERROR("Couldn't load Vulkan: %s", error.c_str());
++#endif
+     };
+ 
+     switch (icd) {
+diff --git a/src/dawn/native/vulkan/VulkanFunctions.cpp b/src/dawn/native/vulkan/VulkanFunctions.cpp
+index 60b075deaf0f871d46b0681d707eda025bbf060a..d9dc3e118c832870b73bcfd018af5dace2450a46 100644
+--- a/src/dawn/native/vulkan/VulkanFunctions.cpp
++++ b/src/dawn/native/vulkan/VulkanFunctions.cpp
+@@ -88,11 +88,21 @@ F AsVkFn(void(VKAPI_PTR* addr)()) {
+         }                                                                            \
+     } while (0)
+ 
++#if DAWN_PLATFORM_IS(AROS)
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ArosVulkanGetInstanceProcAddr(
++    VkInstance instance, const char* name) __asm__("vkGetInstanceProcAddr");
++#endif
++
+ MaybeError VulkanFunctions::LoadGlobalProcs(const DynamicLib& vulkanLib) {
++#if DAWN_PLATFORM_IS(AROS)
++    (void)vulkanLib;
++    GetInstanceProcAddr = &ArosVulkanGetInstanceProcAddr;
++#else
+     if (!vulkanLib.GetProc(&GetInstanceProcAddr, "vkGetInstanceProcAddr")) {
+         return DAWN_INTERNAL_ERROR("Couldn't get vkGetInstanceProcAddr");
+     }
+ 
++#endif
+     GET_GLOBAL_PROC(CreateInstance);
+     GET_GLOBAL_PROC(EnumerateInstanceExtensionProperties);
+     GET_GLOBAL_PROC(EnumerateInstanceLayerProperties);
+diff --git a/src/dawn/tests/BUILD.gn b/src/dawn/tests/BUILD.gn
+index c4f53ac9678eefbb7c11076bddc35fb2714af832..fba00486350453cb2bf2e2d004d9f30caa83f583 100644
+--- a/src/dawn/tests/BUILD.gn
++++ b/src/dawn/tests/BUILD.gn
+@@ -104,7 +104,7 @@ if (!dawn_use_built_dxc && build_with_chromium && is_win) {
+   # end-to-end test in Chromium.
+   copy("copy_dxc_binary") {
+     sources = [
+-      "$windows_sdk_path/bin/$windows_sdk_version/$target_cpu/dxcompiler.dll",
++      "$windows_sdk_path/Redist/D3D/$target_cpu/dxcompiler.dll",
+     ]
+ 
+     outputs = [ "$root_out_dir/{{source_file_part}}" ]
+diff --git a/src/utils/platform.h b/src/utils/platform.h
+index 4dd58a4878e18ce1771c0f88017fa7aea901a190..fe3ba190590d59a0c452c30b1b4bb3dc645228c2 100644
+--- a/src/utils/platform.h
++++ b/src/utils/platform.h
+@@ -60,6 +60,10 @@
+ #error "Unsupported Windows platform."
+ #endif
+ 
++#elif defined(__AROS__)
++#define DAWN_PLATFORM_IS_AROS 1
++#define DAWN_PLATFORM_IS_POSIX 1
++
+ #elif defined(__linux__)
+ #define DAWN_PLATFORM_IS_LINUX 1
+ #define DAWN_PLATFORM_IS_POSIX 1
+@@ -212,6 +216,10 @@ static_assert(sizeof(sizeof(char)) == 4, "Expect sizeof(size_t) == 4");
+ #define DAWN_PLATFORM_IS_POSIX 0
+ #endif
+ 
++#if !defined(DAWN_PLATFORM_IS_AROS)
++#define DAWN_PLATFORM_IS_AROS 0
++#endif
++
+ #if !defined(DAWN_PLATFORM_IS_LINUX)
+ #define DAWN_PLATFORM_IS_LINUX 0
+ #endif

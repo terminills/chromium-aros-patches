@@ -1,0 +1,248 @@
+diff --git a/include/private/SkOnce.h b/include/private/SkOnce.h
+index a3036de02a6f9e7a89a3aad87b020d1d9a372454..25537398d631b3d2107380cba29906010195c621 100644
+--- a/include/private/SkOnce.h
++++ b/include/private/SkOnce.h
+@@ -14,6 +14,10 @@
+ #include <cstdint>
+ #include <utility>
+ 
++#if defined(__AROS__)
++#include <sched.h>
++#endif
++
+ // SkOnce provides call-once guarantees for Skia, much like std::once_flag/std::call_once().
+ //
+ // There should be no particularly error-prone gotcha use cases when using SkOnce.
+@@ -43,7 +47,16 @@ public:
+         // Some other thread is calling fn().
+         // We'll just spin here acquiring until it releases Done into fState.
+         SK_POTENTIALLY_BLOCKING_REGION_BEGIN;
++#if defined(__AROS__)
++        // AROS schedules strictly by priority with tasks pinned to a core.
++        // The thread that Claimed may be READY on this very core (seen:
++        // SkSemaphore's lazy OSSemaphore init from a pinned raster worker,
++        // holder preempted inside sem_init); a bare spin here never gives
++        // it the core back. Same rule as base's PlatformThread::Yield.
++        while (fState.load(std::memory_order_acquire) != Done) { sched_yield(); }
++#else
+         while (fState.load(std::memory_order_acquire) != Done) { /*spin*/ }
++#endif
+         SK_POTENTIALLY_BLOCKING_REGION_END;
+     }
+ 
+diff --git a/src/core/SkExecutor.cpp b/src/core/SkExecutor.cpp
+index c7a5c588fb95eabed189f65a93dd92346bbbee8c..90c474060ea64f6228700e777e38fc5a72586542 100644
+--- a/src/core/SkExecutor.cpp
++++ b/src/core/SkExecutor.cpp
+@@ -18,7 +18,18 @@
+ 
+ using namespace skia_private;
+ 
+-#if defined(SK_BUILD_FOR_WIN)
++#if defined(__AROS__)
++    #include <exec/types.h>
++    #include <proto/exec.h>
++    #pragma push_macro("SCHED_RR")
++    #undef SCHED_RR
++    #include <proto/kernel.h>
++    #pragma pop_macro("SCHED_RR")
++    static int num_cores() {
++        APTR KernelBase = OpenResource("kernel.resource");
++        return KernelBase ? (int)KrnGetCPUCount() : 1;
++    }
++#elif defined(SK_BUILD_FOR_WIN)
+     #include "src/core/SkLeanWindows.h"
+     static int num_cores() {
+         SYSTEM_INFO sysinfo;
+diff --git a/src/core/SkIDChangeListener.cpp b/src/core/SkIDChangeListener.cpp
+index 4298dce565bf649ba9aa5728f8dabf46f6483ed7..9d5beb695a09a98d0d288c64562268d7d9d211ef 100644
+--- a/src/core/SkIDChangeListener.cpp
++++ b/src/core/SkIDChangeListener.cpp
+@@ -22,11 +22,11 @@ SkIDChangeListener::SkIDChangeListener() : fShouldDeregister(false) {}
+ 
+ SkIDChangeListener::~SkIDChangeListener() = default;
+ 
+-using List = SkIDChangeListener::List;
++using ListenerList = SkIDChangeListener::List;
+ 
+-List::List() = default;
++ListenerList::List() = default;
+ 
+-List::~List() {
++ListenerList::~List() {
+     // We don't need the mutex. No other thread should have this list while it's being
+     // destroyed.
+     for (auto& listener : fListeners) {
+@@ -36,7 +36,7 @@ List::~List() {
+     }
+ }
+ 
+-void List::add(sk_sp<SkIDChangeListener> listener) {
++void ListenerList::add(sk_sp<SkIDChangeListener> listener) {
+     if (!listener) {
+         return;
+     }
+@@ -52,12 +52,12 @@ void List::add(sk_sp<SkIDChangeListener> listener) {
+     fListeners.push_back(std::move(listener));
+ }
+ 
+-int List::count() const {
++int ListenerList::count() const {
+     SkAutoMutexExclusive lock(fMutex);
+     return fListeners.size();
+ }
+ 
+-void List::changed() {
++void ListenerList::changed() {
+     SkAutoMutexExclusive lock(fMutex);
+     for (auto& listener : fListeners) {
+         if (!listener->shouldDeregister()) {
+@@ -67,7 +67,7 @@ void List::changed() {
+     fListeners.clear();
+ }
+ 
+-void List::reset() {
++void ListenerList::reset() {
+     SkAutoMutexExclusive lock(fMutex);
+     fListeners.clear();
+ }
+diff --git a/src/ports/SkOSFile_posix.cpp b/src/ports/SkOSFile_posix.cpp
+index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102eed2c10952 100644
+--- a/src/ports/SkOSFile_posix.cpp
++++ b/src/ports/SkOSFile_posix.cpp
+@@ -12,10 +12,14 @@
+ #include "src/core/SkOSFile.h"
+ 
+ #include <dirent.h>
++#include <errno.h>
+ #include <new>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
++#if !defined(__AROS__)
+ #include <sys/mman.h>
++#endif
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -78,7 +82,12 @@ bool sk_fidentical(FILE* a, FILE* b) {
+ }
+ 
+ void sk_fmunmap(const void* addr, size_t length) {
++#if defined(__AROS__)
++    (void)length;
++    free(const_cast<void*>(addr));
++#else
+     munmap(const_cast<void*>(addr), length);
++#endif
+ }
+ 
+ void* sk_fdmmap(int fd, size_t* size) {
+@@ -94,10 +103,45 @@ void* sk_fdmmap(int fd, size_t* size) {
+     }
+     size_t fileSize = static_cast<size_t>(status.st_size);
+ 
++#if defined(__AROS__)
++    void* addr = malloc(fileSize);
++    if (!addr) {
++        return nullptr;
++    }
++
++    off_t original = lseek(fd, 0, SEEK_CUR);
++    if (original < 0 || lseek(fd, 0, SEEK_SET) < 0) {
++        free(addr);
++        return nullptr;
++    }
++
++    size_t total = 0;
++    bool readOK = true;
++    while (total < fileSize) {
++        ssize_t bytesRead = read(fd, static_cast<char*>(addr) + total, fileSize - total);
++        if (bytesRead < 0 && errno == EINTR) {
++            continue;
++        }
++        if (bytesRead <= 0) {
++            readOK = false;
++            break;
++        }
++        total += static_cast<size_t>(bytesRead);
++    }
++
++    if (lseek(fd, original, SEEK_SET) < 0) {
++        readOK = false;
++    }
++    if (!readOK) {
++        free(addr);
++        return nullptr;
++    }
++#else
+     void* addr = mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+     if (MAP_FAILED == addr) {
+         return nullptr;
+     }
++#endif
+ 
+     *size = fileSize;
+     return addr;
+@@ -113,10 +157,53 @@ void* sk_fmmap(FILE* f, size_t* size) {
+         return nullptr;
+     }
+ 
++#if defined(__AROS__)
++    struct stat status = {};
++    if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
++        !SkTFitsIn<size_t>(status.st_size)) {
++        return nullptr;
++    }
++
++    size_t fileSize = static_cast<size_t>(status.st_size);
++    void* addr = malloc(fileSize);
++    if (!addr) {
++        return nullptr;
++    }
++    if (sk_qread(f, addr, fileSize, 0) != fileSize) {
++        free(addr);
++        return nullptr;
++    }
++
++    *size = fileSize;
++    return addr;
++#else
+     return sk_fdmmap(fd, size);
++#endif
+ }
+ 
+ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
++#if defined(__AROS__)
++    if (!SkTFitsIn<off_t>(offset)) {
++        return SIZE_MAX;
++    }
++
++    fpos_t original;
++    size_t bytesRead = SIZE_MAX;
++    flockfile(file);
++    if (fgetpos(file, &original) == 0) {
++        if (fseeko(file, static_cast<off_t>(offset), SEEK_SET) == 0) {
++            bytesRead = fread(buffer, 1, count, file);
++            if (bytesRead < count && ferror(file)) {
++                bytesRead = SIZE_MAX;
++            }
++        }
++        if (fsetpos(file, &original) != 0) {
++            bytesRead = SIZE_MAX;
++        }
++    }
++    funlockfile(file);
++    return bytesRead;
++#else
+     int fd = sk_fileno(file);
+     if (fd < 0) {
+         return SIZE_MAX;
+@@ -126,6 +213,7 @@ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
+         return SIZE_MAX;
+     }
+     return bytesRead;
++#endif
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////

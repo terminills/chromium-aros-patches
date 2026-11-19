@@ -1,0 +1,789 @@
+diff --git a/p2p/base/port_interface.h b/p2p/base/port_interface.h
+index 24c9cce422c1f14d504f2250697fa2927ce6dace..e1064d6f2d42a63933e4cb93ea7888a0ec4c4abe 100644
+--- a/p2p/base/port_interface.h
++++ b/p2p/base/port_interface.h
+@@ -52,7 +52,7 @@ class PortInterface {
+   virtual ~PortInterface();
+ 
+   virtual IceCandidateType Type() const = 0;
+-  virtual const Network* Network() const = 0;
++  virtual const webrtc::Network* Network() const = 0;
+ 
+   // Methods to set/get ICE role and tiebreaker values.
+   virtual void SetIceRole(IceRole role) = 0;
+diff --git a/rtc_base/BUILD.gn b/rtc_base/BUILD.gn
+index cd7421c3d09cc0464a9504d100c2f1009b922dc6..88a85b8023c1f29f1baf71cb4a9bd3f49e1a9516 100644
+--- a/rtc_base/BUILD.gn
++++ b/rtc_base/BUILD.gn
+@@ -909,6 +909,9 @@ rtc_library("net_helpers") {
+   if (is_android) {
+     deps += [ ":ifaddrs_android" ]
+   }
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+   if (is_win) {
+     deps += [
+       ":win32",
+@@ -932,6 +935,9 @@ rtc_library("net_test_helpers") {
+   if (is_android) {
+     deps += [ ":ifaddrs_android" ]
+   }
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+   if (is_win) {
+     deps += [
+       ":win32",
+@@ -966,6 +972,9 @@ rtc_library("async_dns_resolver") {
+     "//third_party/abseil-cpp/absl/functional:any_invocable",
+     "//third_party/abseil-cpp/absl/strings:string_view",
+   ]
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+ }
+ 
+ rtc_library("async_dns_resolver_unittests") {
+@@ -1094,6 +1103,9 @@ rtc_library("threading") {
+     "//third_party/abseil-cpp/absl/functional:any_invocable",
+     "//third_party/abseil-cpp/absl/strings:string_view",
+   ]
++  if (is_aros) {
++    deps += [ "//base" ]
++  }
+   if (is_android) {
+     deps += [ ":ifaddrs_android" ]
+   }
+@@ -1229,7 +1241,7 @@ rtc_library("ifaddrs_converter") {
+     sources += [ "mac_ifaddrs_converter.cc" ]
+   }
+ 
+-  if (is_posix || is_fuchsia) {
++  if ((is_posix || is_fuchsia) && !is_aros) {
+     sources += [
+       "ifaddrs_converter.cc",
+       "ifaddrs_converter.h",
+@@ -1277,7 +1289,6 @@ rtc_library("network") {
+   deps = [
+     ":callback_list",
+     ":checks",
+-    ":ifaddrs_converter",
+     ":ip_address",
+     ":logging",
+     ":macromagic",
+@@ -1297,6 +1308,7 @@ rtc_library("network") {
+     "../api/units:time_delta",
+     "experiments:field_trial_parser",
+     "system:rtc_export",
++
+     "//third_party/abseil-cpp/absl/algorithm:container",
+     "//third_party/abseil-cpp/absl/base:nullability",
+     "//third_party/abseil-cpp/absl/functional:any_invocable",
+@@ -1305,6 +1317,12 @@ rtc_library("network") {
+     "//third_party/abseil-cpp/absl/strings:string_view",
+   ]
+ 
++  if (is_aros) {
++    deps += [ "//base" ]
++  } else if (is_posix) {
++    deps += [ ":ifaddrs_converter" ]
++  }
++
+   if (is_win) {
+     deps += [ ":win32" ]
+   }
+diff --git a/rtc_base/async_dns_resolver.cc b/rtc_base/async_dns_resolver.cc
+index 13530590b3fb38a1fde05b78393a2ee53f3c212b..8f15566da8da91fd45b9a9f9c1db1f43832a5f2d 100644
+--- a/rtc_base/async_dns_resolver.cc
++++ b/rtc_base/async_dns_resolver.cc
+@@ -38,6 +38,13 @@
+ #include <dispatch/dispatch.h>
+ #endif
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++
++// Keep AROS bsdsocket macros out of WebRTC's public C++ headers.
++#include <netdb.h>
++#endif
++
+ namespace webrtc {
+ namespace {
+ #if defined(WEBRTC_WIN)
+@@ -98,12 +105,20 @@ int ResolveHostname(absl::string_view hostname,
+   // Android (source code, not documentation):
+   // https://android.googlesource.com/platform/bionic/+/
+   // 7e0bfb511e85834d7c6cb9631206b62f82701d60/libc/netbsd/net/getaddrinfo.c#1657
++#if defined(__AROS__)
++  int ret = base::aros::GetAddressInfo(hostname.data(), nullptr, &hints, &result);
++#else
+   int ret = getaddrinfo(hostname.data(), nullptr, &hints, &result);
++#endif
+   if (ret != 0) {
+     return ret;
+   }
+   addresses = AddressesFromAddrInfo(result, family);
++#if defined(__AROS__)
++  base::aros::FreeAddressInfo(result);
++#else
+   freeaddrinfo(result);
++#endif
+   return 0;
+ }
+ #endif  // !defined(WEBRTC_WIN)
+diff --git a/rtc_base/byte_order.h b/rtc_base/byte_order.h
+index bf44c450e64e71b65b27e4c28a2875d0a111f448..31ff3d9a4aeb300f55a132dd36f07b005f19e429 100644
+--- a/rtc_base/byte_order.h
++++ b/rtc_base/byte_order.h
+@@ -41,6 +41,38 @@
+ #define le32toh(v) OSSwapLittleToHostInt32(v)
+ #define le64toh(v) OSSwapLittleToHostInt64(v)
+ 
++#elif defined(__AROS__)
++
++#if defined(WEBRTC_ARCH_LITTLE_ENDIAN)
++#define htobe16(v) __builtin_bswap16(v)
++#define htobe32(v) __builtin_bswap32(v)
++#define htobe64(v) __builtin_bswap64(v)
++#define be16toh(v) __builtin_bswap16(v)
++#define be32toh(v) __builtin_bswap32(v)
++#define be64toh(v) __builtin_bswap64(v)
++#define htole16(v) (v)
++#define htole32(v) (v)
++#define htole64(v) (v)
++#define le16toh(v) (v)
++#define le32toh(v) (v)
++#define le64toh(v) (v)
++#elif defined(WEBRTC_ARCH_BIG_ENDIAN)
++#define htobe16(v) (v)
++#define htobe32(v) (v)
++#define htobe64(v) (v)
++#define be16toh(v) (v)
++#define be32toh(v) (v)
++#define be64toh(v) (v)
++#define htole16(v) __builtin_bswap16(v)
++#define htole32(v) __builtin_bswap32(v)
++#define htole64(v) __builtin_bswap64(v)
++#define le16toh(v) __builtin_bswap16(v)
++#define le32toh(v) __builtin_bswap32(v)
++#define le64toh(v) __builtin_bswap64(v)
++#else
++#error WEBRTC_ARCH_BIG_ENDIAN or WEBRTC_ARCH_LITTLE_ENDIAN must be defined.
++#endif
++
+ #elif defined(WEBRTC_WIN)
+ 
+ #if defined(WEBRTC_WIN)
+diff --git a/rtc_base/cpu_info.cc b/rtc_base/cpu_info.cc
+index fa17252c7f15385798c8977757b2f669f232eb79..2c26684ba3a17caed002556e0225417603456803 100644
+--- a/rtc_base/cpu_info.cc
++++ b/rtc_base/cpu_info.cc
+@@ -29,6 +29,12 @@
+ #include <unistd.h>
+ #elif defined(WEBRTC_FUCHSIA)
+ #include <zircon/syscalls.h>
++#elif defined(__AROS__)
++#include <proto/exec.h>
++#pragma push_macro("SCHED_RR")
++#undef SCHED_RR
++#include <proto/kernel.h>
++#pragma pop_macro("SCHED_RR")
+ #elif defined(WEBRTC_LINUX)
+ #include <unistd.h>
+ #endif  // WEBRTC_LINUX
+@@ -69,6 +75,11 @@ uint32_t DetectNumberOfCoresHelper() {
+   }
+ #elif defined(WEBRTC_FUCHSIA)
+   number_of_cores = zx_system_get_num_cpus();
++#elif defined(__AROS__)
++  APTR KernelBase = OpenResource("kernel.resource");
++  number_of_cores = KernelBase ? static_cast<int>(KrnGetCPUCount()) : 1;
++  if (number_of_cores <= 0)
++    number_of_cores = 1;
+ #else
+   RTC_LOG(LS_ERROR) << "No function to get number of cores";
+   number_of_cores = 1;
+diff --git a/rtc_base/ip_address.h b/rtc_base/ip_address.h
+index d08456ea87bbfab8328c4348c059a67c45a5cee4..5fd15fafd706dc9cd001c29c5065cb7eb19b2784 100644
+--- a/rtc_base/ip_address.h
++++ b/rtc_base/ip_address.h
+@@ -23,7 +23,11 @@
+ 
+ #if defined(WEBRTC_POSIX)
+ #include <arpa/inet.h>  // IWYU pragma: keep
++#if defined(__AROS__)
++struct addrinfo;
++#else
+ #include <netdb.h>
++#endif
+ #include <netinet/in.h>  // IWYU pragma: export
+ #endif
+ 
+diff --git a/rtc_base/net_helpers.cc b/rtc_base/net_helpers.cc
+index 6edd2c744eec7ca38f4a73ecf5f2e1374c5dc3b2..504d9ab18b6d4c3564581f33bf10f1687837bc35 100644
+--- a/rtc_base/net_helpers.cc
++++ b/rtc_base/net_helpers.cc
+@@ -13,6 +13,11 @@
+ #include <string>
+ 
+ #include "absl/strings/string_view.h"
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
+ 
+ #if defined(WEBRTC_WIN)
+ #include <ws2spi.h>
+@@ -27,6 +32,8 @@ namespace webrtc {
+ const char* inet_ntop(int af, const void* src, char* dst, socklen_t size) {
+ #if defined(WEBRTC_WIN)
+   return win32_inet_ntop(af, src, dst, size);
++#elif BUILDFLAG(IS_AROS)
++  return base::aros::SocketInetNtop(af, src, dst, size);
+ #else
+   return ::inet_ntop(af, src, dst, size);
+ #endif
+@@ -36,6 +43,8 @@ int inet_pton(int af, absl::string_view src, void* dst) {
+   std::string src_str(src);
+ #if defined(WEBRTC_WIN)
+   return win32_inet_pton(af, src_str.c_str(), dst);
++#elif BUILDFLAG(IS_AROS)
++  return base::aros::SocketInetPton(af, src_str.c_str(), dst);
+ #else
+   return ::inet_pton(af, src_str.c_str(), dst);
+ #endif
+diff --git a/rtc_base/net_test_helpers.cc b/rtc_base/net_test_helpers.cc
+index 91ad83969cb36957fad9692e1de3f7cb454c0b52..2c2c6bea21b5cdeec0cb192930e872c5718587a8 100644
+--- a/rtc_base/net_test_helpers.cc
++++ b/rtc_base/net_test_helpers.cc
+@@ -11,6 +11,13 @@
+ #include "rtc_base/net_test_helpers.h"
+ 
+ #include "rtc_base/net_helpers.h"
++#include <memory>
++#include <string>
++#include <vector>
++
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ 
+ #if defined(WEBRTC_WIN)
+ #include <ws2spi.h>
+@@ -21,15 +28,38 @@
+ #if defined(WEBRTC_POSIX)
+ #if defined(WEBRTC_ANDROID)
+ #include "rtc_base/ifaddrs_android.h"
+-#else
++#elif !defined(__AROS__)
+ #include <ifaddrs.h>
+ #endif
+ #endif  // defined(WEBRTC_POSIX)
+ 
+ namespace webrtc {
+ 
++#if defined(__AROS__)
++namespace {
++
++bool HasAddressFamily(int family) {
++  std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++  if (!base::aros::GetNetworkInterfaces(&interfaces)) {
++    return false;
++  }
++
++  for (const auto& interface : interfaces) {
++    if (interface.is_up && interface.is_running &&
++        interface.family == family) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++#endif
++
+ bool HasIPv4Enabled() {
+-#if defined(WEBRTC_POSIX)
++#if defined(__AROS__)
++  return HasAddressFamily(AF_INET);
++#elif defined(WEBRTC_POSIX)
+   bool has_ipv4 = false;
+   struct ifaddrs* ifa;
+   if (getifaddrs(&ifa) < 0) {
+@@ -88,6 +118,8 @@ bool HasIPv6Enabled() {
+     }
+   }
+   return false;
++#elif defined(__AROS__)
++  return HasAddressFamily(AF_INET6);
+ #elif defined(WEBRTC_POSIX)
+   bool has_ipv6 = false;
+   struct ifaddrs* ifa;
+diff --git a/rtc_base/network.cc b/rtc_base/network.cc
+index 9567199d48fee63e2132ed339a95153f601b4b5a..8e976592a84910c8da0f7700b03b3de698fbd75e 100644
+--- a/rtc_base/network.cc
++++ b/rtc_base/network.cc
+@@ -15,6 +15,10 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <map>
++
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ #include <memory>
+ #include <span>
+ #include <string>
+@@ -47,7 +51,7 @@
+ #include "rtc_base/thread.h"
+ 
+ // IWYU pragma: begin_keep
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+ #include <net/if.h>
+ #endif  // WEBRTC_POSIX
+ 
+@@ -57,7 +61,7 @@
+ #include "rtc_base/experiments/field_trial_parser.h"
+ #include "rtc_base/string_utils.h"
+ #include "rtc_base/win32.h"
+-#else
++#elif !defined(__AROS__)
+ #include "rtc_base/ifaddrs_converter.h"
+ #endif
+ // IWYU pragma: end_keep
+@@ -618,7 +622,110 @@ void BasicNetworkManager::OnNetworksChanged() {
+   UpdateNetworksOnce();
+ }
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(__AROS__)
++
++bool BasicNetworkManager::CreateNetworks(
++    bool include_ignored,
++    std::vector<std::unique_ptr<Network>>* networks) const {
++  std::vector<base::aros::NetworkInterfaceInfo> interfaces;
++  if (!base::aros::GetNetworkInterfaces(&interfaces)) {
++    RTC_LOG_ERR(LS_ERROR) << "AROSTCP failed to gather interface data";
++    return false;
++  }
++
++  std::map<std::string, Network*> current_networks;
++  for (const auto& interface : interfaces) {
++    if (!interface.is_up || !interface.is_running ||
++        (interface.family != AF_INET && interface.family != AF_INET6)) {
++      continue;
++    }
++
++    IPAddress address;
++    IPAddress mask;
++    if (interface.family == AF_INET) {
++      if (interface.address_length != sizeof(in_addr)) {
++        continue;
++      }
++      in_addr native_address = {};
++      memcpy(&native_address, interface.address.data(), sizeof(native_address));
++      address = IPAddress(native_address);
++      if (interface.has_netmask) {
++        in_addr native_mask = {};
++        memcpy(&native_mask, interface.netmask.data(), sizeof(native_mask));
++        mask = IPAddress(native_mask);
++      }
++    } else {
++      if (interface.address_length != sizeof(in6_addr)) {
++        continue;
++      }
++      in6_addr native_address = {};
++      memcpy(&native_address, interface.address.data(), sizeof(native_address));
++      address = IPAddress(native_address);
++      if (IsIgnoredIPv6(allow_mac_based_ipv6_, InterfaceAddress(address))) {
++        continue;
++      }
++      if (interface.has_netmask) {
++        in6_addr native_mask = {};
++        memcpy(&native_mask, interface.netmask.data(), sizeof(native_mask));
++        mask = IPAddress(native_mask);
++      }
++    }
++
++    const int prefix_length =
++        interface.has_netmask ? CountIPMaskBits(mask) : address.Size() * 8;
++    const IPAddress prefix = TruncateIP(address, prefix_length);
++    const InterfaceAddress interface_address(address);
++    const std::string key =
++        MakeNetworkKey(interface.name, prefix, prefix_length);
++    auto existing = current_networks.find(key);
++    if (existing != current_networks.end()) {
++      existing->second->AddIP(interface_address);
++      continue;
++    }
++
++    NetworkMonitorInterface::InterfaceInfo interface_info;
++    if (interface.is_loopback || IPIsLoopback(address)) {
++      interface_info = {
++          .adapter_type = ADAPTER_TYPE_LOOPBACK,
++          .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
++          .network_preference = NetworkPreference::NEUTRAL,
++          .available = true,
++      };
++    } else if (network_monitor_) {
++      interface_info = network_monitor_->GetInterfaceInfo(interface.name);
++    } else {
++      interface_info = {
++          .adapter_type = GetAdapterTypeFromName(interface.name),
++          .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
++          .network_preference = NetworkPreference::NEUTRAL,
++          .available = true,
++      };
++    }
++
++    if (interface_info.adapter_type != ADAPTER_TYPE_VPN &&
++        IsConfiguredVpn(prefix, prefix_length)) {
++      interface_info.underlying_type_for_vpn = interface_info.adapter_type;
++      interface_info.adapter_type = ADAPTER_TYPE_VPN;
++    }
++
++    auto network = CreateNetwork(interface.name, interface.name, prefix,
++                                 prefix_length, interface_info.adapter_type);
++    network->set_default_local_address_provider(this);
++    network->set_scope_id(interface.scope_id);
++    network->AddIP(interface_address);
++    network->set_ignored(!interface_info.available || IsIgnoredNetwork(*network));
++    network->set_underlying_type_for_vpn(
++        interface_info.underlying_type_for_vpn);
++    network->set_network_preference(interface_info.network_preference);
++    if (include_ignored || !network->ignored()) {
++      current_networks[key] = network.get();
++      networks->push_back(std::move(network));
++    }
++  }
++  return true;
++}
++
++#elif defined(WEBRTC_POSIX)
+ NetworkMonitorInterface::InterfaceInfo BasicNetworkManager::GetInterfaceInfo(
+     struct ifaddrs* cursor) const {
+   if (cursor->ifa_flags & IFF_LOOPBACK) {
+diff --git a/rtc_base/network.h b/rtc_base/network.h
+index 144a2f682f6c8630698c8f48e0df0852da116276..0edb2a7d9904701583b69e113f155803594d186e 100644
+--- a/rtc_base/network.h
++++ b/rtc_base/network.h
+@@ -41,10 +41,10 @@
+ #include "rtc_base/thread.h"
+ #include "rtc_base/thread_annotations.h"
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+ #include "rtc_base/ifaddrs_converter.h"
+ struct ifaddrs;
+-#endif  // defined(WEBRTC_POSIX)
++#endif  // defined(WEBRTC_POSIX) && !defined(__AROS__)
+ 
+ namespace webrtc {
+ 
+@@ -583,7 +583,7 @@ class RTC_EXPORT BasicNetworkManager : public NetworkManagerBase,
+                                            const IPAddress& address) override;
+ 
+  protected:
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+   // Separated from CreateNetworks for tests.
+   void ConvertIfAddrs(ifaddrs* interfaces,
+                       IfAddrsConverter* converter,
+diff --git a/rtc_base/physical_socket_server.cc b/rtc_base/physical_socket_server.cc
+index 9d9927e85bd2c7aab8baba1ca23b54c4c718ab5d..93b85d8c803ea8aca0dcca3a371c1696f5139b03 100644
+--- a/rtc_base/physical_socket_server.cc
++++ b/rtc_base/physical_socket_server.cc
+@@ -63,6 +63,9 @@
+ #undef SetPort
+ #endif
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ #if defined(WEBRTC_LINUX)
+ #include <asm-generic/socket.h>
+ #include <sys/epoll.h>
+@@ -79,10 +82,45 @@
+ typedef void* SockOptArg;
+ #endif  // WEBRTC_POSIX
+ 
++
+ #if defined(WEBRTC_WIN)
+ typedef char* SockOptArg;
+ #endif
+ 
++#if defined(__AROS__)
++#define RTC_OS_ACCEPT ::base::aros::Accept
++#define RTC_OS_BIND ::base::aros::Bind
++#define RTC_OS_CLOSE_SOCKET ::base::aros::SocketClose
++#define RTC_OS_CONNECT ::base::aros::Connect
++#define RTC_OS_GETPEERNAME ::base::aros::GetPeerName
++#define RTC_OS_GETSOCKNAME ::base::aros::GetSocketName
++#define RTC_OS_GETSOCKOPT ::base::aros::GetSocketOption
++#define RTC_OS_LISTEN ::base::aros::Listen
++#define RTC_OS_RECV ::base::aros::Receive
++#define RTC_OS_RECVFROM ::base::aros::ReceiveFrom
++#define RTC_OS_RECVMSG ::base::aros::ReceiveMessage
++#define RTC_OS_SEND ::base::aros::Send
++#define RTC_OS_SENDTO ::base::aros::SendTo
++#define RTC_OS_SETSOCKOPT ::base::aros::SetSocketOption
++#define RTC_OS_SOCKET ::base::aros::Socket
++#else
++#define RTC_OS_ACCEPT ::accept
++#define RTC_OS_BIND ::bind
++#define RTC_OS_CLOSE_SOCKET ::closesocket
++#define RTC_OS_CONNECT ::connect
++#define RTC_OS_GETPEERNAME ::getpeername
++#define RTC_OS_GETSOCKNAME ::getsockname
++#define RTC_OS_GETSOCKOPT ::getsockopt
++#define RTC_OS_LISTEN ::listen
++#define RTC_OS_RECV ::recv
++#define RTC_OS_RECVFROM ::recvfrom
++#define RTC_OS_RECVMSG ::recvmsg
++#define RTC_OS_SEND ::send
++#define RTC_OS_SENDTO ::sendto
++#define RTC_OS_SETSOCKOPT ::setsockopt
++#define RTC_OS_SOCKET ::socket
++#endif
++
+ #if defined(WEBRTC_LINUX)
+ // POLLRDHUP / EPOLLRDHUP are only defined starting with Linux 2.6.17.
+ #if !defined(POLLRDHUP)
+@@ -100,7 +138,7 @@ namespace {
+ // RFC-3168, Section 5. ECN is the two least significant bits.
+ constexpr uint8_t kEcnMask = 0x03;
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+ 
+ EcnMarking EcnFromDs(uint8_t ds) {
+   // RFC-3168, Section 5.
+@@ -216,7 +254,7 @@ PhysicalSocket::PhysicalSocket(PhysicalSocketServer* ss, SOCKET s)
+     int type = SOCK_STREAM;
+     socklen_t len = sizeof(type);
+     const int res =
+-        getsockopt(s_, SOL_SOCKET, SO_TYPE, (SockOptArg)&type, &len);
++        RTC_OS_GETSOCKOPT(s_, SOL_SOCKET, SO_TYPE, (SockOptArg)&type, &len);
+     RTC_DCHECK_EQ(0, res);
+     udp_ = (SOCK_DGRAM == type);
+   }
+@@ -228,7 +266,7 @@ PhysicalSocket::~PhysicalSocket() {
+ 
+ bool PhysicalSocket::Create(int family, int type) {
+   Close();
+-  s_ = ::socket(family, type, 0);
++  s_ = RTC_OS_SOCKET(family, type, 0);
+   udp_ = (SOCK_DGRAM == type);
+   family_ = family;
+   UpdateLastError();
+@@ -242,7 +280,7 @@ SocketAddress PhysicalSocket::GetLocalAddress() const {
+   sockaddr_storage addr_storage = {};
+   socklen_t addrlen = sizeof(addr_storage);
+   sockaddr* addr = reinterpret_cast<sockaddr*>(&addr_storage);
+-  int result = ::getsockname(s_, addr, &addrlen);
++  int result = RTC_OS_GETSOCKNAME(s_, addr, &addrlen);
+   SocketAddress address;
+   if (result >= 0) {
+     SocketAddressFromSockAddrStorage(addr_storage, &address);
+@@ -257,7 +295,7 @@ SocketAddress PhysicalSocket::GetRemoteAddress() const {
+   sockaddr_storage addr_storage = {};
+   socklen_t addrlen = sizeof(addr_storage);
+   sockaddr* addr = reinterpret_cast<sockaddr*>(&addr_storage);
+-  int result = ::getpeername(s_, addr, &addrlen);
++  int result = RTC_OS_GETPEERNAME(s_, addr, &addrlen);
+   SocketAddress address;
+   if (result >= 0) {
+     SocketAddressFromSockAddrStorage(addr_storage, &address);
+@@ -304,7 +342,7 @@ int PhysicalSocket::Bind(const SocketAddress& bind_addr) {
+   sockaddr_storage addr_storage;
+   size_t len = copied_bind_addr.ToSockAddrStorage(&addr_storage);
+   sockaddr* addr = reinterpret_cast<sockaddr*>(&addr_storage);
+-  int err = ::bind(s_, addr, static_cast<int>(len));
++  int err = RTC_OS_BIND(s_, addr, static_cast<int>(len));
+   UpdateLastError();
+ #if RTC_DCHECK_IS_ON
+   if (0 == err) {
+@@ -340,7 +378,7 @@ int PhysicalSocket::DoConnect(const SocketAddress& connect_addr) {
+   sockaddr_storage addr_storage;
+   size_t len = connect_addr.ToSockAddrStorage(&addr_storage);
+   sockaddr* addr = reinterpret_cast<sockaddr*>(&addr_storage);
+-  int err = ::connect(s_, addr, static_cast<int>(len));
++  int err = RTC_OS_CONNECT(s_, addr, static_cast<int>(len));
+   UpdateLastError();
+   uint8_t events = DE_READ | DE_WRITE;
+   if (err == 0) {
+@@ -376,7 +414,7 @@ int PhysicalSocket::GetOption(Option opt, int* value) {
+   if (TranslateOption(opt, &slevel, &sopt) == -1)
+     return -1;
+   socklen_t optlen = sizeof(*value);
+-  int ret = ::getsockopt(s_, slevel, sopt, (SockOptArg)value, &optlen);
++  int ret = RTC_OS_GETSOCKOPT(s_, slevel, sopt, (SockOptArg)value, &optlen);
+   if (ret == -1) {
+     return -1;
+   }
+@@ -427,11 +465,12 @@ int PhysicalSocket::SetOption(Option opt, int value) {
+     // Set the IPv4 option in all cases to support dual-stack sockets.
+     // Don't bother checking the return code, as this is expected to fail if
+     // it's not actually dual-stack.
+-    ::setsockopt(s_, IPPROTO_IP, IP_TOS, (SockOptArg)&value, sizeof(value));
++    RTC_OS_SETSOCKOPT(s_, IPPROTO_IP, IP_TOS, (SockOptArg)&value,
++                      sizeof(value));
+   }
+ #endif
+-  int result =
+-      ::setsockopt(s_, slevel, sopt, (SockOptArg)&value, sizeof(value));
++  int result = RTC_OS_SETSOCKOPT(s_, slevel, sopt, (SockOptArg)&value,
++                                 sizeof(value));
+   if (result != 0) {
+     UpdateLastError();
+   }
+@@ -573,7 +612,7 @@ int PhysicalSocket::DoReadFromSocket(void* buffer,
+   socklen_t addr_len = sizeof(addr_storage);
+   sockaddr* addr = reinterpret_cast<sockaddr*>(&addr_storage);
+ 
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+   int received = 0;
+   iovec iov = {.iov_base = buffer, .iov_len = length};
+   msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1};
+@@ -624,12 +663,12 @@ int PhysicalSocket::DoReadFromSocket(void* buffer,
+ #else
+   int received = 0;
+   if (out_addr) {
+-    received = ::recvfrom(s_, static_cast<char*>(buffer),
+-                          static_cast<int>(length), 0, addr, &addr_len);
++    received = RTC_OS_RECVFROM(s_, static_cast<char*>(buffer),
++                               static_cast<int>(length), 0, addr, &addr_len);
+     SocketAddressFromSockAddrStorage(addr_storage, out_addr);
+   } else {
+-    received =
+-        ::recv(s_, static_cast<char*>(buffer), static_cast<int>(length), 0);
++    received = RTC_OS_RECV(s_, static_cast<char*>(buffer),
++                           static_cast<int>(length), 0);
+   }
+   if (timestamp) {
+     *timestamp = -1;
+@@ -639,7 +678,7 @@ int PhysicalSocket::DoReadFromSocket(void* buffer,
+ }
+ 
+ int PhysicalSocket::Listen(int backlog) {
+-  int err = ::listen(s_, backlog);
++  int err = RTC_OS_LISTEN(s_, backlog);
+   UpdateLastError();
+   if (err == 0) {
+     state_ = CS_CONNECTING;
+@@ -671,7 +710,7 @@ Socket* PhysicalSocket::Accept(SocketAddress* out_addr) {
+ int PhysicalSocket::Close() {
+   if (s_ == INVALID_SOCKET)
+     return 0;
+-  int err = ::closesocket(s_);
++  int err = RTC_OS_CLOSE_SOCKET(s_);
+   UpdateLastError();
+   s_ = INVALID_SOCKET;
+   state_ = CS_CLOSED;
+@@ -685,11 +724,11 @@ int PhysicalSocket::Close() {
+ SOCKET PhysicalSocket::DoAccept(SOCKET socket,
+                                 sockaddr* addr,
+                                 socklen_t* addrlen) {
+-  return ::accept(socket, addr, addrlen);
++  return RTC_OS_ACCEPT(socket, addr, addrlen);
+ }
+ 
+ int PhysicalSocket::DoSend(SOCKET socket, const char* buf, int len, int flags) {
+-  return ::send(socket, buf, len, flags);
++  return RTC_OS_SEND(socket, buf, len, flags);
+ }
+ 
+ int PhysicalSocket::DoSendTo(SOCKET socket,
+@@ -698,7 +737,7 @@ int PhysicalSocket::DoSendTo(SOCKET socket,
+                              int flags,
+                              const struct sockaddr* dest_addr,
+                              socklen_t addrlen) {
+-  return ::sendto(socket, buf, len, flags, dest_addr, addrlen);
++  return RTC_OS_SENDTO(socket, buf, len, flags, dest_addr, addrlen);
+ }
+ 
+ void PhysicalSocket::OnResolveResult(const AsyncDnsResolverResult& result) {
+@@ -756,7 +795,7 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
+       *slevel = IPPROTO_IP;
+       *sopt = IP_DONTFRAGMENT;
+       break;
+-#elif defined(WEBRTC_MAC) || defined(BSD)
++#elif defined(WEBRTC_MAC) || defined(BSD) || defined(__AROS__)
+       RTC_LOG(LS_WARNING) << "Socket::OPT_DONTFRAGMENT not supported.";
+       return -1;
+ #elif defined(WEBRTC_POSIX)
+@@ -805,7 +844,7 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
+       return -1;
+ #endif
+     case OPT_RECV_ECN:
+-#if defined(WEBRTC_POSIX)
++#if defined(WEBRTC_POSIX) && !defined(__AROS__)
+       if (family_ == AF_INET6) {
+         *slevel = IPPROTO_IPV6;
+         *sopt = IPV6_RECVTCLASS;
+@@ -888,6 +927,8 @@ bool SocketDispatcher::Initialize() {
+ #if defined(WEBRTC_WIN)
+   u_long argp = 1;
+   ioctlsocket(s_, FIONBIO, &argp);
++#elif defined(__AROS__)
++  base::aros::SetSocketNonBlocking(s_, true);
+ #elif defined(WEBRTC_POSIX)
+   fcntl(s_, F_SETFL, fcntl(s_, F_GETFL, 0) | O_NONBLOCK);
+   int value = 1;
+@@ -904,7 +945,7 @@ bool SocketDispatcher::Initialize() {
+   // default will terminate the process, which we don't want. By specifying
+   // this socket option, SIGPIPE will be disabled for the socket.
+   value = 1;
+-  if (::setsockopt(s_, SOL_SOCKET, SO_NOSIGPIPE, &value, sizeof(value)) != 0) {
++  if (RTC_OS_SETSOCKOPT(s_, SOL_SOCKET, SO_NOSIGPIPE, &value, sizeof(value)) != 0) {
+     RTC_DLOG(LS_ERROR) << "::setsockopt failed. errno: " << LAST_SYSTEM_ERROR;
+   }
+ 
+@@ -980,7 +1021,7 @@ bool SocketDispatcher::IsDescriptorClosed() {
+   ssize_t res;
+   // Retry if the system call was interrupted.
+   do {
+-    res = ::recv(s_, &ch, 1, MSG_PEEK);
++    res = RTC_OS_RECV(s_, &ch, 1, MSG_PEEK);
+   } while (res < 0 && errno == EINTR);
+   if (res > 0) {
+     // Data available, so not closed.
+@@ -1460,8 +1501,8 @@ static void ProcessEvents(Dispatcher* dispatcher,
+   int errcode = 0;
+   if (check_error) {
+     socklen_t len = sizeof(errcode);
+-    int res = ::getsockopt(dispatcher->GetDescriptor(), SOL_SOCKET, SO_ERROR,
+-                           &errcode, &len);
++    int res = RTC_OS_GETSOCKOPT(dispatcher->GetDescriptor(), SOL_SOCKET,
++                                SO_ERROR, &errcode, &len);
+     if (res < 0) {
+       // If we are sure an error has occurred, or if getsockopt failed for a
+       // socket descriptor, make sure we set the error code to a nonzero value.
+diff --git a/rtc_base/platform_thread_types.cc b/rtc_base/platform_thread_types.cc
+index 20bf4afc44c82cfa659ee14666984f92f9c713ed..a8b16c45f4ddef1112df711e517b2ef0e6ea9d57 100644
+--- a/rtc_base/platform_thread_types.cc
++++ b/rtc_base/platform_thread_types.cc
+@@ -36,6 +36,9 @@ typedef HRESULT(WINAPI* RTC_SetThreadDescription)(HANDLE hThread,
+ 
+ #include "rtc_base/checks.h"
+ #endif
++#if defined(__AROS__)
++#include <proto/exec.h>
++#endif
+ // IWYU pragma: end_keep
+ 
+ namespace webrtc {
+@@ -52,6 +55,8 @@ PlatformThreadId CurrentThreadId() {
+   return zx_thread_self();
+ #elif defined(WEBRTC_LINUX)
+   return syscall(__NR_gettid);
++#elif defined(__AROS__)
++  return reinterpret_cast<PlatformThreadId>(FindTask(nullptr));
+ #elif defined(__EMSCRIPTEN__)
+   return static_cast<PlatformThreadId>(pthread_self());
+ #else
