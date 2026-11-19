@@ -1,0 +1,22 @@
+{
+  "scope": "Read-only source audit, not measured attribution of native retention",
+  "findings": [
+    "Native ArosPlatformTask TaskEntry executes CRT leave hooks but has no pthread TLS destructor loop. The registered posixc leave hook only closes its per-task library base.",
+    "SDK pthread foreign task slots are task-local but documented to never run destructors. Chromium base TLS and PartitionAlloc cache TLS currently use those keys.",
+    "PartitionAlloc cache Delete destructor unregisters the thread cache and purges cached allocations; absent exit callback is a supported retention hypothesis.",
+    "Compiler emutls AROS backend allocates arrays/values without a cleanup path; freeing these before CRT or C++ destructors finish would be unsafe.",
+    "Task resource slot storage does not imply destruction of pointed-to allocations."
+  ],
+  "next": "Measure active/dead task cache counts and bytes, then implement Chromium-owned native task exit lifecycle; cover native worker and DOS main task, destructor reentrancy, ordering, no cached data use after free. No SDK mmap or global pthread changes.",
+  "sources": {
+    "/mnt/short-term/job0254-01a1e62b/src/base/threading/aros_native_task.cc": "b8f14144fe076e73e1b8bdff153761b47e78478d4800dc5265bfd1af2e5a8393",
+    "/mnt/short-term/job0254-01a1e62b/src/base/threading/platform_thread_posix.cc": "ccee5fe5db3305e20efa1b113e84b632b286cc32923ff4c750e7005b37e900cc",
+    "/mnt/short-term/job0254-01a1e62b/src/base/threading/thread_local_storage_posix.cc": "6bc9f1d27da0089d6f561f982c7d8c7e76a65e5aa1d9796a5a18c8db599f9c0b",
+    "/mnt/short-term/job0254-01a1e62b/src/base/allocator/partition_allocator/src/partition_alloc/partition_tls.h": "779ff4556a27da7cd49bafe3b4a46b746015e2ebd6c5d44ce89d66e0eab6498d",
+    "/mnt/short-term/job0254-01a1e62b/src/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc": "107889ad6ccfa9118f85000c3695a88f0fcb5f580538a0935658d0c7f390ee27",
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/aros-web/libs/v8/engine/emutls-aros.c": "34fe43929a6da7b7c08a0fa0ddffdfc8f44c34a7deb25bfb57d87bcc1214f23e",
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/AROS-credentials-master/compiler/pthread/pthread.c": "da73514e50ab48a04d120ce8f1d4f31aa9e84c9e694faf2931b26fb8b48c657d",
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/AROS-credentials-master/compiler/pthread/pthread_getspecific.c": "076aa4cbfb9609018b7994bdce38a3dfadd71ec5f2b6ec31de0c7d0b42daf059",
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/AROS-credentials-master/compiler/crt/posixc/__threadhook.c": "4d4184b1a001201242c76169c255c45fee49ac2f350eeaf1db0fa032e26ba46b"
+  }
+}

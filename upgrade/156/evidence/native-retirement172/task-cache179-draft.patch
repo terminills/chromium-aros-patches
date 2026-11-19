@@ -1,0 +1,35 @@
+--- a/base/threading/platform_thread_posix.cc
++++ b/base/threading/platform_thread_posix.cc
+@@ -51,6 +51,9 @@
+ 
+ #if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+ #include "partition_alloc/stack/stack.h"  // nogncheck
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/internal/thread_cache_internal.h"  // nogncheck
++#endif
+ #endif
+ 
+ // The Exec API macros (Allocate(), SysBase, ...) clash with PartitionAlloc
+@@ -134,6 +137,22 @@
+   partition_alloc::internal::StackTopRegistry::Get().NotifyThreadDestroyed();
+ #endif
+ 
++#if BUILDFLAG(IS_AROS) && PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
++  // Diagnostic only: measure cache payload at native task exit before any
++  // proposed destructor changes. Current-task reads avoid racing other caches.
++  uint64_t cached_bytes = 0;
++  uint64_t metadata_bytes = 0;
++  for (size_t i = 0;
++       i < partition_alloc::internal::kMaxThreadCacheIndex; ++i) {
++    partition_alloc::ThreadCacheStats stats{};
++    partition_alloc::internal::ThreadCacheRegistry::Instance().DumpStats(
++        true, &stats, i);
++    cached_bytes += stats.bucket_total_memory;
++    metadata_bytes += stats.metadata_overhead;
++  }
++  LOG(INFO) << "[Chromium:AROS:TaskCacheExit] cached=" << cached_bytes
++            << " metadata=" << metadata_bytes;
++#endif
+   base::TerminateOnThread();
+ #if BUILDFLAG(IS_AROS)
+   CommandLine::ArosUnbindCurrentThread();

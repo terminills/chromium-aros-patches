@@ -1,0 +1,46 @@
+--- a/base/task/post_job.cc
++++ b/base/task/post_job.cc
+@@ -3,6 +3,12 @@
+ // found in the LICENSE file.
+ 
+ #include "base/task/post_job.h"
++
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/debug/stack_trace.h"
++#include "base/logging.h"
++#endif
+ 
+ #include "base/task/scoped_set_task_priority_for_current_thread.h"
+ #include "base/task/thread_pool/job_task_source.h"
+@@ -23,10 +29,16 @@
+       << "Hint: if this is in a unit test, you're likely merely missing a "
+          "base::test::TaskEnvironment member in your fixture.\n";
+ 
+-  return base::MakeRefCounted<internal::JobTaskSource>(
++  auto source = base::MakeRefCounted<internal::JobTaskSource>(
+       from_here, traits, internal::GetCurrentTaskImportance(),
+       std::move(worker_task), std::move(max_concurrency_callback),
+       static_cast<internal::ThreadPoolImpl*>(ThreadPoolInstance::Get()));
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:JobLifetime] create source=" << source.get()
++            << " delegate=" << source->delegate()
++            << " from=" << from_here.ToString();
++#endif
++  return source;
+ }
+ 
+ }  // namespace
+@@ -139,6 +151,12 @@
+ }
+ 
+ void JobHandle::Cancel() {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:JobLifetime] cancel source=" << task_source_.get()
++            << " delegate=" << task_source_->delegate()
++            << " current_pool=" << ThreadPoolInstance::Get();
++  base::debug::StackTrace().Print();
++#endif
+   DCHECK(internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+       task_source_->delegate()));
+   task_source_->Cancel();
