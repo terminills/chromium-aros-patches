@@ -58931,6 +58931,38 @@ index 750f48d6e90605ee7c5bd7309a23a9cdd3b680cf..d8d326665ce3c5f76bb266896e255ed2
          } else {
            locals.Set(name, variable_data);
            cq_dependent_locals.erase(name);
+diff --git a/third_party/blink/renderer/core/css/style_environment_variables.cc b/third_party/blink/renderer/core/css/style_environment_variables.cc
+index fac008246a1c0411d1d5d258626a66300d2dcec5..3cfa4288ab1a4901d63a063ad768d9003ebcf0bf 100644
+--- a/third_party/blink/renderer/core/css/style_environment_variables.cc
++++ b/third_party/blink/renderer/core/css/style_environment_variables.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/css/style_environment_variables.h"
+ 
++#include "base/aros/process_local.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+ #include "third_party/blink/renderer/platform/wtf/text/format.h"
+@@ -61,8 +63,18 @@ StyleEnvironmentVariables::StyleEnvironmentVariables() : parent_(nullptr) {
+ 
+ // static
+ StyleEnvironmentVariables& StyleEnvironmentVariables::GetRootInstance() {
++#if BUILDFLAG(IS_AROS)
++  // This root owns a traced children vector. Each renderer must keep both
++  // the root and every vector backing in its own Oilpan heap.
++  struct StyleEnvironmentRootProcessTag;
++  auto& instance = base::aros::ProcessLocalValue<
++      Persistent<StyleEnvironmentVariables>, StyleEnvironmentRootProcessTag>();
++  if (!instance)
++    instance = MakeGarbageCollected<StyleEnvironmentVariables>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<StyleEnvironmentVariables>, instance,
+                       (MakeGarbageCollected<StyleEnvironmentVariables>()));
++#endif
+   return *instance;
+ }
+ 
 diff --git a/third_party/blink/renderer/core/css/style_scope.cc b/third_party/blink/renderer/core/css/style_scope.cc
 index 65c73be5339131b213bb7ab20712e6b70757c9e8..2aaa95e7ca535cfa22bfc18a9764b90d67c63f9e 100644
 --- a/third_party/blink/renderer/core/css/style_scope.cc
