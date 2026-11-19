@@ -581,3 +581,27 @@ file through multiple write handles is refused. Native150 validates the shared,
 exclusive, upgrade and downgrade flock behavior on RAM, while its profile data
 durability is tested independently on FAT. ARM55 visibly paints Chrome's worker
 PASS page and About AROS; cleanup acceptance is still pending.
+
+
+Native151/152 now qualify the bounded clean lifecycle and persistence case.
+The Chromium-only child teardown change drains BLOCK_SHUTDOWN workers while
+child I/O remains alive, so synchronous SQLite file cleanup can finish.
+Native151 writes the synthetic cookie/localStorage and returns all three helpers
+and the host. Native152 starts a fresh OS session, reads both values, verifies
+that case-distinct application and profile identities are empty, and returns all
+five helpers and the host. The raw strict watcher failures remain preserved:
+serial output interleaved some entry prefixes. Separate exact fragment audits
+cross-check every launched ID and every successful exit; they do not excuse a
+missing exit. Neither run reports a SQLite operation failure.
+
+`../../aros/child-storage-drain-order.patch` replaces the pinned-base diff for
+content/child/child_process.cc, including its existing per-child state isolation.
+It is not an incremental patch on top of another diff for that file. Reverse
+application against the tested source passes. This is x64 QEMU evidence, not
+ARM lifecycle or physical-device qualification. Temporary file diagnostics remain
+in this validation candidate and still need removal for production.
+
+ARM55 painted the worker PASS page and returned the browser client, but its test
+script exhausted stop attempts before that client completed. Its watcher was
+explicitly ended with raw logs retained; no host-cleanup pass is claimed.
+ARM56 uses completion files to order client completion, stop, and host completion.
