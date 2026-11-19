@@ -58700,6 +58700,75 @@ index 84cae256f65441dc0ee74b47db925c346bee2521..603110cde359dfd468618a24b5adf68f
    DCHECK(!g_create_function);
    g_create_function = create_function;
  }
+diff --git a/third_party/blink/renderer/core/css/css_default_style_sheets.cc b/third_party/blink/renderer/core/css/css_default_style_sheets.cc
+index f428c9610bfc97f2bfa20a7495fcdaaf7c679ccc..4ff6c75563042cfec824c4fb27e21497c845d024 100644
+--- a/third_party/blink/renderer/core/css/css_default_style_sheets.cc
++++ b/third_party/blink/renderer/core/css/css_default_style_sheets.cc
+@@ -30,6 +30,11 @@
+ 
+ #include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "base/command_line.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/resources/grit/blink_resources.h"
+@@ -74,18 +79,35 @@ String MaybeRemoveCSSImportant(String string) {
+ }  // namespace
+ 
+ CSSDefaultStyleSheets& CSSDefaultStyleSheets::Instance() {
++#if BUILDFLAG(IS_AROS)
++  struct DefaultStyleSheetsOwnerTag;
++  auto& css_default_style_sheets = base::aros::ProcessLocalValue<
++      Persistent<CSSDefaultStyleSheets>, DefaultStyleSheetsOwnerTag>();
++  if (!css_default_style_sheets)
++    css_default_style_sheets = MakeGarbageCollected<CSSDefaultStyleSheets>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<CSSDefaultStyleSheets>,
+                       css_default_style_sheets,
+                       (MakeGarbageCollected<CSSDefaultStyleSheets>()));
++#endif
+   return *css_default_style_sheets;
+ }
+ 
+ static const MediaQueryEvaluator& ForcedColorsEval() {
+   // We use "ua-forced-colors" here instead of "forced-colors" to indicate that
+   // this is a UA hack for the "forced-colors" media query.
++#if BUILDFLAG(IS_AROS)
++  struct ForcedColorsEvaluatorOwnerTag;
++  auto& forced_colors_eval = base::aros::ProcessLocalValue<
++      Persistent<MediaQueryEvaluator>, ForcedColorsEvaluatorOwnerTag>();
++  if (!forced_colors_eval)
++    forced_colors_eval =
++        MakeGarbageCollected<MediaQueryEvaluator>("ua-forced-colors");
++#else
+   DEFINE_STATIC_LOCAL(
+       Persistent<MediaQueryEvaluator>, forced_colors_eval,
+       (MakeGarbageCollected<MediaQueryEvaluator>("ua-forced-colors")));
++#endif
+   return *forced_colors_eval;
+ }
+ 
+@@ -109,8 +131,16 @@ StyleSheetContents* CSSDefaultStyleSheets::ParseUASheet(const String& str) {
+ 
+ // static
+ const MediaQueryEvaluator& CSSDefaultStyleSheets::ScreenEval() {
++#if BUILDFLAG(IS_AROS)
++  struct ScreenEvaluatorOwnerTag;
++  auto& static_screen_eval = base::aros::ProcessLocalValue<
++      Persistent<MediaQueryEvaluator>, ScreenEvaluatorOwnerTag>();
++  if (!static_screen_eval)
++    static_screen_eval = MakeGarbageCollected<MediaQueryEvaluator>("screen");
++#else
+   DEFINE_STATIC_LOCAL(const Persistent<MediaQueryEvaluator>, static_screen_eval,
+                       (MakeGarbageCollected<MediaQueryEvaluator>("screen")));
++#endif
+   return *static_screen_eval;
+ }
+ 
 diff --git a/third_party/blink/renderer/core/css/css_paint_image_generator.cc b/third_party/blink/renderer/core/css/css_paint_image_generator.cc
 index 8421d3b9c38a050a145d89902a3f3b1f9d4b7a0a..3096f478c8ea15e06682106d2e6231ffdf5559ac 100644
 --- a/third_party/blink/renderer/core/css/css_paint_image_generator.cc
