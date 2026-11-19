@@ -540,3 +540,20 @@ It later paints Chrome and the JS/Wasm worker PASS page with About AROS, but has
 an earlier EBADF fatal closing a fake disk-cache index file. The late screenshot
 is visual evidence only; overall ARM52 remains failed and its first result is
 unchanged. Production timeout defaults remain unchanged.
+
+
+Native148 diagnostic reports SQLite error3850 (`SQLITE_IOERR_LOCK`) during DOM
+storage initialization/recovery. A standalone native `F_SETLK` call returns
+EINVAL22. The sandboxed SQLite VFS still uses that unavailable SDK operation; a
+Chromium-only description-scoped flock adapter is being validated. No SDK/base
+record-lock behavior was changed. The auxiliary FAT contention probe in148 is
+invalid beyond its F_SETLK observation: it attempts a second open while retaining
+a MODE_NEWFILE creation handle. Probe149 closes that creation handle first.
+
+ARM53's standalone descriptor stress is **invalid OS-bug evidence**: asynchronous
+SystemTags children shared inherited I/O handles even though that API transfers
+ownership and closes them. The bad-handler/allocator trap is retained with its
+invalid harness source. ARM54 gives every child distinct NIL input/output/error
+handles; all four workers complete 200 rounds of four file opens, writes, delayed
+readbacks and closes (3200 opens total), with no alert. This bounded pass does not
+prove absence of a rare descriptor race or solve the browser's separate EBADF.
