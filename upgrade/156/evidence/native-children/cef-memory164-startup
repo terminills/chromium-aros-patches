@@ -1,0 +1,86 @@
+FailAt 21
+Assign Developer: SYS:Developer
+MakeDir RAM:CEFProfile
+Assign PROFILE: RAM:CEFProfile
+Stack 1048576
+Assign AROSTCP: SYS:System/Network/AROSTCP
+Run <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP
+C:WaitForPort AROSTCP
+C:CEFMemorySample before-host
+Run >RAM:CEF-host.log Execute S:CEFHost-Run
+C:CEFHostProbe wait
+If WARN
+Echo MEM164-host-unavailable >DEBUG:
+Quit 20
+EndIf
+C:CEFMemorySample host-ready
+Echo MEM164-cycle-start:1 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-1-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-01
+Echo MEM164-cycle-start:2 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-2-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-02
+Echo MEM164-cycle-start:3 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-3-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-03
+Echo MEM164-cycle-start:4 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-4-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-04
+Echo MEM164-cycle-start:5 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-5-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-05
+Echo MEM164-cycle-start:6 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-6-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-06
+Echo MEM164-cycle-start:7 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-7-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-07
+Echo MEM164-cycle-start:8 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-8-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-08
+Echo MEM164-cycle-start:9 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-9-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-09
+Echo MEM164-cycle-start:10 >DEBUG:
+C:CEFHostBrowser A "@SYS:CEF-cycle-url.txt" 1000 2000 primary
+Echo MEM164-cycle-10-returned:$RC >DEBUG:
+Wait 5
+C:CEFHostProbe stats
+C:CEFMemorySample cycle-10
+C:CEFHostProbe stop
+Echo MEM164-stop-returned:$RC >DEBUG:
+C:CEFWaitFile T:CEFHost164.done
+If WARN
+Echo MEM164-host-exit-timeout >DEBUG:
+Quit 20
+EndIf
+C:CEFMemorySample host-exited
+Echo MEM164-finished >DEBUG:
+Wait 3600

@@ -646,3 +646,14 @@ interleaved short entry prefix; parent launch alone cannot establish entry. Its
 The153/161 persistence case also completed after a private host QEMU package
 update. The154 and160 host crashes remain failures; this does not prove all host
 emulator defects fixed. Repeated lifecycle memory measurements are still pending.
+
+
+Native memory164 performs ten sequential browser create/render/close cycles in
+one host. All ten pages and all22 child returns pass, followed by host completion.
+Memory acceptance does not pass: whole-guest usage grows monotonically from
+1706.72 MiB after cycle1 to1949.76 MiB after cycle10, averaging27.00 MiB per
+additional cycle. It remains1753.80 MiB after host exit. These totals include
+AROS and the resident image; they are neither peak RSS nor proof of duplicated
+engine code. Main-isolate and renderer-owner retirement remain active work.
+The162/163 harness omissions are retained separately;164 restores PROFILE and
+network service startup before measuring.

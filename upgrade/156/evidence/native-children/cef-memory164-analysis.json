@@ -1,0 +1,25 @@
+{
+  "candidate": "native-directory158 x64, engine SHA in cef-memory164-inputs.json",
+  "functional_pass": true,
+  "cycles": 10,
+  "native_child_count": 22,
+  "whole_guest_mib_after_cycle1": 1706.7192850112915,
+  "whole_guest_mib_after_cycle10": 1949.7568368911743,
+  "growth_cycle1_to10_mib": 243.0375518798828,
+  "mean_growth_per_additional_cycle_mib": 27.00417243109809,
+  "median_growth_per_additional_cycle_mib": 25.931442260742188,
+  "deltas_mib": [
+    11.687271118164062,
+    33.92781066894531,
+    25.939483642578125,
+    25.8414306640625,
+    25.931442260742188,
+    38.002044677734375,
+    25.880416870117188,
+    29.9627685546875,
+    25.864883422851562
+  ],
+  "memory_acceptance": false,
+  "interpretation": "Monotonic growth across all nine post-first-cycle intervals, with no plateau observed. Source audit identifies main Blink isolate retirement missing and renderer-client retention; allocation attribution still needs controlled intervention. Task completion does not establish memory reclamation.",
+  "limits": "Whole guest accounting, not RSS or peak. One local page and one application/profile. Shared resident image and OS included. No attribution to copied engine images or claim all growth is a leak."
+}
