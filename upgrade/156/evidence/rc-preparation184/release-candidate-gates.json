@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "x64 compiler-owner180 strict audit passes 10 cycles and 22 child exits; refreshed181 pending; ARM68 pending",
+    "sibling_app_isolation": "Earlier119 passes; exact release candidate182 and ownership fixes pending",
+    "persistent_profiles": "Native writer158/reader159 passes; final candidate replay pending",
+    "memory": "Not accepted; residual per-cycle growth under measurement181/69",
+    "native_browser_ui": "ARM67 and68 screenshots reviewed; interactive tabs/navigation/close final candidate pending",
+    "production_launcher": "Required: persistent window lifetime, named default profile, native host startup, user-facing failures",
+    "packaging": "Required: exact libraries/helpers/resources, required OS baseline, install/start scripts, licenses and manifest; no user profile or credentials",
+    "source_reproducibility": "Validated snapshot158 retained; final candidate export/replay required",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Required by user: proper .info TOOL, PROJECT/IconX and drawer icons with correct stack metadata; double-click launch and selected-state visual check. Existing Chromium artwork preserved."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}

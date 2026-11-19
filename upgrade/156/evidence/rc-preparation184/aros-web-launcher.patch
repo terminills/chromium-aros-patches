@@ -1,0 +1,988 @@
+From 6cbbb4b1284dd0fa066afa73451a0d2911a9a44b Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Thu, 19 Nov 2026 13:21:14 -0600
+Subject: [PATCH] Add persistent Chromium client and native release launchers
+
+Reuse the multi-tab callback lifetime implementation, retain timed diagnostic clients, parse host options independently, and include native icon metadata. Add opt-in per-child file evidence because serial records can interleave. Both architectures cross-link; interactive and ledger runtime qualification remains pending.
+---
+ libs/cef/cef_host_browser_client.inc         | 295 +++++++++++++++++++
+ libs/cef/test_cef_host_browser.c             | 262 +---------------
+ tools/CEFHost/CEFHost.c                      |  24 +-
+ tools/CEFHost/CEFHostProbe.c                 |   7 +
+ tools/CEFHost/CEFSubprocess.c                |  54 +++-
+ tools/Chromium/CEFHost-Run                   |   3 +
+ tools/Chromium/Chromium.c                    |   4 +
+ tools/Chromium/README.md                     |  34 +++
+ tools/Chromium/StartChromium                 |  22 ++
+ tools/Chromium/icons/Chromium.info.src       |   2 +
+ tools/Chromium/icons/Chromium.png            | Bin 0 -> 4494 bytes
+ tools/Chromium/icons/ChromiumDrawer.info.src |   1 +
+ tools/Chromium/icons/Start Chromium.info.src |   5 +
+ tools/Chromium/mmakefile.src                 |  15 +
+ 14 files changed, 461 insertions(+), 267 deletions(-)
+ create mode 100644 libs/cef/cef_host_browser_client.inc
+ create mode 100644 tools/Chromium/CEFHost-Run
+ create mode 100644 tools/Chromium/Chromium.c
+ create mode 100644 tools/Chromium/README.md
+ create mode 100644 tools/Chromium/StartChromium
+ create mode 100644 tools/Chromium/icons/Chromium.info.src
+ create mode 100644 tools/Chromium/icons/Chromium.png
+ create mode 100644 tools/Chromium/icons/ChromiumDrawer.info.src
+ create mode 100644 tools/Chromium/icons/Start Chromium.info.src
+ create mode 100644 tools/Chromium/mmakefile.src
+
+diff --git a/libs/cef/cef_host_browser_client.inc b/libs/cef/cef_host_browser_client.inc
+new file mode 100644
+index 0000000..738a1e6
+--- /dev/null
++++ b/libs/cef/cef_host_browser_client.inc
+@@ -0,0 +1,295 @@
++/* Copyright (C) 2026, The AROS Development Team. All rights reserved.
++ * Independent native application using the resident host. This diagnostic
++ * reuses the browser probe's presentation/input handlers. CEF owns the loop;
++ * all browser and Intuition work below runs on its captured UI runner.
++ */
++#include <stdio.h>
++#include <exec/semaphores.h>
++#include <proto/exec.h>
++#include "include/capi/cef_base_capi.h"
++static struct SignalSemaphore reference_lock;
++static struct { cef_base_ref_counted_t *base; LONG count; } references[8];
++static unsigned reference_count;
++static int reference_error;
++static const char *application_name;
++static void host_register_reference(cef_base_ref_counted_t *base)
++{
++    ObtainSemaphore(&reference_lock);
++    if (reference_count < 8) {
++        references[reference_count].base = base;
++        references[reference_count++].count = 1;
++    } else reference_error = 1;
++    ReleaseSemaphore(&reference_lock);
++}
++static LONG host_reference(cef_base_ref_counted_t *base, LONG delta)
++{
++    unsigned i; LONG count = -1;
++    ObtainSemaphore(&reference_lock);
++    for (i = 0; i < reference_count; ++i) if (references[i].base == base) {
++        count = (references[i].count += delta);
++        if (count < 0) reference_error = 1;
++        break;
++    }
++    if (count < 0) reference_error = 1;
++    ReleaseSemaphore(&reference_lock);
++    return count;
++}
++#define CEF_BROWSER_HOST_MODE 1
++#include "test_cef_browser.c"
++#include <libraries/cef_host.h>
++#include "include/capi/cef_task_capi.h"
++#include "include/capi/cef_request_context_capi.h"
++
++static cef_task_runner_t *runner;
++static cef_request_context_t *context;
++static cef_task_t tick_task;
++static struct Task *application_task;
++static BYTE done_signal = -1;
++static ULONG hold_ticks = 1500;
++static ULONG create_timeout_ticks = CREATE_TIMEOUT_TICKS;
++static int view_started, view_done, view_create_failed, view_result = RETURN_FAIL;
++static char window_title[96];
++
++static int view_is_ready(void)
++{
++#ifdef CEF_BROWSER_CHROME_WINDOW
++    return chrome_document_available;
++#else
++    return first_paint;
++#endif
++}
++static ULONG view_ready_tick(void)
++{
++#ifdef CEF_BROWSER_CHROME_WINDOW
++    return chrome_document_tick;
++#else
++    return first_paint_tick;
++#endif
++}
++
++static int handlers_released(int include_task)
++{
++    unsigned i; int ready = 1;
++    ObtainSemaphore(&reference_lock);
++    for (i = 0; i < reference_count; ++i) {
++        if (!include_task && references[i].base == &tick_task.base) continue;
++        if (references[i].count != 1) ready = 0;
++    }
++    if (reference_error) ready = 0;
++    ReleaseSemaphore(&reference_lock);
++    return ready;
++}
++static void report_pending_handlers(void)
++{
++    struct { cef_base_ref_counted_t *base; LONG count; } pending[8];
++    unsigned i, count;
++    int error;
++    ObtainSemaphore(&reference_lock);
++    count = reference_count;
++    error = reference_error;
++    for (i = 0; i < count; ++i) {
++        pending[i].base = references[i].base;
++        pending[i].count = references[i].count;
++    }
++    ReleaseSemaphore(&reference_lock);
++    /* Print outside the reference lock; this is observation only. The
++     * callback-drain barrier and ownership counts remain unchanged. */
++    for (i = 0; i < count; ++i) {
++        const char *name;
++        cef_base_ref_counted_t *base = pending[i].base;
++        if (base == &tick_task.base || pending[i].count == 1) continue;
++        name = base == &client.base ? "client" :
++            base == &request_handler.base ? "request" :
++            base == &load_handler.base ? "load" :
++            base == &display_handler.base ? "display" :
++            base == &render_handler.base ? "render" :
++            base == &life_span_handler.base ? "life-span" : "unknown";
++        KPrintF("[CEF-HOST-REF] app=%s handler=%s count=%ld tick=%lu\n",
++            application_name, name, pending[i].count, pump_tick);
++    }
++    if (error) KPrintF("[CEF-HOST-REF] app=%s reference-error=1\n", application_name);
++}
++static int schedule_tick(void)
++{
++    tick_task.base.add_ref(&tick_task.base); /* C API transfers this reference. */
++    #ifdef CEF_BROWSER_INTERACTIVE
++    return runner->post_delayed_task(runner, &tick_task, 100);
++#else
++    return runner->post_delayed_task(runner, &tick_task, 20);
++#endif
++}
++static void finish_view(void)
++{
++    if (browser_window) { CloseWindow(browser_window); browser_window = NULL; }
++    if (last_frame) { FreeVec(last_frame); last_frame = NULL; }
++    #ifdef CEF_BROWSER_INTERACTIVE
++    /* Closing an unloaded or failed navigation is still an ordinary close. */
++    view_result = !view_create_failed && !reference_error ? RETURN_OK : RETURN_FAIL;
++#else
++    view_result = view_is_ready() && !reference_error ? RETURN_OK : RETURN_FAIL;
++#endif
++    view_done = 1;
++    Signal(application_task, 1UL << done_signal);
++    /* The application sends a host request as a UI-queue barrier before it
++     * unloads. This callback and its CEF wrapper must return first. */
++}
++static int start_view(void)
++{
++    cef_window_info_t info = {0};
++    cef_browser_settings_t settings = {0};
++    cef_string_t url = {0};
++    snprintf(window_title, sizeof(window_title), "CEF shared engine - %s", application_name);
++#ifndef CEF_BROWSER_CHROME_WINDOW
++    browser_window = OpenWindowTags(NULL,
++        WA_Title, (IPTR)window_title, WA_Left, 20 + (application_name[0] == 'B' ? 160 : 0),
++        WA_Top, 45 + (application_name[0] == 'B' ? 90 : 0),
++        WA_InnerWidth, 580, WA_InnerHeight, 340, WA_AutoAdjust, TRUE,
++        WA_GimmeZeroZero, TRUE, WA_Activate, TRUE, WA_ReportMouse, TRUE,
++        WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
++        WA_SizeGadget, TRUE,
++        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW |
++            IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW,
++        TAG_DONE);
++    if (!browser_window) return 0;
++#endif
++    initialize_handlers();
++#ifdef CEF_BROWSER_CHROME_WINDOW
++    /* Chrome creates its own Aura/Ozone window and browser controls. A load
++     * callback is navigation evidence, not proof that the window painted. */
++    info.size = sizeof(info);
++    info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
++    info.bounds.width = 800;
++    info.bounds.height = 600;
++#else
++    info.size = sizeof(info); info.windowless_rendering_enabled = 1;
++    info.bounds.width = browser_window->GZZWidth; info.bounds.height = browser_window->GZZHeight;
++#endif
++    settings.size = sizeof(settings);
++    set_static_cef_string(&url, url_override, url_override_len);
++    client.base.add_ref(&client.base);
++    context->base.base.add_ref(&context->base.base);
++    return CEFCreateBrowser(&info, &client, &url, &settings, NULL, context);
++}
++static void CEF_CALLBACK tick(cef_task_t *self)
++{
++    (void)self;
++    if (!view_started) {
++        view_started = 1;
++        if (!start_view()) {
++            view_create_failed = 1;
++            browser_closed = 1;
++            KPrintF("[CEF-HOST-VIEW] %s create failed\n", application_name);
++        }
++    }
++    ++pump_tick;
++    if (browser_window) handle_window_messages();
++#ifndef CEF_BROWSER_INTERACTIVE
++    if (view_is_ready() && pump_tick >= view_ready_tick() + hold_ticks)
++        request_browser_close();
++    if (!view_is_ready() && pump_tick > create_timeout_ticks)
++        request_browser_close();
++#endif
++    if (browser_closed && handlers_released(0)) { finish_view(); return; }
++    if (browser_closed && pump_tick % 250 == 0) report_pending_handlers();
++    if (!schedule_tick()) {
++        /* Keep the application loaded if callbacks still exist. A failed post
++         * is diagnostic failure, never permission to unload referenced code. */
++        KPrintF("[CEF-HOST-VIEW] %s cannot schedule; retaining callback code\n", application_name);
++    }
++}
++static LONG host_request(struct CEFHostRequest *request, ULONG command)
++{
++    LONG result;
++    request->command = command;
++    result = CEFHostPostRequest(request);
++    if (result != CEF_HOST_OK) return result;
++    WaitPort(request->message.mn_ReplyPort);
++    if (GetMsg(request->message.mn_ReplyPort) != &request->message) return CEF_HOST_INVALID;
++    return request->result;
++}
++int main(int argc, char **argv)
++{
++    struct CEFHostRequest request = {0};
++    struct MsgPort *reply = NULL;
++    IPTR session = 0;
++    unsigned i;
++    int result = RETURN_FAIL;
++#ifdef CEF_BROWSER_INTERACTIVE
++    if (argc > 3 || (argc > 1 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "?")))) {
++        Printf("Usage: Chromium [URL] [profile]\nDefault: chrome://newtab/ with persistent profile default\n");
++        return argc > 3 ? RETURN_ERROR : RETURN_OK;
++    }
++    application_name = "Chromium";
++    if (!set_url_override(argc > 1 ? argv[1] : "chrome://newtab/")) {
++        Printf("Chromium: invalid or oversized URL\n");
++        return RETURN_ERROR;
++    }
++    const char *profile = argc > 2 ? argv[2] : "default";
++    if (!profile[0] || strlen(profile) >= sizeof(request.profile)) {
++        Printf("Chromium: profile name is empty or too long\n");
++        return RETURN_ERROR;
++    }
++    strcpy(request.profile, profile);
++#else
++    if (argc < 3 || strlen(argv[1]) >= CEF_HOST_NAME_MAX || !set_url_override(argv[2])) return RETURN_ERROR;
++    /* Optional synthetic test profile; empty/default retains in-memory mode.
++     * CEFHost validates the name before resolving it below its profile root. */
++    if (argc > 5) {
++        if (strlen(argv[5]) >= sizeof(request.profile)) return RETURN_ERROR;
++        strcpy(request.profile, argv[5]);
++    }
++    application_name = argv[1];
++    if (argc > 3) hold_ticks = strtoul(argv[3], NULL, 10);
++    /* Optional diagnostic budget; the default and acceptance are unchanged. */
++    if (argc > 4) {
++        char *end;
++        unsigned long value = strtoul(argv[4], &end, 10);
++        if (!argv[4][0] || *end || value < 1 || value > 30000)
++            return RETURN_ERROR;
++        create_timeout_ticks = value;
++    }
++    KPrintF("[CEF-HOST-VIEW] %s startup-budget=%lu hold=%lu\n",
++            application_name, create_timeout_ticks, hold_ticks);
++    settle_ticks = hold_ticks ? hold_ticks : 1;
++#endif
++    InitSemaphore(&reference_lock);
++    application_task = FindTask(NULL);
++    done_signal = AllocSignal(-1);
++    reply = CreateMsgPort();
++    CEFBase = OpenLibrary(CEFNAME, CEFVERSION);
++    if (done_signal < 0 || !reply || !CEFBase) goto done;
++    request.message.mn_Length = sizeof(request); request.message.mn_ReplyPort = reply;
++    request.protocol = CEF_HOST_PROTOCOL;
++    strcpy(request.application, application_name);
++    if (host_request(&request, CEF_HOST_OPEN) != CEF_HOST_OK) {
++#ifdef CEF_BROWSER_INTERACTIVE
++        Printf("Chromium: cannot open profile; start CEFHost and use a profile containing letters, digits, _ or -\n");
++#endif
++        goto done;
++    }
++    session = request.session; context = request.context; runner = request.ui_runner;
++    KPrintF("[CEF-HOST-VIEW] %s connected client=%p owner=%p context=%p\n", application_name, application_task, request.engine_owner, context);
++    report_guest_memory("host-client-connected");
++    initialize_base(&tick_task.base, sizeof(tick_task)); tick_task.execute = tick;
++    if (!schedule_tick()) goto close_session;
++    Wait(1UL << done_signal);
++    /* Same UI runner dispatches this acknowledgement after the final tick
++     * returned and released its posted reference. */
++    if (host_request(&request, CEF_HOST_STATS) != CEF_HOST_OK || !view_done || !handlers_released(1)) {
++        KPrintF("[CEF-HOST-VIEW] %s callback barrier failed; retaining code\n", application_name);
++        for (;;) Wait(1UL << done_signal);
++    }
++    result = view_result;
++    for (i = 0; i < reference_count; ++i) references[i].base->release(references[i].base);
++close_session:
++    request.session = session;
++    if (host_request(&request, CEF_HOST_CLOSE) != CEF_HOST_OK) result = RETURN_FAIL;
++    KPrintF("[CEF-HOST-VIEW] %s %s callbacks-drained active=%lu owner=%p\n", application_name,
++        result == RETURN_OK ? "PASS" : "FAIL", request.active_sessions, request.engine_owner);
++    report_guest_memory("host-client-disconnected");
++done:
++    if (CEFBase) CloseLibrary(CEFBase);
++    if (reply) DeleteMsgPort(reply);
++    if (done_signal >= 0) FreeSignal(done_signal);
++    return result;
++}
+diff --git a/libs/cef/test_cef_host_browser.c b/libs/cef/test_cef_host_browser.c
+index 59d04d7..323a70c 100644
+--- a/libs/cef/test_cef_host_browser.c
++++ b/libs/cef/test_cef_host_browser.c
+@@ -1,260 +1,2 @@
+-/* Copyright (C) 2026, The AROS Development Team. All rights reserved.
+- * Independent native application using the resident host. This diagnostic
+- * reuses the browser probe's presentation/input handlers. CEF owns the loop;
+- * all browser and Intuition work below runs on its captured UI runner.
+- */
+-#include <stdio.h>
+-#include <exec/semaphores.h>
+-#include <proto/exec.h>
+-#include "include/capi/cef_base_capi.h"
+-static struct SignalSemaphore reference_lock;
+-static struct { cef_base_ref_counted_t *base; LONG count; } references[8];
+-static unsigned reference_count;
+-static int reference_error;
+-static const char *application_name;
+-static void host_register_reference(cef_base_ref_counted_t *base)
+-{
+-    ObtainSemaphore(&reference_lock);
+-    if (reference_count < 8) {
+-        references[reference_count].base = base;
+-        references[reference_count++].count = 1;
+-    } else reference_error = 1;
+-    ReleaseSemaphore(&reference_lock);
+-}
+-static LONG host_reference(cef_base_ref_counted_t *base, LONG delta)
+-{
+-    unsigned i; LONG count = -1;
+-    ObtainSemaphore(&reference_lock);
+-    for (i = 0; i < reference_count; ++i) if (references[i].base == base) {
+-        count = (references[i].count += delta);
+-        if (count < 0) reference_error = 1;
+-        break;
+-    }
+-    if (count < 0) reference_error = 1;
+-    ReleaseSemaphore(&reference_lock);
+-    return count;
+-}
+-#define CEF_BROWSER_HOST_MODE 1
+-#include "test_cef_browser.c"
+-#include <libraries/cef_host.h>
+-#include "include/capi/cef_task_capi.h"
+-#include "include/capi/cef_request_context_capi.h"
+-
+-static cef_task_runner_t *runner;
+-static cef_request_context_t *context;
+-static cef_task_t tick_task;
+-static struct Task *application_task;
+-static BYTE done_signal = -1;
+-static ULONG hold_ticks = 1500;
+-static ULONG create_timeout_ticks = CREATE_TIMEOUT_TICKS;
+-static int view_started, view_done, view_result = RETURN_FAIL;
+-static char window_title[96];
+-
+-static int view_is_ready(void)
+-{
+-#ifdef CEF_BROWSER_CHROME_WINDOW
+-    return chrome_document_available;
+-#else
+-    return first_paint;
+-#endif
+-}
+-static ULONG view_ready_tick(void)
+-{
+-#ifdef CEF_BROWSER_CHROME_WINDOW
+-    return chrome_document_tick;
+-#else
+-    return first_paint_tick;
+-#endif
+-}
+-
+-static int handlers_released(int include_task)
+-{
+-    unsigned i; int ready = 1;
+-    ObtainSemaphore(&reference_lock);
+-    for (i = 0; i < reference_count; ++i) {
+-        if (!include_task && references[i].base == &tick_task.base) continue;
+-        if (references[i].count != 1) ready = 0;
+-    }
+-    if (reference_error) ready = 0;
+-    ReleaseSemaphore(&reference_lock);
+-    return ready;
+-}
+-static void report_pending_handlers(void)
+-{
+-    struct { cef_base_ref_counted_t *base; LONG count; } pending[8];
+-    unsigned i, count;
+-    int error;
+-    ObtainSemaphore(&reference_lock);
+-    count = reference_count;
+-    error = reference_error;
+-    for (i = 0; i < count; ++i) {
+-        pending[i].base = references[i].base;
+-        pending[i].count = references[i].count;
+-    }
+-    ReleaseSemaphore(&reference_lock);
+-    /* Print outside the reference lock; this is observation only. The
+-     * callback-drain barrier and ownership counts remain unchanged. */
+-    for (i = 0; i < count; ++i) {
+-        const char *name;
+-        cef_base_ref_counted_t *base = pending[i].base;
+-        if (base == &tick_task.base || pending[i].count == 1) continue;
+-        name = base == &client.base ? "client" :
+-            base == &request_handler.base ? "request" :
+-            base == &load_handler.base ? "load" :
+-            base == &display_handler.base ? "display" :
+-            base == &render_handler.base ? "render" :
+-            base == &life_span_handler.base ? "life-span" : "unknown";
+-        KPrintF("[CEF-HOST-REF] app=%s handler=%s count=%ld tick=%lu\n",
+-            application_name, name, pending[i].count, pump_tick);
+-    }
+-    if (error) KPrintF("[CEF-HOST-REF] app=%s reference-error=1\n", application_name);
+-}
+-static int schedule_tick(void)
+-{
+-    tick_task.base.add_ref(&tick_task.base); /* C API transfers this reference. */
+-    return runner->post_delayed_task(runner, &tick_task, 20);
+-}
+-static void finish_view(void)
+-{
+-    if (browser_window) { CloseWindow(browser_window); browser_window = NULL; }
+-    if (last_frame) { FreeVec(last_frame); last_frame = NULL; }
+-    view_result = view_is_ready() && !reference_error ? RETURN_OK : RETURN_FAIL;
+-    view_done = 1;
+-    Signal(application_task, 1UL << done_signal);
+-    /* The application sends a host request as a UI-queue barrier before it
+-     * unloads. This callback and its CEF wrapper must return first. */
+-}
+-static int start_view(void)
+-{
+-    cef_window_info_t info = {0};
+-    cef_browser_settings_t settings = {0};
+-    cef_string_t url = {0};
+-    snprintf(window_title, sizeof(window_title), "CEF shared engine - %s", application_name);
+-#ifndef CEF_BROWSER_CHROME_WINDOW
+-    browser_window = OpenWindowTags(NULL,
+-        WA_Title, (IPTR)window_title, WA_Left, 20 + (application_name[0] == 'B' ? 160 : 0),
+-        WA_Top, 45 + (application_name[0] == 'B' ? 90 : 0),
+-        WA_InnerWidth, 580, WA_InnerHeight, 340, WA_AutoAdjust, TRUE,
+-        WA_GimmeZeroZero, TRUE, WA_Activate, TRUE, WA_ReportMouse, TRUE,
+-        WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
+-        WA_SizeGadget, TRUE,
+-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW |
+-            IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW,
+-        TAG_DONE);
+-    if (!browser_window) return 0;
+-#endif
+-    initialize_handlers();
+-#ifdef CEF_BROWSER_CHROME_WINDOW
+-    /* Chrome creates its own Aura/Ozone window and browser controls. A load
+-     * callback is navigation evidence, not proof that the window painted. */
+-    info.size = sizeof(info);
+-    info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+-    info.bounds.width = 800;
+-    info.bounds.height = 600;
+-#else
+-    info.size = sizeof(info); info.windowless_rendering_enabled = 1;
+-    info.bounds.width = browser_window->GZZWidth; info.bounds.height = browser_window->GZZHeight;
+-#endif
+-    settings.size = sizeof(settings);
+-    set_static_cef_string(&url, url_override, url_override_len);
+-    client.base.add_ref(&client.base);
+-    context->base.base.add_ref(&context->base.base);
+-    return CEFCreateBrowser(&info, &client, &url, &settings, NULL, context);
+-}
+-static void CEF_CALLBACK tick(cef_task_t *self)
+-{
+-    (void)self;
+-    if (!view_started) {
+-        view_started = 1;
+-        if (!start_view()) {
+-            browser_closed = 1;
+-            KPrintF("[CEF-HOST-VIEW] %s create failed\n", application_name);
+-        }
+-    }
+-    ++pump_tick;
+-    if (browser_window) handle_window_messages();
+-    if (view_is_ready() && pump_tick >= view_ready_tick() + hold_ticks)
+-        request_browser_close();
+-    if (!view_is_ready() && pump_tick > create_timeout_ticks)
+-        request_browser_close();
+-    if (browser_closed && handlers_released(0)) { finish_view(); return; }
+-    if (browser_closed && pump_tick % 250 == 0) report_pending_handlers();
+-    if (!schedule_tick()) {
+-        /* Keep the application loaded if callbacks still exist. A failed post
+-         * is diagnostic failure, never permission to unload referenced code. */
+-        KPrintF("[CEF-HOST-VIEW] %s cannot schedule; retaining callback code\n", application_name);
+-    }
+-}
+-static LONG host_request(struct CEFHostRequest *request, ULONG command)
+-{
+-    LONG result;
+-    request->command = command;
+-    result = CEFHostPostRequest(request);
+-    if (result != CEF_HOST_OK) return result;
+-    WaitPort(request->message.mn_ReplyPort);
+-    if (GetMsg(request->message.mn_ReplyPort) != &request->message) return CEF_HOST_INVALID;
+-    return request->result;
+-}
+-int main(int argc, char **argv)
+-{
+-    struct CEFHostRequest request = {0};
+-    struct MsgPort *reply = NULL;
+-    IPTR session = 0;
+-    unsigned i;
+-    int result = RETURN_FAIL;
+-    if (argc < 3 || strlen(argv[1]) >= CEF_HOST_NAME_MAX || !set_url_override(argv[2])) return RETURN_ERROR;
+-    /* Optional synthetic test profile; empty/default retains in-memory mode.
+-     * CEFHost validates the name before resolving it below its profile root. */
+-    if (argc > 5) {
+-        if (strlen(argv[5]) >= sizeof(request.profile)) return RETURN_ERROR;
+-        strcpy(request.profile, argv[5]);
+-    }
+-    application_name = argv[1];
+-    if (argc > 3) hold_ticks = strtoul(argv[3], NULL, 10);
+-    /* Optional diagnostic budget; the default and acceptance are unchanged. */
+-    if (argc > 4) {
+-        char *end;
+-        unsigned long value = strtoul(argv[4], &end, 10);
+-        if (!argv[4][0] || *end || value < 1 || value > 30000)
+-            return RETURN_ERROR;
+-        create_timeout_ticks = value;
+-    }
+-    KPrintF("[CEF-HOST-VIEW] %s startup-budget=%lu hold=%lu\n",
+-            application_name, create_timeout_ticks, hold_ticks);
+-    settle_ticks = hold_ticks ? hold_ticks : 1;
+-    InitSemaphore(&reference_lock);
+-    application_task = FindTask(NULL);
+-    done_signal = AllocSignal(-1);
+-    reply = CreateMsgPort();
+-    CEFBase = OpenLibrary(CEFNAME, CEFVERSION);
+-    if (done_signal < 0 || !reply || !CEFBase) goto done;
+-    request.message.mn_Length = sizeof(request); request.message.mn_ReplyPort = reply;
+-    request.protocol = CEF_HOST_PROTOCOL;
+-    strcpy(request.application, application_name);
+-    if (host_request(&request, CEF_HOST_OPEN) != CEF_HOST_OK) goto done;
+-    session = request.session; context = request.context; runner = request.ui_runner;
+-    KPrintF("[CEF-HOST-VIEW] %s connected client=%p owner=%p context=%p\n", application_name, application_task, request.engine_owner, context);
+-    report_guest_memory("host-client-connected");
+-    initialize_base(&tick_task.base, sizeof(tick_task)); tick_task.execute = tick;
+-    if (!schedule_tick()) goto close_session;
+-    Wait(1UL << done_signal);
+-    /* Same UI runner dispatches this acknowledgement after the final tick
+-     * returned and released its posted reference. */
+-    if (host_request(&request, CEF_HOST_STATS) != CEF_HOST_OK || !view_done || !handlers_released(1)) {
+-        KPrintF("[CEF-HOST-VIEW] %s callback barrier failed; retaining code\n", application_name);
+-        for (;;) Wait(1UL << done_signal);
+-    }
+-    result = view_result;
+-    for (i = 0; i < reference_count; ++i) references[i].base->release(references[i].base);
+-close_session:
+-    request.session = session;
+-    if (host_request(&request, CEF_HOST_CLOSE) != CEF_HOST_OK) result = RETURN_FAIL;
+-    KPrintF("[CEF-HOST-VIEW] %s %s callbacks-drained active=%lu owner=%p\n", application_name,
+-        result == RETURN_OK ? "PASS" : "FAIL", request.active_sessions, request.engine_owner);
+-    report_guest_memory("host-client-disconnected");
+-done:
+-    if (CEFBase) CloseLibrary(CEFBase);
+-    if (reply) DeleteMsgPort(reply);
+-    if (done_signal >= 0) FreeSignal(done_signal);
+-    return result;
+-}
++/* Shared native browser client; this entry retains timed diagnostic behavior. */
++#include "cef_host_browser_client.inc"
+diff --git a/tools/CEFHost/CEFHost.c b/tools/CEFHost/CEFHost.c
+index a4c9fb5..c7b7d5a 100644
+--- a/tools/CEFHost/CEFHost.c
++++ b/tools/CEFHost/CEFHost.c
+@@ -214,21 +214,35 @@ int main(int argc, char **argv)
+     cef_settings_t settings = {0};
+     cef_char_t subprocess_path[1024];
+     char subprocess_ascii[1024];
+-    int native_children = argc > 3 && !strcmp(argv[3], "--native-children");
+-    if (argc > 4 && !strcmp(argv[4], "--debug-native")) {
++    int native_children = 0, debug_native = 0, root_supplied = 0;
++    const char *profile_root = "ENVARC:CEF/Profiles";
++    for (int i = 1; i < argc; ++i) {
++        if (!strcmp(argv[i], "--native-children")) native_children = 1;
++        else if (!strcmp(argv[i], "--debug-native")) debug_native = 1;
++        else if (!strcmp(argv[i], "--allow-stop")) allow_stop = 1;
++        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "?")) {
++            Printf("Usage: CEFHost [profile-root] [--native-children] [--debug-native] [--allow-stop]\n");
++            return RETURN_OK;
++        } else if (!argv[i][0] || argv[i][0] == '-' || root_supplied) {
++            Printf("CEF host: invalid argument; use --help\n");
++            return RETURN_ERROR;
++        } else {
++            profile_root = argv[i];
++            root_supplied = 1;
++        }
++    }
++    if (debug_native) {
+         /* Retain INFO/error diagnostics on AROS DEBUG: for native test runs. */
+         args[4] = "--enable-logging=system";
+         main_args.argc = 5;
+     }
+-    const char *profile_root = argc > 1 ? argv[1] : "ENVARC:CEF/Profiles";
+-    allow_stop = argc > 2 && !strcmp(argv[2], "--allow-stop");
+     if (!to_utf16(root, sizeof(root) / sizeof(*root), profile_root) ||
+         !prepare_profile_root(profile_root) ||
+         !to_utf16(root, sizeof(root) / sizeof(*root), root_ascii)) {
+         Printf("CEF host: cannot prepare profile directory (DOS error %ld)\n", IoErr());
+         return RETURN_ERROR;
+     }
+-    if (argc > 4 && !strcmp(argv[4], "--debug-native"))
++    if (debug_native)
+         KPrintF("[CEF-HOST] profile root input=%s canonical=%s\n", profile_root, root_ascii);
+     owner = FindTask(NULL);
+     port = CreateMsgPort();
+diff --git a/tools/CEFHost/CEFHostProbe.c b/tools/CEFHost/CEFHostProbe.c
+index 98b71cf..807b890 100644
+--- a/tools/CEFHost/CEFHostProbe.c
++++ b/tools/CEFHost/CEFHostProbe.c
+@@ -27,6 +27,13 @@ int main(int argc, char **argv)
+     LONG result = CEF_HOST_UNAVAILABLE;
+     int ok = 0;
+     if (argc < 2) goto done;
++    if (!strcmp(argv[1], "present")) {
++        /* Readiness only: do not load the engine into a cold probe process. */
++        Forbid();
++        ok = FindPort(CEF_HOST_PORT) != NULL;
++        Permit();
++        goto done;
++    }
+     if (!strcmp(argv[1], "wait")) {
+         unsigned attempt;
+         BOOL ready = FALSE;
+diff --git a/tools/CEFHost/CEFSubprocess.c b/tools/CEFHost/CEFSubprocess.c
+index 73606c7..eb2a61b 100644
+--- a/tools/CEFHost/CEFSubprocess.c
++++ b/tools/CEFHost/CEFSubprocess.c
+@@ -1,6 +1,8 @@
+ /* Copyright (C) 2026, The AROS Development Team. All rights reserved.
+  * Small native child executable. Engine code remains in resident libraries. */
+ #include <string.h>
++#include <stdio.h>
++#include <dos/var.h>
+ #include <exec/memory.h>
+ #include <exec/tasks.h>
+ #include <libraries/cef_client.h>
+@@ -10,6 +12,33 @@
+ #include <proto/v8.h>
+ #include "include/capi/cef_app_capi.h"
+ struct Library *CEFBase;
++
++/* Optional validation evidence, independent of character-interleaved DEBUG:.
++ * Each native child owns separate files. Disabled during ordinary use. */
++static int record_child(const char *directory, ULONG id, const char *type,
++    const char *event, LONG result)
++{
++    char path[1024], leaf[48], record[192];
++    BPTR file;
++    int length;
++    LONG written;
++    BOOL closed;
++    if (!directory[0]) return 1;
++    if (strlen(directory) >= sizeof(path)) return 0;
++    strcpy(path, directory);
++    snprintf(leaf, sizeof(leaf), "%lu.%s", (unsigned long)id, event);
++    if (!AddPart(path, leaf, sizeof(path))) return 0;
++    length = snprintf(record, sizeof(record),
++        "CEFCHILD1\nid=%lu\ntype=%s\nevent=%s\nresult=%ld\n",
++        (unsigned long)id, type, event, (long)result);
++    if (length < 0 || (size_t)length >= sizeof(record)) return 0;
++    file = Open(path, MODE_NEWFILE);
++    if (!file) return 0;
++    written = Write(file, record, length);
++    closed = Close(file);
++    return written == length && closed;
++}
++
+ int main(int argc, char **argv)
+ {
+     cef_main_args_t args = {argc, argv};
+@@ -17,14 +46,29 @@ int main(int argc, char **argv)
+     const char *type = NULL;
+     const char *subtype = "none";
+     LONG result = RETURN_FAIL;
++    char ledger[1024] = {0};
++    ULONG child_id = (ULONG)GetETaskID(FindTask(NULL));
++    LONG ledger_length;
+     int i;
+     for (i = 1; i < argc; ++i)
+         if (!strncmp(argv[i], "--type=", 7)) type = argv[i] + 7;
+     for (i = 1; i < argc; ++i)
+         if (!strncmp(argv[i], "--utility-sub-type=", 19)) subtype = argv[i] + 19;
+     if (!type || !*type) return RETURN_ERROR;
++    /* Restrict the diagnostic record's type field, not Chromium arguments. */
++    ledger_length = GetVar("CEF_CHILD_LEDGER", ledger, sizeof(ledger), GVF_GLOBAL_ONLY);
++    if (ledger_length >= 0) {
++        if (ledger_length >= (LONG)sizeof(ledger) - 1 || strlen(type) > 63)
++            return RETURN_ERROR;
++        for (const char *p = type; *p; ++p)
++            if ((*p < 'a' || *p > 'z') && *p != '-') return RETURN_ERROR;
++        if (!record_child(ledger, child_id, type, "enter", 0)) {
++            KPrintF("[CEF-LEDGER] entry write failed id=%lu\n", child_id);
++            return RETURN_FAIL;
++        }
++    } else ledger[0] = 0;
+     CEFBase = OpenLibrary(CEFNAME, CEFVERSION);
+-    if (!CEFBase) return RETURN_FAIL;
++    if (!CEFBase) goto finished;
+     CEFGetAllocator(&alloc, &free_fn);
+     if (alloc && free_fn && V8AllocatorInstall(alloc, free_fn)) {
+         /* Short ID-keyed records supplement verbose lines that can interleave
+@@ -44,5 +88,11 @@ int main(int argc, char **argv)
+         KPrintF("[CEF-CHILD] exit type=%s result=%ld\n", type, result);
+     }
+     CloseLibrary(CEFBase);
+-    return result < 0 ? RETURN_FAIL : result;
++finished:
++    if (result < 0) result = RETURN_FAIL;
++    if (!record_child(ledger, child_id, type, "exit", result)) {
++        KPrintF("[CEF-LEDGER] exit write failed id=%lu\n", child_id);
++        return RETURN_FAIL;
++    }
++    return result;
+ }
+diff --git a/tools/Chromium/CEFHost-Run b/tools/Chromium/CEFHost-Run
+new file mode 100644
+index 0000000..d228d60
+--- /dev/null
++++ b/tools/Chromium/CEFHost-Run
+@@ -0,0 +1,3 @@
++Stack 1048576
++SYS:System/CEFHost ENVARC:CEF/Profiles --native-children
++
+diff --git a/tools/Chromium/Chromium.c b/tools/Chromium/Chromium.c
+new file mode 100644
+index 0000000..3ede5dc
+--- /dev/null
++++ b/tools/Chromium/Chromium.c
+@@ -0,0 +1,4 @@
++/* Native interactive Chromium client of the resident AROS CEF engine. */
++#define CEF_BROWSER_CHROME_WINDOW 1
++#define CEF_BROWSER_INTERACTIVE 1
++#include "../../libs/cef/cef_host_browser_client.inc"
+diff --git a/tools/Chromium/README.md b/tools/Chromium/README.md
+new file mode 100644
+index 0000000..72e958f
+--- /dev/null
++++ b/tools/Chromium/README.md
+@@ -0,0 +1,34 @@
++# Native Chromium launcher
++
++Build `workbench-tools-chromium-client` with the matching Chromium/CEF output.
++The executable opens a session in the resident CEFHost and runs until all of
++its Chrome tabs/windows close. It uses the persistent `Chromium/default`
++application/profile identity unless a different profile is supplied:
++
++```
++SYS:System/Chromium https://example.com/ personal
++```
++
++The release layout installs the executable and CEFHost helpers in `SYS:System`,
++`CEFHost-Run` in `S:`, and `StartChromium` as
++`SYS:Applications/Internet/Chromium/Chromium`. That last file is a DOS script;
++its native PROJECT icon uses `C:IconX`. The containing drawer also needs its
++own DRAWER icon. The native executable has a TOOL icon when exposed directly.
++Both the script and icon specify a 1 MiB stack.
++
++The script starts the shared host if its ready port is absent, waits for
++readiness, then opens Chromium. The host keeps running when the last window
++closes so another application can reuse the same engine. Host registration
++arbitrates concurrent startup attempts; only the registered owner initializes
++CEF. The regular startup script does not enable diagnostic host shutdown.
++
++The host requires matching `cef.library`, `cef-blink.library`, `v8.library`,
++CEF resources under `Developer:CEF`, and writable persistent profiles under
++`ENVARC:CEF/Profiles`. Browser profiles provide storage separation in AROS's
++shared address space; they are not an OS security sandbox.
++
++The timed diagnostic clients still use the same callback/reference lifecycle
++implementation. This launcher removes their automatic close timers; closing
++a window before navigation finishes is an ordinary close, not a test failure.
++Native icon launch and interactive browser qualification are required before
++including a build in a release candidate.
+diff --git a/tools/Chromium/StartChromium b/tools/Chromium/StartChromium
+new file mode 100644
+index 0000000..e1feefa
+--- /dev/null
++++ b/tools/Chromium/StartChromium
+@@ -0,0 +1,22 @@
++.KEY URL,PROFILE
++.DEF URL "chrome://newtab/"
++.DEF PROFILE "default"
++.BRA {
++.KET }
++FailAt 21
++Stack 1048576
++SYS:System/CEFHostProbe present
++If WARN
++    Run >NIL: Execute S:CEFHost-Run
++    If WARN
++        Echo "Chromium: unable to start the shared engine."
++        Quit 20
++    EndIf
++EndIf
++SYS:System/CEFHostProbe wait
++If WARN
++    Echo "Chromium: the shared engine did not become ready. Check its installation and profile drawer."
++    Quit 20
++EndIf
++SYS:System/Chromium "{URL}" "{PROFILE}"
++
+diff --git a/tools/Chromium/icons/Chromium.info.src b/tools/Chromium/icons/Chromium.info.src
+new file mode 100644
+index 0000000..5709c01
+--- /dev/null
++++ b/tools/Chromium/icons/Chromium.info.src
+@@ -0,0 +1,2 @@
++TYPE = TOOL
++STACK = 1048576
+diff --git a/tools/Chromium/icons/Chromium.png b/tools/Chromium/icons/Chromium.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..d106d7ba576c984b335c12f1009b3f7db910e406
+GIT binary patch
+literal 4494
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tools/Chromium/icons/ChromiumDrawer.info.src b/tools/Chromium/icons/ChromiumDrawer.info.src
+new file mode 100644
+index 0000000..045d67c
+--- /dev/null
++++ b/tools/Chromium/icons/ChromiumDrawer.info.src
+@@ -0,0 +1 @@
++TYPE = DRAWER
+diff --git a/tools/Chromium/icons/Start Chromium.info.src b/tools/Chromium/icons/Start Chromium.info.src
+new file mode 100644
+index 0000000..2429922
+--- /dev/null
++++ b/tools/Chromium/icons/Start Chromium.info.src	
+@@ -0,0 +1,5 @@
++TYPE = PROJECT
++DEFAULTTOOL = "C:IconX"
++STACK = 1048576
++TOOLTYPE = "STACK=1048576"
++TOOLTYPE = "WAIT=0"
+diff --git a/tools/Chromium/mmakefile.src b/tools/Chromium/mmakefile.src
+new file mode 100644
+index 0000000..5bdc9d9
+--- /dev/null
++++ b/tools/Chromium/mmakefile.src
+@@ -0,0 +1,15 @@
++include $(SRCDIR)/config/aros.cfg
++include $(SRCDIR)/$(CURDIR)/../../build/chromium.mk
++CEF_SOURCE ?= $(CHROMIUM_SRC)
++CEF_OUTPUT ?= $(CEF_SOURCE)/out/aros-cef156
++CEF_HEADERS := $(CEF_SOURCE)/cef
++CEF_GENERATED_HEADERS := $(CEF_OUTPUT)/gen/cef
++
++#MM workbench-tools-chromium-client : workbench-libs-cef
++%build_prog mmake=workbench-tools-chromium-client \
++    progname=Chromium files=Chromium targetdir=$(AROS_SYSTEM) \
++    cflags="$(TARGET_ISA_CFLAGS) $(TARGET_CFLAGS) -DCEF_API_VERSION=15600 -I$(CEF_HEADERS) -I$(CEF_GENERATED_HEADERS) -I$(CEF_SOURCE)" \
++    ldflags="$(TARGET_LDFLAGS)" \
++    uselibs="cef v8 cybergraphics graphics intuition dos exec debug"
++
++%common
+-- 
+2.53.0
+
