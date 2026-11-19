@@ -1,0 +1,286 @@
+
+/mnt/short-term/job0254-01a1e62b/aros-master-build/bin/pc-x86_64-smp/AROS/Libs/v8.library:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000011816f0 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xd0>:
+ 11816f0:	6d                   	insl   (%dx),(%rdi)
+ 11816f1:	e8 31 c0 41 80       	call   ffffffff8159d727 <std::__is_ios_failure_handler(__cxxabiv1::__class_type_info const*)+0xffffffff7f780a37>
+ 11816f6:	7e 28                	jle    1181720 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x100>
+ 11816f8:	00 75 1b             	add    %dh,0x1b(%rbp)
+ 11816fb:	4c 8b 75 f0          	mov    -0x10(%rbp),%r14
+ 11816ff:	c9                   	leave
+ 1181700:	c3                   	ret
+ 1181701:	48 8b 5d d8          	mov    -0x28(%rbp),%rbx
+ 1181705:	4c 8b 65 e0          	mov    -0x20(%rbp),%r12
+ 1181709:	4c 8b 6d e8          	mov    -0x18(%rbp),%r13
+ 118170d:	31 c0                	xor    %eax,%eax
+ 118170f:	41 80 7e 28 00       	cmpb   $0x0,0x28(%r14)
+ 1181714:	74 e5                	je     11816fb <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xdb>
+ 1181716:	48 8d 45 98          	lea    -0x68(%rbp),%rax
+ 118171a:	48 89 5d d8          	mov    %rbx,-0x28(%rbp)
+ 118171e:	66 0f ef d2          	pxor   %xmm2,%xmm2
+ 1181722:	4c 89 65 e0          	mov    %r12,-0x20(%rbp)
+ 1181726:	4c 89 6d e8          	mov    %r13,-0x18(%rbp)
+ 118172a:	4c 89 7d f8          	mov    %r15,-0x8(%rbp)
+ 118172e:	48 89 85 b0 fe ff ff 	mov    %rax,-0x150(%rbp)
+ 1181735:	49 8b 06             	mov    (%r14),%rax
+ 1181738:	0f 16 95 b0 fe ff ff 	movhps -0x150(%rbp),%xmm2
+ 118173f:	0f 29 95 b0 fe ff ff 	movaps %xmm2,-0x150(%rbp)
+ 1181746:	48 8b 00             	mov    (%rax),%rax
+ 1181749:	48 8b 58 58          	mov    0x58(%rax),%rbx
+ 118174d:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181754:	00 00 00 
+			118174f: R_X86_64_64	v8::base::TimeTicks::Now()
+ 1181757:	48 89 9d f0 fe ff ff 	mov    %rbx,-0x110(%rbp)
+ 118175e:	ff d0                	call   *%rax
+ 1181760:	c7 85 00 ff ff ff 02 	movl   $0x2,-0x100(%rbp)
+ 1181767:	00 00 00 
+ 118176a:	48 89 85 f8 fe ff ff 	mov    %rax,-0x108(%rbp)
+ 1181771:	48 a1 00 00 00 00 00 	movabs 0x0,%rax
+ 1181778:	00 00 00 
+			1181773: R_X86_64_64	v8::perfetto_track_event::internal::kCategoryRegistry+0x10
+ 118177b:	48 c7 85 e0 fe ff ff 	movq   $0x0,-0x120(%rbp)
+ 1181782:	00 00 00 00 
+ 1181786:	0f b6 38             	movzbl (%rax),%edi
+ 1181789:	85 ff                	test   %edi,%edi
+ 118178b:	0f 85 25 10 00 00    	jne    11827b6 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1196>
+ 1181791:	49 8b 06             	mov    (%r14),%rax
+ 1181794:	48 8d 75 88          	lea    -0x78(%rbp),%rsi
+ 1181798:	48 ba 00 00 00 00 00 	movabs $0x0,%rdx
+ 118179f:	00 00 00 
+			118179a: R_X86_64_64	.rodata+0xc73228
+ 11817a2:	66 0f 6f 9d b0 fe ff 	movdqa -0x150(%rbp),%xmm3
+ 11817a9:	ff 
+ 11817aa:	48 bb 00 00 00 00 00 	movabs $0x0,%rbx
+ 11817b1:	00 00 00 
+			11817ac: R_X86_64_64	heap::base::internal::SegmentBase::GetSentinelSegmentAddress()
+ 11817b4:	f3 0f 10 02          	movss  (%rdx),%xmm0
+ 11817b8:	48 8b 00             	mov    (%rax),%rax
+ 11817bb:	48 89 b5 58 ff ff ff 	mov    %rsi,-0xa8(%rbp)
+ 11817c2:	48 8d 75 98          	lea    -0x68(%rbp),%rsi
+ 11817c6:	48 89 75 b0          	mov    %rsi,-0x50(%rbp)
+ 11817ca:	48 89 85 50 ff ff ff 	mov    %rax,-0xb0(%rbp)
+ 11817d1:	48 8b b0 f8 01 00 00 	mov    0x1f8(%rax),%rsi
+ 11817d8:	48 39 b0 00 02 00 00 	cmp    %rsi,0x200(%rax)
+ 11817df:	49 8b 46 20          	mov    0x20(%r14),%rax
+ 11817e3:	f3 0f 11 85 78 ff ff 	movss  %xmm0,-0x88(%rbp)
+ 11817ea:	ff 
+ 11817eb:	0f 29 5d a0          	movaps %xmm3,-0x60(%rbp)
+ 11817ef:	0f 95 45 c0          	setne  -0x40(%rbp)
+ 11817f3:	48 c7 85 60 ff ff ff 	movq   $0x1,-0xa0(%rbp)
+ 11817fa:	01 00 00 00 
+ 11817fe:	48 c7 85 68 ff ff ff 	movq   $0x0,-0x98(%rbp)
+ 1181805:	00 00 00 00 
+ 1181809:	48 c7 85 70 ff ff ff 	movq   $0x0,-0x90(%rbp)
+ 1181810:	00 00 00 00 
+ 1181814:	48 c7 45 80 00 00 00 	movq   $0x0,-0x80(%rbp)
+ 118181b:	00 
+ 118181c:	48 c7 45 88 00 00 00 	movq   $0x0,-0x78(%rbp)
+ 1181823:	00 
+ 1181824:	c7 45 98 00 00 00 00 	movl   $0x0,-0x68(%rbp)
+ 118182b:	48 c7 45 b8 00 00 00 	movq   $0x0,-0x48(%rbp)
+ 1181832:	00 
+ 1181833:	48 89 85 b0 fe ff ff 	mov    %rax,-0x150(%rbp)
+ 118183a:	ff d3                	call   *%rbx
+ 118183c:	48 89 85 48 fe ff ff 	mov    %rax,-0x1b8(%rbp)
+ 1181843:	ff d3                	call   *%rbx
+ 1181845:	49 89 c4             	mov    %rax,%r12
+ 1181848:	0f 1f 84 00 00 00 00 	nopl   0x0(%rax,%rax,1)
+ 118184f:	00 
+ 1181850:	41 0f b7 44 24 02    	movzwl 0x2(%r12),%eax
+ 1181856:	66 85 c0             	test   %ax,%ax
+ 1181859:	75 25                	jne    1181880 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x260>
+ 118185b:	48 8b 85 48 fe ff ff 	mov    -0x1b8(%rbp),%rax
+ 1181862:	0f b7 40 02          	movzwl 0x2(%rax),%eax
+ 1181866:	66 85 c0             	test   %ax,%ax
+ 1181869:	0f 84 61 01 00 00    	je     11819d0 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x3b0>
+ 118186f:	48 8b 95 48 fe ff ff 	mov    -0x1b8(%rbp),%rdx
+ 1181876:	4c 89 a5 48 fe ff ff 	mov    %r12,-0x1b8(%rbp)
+ 118187d:	49 89 d4             	mov    %rdx,%r12
+ 1181880:	83 e8 01             	sub    $0x1,%eax
+ 1181883:	66 41 89 44 24 02    	mov    %ax,0x2(%r12)
+ 1181889:	0f b7 c0             	movzwl %ax,%eax
+ 118188c:	48 8b bd 50 ff ff ff 	mov    -0xb0(%rbp),%rdi
+ 1181893:	49 8b 5c c4 10       	mov    0x10(%r12,%rax,8),%rbx
+ 1181898:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 118189f:	00 00 00 
+			118189a: R_X86_64_64	cppgc::internal::BasePage::FromInnerAddress(cppgc::internal::HeapBase const*, void*)
+ 11818a2:	48 89 de             	mov    %rbx,%rsi
+ 11818a5:	ff d0                	call   *%rax
+ 11818a7:	49 89 c7             	mov    %rax,%r15
+ 11818aa:	48 85 c0             	test   %rax,%rax
+ 11818ad:	0f 84 a3 04 00 00    	je     1181d56 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x736>
+ 11818b3:	4c 8b 2b             	mov    (%rbx),%r13
+ 11818b6:	4d 85 ed             	test   %r13,%r13
+ 11818b9:	74 95                	je     1181850 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x230>
+ 11818bb:	48 89 c7             	mov    %rax,%rdi
+ 11818be:	48 89 de             	mov    %rbx,%rsi
+ 11818c1:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 11818c8:	00 00 00 
+			11818c3: R_X86_64_64	cppgc::internal::HeapObjectHeader const& cppgc::internal::BasePage::ObjectHeaderFromInnerAddress<(cppgc::internal::AccessMode)0>(void const*) const
+ 11818cb:	ff d0                	call   *%rax
+ 11818cd:	f6 40 06 01          	testb  $0x1,0x6(%rax)
+ 11818d1:	0f 84 79 ff ff ff    	je     1181850 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x230>
+ 11818d7:	48 8b bd 50 ff ff ff 	mov    -0xb0(%rbp),%rdi
+ 11818de:	4c 89 ee             	mov    %r13,%rsi
+ 11818e1:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 11818e8:	00 00 00 
+			11818e3: R_X86_64_64	cppgc::internal::BasePage::FromInnerAddress(cppgc::internal::HeapBase const*, void const*)
+ 11818eb:	ff d0                	call   *%rax
+ 11818ed:	48 85 c0             	test   %rax,%rax
+ 11818f0:	0f 84 84 0d 00 00    	je     118267a <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x105a>
+ 11818f6:	80 78 10 01          	cmpb   $0x1,0x10(%rax)
+ 11818fa:	0f 84 50 ff ff ff    	je     1181850 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x230>
+ 1181900:	48 8b 50 08          	mov    0x8(%rax),%rdx
+ 1181904:	80 7a 3c 00          	cmpb   $0x0,0x3c(%rdx)
+ 1181908:	0f 84 42 ff ff ff    	je     1181850 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x230>
+ 118190e:	48 89 c7             	mov    %rax,%rdi
+ 1181911:	4c 89 ee             	mov    %r13,%rsi
+ 1181914:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 118191b:	00 00 00 
+			1181916: R_X86_64_64	cppgc::internal::HeapObjectHeader const& cppgc::internal::BasePage::ObjectHeaderFromInnerAddress<(cppgc::internal::AccessMode)0>(void const*) const
+ 118191e:	ff d0                	call   *%rax
+ 1181920:	f6 40 06 01          	testb  $0x1,0x6(%rax)
+ 1181924:	0f 84 42 0f 00 00    	je     118286c <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x124c>
+ 118192a:	4c 8b 9d 70 ff ff ff 	mov    -0x90(%rbp),%r11
+ 1181931:	4d 85 db             	test   %r11,%r11
+ 1181934:	0f 84 3e 04 00 00    	je     1181d78 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x758>
+ 118193a:	48 8b 8d 60 ff ff ff 	mov    -0xa0(%rbp),%rcx
+ 1181941:	4c 89 e8             	mov    %r13,%rax
+ 1181944:	31 d2                	xor    %edx,%edx
+ 1181946:	4c 8b 85 58 ff ff ff 	mov    -0xa8(%rbp),%r8
+ 118194d:	48 f7 f1             	div    %rcx
+ 1181950:	4d 8b 14 d0          	mov    (%r8,%rdx,8),%r10
+ 1181954:	49 89 d1             	mov    %rdx,%r9
+ 1181957:	4d 85 d2             	test   %r10,%r10
+ 118195a:	0f 84 59 0d 00 00    	je     11826b9 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1099>
+ 1181960:	49 8b 02             	mov    (%r10),%rax
+ 1181963:	48 8b 70 08          	mov    0x8(%rax),%rsi
+ 1181967:	49 39 f5             	cmp    %rsi,%r13
+ 118196a:	74 2c                	je     1181998 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x378>
+ 118196c:	48 8b 38             	mov    (%rax),%rdi
+ 118196f:	48 85 ff             	test   %rdi,%rdi
+ 1181972:	0f 84 41 0d 00 00    	je     11826b9 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1099>
+ 1181978:	48 8b 77 08          	mov    0x8(%rdi),%rsi
+ 118197c:	49 89 c2             	mov    %rax,%r10
+ 118197f:	31 d2                	xor    %edx,%edx
+ 1181981:	48 89 f0             	mov    %rsi,%rax
+ 1181984:	48 f7 f1             	div    %rcx
+ 1181987:	4c 39 ca             	cmp    %r9,%rdx
+ 118198a:	0f 85 29 0d 00 00    	jne    11826b9 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1099>
+ 1181990:	48 89 f8             	mov    %rdi,%rax
+ 1181993:	49 39 f5             	cmp    %rsi,%r13
+ 1181996:	75 d4                	jne    118196c <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x34c>
+ 1181998:	49 8b 02             	mov    (%r10),%rax
+ 118199b:	48 85 c0             	test   %rax,%rax
+ 118199e:	0f 84 15 0d 00 00    	je     11826b9 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1099>
+ 11819a4:	48 3b 58 10          	cmp    0x10(%rax),%rbx
+ 11819a8:	0f 84 a2 fe ff ff    	je     1181850 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x230>
+ 11819ae:	48 be 00 00 00 00 00 	movabs $0x0,%rsi
+ 11819b5:	00 00 00 
+			11819b0: R_X86_64_64	.rodata+0xc4c01d
+ 11819b8:	31 c0                	xor    %eax,%eax
+ 11819ba:	48 bf 00 00 00 00 00 	movabs $0x0,%rdi
+ 11819c1:	00 00 00 
+			11819bc: R_X86_64_64	.rodata+0xc4bf96
+ 11819c4:	48 ba 00 00 00 00 00 	movabs $0x0,%rdx
+ 11819cb:	00 00 00 
+			11819c6: R_X86_64_64	V8_Fatal(char const*, ...)
+ 11819ce:	ff d2                	call   *%rdx
+ 11819d0:	48 8b 9d b0 fe ff ff 	mov    -0x150(%rbp),%rbx
+ 11819d7:	48 83 7b 10 00       	cmpq   $0x0,0x10(%rbx)
+ 11819dc:	0f 85 39 0b 00 00    	jne    118251b <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xefb>
+ 11819e2:	4c 89 a5 38 fe ff ff 	mov    %r12,-0x1c8(%rbp)
+ 11819e9:	49 8b 5e 20          	mov    0x20(%r14),%rbx
+ 11819ed:	49 c7 46 20 00 00 00 	movq   $0x0,0x20(%r14)
+ 11819f4:	00 
+ 11819f5:	48 85 db             	test   %rbx,%rbx
+ 11819f8:	74 2f                	je     1181a29 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x409>
+ 11819fa:	48 83 7b 10 00       	cmpq   $0x0,0x10(%rbx)
+ 11819ff:	0f 85 8d 0e 00 00    	jne    1182892 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0x1272>
+ 1181a05:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181a0c:	00 00 00 
+			1181a07: R_X86_64_64	v8::base::Mutex::~Mutex()
+ 1181a0f:	48 89 df             	mov    %rbx,%rdi
+ 1181a12:	49 bc 00 00 00 00 00 	movabs $0x0,%r12
+ 1181a19:	00 00 00 
+			1181a14: R_X86_64_64	operator delete(void*, unsigned long)
+ 1181a1c:	ff d0                	call   *%rax
+ 1181a1e:	be 18 00 00 00       	mov    $0x18,%esi
+ 1181a23:	48 89 df             	mov    %rbx,%rdi
+ 1181a26:	41 ff d4             	call   *%r12
+ 1181a29:	49 8b 46 08          	mov    0x8(%r14),%rax
+ 1181a2d:	49 8b 76 10          	mov    0x10(%r14),%rsi
+ 1181a31:	48 39 c6             	cmp    %rax,%rsi
+ 1181a34:	0f 84 8d 07 00 00    	je     11821c7 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xba7>
+ 1181a3a:	48 89 85 50 fe ff ff 	mov    %rax,-0x1b0(%rbp)
+ 1181a41:	4c 89 b5 30 fe ff ff 	mov    %r14,-0x1d0(%rbp)
+ 1181a48:	49 89 f6             	mov    %rsi,%r14
+ 1181a4b:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+ 1181a50:	48 8b 85 50 fe ff ff 	mov    -0x1b0(%rbp),%rax
+ 1181a57:	48 8b 18             	mov    (%rax),%rbx
+ 1181a5a:	48 8d 43 50          	lea    0x50(%rbx),%rax
+ 1181a5e:	48 89 9d 78 fe ff ff 	mov    %rbx,-0x188(%rbp)
+ 1181a65:	48 89 c7             	mov    %rax,%rdi
+ 1181a68:	48 89 85 58 fe ff ff 	mov    %rax,-0x1a8(%rbp)
+ 1181a6f:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181a76:	00 00 00 
+			1181a71: R_X86_64_64	cppgc::internal::FreeList::Clear()
+ 1181a79:	ff d0                	call   *%rax
+ 1181a7b:	48 89 de             	mov    %rbx,%rsi
+ 1181a7e:	48 8d bd 10 ff ff ff 	lea    -0xf0(%rbp),%rdi
+ 1181a85:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181a8c:	00 00 00 
+			1181a87: R_X86_64_64	cppgc::internal::BaseSpace::RemoveAllPages()
+ 1181a8f:	ff d0                	call   *%rax
+ 1181a91:	4c 8b 85 18 ff ff ff 	mov    -0xe8(%rbp),%r8
+ 1181a98:	48 8b 85 10 ff ff ff 	mov    -0xf0(%rbp),%rax
+ 1181a9f:	49 39 c0             	cmp    %rax,%r8
+ 1181aa2:	0f 84 e1 0a 00 00    	je     1182589 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xf69>
+ 1181aa8:	48 c7 85 70 fe ff ff 	movq   $0x0,-0x190(%rbp)
+ 1181aaf:	00 00 00 00 
+ 1181ab3:	45 31 ff             	xor    %r15d,%r15d
+ 1181ab6:	49 89 c4             	mov    %rax,%r12
+ 1181ab9:	48 c7 85 98 fe ff ff 	movq   $0x0,-0x168(%rbp)
+ 1181ac0:	00 00 00 00 
+ 1181ac4:	48 c7 85 60 fe ff ff 	movq   $0x0,-0x1a0(%rbp)
+ 1181acb:	00 00 00 00 
+ 1181acf:	48 c7 85 a0 fe ff ff 	movq   $0x0,-0x160(%rbp)
+ 1181ad6:	00 00 00 00 
+ 1181ada:	4c 89 b5 40 fe ff ff 	mov    %r14,-0x1c0(%rbp)
+ 1181ae1:	4c 89 85 68 fe ff ff 	mov    %r8,-0x198(%rbp)
+ 1181ae8:	0f 1f 84 00 00 00 00 	nopl   0x0(%rax,%rax,1)
+ 1181aef:	00 
+ 1181af0:	4d 8b 14 24          	mov    (%r12),%r10
+ 1181af4:	49 c7 42 20 00 00 00 	movq   $0x0,0x20(%r10)
+ 1181afb:	00 
+ 1181afc:	4d 85 ff             	test   %r15,%r15
+ 1181aff:	0f 84 83 08 00 00    	je     1182388 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xd68>
+ 1181b05:	48 8b 85 98 fe ff ff 	mov    -0x168(%rbp),%rax
+ 1181b0c:	48 3b 85 70 fe ff ff 	cmp    -0x190(%rbp),%rax
+ 1181b13:	0f 84 77 08 00 00    	je     1182390 <cppgc::internal::Compactor::CompactSpacesIfEnabled()+0xd70>
+ 1181b19:	4c 89 10             	mov    %r10,(%rax)
+ 1181b1c:	48 83 c0 08          	add    $0x8,%rax
+ 1181b20:	48 89 85 98 fe ff ff 	mov    %rax,-0x168(%rbp)
+ 1181b27:	49 8d 7a 31          	lea    0x31(%r10),%rdi
+ 1181b2b:	41 c6 42 30 00       	movb   $0x0,0x30(%r10)
+ 1181b30:	ba 00 08 00 00       	mov    $0x800,%edx
+ 1181b35:	31 f6                	xor    %esi,%esi
+ 1181b37:	4c 89 95 b0 fe ff ff 	mov    %r10,-0x150(%rbp)
+ 1181b3e:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181b45:	00 00 00 
+			1181b40: R_X86_64_64	memset
+ 1181b48:	ff d0                	call   *%rax
+ 1181b4a:	48 8b bd b0 fe ff ff 	mov    -0x150(%rbp),%rdi
+ 1181b51:	48 b8 00 00 00 00 00 	movabs $0x0,%rax
+ 1181b58:	00 00 00 
+			1181b53: R_X86_64_64	cppgc::internal::NormalPage::PayloadStart()
+ 1181b5b:	ff d0                	call   *%rax
+ 1181b5d:	4c 8b 95 b0 fe ff ff 	mov    -0x150(%rbp),%r10
+ 1181b64:	4c 89 a5 88 fe ff ff 	mov    %r12,-0x178(%rbp)
+ 1181b6b:	49 89 c5             	mov    %rax,%r13
+ 1181b6e:	4c 89 95 a8 fe ff ff 	mov    %r10,-0x158(%rbp)
+ 1181b75:	66 66 2e 0f 1f 84 00 	data16 cs nopw 0x0(%rax,%rax,1)
+ 1181b7c:	00 00 00 00 

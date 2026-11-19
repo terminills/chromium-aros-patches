@@ -44798,7 +44798,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..e1b185f938dc9c54690615bb946ad70a614adc89 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..4b9edefe3eca4df5e709fcafe9da1a32ceefa975 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
 @@ -57,6 +57,9 @@
@@ -44898,19 +44898,11 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..e1b185f938dc9c54690615bb946ad70a
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +714,49 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +714,51 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
 +#if BUILDFLAG(IS_AROS)
-+  // AROS child processes return through renderer_main instead of terminating
-+  // the current task from the I/O thread.  Run the same explicit Blink cleanup
-+  // used by the in-process renderer before RenderThreadImpl is destroyed.
-+  if (blink_platform_impl_) {
-+    LOG(INFO) << "[Chromium:shutdown] stopping AROS compositor thread";
-+    blink::ShutdownCompositorThread();
-+    LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
-+  }
 +  // viz::Gpu destruction reports channel loss through the current renderer
 +  // task runner.  Release it before shutting that runner down.
 +  if (gpu_) {
@@ -44920,6 +44912,16 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..e1b185f938dc9c54690615bb946ad70a
 +  if (main_thread_scheduler_) {
 +    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
 +    main_thread_scheduler_->Shutdown();
++    LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
++  }
++  // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.
++  // Their ProxyMain::Stop posts to the compositor and waits synchronously,
++  // so the compositor must outlive the scheduler queues being discarded.
++  // Native AROS returns through renderer_main instead of exiting the process.
++  if (blink_platform_impl_) {
++    LOG(INFO) << "[Chromium:shutdown] stopping AROS compositor thread";
++    blink::ShutdownCompositorThread();
++    LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
 +  }
 +#endif
    // In a single-process mode, we cannot call _exit(0) in Shutdown() because
@@ -44949,7 +44951,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..e1b185f938dc9c54690615bb946ad70a
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +767,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +769,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
