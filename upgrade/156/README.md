@@ -13,9 +13,9 @@ normal and selected appearance, double-click startup, two tabs, navigation,
 clean closure and reopening with the same resident engine. The drawer title
 corruption observed after closure remains under investigation. AArch64 icon
 launch is not yet qualified.
-The x64 ten-cycle run184 completes twenty heap retirements and all22 child
+The x64 ten-cycle run184 completes twenty heap retirements and all 22 child
 returns; both strict serial accounting and independent native child-file pairs
-pass. Whole-guest memory still rises from1699.02 to1833.32MiB across cycles1–10.
+pass. Whole-guest memory still rises from 1699.02 to 1833.32 MiB across cycles 1–10.
 ARM69 paints the worker test but fails its bounded shutdown check; it is not a
 successful lifecycle result. No RC is published yet.
 See [native icon and launcher evidence](evidence/native-icons188/interactive188-result.json)
