@@ -7,34 +7,37 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-19 UTC
 
-Release-candidate preparation is now authorized, including binary releases and
-proper native AROS icons. Native x64 test188 verifies icon types/stack settings,
-normal and selected appearance, double-click startup, two tabs, navigation,
-clean closure and reopening with the same resident engine. The drawer title
-corruption observed after closure remains under investigation. AArch64 icon
-launch is not yet qualified.
-The x64 ten-cycle run186 completes twenty heap retirements and all 22 child
-returns, confirmed by strict serial and independent native child files. Memory
-still rises from 1692.88 to 1823.15 MiB across cycles 1–10. ARM70 paints the
-worker test but fails bounded host exit; its utility child has no exit record.
-Installed-resource203 paints four tabs and chrome://version and drains their
-browser close callbacks, but renderer teardown and reopening still fault.
-Candidate217 preserves scheduler clocks through isolate cleanup and separates
-the calculation-value handle map by renderer. It also includes the audited
-scope corrections204–210. Focused host regressions and cross objects pass;
-full native217 acceptance is pending. [Exact failure evidence and replayable
-source](evidence/native-retirement217/README.md) are retained. No RC is published.
-See [installed191 results and exact source](evidence/native-installed191/README.md).
-See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
-[native icons](evidence/native-icons188/interactive188-result.json), and
-[current RC gates](evidence/native-retirement217/release-candidate-gates.json).
-[Compact-image and DevTools ownership experiments](evidence/compact-image198/README.md)
-now include matched native cold-load evidence: packed build 191 reduces whole-guest
-resident use from 871.59 to 646.89 MiB. Packed browser behavior, long-run memory
-and the DevTools draft remain unqualified.
-The validated source snapshot remains directory158; the complete186v2 candidate
-is separately replay-checked in evidence/native-worker-tls186-v2/source.
+Native x64 candidate226 launches through the installed AROS icon, paints New Tab,
+opens four tabs and chrome://version, closes, and reopens through the same
+resident host. Its second session passes two500-iteration calculation,
+animation, mutation, custom-element, Range and XML pages. All11 observed
+renderer tasks return successfully without a native fault. The earlier217
+closed-queue crash is corrected. [Screenshots, exact symbols, serial and
+limits](evidence/native-browser226/README.md) are retained.
 
+This bounded browser test is not full host-shutdown, independent-app isolation,
+long-run memory or current persistent-profile acceptance. The Wanderer drawer
+title corruption after closure remains under investigation. ARM73 activated
+the installed icon through an input.device diagnostic but did not finish full
+painting; ARM226 native acceptance is pending. This does not qualify USB input.
+The complete21-repository226 source is replay-checked in
+[native-shutdown226/source](evidence/native-shutdown226/source).
+No RC binary release has been published. See the
+[current RC gates](evidence/native-browser226/release-candidate-gates.json).
+
+Compact218, derived from217, paints the full native browser and chrome://version;
+it retains217's known shutdown failure. Compact232 is derived from226 and awaits
+native acceptance. The separate matched191 bare-engine comparison reduced
+whole-guest cold-load use from871.59 to646.89MiB; that is not a full-browser
+memory result. [Compact browser measurements](evidence/compact218-native/README.md)
+and [matched cold-load evidence](evidence/compact-image198/README.md) distinguish
+these tests. Current long-run memory acceptance remains open; historical186
+completed ten cycles but still grew from1692.88 to1823.15MiB.
+
+Fresh x64 andARM SDK builds pass against upstream AROS master b6dcaeea plus
+[replayable private prerequisites](evidence/native-browser226/master229-source).
+Their native OS builds are separate and unqualified. Candidate226 still uses
+its original frozen SDK/runtime; no latest-master browser rebuild is claimed.
 
 The current directory-enumeration candidate passes native x86-64 writer158 and
 clean reader159: cookies/localStorage survive a fresh OS session, case-distinct
