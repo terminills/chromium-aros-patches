@@ -272,3 +272,21 @@ Native local JavaScript/Wasm workers, paint, close, CEF teardown, and script ret
 Native104 is a failure, not an isolation pass. B reports storage and heap/worker checks after A callback drain, but A reports no content checks, the survivor screenshot shows black content and stale pooled task-runner warnings, and child returns are incomplete. Host shutdown returns. Exact fatal symbols identify BlobRegistryProxy::Register through BlobDataHandle and the JavaScript Blob constructor; a utility task also faults removing a RunLoop nesting observer. Normal LOG-based lifecycle diagnostics yielded no serial events.
 
 WTF ThreadSpecific selected an engine-global main_thread_storage_ cache on AROS even though the resident engine has multiple renderer main tasks. The current candidate selects the existing always-TLS branch on AROS, retaining all Mojo sequence checks. It also changes the temporary lifecycle diagnostics to direct KPrintF. x64 and ARM full rebuilds and native105/ARM30 tests are pending. No task-runner lifetime, clean child exit, or complete browser qualification is claimed.
+
+## Native105 / ARM30 and next shutdown candidate
+
+The task-TLS candidate passes ARM30 local JavaScript/Wasm workers, painting,
+close, CEF teardown and native clock/OOM callback probes. Whole-guest first
+paint is 1193.88 MiB; after-close 1151.76 MiB is not reclamation or process RSS.
+The retained screenshot includes About AROS.
+
+Native105 has no Blob sequence fatal. B continues its checks after A closes,
+but A never reports its content checks: this is not two-app isolation PASS.
+All five complete child allocator records match the host. Direct lifecycle
+logs identify a utility task destroying the browser-owned UI SequenceManager:
+ContentMainRunner shutdown unconditionally reaches image-global
+BrowserTaskExecutor. The new candidate scopes that pointer to the native owner.
+Normal AROS GPU exit also now returns through GpuMain and the existing Viz
+destructor instead of calling resident-library stdc _exit without a startup
+frame. Abnormal fail-fast behavior is unchanged and remains unqualified.
+Both fixes await native106/ARM31 validation; no full browser release claim.

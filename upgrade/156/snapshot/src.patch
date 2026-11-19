@@ -40429,6 +40429,28 @@ index 5d5ffc8544d2a1eba6fc9369c9f33c372b8ebdf3..f35004284acd7eaef3efbcdaa7ccd720
  
    StopCapture();
  }
+diff --git a/components/viz/service/main/viz_main_impl.cc b/components/viz/service/main/viz_main_impl.cc
+index 13224dcc33a81fa52573c0c0da7103c3a381e661..c41f12e26b2998e04df21f72435e2073652919bd 100644
+--- a/components/viz/service/main/viz_main_impl.cc
++++ b/components/viz/service/main/viz_main_impl.cc
+@@ -376,6 +376,17 @@ void VizMainImpl::StopDebugStream() {
+ void VizMainImpl::ExitProcess(ExitCode immediate_exit_code) {
+   DCHECK(gpu_thread_task_runner_->BelongsToCurrentThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  if (immediate_exit_code == ExitCode::RESULT_CODE_NORMAL_EXIT) {
++    // The resident engine has no executable startup frame for _exit(). Let
++    // GpuMain return to the native helper instead. VizMainImpl's destructor
++    // closes and joins its owned compositor before destroying GPU resources.
++    receiver_.reset();
++    delegate_->QuitMainMessageLoop();
++    return;
++  }
++#endif
++
+   if (!gpu_init_->gpu_info().in_process_gpu) {
+     // Atomically shut down GPU process to make it faster and simpler.
+     base::Process::TerminateCurrentProcessImmediately(
 diff --git a/components/viz/test/test_output_surface_provider.cc b/components/viz/test/test_output_surface_provider.cc
 index 47db87ff98bf8b3e76a1780e6a3c243be589eb03..4a1dbf7996ffacbc62e744fcb9c2aab8f4c36b8c 100644
 --- a/components/viz/test/test_output_surface_provider.cc
@@ -43024,10 +43046,40 @@ index 225224a587ddf5c4fe30d27d76d2476b98777570..24819af893666f0f99cd1d7068688eba
    if (host_ && set_focus_on_mouse_down_or_key_event_) {
      set_focus_on_mouse_down_or_key_event_ = false;
 diff --git a/content/browser/scheduler/browser_task_executor.cc b/content/browser/scheduler/browser_task_executor.cc
-index 09614985b936857db61013f774d668204dd2fe26..955d0cd3daadbbf5531d5196ed803b40acb77125 100644
+index 09614985b936857db61013f774d668204dd2fe26..e151b46478f61b02442482534df86c4bf7708e51 100644
 --- a/content/browser/scheduler/browser_task_executor.cc
 +++ b/content/browser/scheduler/browser_task_executor.cc
-@@ -230,11 +230,10 @@ void BrowserTaskExecutor::ResetForTesting() {
+@@ -17,6 +17,9 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "content/browser/browser_process_io_thread.h"
+ #include "content/browser/browser_thread_impl.h"
+ #include "content/common/features.h"
+@@ -38,7 +41,19 @@ namespace content {
+ namespace {
+ 
+ // |g_browser_task_executor| is intentionally leaked on shutdown.
++#if BUILDFLAG(IS_AROS)
++struct BrowserTaskExecutorOwnerTag;
++BrowserTaskExecutor*& CurrentBrowserTaskExecutor() {
++  return base::aros::ProcessLocalValue<BrowserTaskExecutor*,
++                                     BrowserTaskExecutorOwnerTag>();
++}
++// Child ContentMainRunner shutdown also calls BrowserTaskExecutor::Shutdown.
++// A native child must see its own null executor, never destroy the resident
++// browser owner's UI scheduler from its utility or renderer main task.
++#define g_browser_task_executor CurrentBrowserTaskExecutor()
++#else
+ BrowserTaskExecutor* g_browser_task_executor = nullptr;
++#endif
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunnerForAndroidMainThread(
+@@ -230,11 +245,10 @@ void BrowserTaskExecutor::ResetForTesting() {
  
  // static
  void BrowserTaskExecutor::Shutdown() {

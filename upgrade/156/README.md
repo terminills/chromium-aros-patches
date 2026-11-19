@@ -5,7 +5,19 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
-## Current validation status — 2026-11-18 UTC
+## Current validation status — 2026-11-19 UTC
+
+Native AArch64 now passes the local CEF browser, JavaScript/Wasm workers,
+painting, closing and CEF teardown. ARM30 whole-guest first-paint usage is
+1193.88 MiB; this is not application RSS or memory-reclamation proof.
+Native x86-64 HTTP/HTTPS and single-browser tests have passed in earlier
+retained runs. Multi-application native-child acceptance remains open:
+run105 confirms shared allocator addresses and B continuing after A closes,
+but A content checks and full child shutdown do not pass. The current patch
+candidate fixes browser-executor ownership and normal GPU shutdown; its new
+runtime results are pending. See `evidence/native-children/README.md`.
+
+## Earlier initialization evidence — 2026-11-18 UTC
 
 Both architectures have produced complete CEF archives and native CEF/Blink
 modules that pass linking and ELF validation. On native x86-64 AROS with two
