@@ -1,0 +1,18 @@
+{
+  "applied": true,
+  "native_runtime": "pending",
+  "file": "third_party/blink/renderer/platform/wtf/std_lib_extras.h",
+  "draft_sha256": "f6d211415e7ab0527a9aa7da91c9e8411ca8714c1e5e1ce3041de3cb59cf2af4",
+  "change_from_v2": "Normalize const/volatile before Persistent type detection. Includes generated computed style roots and SVG parser roots.",
+  "host_validation": {
+    "v2-const-control": {
+      "returncode": -6,
+      "output": "FAIL 14\nv2-const-control: /run/media/terminills/Amiwest/job0254-01a1e62b/evidence/persistent-singleton169-host/test-v3.cc:46: int main(): Assertion `check(const_a!=const_b && const_a->Get()!=const_b->Get())' failed.\n"
+    },
+    "v3": {
+      "returncode": 0,
+      "output": "PASS 15 owner/call-site/ordinary/weak-root checks\n"
+    }
+  },
+  "full_cross_build": "running on x64 and ARM64"
+}

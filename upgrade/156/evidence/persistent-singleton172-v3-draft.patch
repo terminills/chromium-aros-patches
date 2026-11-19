@@ -1,0 +1,97 @@
+--- a/third_party/blink/renderer/platform/wtf/std_lib_extras.h
++++ b/third_party/blink/renderer/platform/wtf/std_lib_extras.h
+@@ -32,6 +32,9 @@
+ #include "base/check.h"
+ #include "base/dcheck_is_on.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
+ #include "third_party/blink/renderer/platform/wtf/sanitizers.h"
+ #include "third_party/blink/renderer/platform/wtf/type_traits.h"
+@@ -40,6 +43,18 @@
+ #include "third_party/blink/renderer/platform/wtf/threading.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread) \
++  struct Name##ArosSingletonTag;                                            \
++  Type& Name = blink::ArosStaticSingletonGet<Type, Name##ArosSingletonTag>(   \
++      allow_cross_thread,                                                  \
++      [&]() {                                                              \
++        return new blink::StaticSingleton<Type>::WrapperType Arguments;    \
++      },                                                                   \
++      [&](void* leaked_ptr) {                                               \
++        new (leaked_ptr) blink::StaticSingleton<Type>::WrapperType Arguments; \
++      })
++#else
+ #define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread)   \
+   static blink::StaticSingleton<Type> s_##Name(                               \
+       [&]() {                                                                 \
+@@ -50,6 +65,8 @@
+       });                                                                     \
+   Type& Name = s_##Name.Get(allow_cross_thread)
+ 
++#endif
++
+ // Use |DEFINE_STATIC_LOCAL()| to declare and define a static local variable
+ // (|static T;|) so that it is leaked and its destructors are not called at
+ // exit.
+@@ -69,6 +86,14 @@
+ #define DEFINE_THREAD_SAFE_STATIC_LOCAL(Type, Name, Arguments) \
+   DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, true)
+ 
++#if BUILDFLAG(IS_AROS)
++namespace cppgc::internal {
++template <typename T, typename WeaknessPolicy, typename LocationPolicy,
++          typename CheckingPolicy>
++class BasicPersistent;
++}  // namespace cppgc::internal
++#endif
++
+ namespace blink {
+ 
+ template <typename Type>
+@@ -151,6 +176,41 @@
+   base::PlatformThreadId thread_;
+ #endif
+ };
++
++#if BUILDFLAG(IS_AROS)
++template <typename T>
++struct IsArosHeapPersistent : std::false_type {};
++template <typename T, typename Weakness, typename Location, typename Checking>
++struct IsArosHeapPersistent<
++    cppgc::internal::BasicPersistent<T, Weakness, Location, Checking>>
++    : std::true_type {};
++
++// Heap roots must belong to the logical renderer that allocated their pointee.
++// The handle wrapper retains static lifetime; its heap clears it on retirement.
++// A distinct call-site tag and monotonic owner identity prevent later renderers
++// or sibling applications from inheriting that cleared root. Ordinary statics
++// and explicitly cross-thread persistent handles keep their existing semantics.
++template <typename Type, typename Tag, typename HeapNew, typename PlacementNew>
++Type& ArosStaticSingletonGet(bool allow_cross_thread, const HeapNew& heap_new,
++                            const PlacementNew& placement_new) {
++  if constexpr (IsArosHeapPersistent<std::remove_cv_t<Type>>::value) {
++    struct OwnerSlot {
++      base::Lock lock;
++      StaticSingleton<Type>* singleton = nullptr;
++    };
++    auto& slot = base::aros::ProcessLocalValue<OwnerSlot, Tag>();
++    // Serialize first construction within this owner, retaining the ordinary
++    // singleton's initialization and thread-use checks.
++    base::AutoLock lock(slot.lock);
++    if (!slot.singleton)
++      slot.singleton = new StaticSingleton<Type>(heap_new, placement_new);
++    return slot.singleton->Get(allow_cross_thread);
++  } else {
++    static StaticSingleton<Type> singleton(heap_new, placement_new);
++    return singleton.Get(allow_cross_thread);
++  }
++}
++#endif
+ 
+ // Use this to declare and define a static local pointer to a ref-counted object
+ // so that it is leaked so that the object's destructors are not called at

@@ -1,0 +1,26 @@
+{
+  "utc": "2026-11-19T17:15:52.835457+00:00",
+  "candidate": "fetcher-root168 x64 / fetcher-root65 ARM",
+  "x64": {
+    "functional_pass": false,
+    "cycle": 2,
+    "first_isolate_retirement_completed": true,
+    "fault_function": "blink::NinePieceImage::MaskDefaults()",
+    "text_offset": "0xb4c2073",
+    "source": "third_party/blink/renderer/core/style/nine_piece_image.cc:59",
+    "finding": "Macro-declared image-wide Persistent root remains after owning heap retirement; next renderer dereferences cleared handle. Focused ResourceFetcher fix moved execution to another shared root."
+  },
+  "arm64": {
+    "functional_pass": false,
+    "fatal": "Check failed: IsCreationThread().",
+    "resolved_stack": [
+      "blink::HeapTaskRunnerTimer<blink::InteractiveDetector>::BindTimerClosure()",
+      "blink::TimerBase::SetNextFireTime(base::TimeTicks)",
+      "blink::InteractiveDetector::StartOrPostponeCITimer(base::TimeTicks)",
+      "blink::LongTaskDetector::DidProcessTask(base::TimeTicks, base::TimeTicks, base::TimeTicks)"
+    ],
+    "candidate_cause": "LongTaskDetector::Instance uses macro-declared Persistent shared across logical renderers; observer set can contain detector from different heap/thread. This is a source-supported hypothesis, not yet native-verified."
+  },
+  "next": "persistent-singleton169 v2 changes only macro-declared cppgc BasicPersistent roots to logical-owner scope. Cross-thread handles and ordinary statics unchanged. Full build and native validation pending.",
+  "limits": "No memory saving claim; first successful retirement followed by fatal second lifecycle is not an accepted result."
+}
