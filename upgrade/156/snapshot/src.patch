@@ -59002,10 +59002,36 @@ index 3d8839154bb872db567119aae19df1cb51424de6..d5c36966d0320e927fae66046c6e70eb
    void SetTextTrackKindUserPreference(TextTrackKindUserPreference) override;
    void SetTextTrackBackgroundColor(const WebString&) override;
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
-index 210e182a80343b67302a2ed347c1ab984cdc3b09..43d513049dc1c05c152e406b5885fe00e343e71d 100644
+index 210e182a80343b67302a2ed347c1ab984cdc3b09..500a23660b725e9b2efd13e97b3de9b77a76fd7e 100644
 --- a/third_party/blink/renderer/core/exported/web_view_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
-@@ -1885,6 +1885,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
+@@ -242,6 +242,10 @@ static const float minScaleChangeToTriggerZoom = 1.5f;
+ static const float leftBoxRatio = 0.3f;
+ static const int caretPadding = 10;
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ using mojom::blink::EffectiveConnectionType;
+@@ -254,8 +258,14 @@ const double WebView::kMaxTextSizeMultiplier = 3.0;
+ 
+ // static
+ HashSet<WebViewImpl*>& WebViewImpl::AllInstances() {
++#if BUILDFLAG(IS_AROS)
++  struct WebViewInstancesOwnerTag;
++  return base::aros::ProcessLocalValue<HashSet<WebViewImpl*>,
++                                      WebViewInstancesOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(HashSet<WebViewImpl*>, all_instances, ());
+   return all_instances;
++#endif
+ }
+ 
+ namespace {
+@@ -1885,6 +1895,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
    settings->SetForceDarkModeEnabled(prefs.force_dark_mode_enabled);
  
    settings->SetAccessibilityAlwaysShowFocus(prefs.always_show_focus);
@@ -59014,7 +59040,7 @@ index 210e182a80343b67302a2ed347c1ab984cdc3b09..43d513049dc1c05c152e406b5885fe00
    settings->SetAutoplayPolicy(prefs.autoplay_policy);
    settings->SetRequireTransientActivationForGetDisplayMedia(
        prefs.require_transient_activation_for_get_display_media);
-@@ -3721,12 +3723,12 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
+@@ -3721,12 +3733,12 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
        gfx::FontRenderParams::SUBPIXEL_RENDERING_NONE);
    WebFontRenderStyle::SetSubpixelPositioning(
        renderer_preferences_.use_subpixel_positioning);
@@ -59064,6 +59090,38 @@ index 1c4e22e2d79fe68a49fbbc660c6de1b1bb41545d..865f727e4aa54fb47ac0fd0fc479b455
    // All the registered observers.
    base::ObserverList<WebViewObserver> observers_;
  };
+diff --git a/third_party/blink/renderer/core/frame/frame.cc b/third_party/blink/renderer/core/frame/frame.cc
+index ee74e0a9d50d0718815d346a420bdc5f4dcb0c18..61ec9ba26238fd0a5d14eb1d46787572148b23af 100644
+--- a/third_party/blink/renderer/core/frame/frame.cc
++++ b/third_party/blink/renderer/core/frame/frame.cc
+@@ -73,6 +73,10 @@
+ #include "third_party/blink/renderer/core/frame/picture_in_picture_controller.h"
+ #endif  // !BUILDFLAG(TARGET_OS_IS_ANDROID)
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ // static
+@@ -262,8 +266,16 @@ HTMLFrameOwnerElement* Frame::DeprecatedLocalOwner() const {
+ }
+ 
+ static ChromeClient& GetEmptyChromeClient() {
++#if BUILDFLAG(IS_AROS)
++  struct EmptyChromeClientOwnerTag;
++  auto& client = base::aros::ProcessLocalValue<
++      Persistent<EmptyChromeClient>, EmptyChromeClientOwnerTag>();
++  if (!client)
++    client = MakeGarbageCollected<EmptyChromeClient>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<EmptyChromeClient>, client,
+                       (MakeGarbageCollected<EmptyChromeClient>()));
++#endif
+   return *client;
+ }
+ 
 diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
 index 8285e3768996571cdae7409078a502a8f18bda89..f8de9ac0de6dd0c3eb528e4cad46ed4a1c9f5168 100644
 --- a/third_party/blink/renderer/core/frame/local_dom_window.cc
@@ -59160,6 +59218,38 @@ index ee2c080f61b630a0b80efbe54b0ede3df7c4d657..759d768cebb15b0e202a465a776812e6
    // Records this window's Storage Access API status. It cannot be downgraded.
    net::StorageAccessApiStatus storage_access_api_status_ =
        net::StorageAccessApiStatus::kNone;
+diff --git a/third_party/blink/renderer/core/frame/local_frame.cc b/third_party/blink/renderer/core/frame/local_frame.cc
+index 432a2d4c8b9d0c37a1a7fdafd61cceb6e2feff8e..872b5f86e4b92a6a2f32e7791713ece362d2bf05 100644
+--- a/third_party/blink/renderer/core/frame/local_frame.cc
++++ b/third_party/blink/renderer/core/frame/local_frame.cc
+@@ -269,6 +269,10 @@
+ #include "ui/gfx/range/range.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -282,8 +286,16 @@ constexpr unsigned kMaxDocumentChunkSize = 1000000;
+ using LocalFramesByTokenMap = HeapHashMap<uint64_t, WeakMember<LocalFrame>>;
+ static LocalFramesByTokenMap& GetLocalFramesMap() {
+   using LocalFramesByTokenMapHolder = DisallowNewWrapper<LocalFramesByTokenMap>;
++#if BUILDFLAG(IS_AROS)
++  struct LocalFrameTokensOwnerTag;
++  auto& holder = base::aros::ProcessLocalValue<
++      Persistent<LocalFramesByTokenMapHolder>, LocalFrameTokensOwnerTag>();
++  if (!holder)
++    holder = MakeGarbageCollected<LocalFramesByTokenMapHolder>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<LocalFramesByTokenMapHolder>, holder,
+                       (MakeGarbageCollected<LocalFramesByTokenMapHolder>()));
++#endif
+   return holder->Value();
+ }
+ 
 diff --git a/third_party/blink/renderer/core/frame/navigator_id.cc b/third_party/blink/renderer/core/frame/navigator_id.cc
 index 22243ebf5e26fc7224ef53694a1cd9dccf777196..c3294a0d02e79827bfda1490bcc0d576fc52431e 100644
 --- a/third_party/blink/renderer/core/frame/navigator_id.cc
@@ -59193,6 +59283,38 @@ index 22243ebf5e26fc7224ef53694a1cd9dccf777196..c3294a0d02e79827bfda1490bcc0d576
    struct utsname osname;
    DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<String>, platform_name, ());
    if (platform_name->IsNull()) {
+diff --git a/third_party/blink/renderer/core/frame/remote_frame.cc b/third_party/blink/renderer/core/frame/remote_frame.cc
+index 62180d858010c30d1f4e3e960a0ab11843099ea5..5d8000950b109f2345f2bcdfc1e5b62b5ff702aa 100644
+--- a/third_party/blink/renderer/core/frame/remote_frame.cc
++++ b/third_party/blink/renderer/core/frame/remote_frame.cc
+@@ -74,6 +74,10 @@
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -84,8 +88,16 @@ using RemoteFramesByTokenMap = HeapHashMap<uint64_t, WeakMember<RemoteFrame>>;
+ static RemoteFramesByTokenMap& GetRemoteFramesMap() {
+   using RemoteFramesByTokenMapHolder =
+       DisallowNewWrapper<RemoteFramesByTokenMap>;
++#if BUILDFLAG(IS_AROS)
++  struct RemoteFrameTokensOwnerTag;
++  auto& holder = base::aros::ProcessLocalValue<
++      Persistent<RemoteFramesByTokenMapHolder>, RemoteFrameTokensOwnerTag>();
++  if (!holder)
++    holder = MakeGarbageCollected<RemoteFramesByTokenMapHolder>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<RemoteFramesByTokenMapHolder>, holder,
+                       (MakeGarbageCollected<RemoteFramesByTokenMapHolder>()));
++#endif
+   return holder->Value();
+ }
+ 
 diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
 index a3f7ad92d7aefa2179b1448f07d1502baa540616..502b7f3a382d8cf3364cfb1d6e99b6243ad1c35d 100644
 --- a/third_party/blink/renderer/core/frame/settings.json5
@@ -59357,6 +59479,53 @@ index 2a4949728745ed2e5e926676097d3c41f0c49ef3..c4d1db95c7276089409d2fbf40aed0df
  }
  
  bool OffscreenCanvas::OriginClean() const {
+diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
+index dce0c22ee0020ee0b1873d148912bdf8ef84f549..dc4bb1804311892f957ff221bf86d734419502b4 100644
+--- a/third_party/blink/renderer/core/page/page.cc
++++ b/third_party/blink/renderer/core/page/page.cc
+@@ -107,6 +107,10 @@
+ #include "ui/color/color_provider_utils.h"
+ #include "ui/gfx/geometry/insets_conversions.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -174,15 +178,31 @@ void ResetPluginCache() {
+ // not observable from scripts.
+ static Page::PageSet& AllPages() {
+   using PageSetHolder = DisallowNewWrapper<Page::PageSet>;
++#if BUILDFLAG(IS_AROS)
++  struct AllPagesOwnerTag;
++  auto& pages = base::aros::ProcessLocalValue<
++      Persistent<PageSetHolder>, AllPagesOwnerTag>();
++  if (!pages)
++    pages = MakeGarbageCollected<PageSetHolder>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<PageSetHolder>, pages,
+                       (MakeGarbageCollected<PageSetHolder>()));
++#endif
+   return pages->Value();
+ }
+ 
+ Page::PageSet& Page::OrdinaryPages() {
+   using PageSetHolder = DisallowNewWrapper<Page::PageSet>;
++#if BUILDFLAG(IS_AROS)
++  struct OrdinaryPagesOwnerTag;
++  auto& pages = base::aros::ProcessLocalValue<
++      Persistent<PageSetHolder>, OrdinaryPagesOwnerTag>();
++  if (!pages)
++    pages = MakeGarbageCollected<PageSetHolder>();
++#else
+   DEFINE_STATIC_LOCAL(Persistent<PageSetHolder>, pages,
+                       (MakeGarbageCollected<PageSetHolder>()));
++#endif
+   return pages->Value();
+ }
+ 
 diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
 index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..b825389dfd3b910e5245232c8dd45905142bd5a8 100644
 --- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc

@@ -1,0 +1,42 @@
+{
+  "files": {
+    "Libs/v8.library": "695d9860de339f2c44d6b59f0c43e28e5eda4ccd282fca21c722938d98ba3d1a",
+    "Libs/cef-blink.library": "3b4ec53cad6e2d9ef9758ce4ad5170a5db04b37e183523db480dc08941a1566d",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "01a63b6fe9a632aa90c2c14ff4bfc095e74e20ae7564d8fc06ec55c8c9f34533",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "da5a5598bbc3dfea1975c99800985ac93772033d3b7ad8ffe6b3db467317c45b"
+  },
+  "web_commit": "c5de7e841115fbb595d38a228600e2594eb0215b",
+  "web_test_client_sha256": "edcc207035605cfd6b63d4c2b595c0d0d7a2345a57f5fc41aed83082dbf28b74",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm38.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM38-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T06:09:19.832941+00:00",
+    "validation": "Mojo ownership candidate passes native114 both-app storage, DOM and worker checks; closure exposes raster pool cross-owner job handles and a V8 import absent from debug enumeration despite its native ELF definition. This additional candidate isolates CategorizedWorkerPool by logical renderer owner. Companion aros-web direct import table avoids debug SHN_XINDEX omission; preserves absent-import failure. Exact-base replay checked; native115/ARM38 validation pending. No heap reclamation claim.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "bfe854dec52f5416c2bfa04e4a47031fcdc416fb1c3e5fdd6eac9d3c2f2a5590",
+        "applied_tree": "b7b018daac1ae5abb591d354f1a1f114eb378f10",
+        "bytes": 3006619
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}

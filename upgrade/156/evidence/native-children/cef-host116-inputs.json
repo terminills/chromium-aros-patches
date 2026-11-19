@@ -1,0 +1,51 @@
+{
+  "files": {
+    "Libs/v8.library": "67d2636a3dde7fd61e97619114f93bb0a9c95995318a753c629fcf4bae2fd7dd",
+    "Libs/cef-blink.library": "86ea0298ba465b2307d5947ec8c4ba04650e3f8e08db6899637e62140db28f77",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "c7d4957b1f468b24ecd2977758c22b1d05dba7243c954ee0c6a7679f014e1171",
+    "C/CEFSubprocess": "f90b3cc1f128121f8d0e7a210f72003973a1075298aa10672bccc6cec9d2a9e6",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28",
+    "C/CEFHostBrowser": "183b3e7c4f3d6f5ebbb0d838bc11554b10ff5696c9658ea21c4f4f31622c0643",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f"
+  },
+  "web_commit": "c5de7e841115fbb595d38a228600e2594eb0215b",
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nWait 3\nRun >RAM:CEF-appB.log Execute S:CEF-AppB\nWait 150\nC:CEFHostProbe stats\nWait 150\nC:CEFHostProbe stats\nType RAM:CEF-host.log >DEBUG:\nC:CEFHostProbe stop\nType RAM:CEF-appA.log >DEBUG:\nType RAM:CEF-appB.log >DEBUG:\nEcho Shared-browser-test-finished\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T06:23:24.858048+00:00",
+    "validation": "Native115 with raster-owner/V8 direct imports passes both-app storage/DOM/worker checks, then fails FrameDetached map membership CHECK during closure. This candidate scopes FrameMap LazyInstance wrapper by logical renderer while preserving normal AtExit destruction and all checks. Exact-base replay checked; native116/ARM39 runtime pending. No renderer heap reclamation claim.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "0c294bc3745a0161a57c580acdc71f00e82bf86a59aa401c24ce69225489517f",
+        "applied_tree": "6e91a40e8a015229d066df1d372690239e06a43e",
+        "bytes": 3010449
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "c813d901e27912f1c31eda7e2ae004750e4eb53ca90398612d8bb4a5b01e90b4",
+    "tools/CEFHost/CEFSubprocess.c": "46ef11a6002fc4235bfd45d8715205ab2a29a4482a98fa834c07a8859583361e",
+    "libs/cef/test_cef_host_browser.c": "beabb978e08d92a6156cc3244eafc49f27763b30f97bb9eb0f44555fdbb27f5f",
+    "libs/cef/test_cef_browser.c": "edcc207035605cfd6b63d4c2b595c0d0d7a2345a57f5fc41aed83082dbf28b74",
+    "libs/v8/v8findenginesymbol.c": "157d99744cb4057bc1385b3c529a57b228b77860c97dd4b97ea0bcd41f0f5642",
+    "libs/v8/mmakefile.src": "ac4588f55d0d4a96374be83d41993da3df67df347a9592588fb246ff08e8fc89",
+    "build/v8-import-table.py": "0e2f692d0fe09c35488d3107383225f971441da11cd1b42886e7e30f57826744"
+  },
+  "fixture_sha256": "47d01c33e577881fd0417de4f167cd656af0d734fac8530e545b71c4aff5a6d8"
+}

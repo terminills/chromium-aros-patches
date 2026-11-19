@@ -383,3 +383,11 @@ ARM36 passed its complete local worker/paint/close/teardown regression and nativ
 Native115 uses the rebuilt direct-import V8 library (hash checked against native build output) plus per-owner raster pools, with ordinary logging. Both apps again pass storage/DOM/worker checks. Strict lifecycle FAIL now occurs at RenderFrameImpl::FrameDetached's frame-membership CHECK. The exact-ELF stack is retained. The global LazyInstance<FrameMap>::DestructorAtExit registers destruction with the first renderer; that exit can clear a sibling's live frame map. The new candidate scopes the LazyInstance wrapper by logical renderer and retains normal AtExit destruction and both membership/identity checks. This does not bypass teardown or claim heap reclamation. Complete build/native116/ARM39 validation is pending.
 
 ARM37 passed content/workers and browser-close callbacks, but timed out in final CEF teardown without a native alert or fatal. Its retained inputs still contain the preceding V8 library; ARM38 is running the direct-table library with independently verified staging hashes. A separate profile-lock audit records an unsupported F_SETLK consumer and an existing SDK flock implementation with different lifetime semantics; no locking or SDK change is included.
+
+## Native116 and ARM38; Blink page/frame ownership candidate
+
+Native116 repeats both applications storage, DOM and worker PASS, with complete shared allocator-address records. Full lifecycle remains FAIL: the exact retained ELF resolves the next close-path CHECK to LocalFrame::DetachImpl (frame-token map membership), after the preceding RenderFrameImpl map fix. No surviving-app or full teardown acceptance. Screenshot and exact-symbol stack retained.
+
+The next snapshot scopes Blink AllPages/OrdinaryPages Persistent roots, local/remote frame-token maps, empty ChromeClient and WebView instance registry to each logical renderer, preserving sharing within the renderer and existing CHECKs. Both architecture compilations are in progress; native117/ARM40 are pending. No heap reclamation claim.
+
+ARM38 used the new direct V8 import table, passed local JS/Wasm workers and paint/close, but timed out during final teardown without fatal/native alert. First-paint whole guest usage 1178.32 MiB; not engine RSS, network or multi-app acceptance. ARM39 separately tests the preceding frame-map snapshot.
