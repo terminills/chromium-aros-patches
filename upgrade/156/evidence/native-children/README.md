@@ -628,3 +628,21 @@ The diagnostics-free153 writer completed, but its154 reader suffered host QEMU
 SIGSEGV before finishing all checks. The host kernel record and original result
 are retained;160 repeats the same engine. Do not treat154 as a guest pass or
 attribute the host crash to a proven guest defect.
+
+
+The diagnostics-free directory candidate now passes native x64 writer158 and
+clean reader159: cookie/localStorage persistence, case-distinct application and
+profile isolation, every child return, and host completion. ARM58 also passes
+the full Chrome local JavaScript/WebAssembly worker fixture with all six native
+child IDs returning zero and the host completing. The reviewed content screenshot
+shows the worker PASS page and About AROS identifying aarch64-raspi. These are
+QEMU results, not physical Raspberry Pi or general browser qualification.
+
+The native child-accounting helper requires child-emitted entry evidence and a
+unique zero exit for every observed ID. Complete DETAIL records can recover an
+interleaved short entry prefix; parent launch alone cannot establish entry. Its
+21-case regression report retains failures for missing or ambiguous evidence.
+
+The153/161 persistence case also completed after a private host QEMU package
+update. The154 and160 host crashes remain failures; this does not prove all host
+emulator defects fixed. Repeated lifecycle memory measurements are still pending.
