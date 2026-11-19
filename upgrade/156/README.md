@@ -16,13 +16,13 @@ separate deferred investigation.
 Native x86-64 HTTP/HTTPS and single-browser tests passed in earlier retained
 runs. Both applications now repeatedly pass independent cookie/localStorage,
 DOM and worker checks through the shared resident engine. Full multi-app
-lifecycle acceptance remains open: native116 failed on Blink frame-token
-registry ownership during close. The current snapshot isolates the adjoining
-Blink page/frame/view roots; native117 has reached both close callbacks without
-that assertion but has not passed callback-drain/full teardown acceptance.
-A test-client reference-lifetime fix is queued as native118 using unchanged
-engine binaries. See `evidence/native-children/README.md` for exact run inputs,
-results and screenshots. Full Chrome UI, Node/Electron/Zune consumers and
+lifecycle now completes functionally in native118: A exits, B continues its
+checks, B exits, all six native children return0, and host shutdown returns.
+Its strict result remains failed because one allocator-address record was
+interleaved; exact-fragment recovery is retained separately, and native119
+is a clean replay. Stale task-runner warnings still need investigation.
+See `evidence/native-children/README.md` for exact inputs and qualifications.
+Full Chrome UI, Node/Electron/Zune consumers and
 broad hardware qualification remain outside the completed evidence.
 
 ## Earlier initialization evidence — 2026-11-18 UTC
