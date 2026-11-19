@@ -1,0 +1,28 @@
+--- a/third_party/blink/renderer/core/css/post_style_update_scope.cc
++++ b/third_party/blink/renderer/core/css/post_style_update_scope.cc
+@@ -13,7 +13,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local PostStyleUpdateScope* PostStyleUpdateScope::current_ = nullptr;
++#else
+ PostStyleUpdateScope* PostStyleUpdateScope::current_ = nullptr;
++#endif
+ 
+ PostStyleUpdateScope::AnimationData*
+ PostStyleUpdateScope::CurrentAnimationData() {
+--- a/third_party/blink/renderer/core/css/post_style_update_scope.h
++++ b/third_party/blink/renderer/core/css/post_style_update_scope.h
+@@ -131,7 +131,11 @@
+     return nullify_pseudo_data_ ? nullptr : &pseudo_data_;
+   }
+ 
++#if defined(__AROS__)
++  static thread_local PostStyleUpdateScope* current_;
++#else
+   static PostStyleUpdateScope* current_;
++#endif
+ };
+ 
+ }  // namespace blink

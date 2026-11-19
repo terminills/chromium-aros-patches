@@ -1,0 +1,28 @@
+--- a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc
++++ b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc
+@@ -94,7 +94,11 @@
+   return construction_stack_iter->value;
+ }
+ 
++#if defined(__AROS__)
++thread_local wtf_size_t CustomElementConstructionStackScope::nesting_level_ = 0;
++#else
+ wtf_size_t CustomElementConstructionStackScope::nesting_level_ = 0;
++#endif
+ 
+ CustomElementConstructionStackScope::CustomElementConstructionStackScope(
+     CustomElementDefinition& definition,
+--- a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h
++++ b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h
+@@ -77,7 +77,11 @@
+   wtf_size_t depth_;
+ #endif
+ 
++#if defined(__AROS__)
++  static thread_local wtf_size_t nesting_level_;
++#else
+   static wtf_size_t nesting_level_;
++#endif
+ };
+ 
+ }  // namespace blink

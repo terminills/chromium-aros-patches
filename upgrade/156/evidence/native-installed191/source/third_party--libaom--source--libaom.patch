@@ -1,0 +1,27 @@
+diff --git a/aom_ports/aarch64_cpudetect.c b/aom_ports/aarch64_cpudetect.c
+index 3b7c2d7c7af4a86fa5178aaf06cf67e08344e610..9c4429bf8ad08d21ed06bee643b45ad760599afb 100644
+--- a/aom_ports/aarch64_cpudetect.c
++++ b/aom_ports/aarch64_cpudetect.c
+@@ -32,6 +32,22 @@ static int arm_get_cpu_caps(void) {
+   return flags;
+ }
+ 
++#elif defined(__AROS__)
++
++static int arm_get_cpu_caps(void) {
++  // The native port guarantees Armv8 NEON. AROS currently has no public
++  // runtime feature mask for optional ISA extensions or saved SVE state;
++  // do not select those kernels merely because the assembler supports them.
++  int flags = 0;
++#if HAVE_NEON
++  flags |= HAS_NEON;
++#endif
++#if HAVE_ARM_CRC32 && defined(__ARM_FEATURE_CRC32)
++  flags |= HAS_ARM_CRC32;
++#endif
++  return flags;
++}
++
+ #elif defined(__APPLE__)  // end !CONFIG_RUNTIME_CPU_DETECT
+ 
+ // sysctlbyname() parameter documentation for instruction set characteristics:

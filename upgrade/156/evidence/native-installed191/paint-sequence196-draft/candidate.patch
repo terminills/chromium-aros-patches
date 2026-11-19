@@ -1,0 +1,15 @@
+--- a/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
++++ b/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
+@@ -55,7 +55,12 @@
+ // we update the property trees. We should explore optimizing our management of
+ // the sequence number through the use of a dirty bit or similar. See
+ // http://crbug.com/692842#c4.
++#if defined(__AROS__)
++// Each native renderer updates its property trees on its own main task.
++static thread_local int g_s_property_tree_sequence_number = 1;
++#else
+ static int g_s_property_tree_sequence_number = 1;
++#endif
+ 
+ namespace {
+ 

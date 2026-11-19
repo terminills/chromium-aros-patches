@@ -1,0 +1,39 @@
+{
+  "scope": "Bounded audit around reproduced custom-element failure. Not a complete global-state audit or native qualification. Source remains frozen for191/ARM71.",
+  "items": [
+    {
+      "component": "CEReactionsScope::top_of_stack_",
+      "status": "191 applied, x64 link and ARM archive in progress; actual-source host test fails before/passes after",
+      "risk": "Cross-renderer construction dispatch and wrong isolate context",
+      "fix": "AROS native-task-local stack pointer"
+    },
+    {
+      "component": "CustomElementConstructionStackScope::nesting_level_",
+      "status": "192 private draft, host fail-before/pass-after and x64/ARM isolated compilation PASS; not applied",
+      "risk": "Counter shared across process-local window map holders can prevent one renderer clearing its holder",
+      "fix": "AROS native-task-local nesting counter"
+    },
+    {
+      "component": "ScopedEventQueue::instance_",
+      "status": "194 private draft: actual source/header host fail-before/pass-after (one wrong-renderer event dispatch before, zero after); x64 and ARM isolated object compile PASS. Native GC lifetime still requires qualification.",
+      "risk": "Global queue contains a GC Persistent belonging to its first renderer, plus shared event scope depth; unrelated renderer events can join or drain that queue",
+      "fix": "Draft AROS native-task-local instance pointer, retaining existing lazy construction/GC-root semantics; no forced deletion of live queue."
+    },
+    {
+      "component": "PostStyleUpdateScope::current_",
+      "status": "195 private draft: extracted production accessors/ctor/dtor host fail-before/pass-after, cross object compilation underway; no native qualification.",
+      "risk": "Global pointer to one renderer stack object supplies animation/pseudo state to another renderer",
+      "fix": "AROS native-task-local active scope pointer"
+    },
+    {
+      "component": "CoreInitializer::instance_",
+      "status": "Intentionally shared initializer candidate; no change from this grep alone",
+      "risk": "Requires separate review; existence of a static alone is not sufficient to make it task-local"
+    },
+    {
+      "component": "ClientMessageLoopAdapter::instance_",
+      "status": "DevTools lifecycle requires separate review",
+      "risk": "Nested debugging loops may assume one renderer per OS process; not claimed fixed"
+    }
+  ]
+}

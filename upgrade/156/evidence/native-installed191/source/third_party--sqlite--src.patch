@@ -1,0 +1,243 @@
+diff --git a/amalgamation/sqlite3.c b/amalgamation/sqlite3.c
+index 221bd9629701a80716b00716a03a34dacbd7e0fe..7b0662f318ec2f784d3796947f3fe5d69e1a21fa 100644
+--- a/amalgamation/sqlite3.c
++++ b/amalgamation/sqlite3.c
+@@ -46033,6 +46033,32 @@ static const sqlite3_io_methods *(*const FINDER)(const char*,unixFile *p)    \
+ ** locking strategies.  Functions that return pointers to these methods
+ ** are also created.
+ */
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++static int arosLock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosLock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosUnlock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosUnlock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosReserved(sqlite3_file *id,int *result) {
++  return chromiumArosReserved(((unixFile*)id)->lockingContext,result);
++}
++static int arosClose(sqlite3_file *id) {
++  unixFile *p=(unixFile*)id;
++  chromiumArosLockClose(p->lockingContext);
++  p->lockingContext=0;p->eFileLock=NO_LOCK;
++  return closeUnixFile(id);
++}
++IOMETHODS(arosIoFinder, arosIoMethods, 1, arosClose, arosLock,
++          arosUnlock, arosReserved, 0)
++#endif
++
+ IOMETHODS(
+   posixIoFinder,            /* Finder function name */
+   posixIoMethods,           /* sqlite3_io_methods object name */
+@@ -46313,6 +46339,13 @@ static int fillInUnixFile(
+ #endif
+   }
+ 
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++  if( pLockingStyle == &arosIoMethods ){
++    pNew->lockingContext=chromiumArosLockOpen(zFilename);
++    if(!pNew->lockingContext)rc=SQLITE_CANTOPEN_BKPT;
++  }
++#endif
++
+   if( pLockingStyle == &posixIoMethods
+ #if defined(__APPLE__) && SQLITE_ENABLE_LOCKING_STYLE
+     || pLockingStyle == &nfsIoMethods
+@@ -47195,6 +47228,10 @@ static int unixFullPathname(
+   int nOut,                     /* Size of output buffer in bytes */
+   char *zOut                    /* Output buffer */
+ ){
++#ifdef SQLITE_AROS_FULL_PATHNAME
++  UNUSED_PARAMETER(pVfs);
++  return SQLITE_AROS_FULL_PATHNAME(zPath, nOut, zOut);
++#else
+   DbPath path;
+   UNUSED_PARAMETER(pVfs);
+   path.rc = 0;
+@@ -47214,6 +47251,7 @@ static int unixFullPathname(
+   if( path.rc || path.nUsed<2 ) return SQLITE_CANTOPEN_BKPT;
+   if( path.nSymlink ) return SQLITE_OK_SYMLINK;
+   return SQLITE_OK;
++#endif
+ }
+ 
+ #ifndef SQLITE_OMIT_LOAD_EXTENSION
+@@ -48683,7 +48721,9 @@ SQLITE_API int sqlite3_os_init(void){
+   ** array cannot be const.
+   */
+   static sqlite3_vfs aVfs[] = {
+-#if SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
++#if defined(SQLITE_AROS_NATIVE_LOCKS)
++    UNIXVFS("aros",          arosIoFinder ),
++#elif SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
+     UNIXVFS("unix",          autolockIoFinder ),
+ #elif OS_VXWORKS
+     UNIXVFS("unix",          vxworksIoFinder ),
+diff --git a/amalgamation_dev/sqlite3.c b/amalgamation_dev/sqlite3.c
+index 65d4ddf0c696943688ac70a202baebeceb6c5bc4..5f4b2fa67f689ba3200031f66915c541b04ae9cd 100644
+--- a/amalgamation_dev/sqlite3.c
++++ b/amalgamation_dev/sqlite3.c
+@@ -46046,6 +46046,32 @@ static const sqlite3_io_methods *(*const FINDER)(const char*,unixFile *p)    \
+ ** locking strategies.  Functions that return pointers to these methods
+ ** are also created.
+ */
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++static int arosLock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosLock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosUnlock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosUnlock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosReserved(sqlite3_file *id,int *result) {
++  return chromiumArosReserved(((unixFile*)id)->lockingContext,result);
++}
++static int arosClose(sqlite3_file *id) {
++  unixFile *p=(unixFile*)id;
++  chromiumArosLockClose(p->lockingContext);
++  p->lockingContext=0;p->eFileLock=NO_LOCK;
++  return closeUnixFile(id);
++}
++IOMETHODS(arosIoFinder, arosIoMethods, 1, arosClose, arosLock,
++          arosUnlock, arosReserved, 0)
++#endif
++
+ IOMETHODS(
+   posixIoFinder,            /* Finder function name */
+   posixIoMethods,           /* sqlite3_io_methods object name */
+@@ -46326,6 +46352,13 @@ static int fillInUnixFile(
+ #endif
+   }
+ 
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++  if( pLockingStyle == &arosIoMethods ){
++    pNew->lockingContext=chromiumArosLockOpen(zFilename);
++    if(!pNew->lockingContext)rc=SQLITE_CANTOPEN_BKPT;
++  }
++#endif
++
+   if( pLockingStyle == &posixIoMethods
+ #if defined(__APPLE__) && SQLITE_ENABLE_LOCKING_STYLE
+     || pLockingStyle == &nfsIoMethods
+@@ -47208,6 +47241,10 @@ static int unixFullPathname(
+   int nOut,                     /* Size of output buffer in bytes */
+   char *zOut                    /* Output buffer */
+ ){
++#ifdef SQLITE_AROS_FULL_PATHNAME
++  UNUSED_PARAMETER(pVfs);
++  return SQLITE_AROS_FULL_PATHNAME(zPath, nOut, zOut);
++#else
+   DbPath path;
+   UNUSED_PARAMETER(pVfs);
+   path.rc = 0;
+@@ -47227,6 +47264,7 @@ static int unixFullPathname(
+   if( path.rc || path.nUsed<2 ) return SQLITE_CANTOPEN_BKPT;
+   if( path.nSymlink ) return SQLITE_OK_SYMLINK;
+   return SQLITE_OK;
++#endif
+ }
+ 
+ #ifndef SQLITE_OMIT_LOAD_EXTENSION
+@@ -48696,7 +48734,9 @@ SQLITE_API int sqlite3_os_init(void){
+   ** array cannot be const.
+   */
+   static sqlite3_vfs aVfs[] = {
+-#if SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
++#if defined(SQLITE_AROS_NATIVE_LOCKS)
++    UNIXVFS("aros",          arosIoFinder ),
++#elif SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
+     UNIXVFS("unix",          autolockIoFinder ),
+ #elif OS_VXWORKS
+     UNIXVFS("unix",          vxworksIoFinder ),
+diff --git a/src/os_unix.c b/src/os_unix.c
+index 927b8ebfcbce355934dbf3671497057f67ba9cb2..9b82474156554cff4ac741382229ad71979f3f6d 100644
+--- a/src/os_unix.c
++++ b/src/os_unix.c
+@@ -5849,6 +5849,32 @@ static const sqlite3_io_methods *(*const FINDER)(const char*,unixFile *p)    \
+ ** locking strategies.  Functions that return pointers to these methods
+ ** are also created.
+ */
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++static int arosLock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosLock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosUnlock(sqlite3_file *id, int level) {
++  unixFile *p=(unixFile*)id;
++  int rc=chromiumArosUnlock(p->lockingContext,level);
++  p->eFileLock=chromiumArosLockLevel(p->lockingContext);
++  return rc;
++}
++static int arosReserved(sqlite3_file *id,int *result) {
++  return chromiumArosReserved(((unixFile*)id)->lockingContext,result);
++}
++static int arosClose(sqlite3_file *id) {
++  unixFile *p=(unixFile*)id;
++  chromiumArosLockClose(p->lockingContext);
++  p->lockingContext=0;p->eFileLock=NO_LOCK;
++  return closeUnixFile(id);
++}
++IOMETHODS(arosIoFinder, arosIoMethods, 1, arosClose, arosLock,
++          arosUnlock, arosReserved, 0)
++#endif
++
+ IOMETHODS(
+   posixIoFinder,            /* Finder function name */
+   posixIoMethods,           /* sqlite3_io_methods object name */
+@@ -6129,6 +6155,13 @@ static int fillInUnixFile(
+ #endif
+   }
+ 
++#ifdef SQLITE_AROS_NATIVE_LOCKS
++  if( pLockingStyle == &arosIoMethods ){
++    pNew->lockingContext=chromiumArosLockOpen(zFilename);
++    if(!pNew->lockingContext)rc=SQLITE_CANTOPEN_BKPT;
++  }
++#endif
++
+   if( pLockingStyle == &posixIoMethods
+ #if defined(__APPLE__) && SQLITE_ENABLE_LOCKING_STYLE
+     || pLockingStyle == &nfsIoMethods
+@@ -7011,6 +7044,10 @@ static int unixFullPathname(
+   int nOut,                     /* Size of output buffer in bytes */
+   char *zOut                    /* Output buffer */
+ ){
++#ifdef SQLITE_AROS_FULL_PATHNAME
++  UNUSED_PARAMETER(pVfs);
++  return SQLITE_AROS_FULL_PATHNAME(zPath, nOut, zOut);
++#else
+   DbPath path;
+   UNUSED_PARAMETER(pVfs);
+   path.rc = 0;
+@@ -7030,6 +7067,7 @@ static int unixFullPathname(
+   if( path.rc || path.nUsed<2 ) return SQLITE_CANTOPEN_BKPT;
+   if( path.nSymlink ) return SQLITE_OK_SYMLINK;
+   return SQLITE_OK;
++#endif
+ }
+ 
+ #ifndef SQLITE_OMIT_LOAD_EXTENSION
+@@ -8499,7 +8537,9 @@ int sqlite3_os_init(void){
+   ** array cannot be const.
+   */
+   static sqlite3_vfs aVfs[] = {
+-#if SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
++#if defined(SQLITE_AROS_NATIVE_LOCKS)
++    UNIXVFS("aros",          arosIoFinder ),
++#elif SQLITE_ENABLE_LOCKING_STYLE && defined(__APPLE__)
+     UNIXVFS("unix",          autolockIoFinder ),
+ #elif OS_VXWORKS
+     UNIXVFS("unix",          vxworksIoFinder ),

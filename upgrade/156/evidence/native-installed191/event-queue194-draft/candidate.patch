@@ -1,0 +1,28 @@
+--- a/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc
++++ b/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc
+@@ -39,7 +39,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local ScopedEventQueue* ScopedEventQueue::instance_ = nullptr;
++#else
+ ScopedEventQueue* ScopedEventQueue::instance_ = nullptr;
++#endif
+ 
+ ScopedEventQueue::ScopedEventQueue()
+     : queued_events_(MakeGarbageCollected<GCedHeapVector<Member<Event>>>()),
+--- a/third_party/blink/renderer/core/dom/events/scoped_event_queue.h
++++ b/third_party/blink/renderer/core/dom/events/scoped_event_queue.h
+@@ -63,7 +63,11 @@
+   Persistent<GCedHeapVector<Member<Event>>> queued_events_;
+   unsigned scoping_level_;
+ 
++#if defined(__AROS__)
++  static thread_local ScopedEventQueue* instance_;
++#else
+   static ScopedEventQueue* instance_;
++#endif
+ };
+ 
+ class EventQueueScope {

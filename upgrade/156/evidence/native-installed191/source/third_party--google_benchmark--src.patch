@@ -1,0 +1,14 @@
+diff --git a/src/sysinfo.cc b/src/sysinfo.cc
+index ca32daab5a8b87d3c7fb9c5b693fa2c66ae3c961..8d00f3960549e3ff1f2fbabe59b2920c4700b363 100644
+--- a/src/sysinfo.cc
++++ b/src/sysinfo.cc
+@@ -481,6 +481,9 @@ std::string GetSystemName() {
+   return str;
+ #elif defined(BENCHMARK_OS_WASI)
+   return std::string("wasi");
++#elif defined(__AROS__)
++  // The native CRT has no gethostname; an unavailable hostname is empty.
++  return std::string();
+ #else
+ #ifndef HOST_NAME_MAX
+ #ifdef BENCHMARK_HAS_SYSCTL  // BSD/Mac doesn't have HOST_NAME_MAX defined

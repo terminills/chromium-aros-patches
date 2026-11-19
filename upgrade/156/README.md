@@ -17,9 +17,11 @@ The x64 ten-cycle run186 completes twenty heap retirements and all 22 child
 returns, confirmed by strict serial and independent native child files. Memory
 still rises from 1692.88 to 1823.15 MiB across cycles 1–10. ARM70 paints the
 worker test but fails bounded host exit; its utility child has no exit record.
-Installed-resource tests189/190 expose a custom-element constructor crash.
-An AROS-only per-task scope candidate reproduces/fixes the shared-global error
-in a controlled host test; native qualification is pending. No RC is published.
+Installed-resource191 passes initial New Tab and four-tab paint after the
+custom-element scope fix, then fails a compositor bounds check while navigating
+the fourth tab. Four related renderer-scope corrections are host-tested and
+cross-compiled for subsequent197 validation. No RC is published.
+See [installed191 results and exact source](evidence/native-installed191/README.md).
 See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
 [native icons](evidence/native-icons188/interactive188-result.json), and
 [current RC gates](evidence/native-cleanup186/release-candidate-gates.json).
