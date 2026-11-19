@@ -1,0 +1,46 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "0995395c8175f501db0fd09970cce922feceed4d0866dbed5249a08fb79e7cee",
+    "Libs/cef.library": "ecad04a1a06d085e6054cd2b7e79cd10c6a4a7b5a9800dcabdd10be2a2363ed2",
+    "C/CEFHost": "3729fb2b605e5f4357b1bcf4c295f315b2de4c031fee5d2beebed1c25fca5a79",
+    "C/CEFSubprocess": "480eedcddfaee7f5881aac15ffe811e4b1ec1267850902924bc5f92b987aed40",
+    "C/CEFHostProbe": "ab401387ffebbc3abc84bc55ebd943734388f3393c7a7585ba27267b9a68bc28",
+    "C/CEFHostBrowser": "5f2c91a2c005735151f39f95212b114559f849e6f95984cc7d46045d1e85cdbd",
+    "C/CEFClockContract": "76b8ad203f5b8d86def59cda8fccf8f887c2bed414efc3c389714dad0745685c",
+    "C/CEFOomCallback": "98013c1ca519c75e81d0cdf43d69bc5b2c99e8114bada8f4cd84391e8dd9a91f"
+  },
+  "startup": "FailAt 21\nAssign Developer: SYS:Developer\nMakeDir RAM:CEFProfile\nAssign PROFILE: RAM:CEFProfile\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nAssign AROSTCP: SYS:System/Network/AROSTCP\nRun <NIL: >RAM:AROSTCP-startup.log QUIET AROSTCP:C/AROSTCP\nC:WaitForPort AROSTCP\nRun >RAM:CEF-host.log Execute S:CEFHost-Run\nC:CEFHostProbe wait\nRun >RAM:CEF-appA.log Execute S:CEF-AppA\nWait 3\nRun >RAM:CEF-appB.log Execute S:CEF-AppB\nWait 60\nC:CEFHostProbe stats\nWait 60\nC:CEFHostProbe stats\nC:CEFHostProbe stop\nType RAM:CEF-appA.log >DEBUG:\nType RAM:CEF-appB.log >DEBUG:\nEcho Shared-browser-test-finished\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T04:36:01.572279+00:00",
+    "validation": "Paint/liveness/helper objects compile on both architectures. Native107 clears resource fatal, then host CHECKs deleted ChromeProcessSingleton after child exit; now also scope singleton by native owner. Final combined build/runtime pending: scope all four linked paint GC roots by native process while preserving intra-renderer task sharing; failed native kill must verify Task-ID disappearance; helper command line retires after ContentMain/delegate cleanup; registry keys use Exec task IDs and a retired-owner barrier prevents late cleanup inheriting parent state. Runtime CHECK verifies retirement visibility. Includes resource-bundle owner fix currently linking separately for107/ARM32. Not an isolation or reclamation pass.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "e7084b2f6957c7a315096c582342348b9dc83b52fc775fe629ddc747a1d69b24",
+        "applied_tree": "25829a2d9c6d85a8a49a11fd35d20d009fc6cda6",
+        "bytes": 2993374
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "web_source_sha256": {
+    "tools/CEFHost/CEFHost.c": "b311dafd5ce8f1fdd0a4d947d8b303bae7cd39e3e17bd041f0c1a452ce6c94d8",
+    "tools/CEFHost/CEFSubprocess.c": "1537f20a8e9a20218f0b6261d94f65f6921fd24c3ff4495a86baf6c396d8e526",
+    "libs/cef/test_cef_host_browser.c": "20e93ad0c59fb2a99b6f2f2b46b821d3b3cfc991316e72de17504d2f76336439",
+    "libs/cef/test_cef_browser.c": "29321648535f3c7ba88410ab0e360fc3d5d682097ce62b730b3dc4499f60b771"
+  },
+  "fixture_sha256": "5a1548884114ce0a4c3601567349ab3eeacf403f4796ba27c97b25636f15baf9"
+}

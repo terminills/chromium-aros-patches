@@ -1,0 +1,162 @@
+{
+  "pass": false,
+  "shared_allocator_addresses": true,
+  "allocator_record_parse_complete": true,
+  "native_child_memory_enter_counts": {
+    "gpu-process": 1,
+    "utility": 1,
+    "renderer": 3
+  },
+  "unreadable_native_child_records": [],
+  "native_child_records": [
+    [
+      "gpu-process",
+      "0000000001090540",
+      "0000000101244340",
+      "0000000110653180",
+      "0000000110653170"
+    ],
+    [
+      "utility",
+      "0000000001092aa0",
+      "0000000101244340",
+      "0000000110653180",
+      "0000000110653170"
+    ],
+    [
+      "renderer",
+      "0000000001097840",
+      "0000000101244340",
+      "0000000110653180",
+      "0000000110653170"
+    ],
+    [
+      "renderer",
+      "000000000109b1c0",
+      "0000000101244340",
+      "0000000110653180",
+      "0000000110653170"
+    ],
+    [
+      "renderer",
+      "000000000109e2d0",
+      "0000000101244340",
+      "0000000110653180",
+      "0000000110653170"
+    ]
+  ],
+  "isolated_app_checks": false,
+  "shutdown_returned": true,
+  "app_b_storage_pass_after_a_exit": false,
+  "timed_out": true,
+  "native_alert": false,
+  "fatal": false,
+  "captured_two_apps": false,
+  "captured_surviving_app": false,
+  "all_started_children_reported_successful_return": false,
+  "native_child_enter_counts": {
+    "gpu-process": 1,
+    "utility": 1,
+    "renderer": 3
+  },
+  "native_child_successful_return_counts": {
+    "renderer": 3,
+    "gpu-process": 1
+  },
+  "native_child_exit_records": [
+    [
+      "renderer",
+      "0"
+    ],
+    [
+      "renderer",
+      "0"
+    ],
+    [
+      "renderer",
+      "0"
+    ],
+    [
+      "gpu-process",
+      "0"
+    ]
+  ],
+  "child_return_qualification": "CEFExecuteProcess return records precede final CloseLibrary; not independent proof of task disappearance or resident allocation reclamation.",
+  "native_memory_samples": [
+    {
+      "application": "A",
+      "phase": "host-client-connected",
+      "whole_guest_bytes": {
+        "total": 4294393409,
+        "free": 2539836624,
+        "used": 1754556785,
+        "largest": 1200451808
+      },
+      "whole_guest_mib": {
+        "total": 4095.45,
+        "free": 2422.18,
+        "used": 1673.28,
+        "largest": 1144.84
+      },
+      "arithmetic_consistent": true
+    },
+    {
+      "application": "B",
+      "phase": "host-client-connected",
+      "whole_guest_bytes": {
+        "total": 4294393409,
+        "free": 2520255328,
+        "used": 1774138081,
+        "largest": 1200451808
+      },
+      "whole_guest_mib": {
+        "total": 4095.45,
+        "free": 2403.5,
+        "used": 1691.95,
+        "largest": 1144.84
+      },
+      "arithmetic_consistent": true
+    },
+    {
+      "application": "A",
+      "phase": "host-client-disconnected",
+      "whole_guest_bytes": {
+        "total": 4294393409,
+        "free": 2551917920,
+        "used": 1742475489,
+        "largest": 1200451808
+      },
+      "whole_guest_mib": {
+        "total": 4095.45,
+        "free": 2433.7,
+        "used": 1661.75,
+        "largest": 1144.84
+      },
+      "arithmetic_consistent": true
+    },
+    {
+      "application": "B",
+      "phase": "host-client-disconnected",
+      "whole_guest_bytes": {
+        "total": 4294393409,
+        "free": 2551881088,
+        "used": 1742512321,
+        "largest": 1200451808
+      },
+      "whole_guest_mib": {
+        "total": 4095.45,
+        "free": 2433.66,
+        "used": 1661.79,
+        "largest": 1144.84
+      },
+      "arithmetic_consistent": true
+    }
+  ],
+  "heap_worker_checks": false,
+  "app_b_heap_pass_after_a_exit": false,
+  "native_contract_probes": {
+    "oom_callback_pass": true,
+    "clock_returned_successfully": true,
+    "qualification": "Native actual PartitionAlloc callback-object invocation test; does not force OOM or qualify reporter lookup under allocation failure."
+  }
+}

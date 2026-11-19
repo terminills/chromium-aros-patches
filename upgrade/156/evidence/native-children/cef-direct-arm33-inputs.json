@@ -1,0 +1,40 @@
+{
+  "files": {
+    "Libs/cef-blink.library": "2cc9a677866e5f8d30e5e99fbd6af90f661eec84e5954a999cd3c9ae53b82966",
+    "Libs/cef.library": "66a46fed5d593cbdf1978a95e165c059256f4e7834fe891133e1ee24c5a5cc78",
+    "C/CEFDirectBrowser": "7863a66d26e9b9bc222dcb392515135158e180c9e887cf0aca51ce4c687ccd38",
+    "C/CEFClockContract": "a3e8ec3428e4c6c9ec6481d724ee3cb8f33053439867b7fa33492e7d02486c15",
+    "C/CEFOomCallback": "7b65913613c0e6ec2657c640b18ffd9fcae5a5dc8dd8f9cedb3377bc3617167a",
+    "CEF-worker-url.txt": "d43791e57a8619b82dffd02140582abdf44cc731f6ac2e4133e1c9de56acda3b",
+    "S/ARM-Screenshot": "a06ee6c50b500bf12336321cbd280f0c69e7916802c64736405a24f03d8fb0bd"
+  },
+  "web_test_client_sha256": "29321648535f3c7ba88410ab0e360fc3d5d682097ce62b730b3dc4499f60b771",
+  "startup": "FailAt 21\nWait 20\nStack 1048576\nC:CEFClockContract\nEcho CEF-clock-returned:$RC >DEBUG:\nC:CEFOomCallback\nEcho CEF-oom-callback-returned:$RC >DEBUG:\nC:CEFDirectBrowser T:cef-arm33.ppm \"@SYS:CEF-worker-url.txt\" 1500 --show-about\nEcho ARM33-browser-returned:$RC >DEBUG:\nWait 3600\n",
+  "source_manifest": {
+    "status": "in-progress, not release-ready",
+    "chromium_version": "156.0.8078.96",
+    "recorded_utc": "2026-11-19T04:36:01.572279+00:00",
+    "validation": "Paint/liveness/helper objects compile on both architectures. Native107 clears resource fatal, then host CHECKs deleted ChromeProcessSingleton after child exit; now also scope singleton by native owner. Final combined build/runtime pending: scope all four linked paint GC roots by native process while preserving intra-renderer task sharing; failed native kill must verify Task-ID disappearance; helper command line retires after ContentMain/delegate cleanup; registry keys use Exec task IDs and a retired-owner barrier prevents late cleanup inheriting parent state. Runtime CHECK verifies retirement visibility. Includes resource-bundle owner fix currently linking separately for107/ARM32. Not an isolation or reclamation pass.",
+    "repositories": [
+      {
+        "path": "src",
+        "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
+        "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
+        "patch": "src.patch",
+        "sha256": "e7084b2f6957c7a315096c582342348b9dc83b52fc775fe629ddc747a1d69b24",
+        "applied_tree": "25829a2d9c6d85a8a49a11fd35d20d009fc6cda6",
+        "bytes": 2993374
+      },
+      {
+        "path": "cef",
+        "base": "6028375a4532fb89d23b58635f5c0d3a82c93959",
+        "upstream_url": "https://github.com/chromiumembedded/cef.git",
+        "patch": "cef.patch",
+        "sha256": "ea532a704cc5f2bef3b7db32daeb024a0bcc1fd4ffae745c6518093b1a3cce0b",
+        "applied_tree": "2f44e645434359138ff2c19d5f5f26ee66de20d5",
+        "bytes": 63009
+      }
+    ]
+  },
+  "scope": "Native ARM single-browser local JS/Wasm worker regression, not network or multi-app acceptance"
+}

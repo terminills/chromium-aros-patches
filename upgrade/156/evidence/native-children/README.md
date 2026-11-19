@@ -327,3 +327,13 @@ Initial changed objects pass both architectures. Final edits crossed an
 in-flight archive verification; the coordinator was paused and frozen-source
 archive confirmation is being rerun before native linking. Native108/ARM33
 remain pending. Paint-root retention is not renderer heap reclamation proof.
+
+### Renderer coordinator ownership candidate
+
+The preceding candidate passed complete archives and native links on x86-64 and AArch64. ARM33 passed local JavaScript/Wasm workers, painting, closing, teardown, and clock/allocator callback probes. Whole-guest used memory was 1184.22 MiB at first paint and 1152.33 MiB after CEF close; these are not browser RSS or reclaimed-heap measurements.
+
+Native108 could not fetch the fixture (local server absent) and separately hit a Mojo sequence check in the renderer main-thread load report. Exact ELF symbols identify ProcessCoordinationUnitProxy::SetMainThreadTaskLoadIsLow. RendererResourceCoordinator had a single resident global pointer; the new snapshot scopes that pointer to the native logical owner and retains sequence validation. Build/runtime validation for this additional change is pending.
+
+Native109 uses the same engine, facade, and fixture hashes as108 with the server restored; both app requests returned HTTP200. Host shutdown, three renderer returns, and GPU return completed without a fatal. However, neither app painted before the diagnostic startup deadline and the utility return was absent, so strict acceptance failed. Native110 is an independent longer-startup comparison using the same engine/facade and only an optional diagnostic wait-budget change (aros-web11000c2); results pending.
+
+Read-only audits retain follow-up contracts for path-cache ownership and main-isolate destruction. No renderer-heap reclamation change or memory-reduction claim is included. The source snapshot is replay-checked against its pinned bases and remains in progress.

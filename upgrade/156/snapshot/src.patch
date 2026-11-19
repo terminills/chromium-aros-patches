@@ -60660,6 +60660,39 @@ index 41b484492dccabac68c73777da72799c7a4d2821..d22dcce446a3c59e7d781e5262dd8943
  }
  
  source_set("unit_tests") {
+diff --git a/third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.cc b/third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.cc
+index 9ca7d4eeac94260323e5dd35e7de328c870e812b..5a53cd0700b1a76e4d5441d0d05ecb7adab903c2 100644
+--- a/third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.cc
++++ b/third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/heap/thread_state.h"
+@@ -14,7 +19,16 @@ namespace blink {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++RendererResourceCoordinator*& CurrentRendererResourceCoordinator() {
++  struct RendererResourceCoordinatorOwnerTag;
++  return base::aros::ProcessLocalValue<RendererResourceCoordinator*,
++                                       RendererResourceCoordinatorOwnerTag>();
++}
++#define g_renderer_resource_coordinator CurrentRendererResourceCoordinator()
++#else
+ RendererResourceCoordinator* g_renderer_resource_coordinator = nullptr;
++#endif
+ 
+ class DummyRendererResourceCoordinator final
+     : public RendererResourceCoordinator {
 diff --git a/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc b/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc
 index aaf3cd2de1242bda2b81dd35961099594c309104..e5db102571b00cb962790455cc1a0a176017d3a7 100644
 --- a/third_party/blink/renderer/platform/instrumentation/tracing/memory_cache_dump_provider.cc

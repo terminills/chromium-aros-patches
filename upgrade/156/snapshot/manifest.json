@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-19T04:36:01.572279+00:00",
-  "validation": "Paint/liveness/helper objects compile on both architectures. Native107 clears resource fatal, then host CHECKs deleted ChromeProcessSingleton after child exit; now also scope singleton by native owner. Final combined build/runtime pending: scope all four linked paint GC roots by native process while preserving intra-renderer task sharing; failed native kill must verify Task-ID disappearance; helper command line retires after ContentMain/delegate cleanup; registry keys use Exec task IDs and a retired-owner barrier prevents late cleanup inheriting parent state. Runtime CHECK verifies retirement visibility. Includes resource-bundle owner fix currently linking separately for107/ARM32. Not an isolation or reclamation pass.",
+  "recorded_utc": "2026-11-19T05:01:56.877126+00:00",
+  "validation": "Prior frozen candidate archives/native links PASS x64 and ARM. ARM33 local JS/Wasm worker, paint/close, teardown and contract probes PASS. Native108 had unavailable HTTP fixture and a separately symbolized wrong-sequence load-report Mojo call. Native109 restored HTTP200 both apps and normal host/GPU return, but no first paint before diagnostic timeout and no utility return; not acceptance. This candidate scopes RendererResourceCoordinator pointer by native owner while retaining sequence checks; archives/build/runtime pending. No main-isolate reclamation patch or claim. Native110 longer-startup comparison uses the prior engine binaries independently.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
       "patch": "src.patch",
-      "sha256": "e7084b2f6957c7a315096c582342348b9dc83b52fc775fe629ddc747a1d69b24",
-      "applied_tree": "25829a2d9c6d85a8a49a11fd35d20d009fc6cda6",
-      "bytes": 2993374
+      "sha256": "bc38d8eb55085beb2f98a7eb331b3eff5cf76853e2ca60f8323fc614b6d40102",
+      "applied_tree": "ddc47f4d4d746e191da2f8f0869b69fab41e1090",
+      "bytes": 2994984
     },
     {
       "path": "cef",
