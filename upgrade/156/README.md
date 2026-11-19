@@ -35,6 +35,15 @@ A one-cycle control retains 1492.41 MiB after host exit, versus 1753.80 MiB
 after ten cycles; the [controlled comparison](evidence/native-children/cef-memory164-vs171-analysis.json)
 records its limits and the separate child-entry fragment audit.
 
+The private worker-ownership candidate also passes native x86-64 memory165:
+all ten pages, 22 child returns and host completion succeed. Its measured
+retention remains approximately 27.45 MiB per additional cycle; the ownership
+fix is not a memory-reclamation fix. A separate native Exec ownership probe
+passes 700 controlled checks. ARM acceptance for that candidate and runtime
+validation of the subsequent isolate-cleanup candidate remain pending. These
+results do not replace the validated directory158 snapshot above. See the
+[165 measurements](evidence/native-children/cef-memory165-analysis.json).
+
 Earlier native HTTP/HTTPS, multi-app DOM/cookie/worker isolation and sibling
 survival evidence remains retained, including native119 and full Chrome121.
 The controlled x64 lane uses one CPU. Interactive tabs/profiles/sign-in/media,
