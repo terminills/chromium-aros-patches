@@ -1,0 +1,37 @@
+{
+  "image_bytes": 535320800,
+  "runtime_relocations": 9492105,
+  "input_relocation_counts": {
+    "1": 9493725,
+    "2": 1266586,
+    "4": 144,
+    "24": 32473
+  },
+  "output_bytes": 763135912,
+  "status": "host-validation-only",
+  "native_runtime": "not tested",
+  "rationale": "LLD special .eh_frame processing changed record layout while retained relocation offsets did not describe the resulting bytes. Renaming the input section to .aros_unwind before final linking preserves original record layout; all absolute and relative relocation values are checked by the packer. No verification bypass.",
+  "source": "retained native191; known multitab navigation failure remains; use newer validated source for release",
+  "files": {
+    "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/x64-image198/v3/cef-blink.library": {
+      "bytes": 763135912,
+      "sha256": "dfe8279a206a4550c12dd3842cb3ee62f58ed499fa812a90fb23d27ab5d75fd1"
+    },
+    "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/x64-image198/v3/native-final.elf": {
+      "bytes": 1000345200,
+      "sha256": "bd35307d0edaec77391adc4bca9093f1d47718412da7cfcba44a430d9ede210c"
+    },
+    "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/x64-image198/v3/image.ld": {
+      "bytes": 440,
+      "sha256": "3fe118fe52a0b1b9a659285868797858c5d0b990cb919a962f92ab1e3e7ceae4"
+    },
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/aros-x64-engine-image198.py": {
+      "bytes": 9192,
+      "sha256": "ee4220028e535ce07fc1d3fc998c8ae3890e15bd14d87147ec2aa41717a76f53"
+    },
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/link-x64-image198-v3.py": {
+      "bytes": 2041,
+      "sha256": "ce482cb90b4224b90501ca16f5cee5dd0740f4f7616748a511f1c97b82ee263f"
+    }
+  }
+}

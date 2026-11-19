@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "x64186 strict serial and independent native file ledger PASS:10cycles,20complete/0deferred retirements,22children exit0. ARM70 fails bounded host exit: utility67 exit missing in offline ledger,3complete/1deferred retirement.",
+    "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
+    "persistent_profiles": "Native writer158/reader159 passes; final candidate replay pending",
+    "memory": "Not accepted: TLS186v2 cycles1-10 1692.88->1823.15MiB,1288.58MiB afterhost exit. Thread TLS teardown does not resolve continued growth.",
+    "native_browser_ui": "Installed191 actual native icon launch and four New Tabs PASS with Developer assign removed; fourth-tab chrome://version hits paint-tree index assertion. Exact native stack retained. Four scope candidates197 pass focused host tests and both architecture compile checks; x64 native build queued after ARM71 frozen readers finish.",
+    "production_launcher": "Companion6499b2e supports explicit installed resource directory SYS:System/CEF; installed191 firstpaint/fourtabs pass. Full navigation acceptance fails compositor scope issue; ARM optional argument checks pending.",
+    "packaging": "Required: exact libraries/helpers/resources, required OS baseline, install/start scripts, licenses and manifest; no user profile or credentials",
+    "source_reproducibility": "Complete21-repository191 snapshot replay passed.197 export/replay queued before native build. Validated directory158 remains separate.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "x64188 exact five native metadata records PASS; normal/selected appearance and drawer label reviewed; actual double-click launch PASS. ARM runtime check pending."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}

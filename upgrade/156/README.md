@@ -24,7 +24,10 @@ cross-compiled for subsequent197 validation. No RC is published.
 See [installed191 results and exact source](evidence/native-installed191/README.md).
 See [cleanup and failure evidence](evidence/native-cleanup186/README.md),
 [native icons](evidence/native-icons188/interactive188-result.json), and
-[current RC gates](evidence/native-cleanup186/release-candidate-gates.json).
+[current RC gates](evidence/compact-image198/release-candidate-gates.json).
+[Compact-image and DevTools ownership experiments](evidence/compact-image198/README.md)
+are host-only candidates; native loading, memory savings and debugger behavior
+remain unqualified.
 The validated source snapshot remains directory158; the complete186v2 candidate
 is separately replay-checked in evidence/native-worker-tls186-v2/source.
 

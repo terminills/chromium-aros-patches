@@ -1,0 +1,22 @@
+--- a/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc
+@@ -308,10 +308,19 @@
+   WeakPersistent<WebLocalFrameImpl> paused_frame_;
+   scoped_refptr<InspectorTaskRunner>
+       inspector_task_runner_for_instrumentation_pause_;
++#if defined(__AROS__)
++  // The debugger and nested loop belong to this native renderer main task.
++  static thread_local ClientMessageLoopAdapter* instance_;
++#else
+   static ClientMessageLoopAdapter* instance_;
++#endif
+ };
+ 
++#if defined(__AROS__)
++thread_local ClientMessageLoopAdapter* ClientMessageLoopAdapter::instance_ = nullptr;
++#else
+ ClientMessageLoopAdapter* ClientMessageLoopAdapter::instance_ = nullptr;
++#endif
+ 
+ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
+                                          bool restore) {
