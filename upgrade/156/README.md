@@ -7,15 +7,23 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-19 UTC
 
-Native AArch64 now passes the local CEF browser, JavaScript/Wasm workers,
-painting, closing and CEF teardown. ARM30 whole-guest first-paint usage is
-1193.88 MiB; this is not application RSS or memory-reclamation proof.
-Native x86-64 HTTP/HTTPS and single-browser tests have passed in earlier
-retained runs. Multi-application native-child acceptance remains open:
-run105 confirms shared allocator addresses and B continuing after A closes,
-but A content checks and full child shutdown do not pass. The current patch
-candidate fixes browser-executor ownership and normal GPU shutdown; its new
-runtime results are pending. See `evidence/native-children/README.md`.
+Native AArch64 passes local CEF browser JavaScript/Wasm workers, painting,
+closing and final teardown in ARM39 and ARM40. ARM40 whole-guest first-paint
+usage is 1176.28 MiB and after library close is 1143.97 MiB; neither is engine
+RSS or proof of complete heap reclamation. Intermittent ARM stalls remain a
+separate deferred investigation.
+
+Native x86-64 HTTP/HTTPS and single-browser tests passed in earlier retained
+runs. Both applications now repeatedly pass independent cookie/localStorage,
+DOM and worker checks through the shared resident engine. Full multi-app
+lifecycle acceptance remains open: native116 failed on Blink frame-token
+registry ownership during close. The current snapshot isolates the adjoining
+Blink page/frame/view roots; native117 has reached both close callbacks without
+that assertion but has not passed callback-drain/full teardown acceptance.
+A test-client reference-lifetime fix is queued as native118 using unchanged
+engine binaries. See `evidence/native-children/README.md` for exact run inputs,
+results and screenshots. Full Chrome UI, Node/Electron/Zune consumers and
+broad hardware qualification remain outside the completed evidence.
 
 ## Earlier initialization evidence — 2026-11-18 UTC
 
