@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-19T04:00:53.805840+00:00",
-  "validation": "Native105 removes Blob sequence fatal but utility shutdown destroys browser UI SequenceManager via image-global BrowserTaskExecutor. Scope pointer by native process. Native GPU normal exit now unwinds GpuMain through existing destructor rather than resident stdc _exit. Both architecture rebuild and runtime106/ARM31 pending; no multi-app acceptance.",
+  "recorded_utc": "2026-11-19T04:17:30.282788+00:00",
+  "validation": "Native106 records renderer return0, then multiple sibling ResourceBundle GetSharedInstance CHECK failures after global cleanup. ResourceBundle pointer now scoped by native process; normal initialization and cleanup checks retained. Both archives and native107/ARM32 pending. Previous browser-executor and normal GPU quit fixes included. No isolation acceptance.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://chromium.googlesource.com/chromium/src.git",
       "patch": "src.patch",
-      "sha256": "64fc5bf6fc323bc1fb99c2066e15d43139ce7527077843b6d62adc08c6ebf552",
-      "applied_tree": "b6874d9ec0057720c9a0e0ba400fefaf83dec5dd",
-      "bytes": 2983681
+      "sha256": "a97d27f74e6c2ae4accdda15b1efd3dd6d089301eecda80ad26b4042d0fa03a6",
+      "applied_tree": "03896b5308480a24024f0c724d35f6ad83f8b557",
+      "bytes": 2984643
     },
     {
       "path": "cef",

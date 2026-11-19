@@ -1,0 +1,58 @@
+<!doctype html><meta charset="utf-8"><title>AROS shared engine: independent heaps</title>
+<style>
+body{font:20px sans-serif;background:#163149;color:white;margin:24px}
+h1{font-size:30px;margin:0 0 10px}#state{padding:12px;background:#294a62}
+#cells{display:flex;flex-wrap:wrap;gap:2px;margin-top:10px}#cells span{background:#4180aa;width:8px;height:8px}
+small{font-size:14px}p{margin:10px 0}
+</style>
+<h1 id="title"></h1><p>One resident engine · separate application state</p>
+<div id="state">Checking storage, DOM and worker state…</div><p id="ticks"></p>
+<div id="cells"></div><small>Controlled isolation test; not a sandbox-security test.</small>
+<script>
+'use strict';
+const id=new URL(location.href).searchParams.get('app');
+if(id!=='A'&&id!=='B')throw new Error('Expected test app A or B');
+document.querySelector('#title').textContent='Application '+id;
+document.body.style.background=id==='A'?'#163149':'#513416';
+document.cookie='shared_engine_identity='+id+';path=/;SameSite=Lax';
+localStorage.setItem('shared_engine_identity',id);
+const cells=document.querySelector('#cells');
+for(let i=0;i<100;i++){
+  const cell=document.createElement('span');cell.dataset.owner=id;cell.dataset.index=String(i);cells.append(cell);
+}
+let ticks=0,workerTick=0,failed=false;
+const workerSource=`self.onmessage=({data})=>{
+  const values=new Uint32Array(16384);const seed=data.id==='A'?17:29;
+  let sum=0;for(let i=0;i<values.length;i++){values[i]=seed+i;sum+=values[i];}
+  self.postMessage({id:data.id,tick:data.tick,sum});
+};`;
+const workerURL=URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'}));
+const worker=new Worker(workerURL);URL.revokeObjectURL(workerURL);
+worker.onmessage=({data})=>{
+  const seed=id==='A'?17:29,expected=16384*seed+16384*16383/2;
+  if(data.id!==id||data.sum!==expected||data.tick<=workerTick){
+    failed=true;console.log('AROS_HEAP_APP_'+id+'_FAIL worker mismatch');
+  }
+  workerTick=data.tick;
+};
+worker.onerror=()=>{failed=true;console.log('AROS_HEAP_APP_'+id+'_FAIL worker error');};
+setInterval(()=>{
+  ticks++;
+  const stored=localStorage.getItem('shared_engine_identity');
+  const cookie=document.cookie.split('; ').find(x=>x.startsWith('shared_engine_identity='));
+  const storageOK=stored===id&&cookie==='shared_engine_identity='+id;
+  const domOK=cells.children.length===100&&Array.from(cells.children).every((c,i)=>c.dataset.owner===id&&c.dataset.index===String(i));
+  const scratch=Array.from({length:512},(_,i)=>({owner:id,index:i,text:id.repeat(32)}));
+  const dataOK=domOK&&scratch.every((v,i)=>v.owner===id&&v.index===i);
+  const heapOK=dataOK&&workerTick>0&&workerTick>=ticks-10&&!failed;
+  if(!storageOK||!dataOK||(ticks>=15&&!heapOK))failed=true;
+  worker.postMessage({id,tick:ticks});
+  document.querySelector('#state').textContent=failed?'FAIL: state mismatch':(workerTick?'PASS: storage, DOM and worker remain independent':'Waiting for worker startup…');
+  document.querySelector('#state').style.background=failed?'#9f2929':'#21623b';
+  document.querySelector('#ticks').textContent='App '+id+' alive: '+ticks+' s · worker round trips: '+workerTick;
+  if(ticks%10===0||failed){
+    console.log('AROS_SHARED_APP_'+id+'_'+(storageOK?'PASS':'FAIL')+' tick='+ticks);
+    if(workerTick||ticks>=15||failed)console.log('AROS_HEAP_APP_'+id+'_'+(heapOK?'PASS':'FAIL')+' tick='+ticks+' worker='+workerTick);
+  }
+},1000);
+</script>

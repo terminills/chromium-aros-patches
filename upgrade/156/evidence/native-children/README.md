@@ -290,3 +290,18 @@ Normal AROS GPU exit also now returns through GpuMain and the existing Viz
 destructor instead of calling resident-library stdc _exit without a startup
 frame. Abnormal fail-fast behavior is unchanged and remains unqualified.
 Both fixes await native106/ARM31 validation; no full browser release claim.
+
+## Native106 resource lifetime follow-up
+
+The browser-executor/GPU candidate links on both architectures. Native106
+records a renderer returning0, then multiple other tasks fail the ResourceBundle
+shared-instance CHECK. ChromeMainDelegate::ProcessExiting calls resource
+cleanup for children; its image-global pointer allowed one renderer to delete
+resources still used by siblings. The current snapshot scopes the ResourceBundle
+pointer to its native owner, preserving initialization and cleanup checks.
+Native107/ARM32 validation is pending. ARM31's preceding candidate is still
+under observation; no ARM31 result is claimed here.
+
+The original105 fixture and106 diagnostic fixture are both retained. Startup
+phase/error logging was added without weakening storage, DOM or worker checks.
+No two-app isolation, complete child retirement or reclamation PASS is claimed.
