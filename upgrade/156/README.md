@@ -5,7 +5,7 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
-## Current validation status — 2026-11-19 UTC
+## Current validation status — 2026-11-20 UTC
 
 Native x64 candidate226 launches through the installed AROS icon, paints New Tab,
 opens four tabs and chrome://version, closes, and reopens through the same
@@ -15,29 +15,39 @@ renderer tasks return successfully without a native fault. The earlier217
 closed-queue crash is corrected. [Screenshots, exact symbols, serial and
 limits](evidence/native-browser226/README.md) are retained.
 
-This bounded browser test is not full host-shutdown, independent-app isolation,
-long-run memory or current persistent-profile acceptance. The Wanderer drawer
-title corruption after closure remains under investigation. ARM73 activated
-the installed icon through an input.device diagnostic but did not finish full
-painting; ARM226 native acceptance is pending. This does not qualify USB input.
+Compact232, built from the same226 source, also passes full native UI, two
+browser sessions, both500-iteration stress pages and closure; all13 observed
+renderer tasks return0. Its initial premature keyboard attempt is retained and
+excluded from the four-tab result.
+
+The separate compact234 ten-cycle run passes every page, full host shutdown,
+and independent native FAT-ledger accounting:23 child tasks return0 and20
+renderer heaps retire with none deferred. Memory acceptance remains open:
+whole-guest use rises from1471.27MiB aftercycle1 to1646.43MiB aftercycle10,
+with1095.54MiB remaining after host exit. This is OS-plus-resident-engine use,
+not per-app RSS or evidence of engine duplication. The fresh FAT profile also
+reports a heavy-ad SQLite cache I/O error; profile acceptance is still pending.
+[Compact226 inputs, raw logs, native ledger, screenshots and measurements](evidence/compact226-native)
+are retained. Current independent-app isolation and profile replay remain open.
+
+The Wanderer drawer title corruption after closure remains under investigation.
+ARM74 opens the installed browser window and About AROS, but full browser
+painting remains incomplete. This does not qualify USB input or physical Pi hardware.
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
 [current RC gates](evidence/native-browser226/release-candidate-gates.json).
 
-Compact218, derived from217, paints the full native browser and chrome://version;
-it retains217's known shutdown failure. Compact232 is derived from226 and awaits
-native acceptance. The separate matched191 bare-engine comparison reduced
-whole-guest cold-load use from871.59 to646.89MiB; that is not a full-browser
-memory result. [Compact browser measurements](evidence/compact218-native/README.md)
-and [matched cold-load evidence](evidence/compact-image198/README.md) distinguish
-these tests. Current long-run memory acceptance remains open; historical186
-completed ten cycles but still grew from1692.88 to1823.15MiB.
+The earlier matched191 bare-engine comparison reduced whole-guest cold-load
+use from871.59 to646.89MiB. That separate experiment is not a matched
+full-browser comparison; see [cold-load evidence](evidence/compact-image198/README.md).
 
 Fresh x64 andARM SDK builds pass against upstream AROS master b6dcaeea plus
 [replayable private prerequisites](evidence/native-browser226/master229-source).
-Their native OS builds are separate and unqualified. Candidate226 still uses
-its original frozen SDK/runtime; no latest-master browser rebuild is claimed.
+The ARM production kernel, workbench and external targets pass; optional
+full-build developer tests hit a retained GCC16 ICE. The x64 OS build continues.
+Candidate226 still uses its original frozen SDK/runtime; no latest-master
+browser rebuild is claimed.
 
 The current directory-enumeration candidate passes native x86-64 writer158 and
 clean reader159: cookies/localStorage survive a fresh OS session, case-distinct
