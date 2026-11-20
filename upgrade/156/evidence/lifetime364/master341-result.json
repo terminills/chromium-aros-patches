@@ -1,0 +1,13 @@
+{
+  "source": "master341-inputs.json",
+  "functional_pass": false,
+  "native_fault": true,
+  "directory_fault_seen": false,
+  "first_paint_seen": false,
+  "frame_chain": "arm341-frame-chain.json",
+  "pc": "0x92433fc",
+  "bias": "0x7df0000",
+  "link_pc": "0x14533fc",
+  "diagnosis": "Null ChannelProxy this in extensions RendererStartupHelper BindNewRendererRemote. Caller preserves GetChannel() result in x21=0. Frame chain from guest x29 is ReadyToCommitNavigation -> InitializeProcess -> RegisterProcess -> BindNewRendererRemote. Channel reset cause remains unproved.",
+  "scope": "Native QEMU only. Source338 prevents known directory descriptor reservation race; absence of that fault in one run is not broad qualification."
+}

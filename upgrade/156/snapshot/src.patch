@@ -46316,28 +46316,33 @@ index b0c3e44529aed181e31053bdbcceb02eb2f4f9f5..65aedb8a2978bdc56afb82ae924ed7d0
  }  // namespace
  
 diff --git a/extensions/common/features/feature_provider.cc b/extensions/common/features/feature_provider.cc
-index d360bf6ca0ca849d20bd360f8c24fcbab3ab69f3..cc2f3ed95823492ee3d5256a2ddaf0a38f0d06d5 100644
+index d360bf6ca0ca849d20bd360f8c24fcbab3ab69f3..4cadde277081156b98cf80107613a8bc54afac66 100644
 --- a/extensions/common/features/feature_provider.cc
 +++ b/extensions/common/features/feature_provider.cc
-@@ -22,6 +22,11 @@
+@@ -22,6 +22,12 @@
  #include "extensions/common/extensions_client.h"
  #include "extensions/common/features/feature.h"
  
 +#include "build/build_config.h"
 +#if BUILDFLAG(IS_AROS)
 +#include "base/aros/process_local.h"
++#include "base/lazy_instance.h"
 +#endif
 +
  namespace extensions {
  
  namespace {
-@@ -76,8 +81,13 @@ class FeatureProviderStatic {
+@@ -76,8 +82,17 @@ class FeatureProviderStatic {
  };
  
  const FeatureProviderStatic& GetFeatureProviderStatic() {
 +#if BUILDFLAG(IS_AROS)
 +  struct FeatureProviderProcessTag {};
-+  return *base::aros::ProcessLocalValue<base::NoDestructor<FeatureProviderStatic>, FeatureProviderProcessTag>();
++  // Keep each embedder's feature configuration isolated, but release its maps
++  // at that native owner's AtExit boundary. NoDestructor retained four full
++  // providers for every renderer after its tasks had already returned.
++  using OwnerProvider = base::LazyInstance<FeatureProviderStatic>::DestructorAtExit;
++  return base::aros::ProcessLocalValue<OwnerProvider, FeatureProviderProcessTag>().Get();
 +#else
    static base::NoDestructor<FeatureProviderStatic> instance;
    return *instance;

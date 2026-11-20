@@ -107,14 +107,17 @@ index 4298dce565bf649ba9aa5728f8dabf46f6483ed7..9d5beb695a09a98d0d288c64562268d7
      fListeners.clear();
  }
 diff --git a/src/ports/SkOSFile_posix.cpp b/src/ports/SkOSFile_posix.cpp
-index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102eed2c10952 100644
+index 2ec6b25876a036defae25ffab6f455c504ffb7f3..f160e8b532e1c6486868e459849320d266cbbae6 100644
 --- a/src/ports/SkOSFile_posix.cpp
 +++ b/src/ports/SkOSFile_posix.cpp
-@@ -12,10 +12,14 @@
+@@ -12,10 +12,17 @@
  #include "src/core/SkOSFile.h"
  
  #include <dirent.h>
 +#include <errno.h>
++#if defined(__AROS__)
++#include <fcntl.h>
++#endif
  #include <new>
  #include <stdio.h>
 +#include <stdlib.h>
@@ -125,7 +128,7 @@ index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102ee
  #include <sys/stat.h>
  #include <sys/types.h>
  #include <unistd.h>
-@@ -78,7 +82,12 @@ bool sk_fidentical(FILE* a, FILE* b) {
+@@ -78,7 +85,12 @@ bool sk_fidentical(FILE* a, FILE* b) {
  }
  
  void sk_fmunmap(const void* addr, size_t length) {
@@ -138,7 +141,7 @@ index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102ee
  }
  
  void* sk_fdmmap(int fd, size_t* size) {
-@@ -94,10 +103,45 @@ void* sk_fdmmap(int fd, size_t* size) {
+@@ -94,10 +106,45 @@ void* sk_fdmmap(int fd, size_t* size) {
      }
      size_t fileSize = static_cast<size_t>(status.st_size);
  
@@ -184,7 +187,7 @@ index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102ee
  
      *size = fileSize;
      return addr;
-@@ -113,10 +157,53 @@ void* sk_fmmap(FILE* f, size_t* size) {
+@@ -113,10 +160,53 @@ void* sk_fmmap(FILE* f, size_t* size) {
          return nullptr;
      }
  
@@ -238,7 +241,7 @@ index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102ee
      int fd = sk_fileno(file);
      if (fd < 0) {
          return SIZE_MAX;
-@@ -126,6 +213,7 @@ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
+@@ -126,10 +216,37 @@ size_t sk_qread(FILE* file, void* buffer, size_t count, size_t offset) {
          return SIZE_MAX;
      }
      return bytesRead;
@@ -246,3 +249,47 @@ index 2ec6b25876a036defae25ffab6f455c504ffb7f3..80740b5d4ac1b7d8ba78fec0aa4102ee
  }
  
  ////////////////////////////////////////////////////////////////////////////
+ 
++#if defined(__AROS__)
++static DIR* sk_open_directory(const char* path) {
++    // Reserve the descriptor under the AROS descriptor-table lock. opendir()
++    // chooses a slot before publishing it and can overwrite a concurrent open.
++    // Keep this local to Chromium; fdopendir adopts the reserved descriptor.
++    int fd;
++    do {
++        fd = ::open(path, O_RDONLY | O_DIRECTORY);
++    } while (fd < 0 && errno == EINTR);
++    if (fd < 0) {
++        return nullptr;
++    }
++    DIR* directory = ::fdopendir(fd);
++    if (!directory) {
++        const int saved_errno = errno;
++        ::close(fd);
++        errno = saved_errno;
++    }
++    return directory;
++}
++#else
++static DIR* sk_open_directory(const char* path) {
++    return ::opendir(path);
++}
++#endif
++
+ struct SkOSFileIterData {
+     SkOSFileIterData() : fDIR(nullptr) { }
+     DIR* fDIR;
+@@ -161,11 +278,11 @@ void SkOSFile::Iter::reset(const char path[], const char suffix[]) {
+     self.fPath.set(path);
+ 
+     if (path) {
+-        self.fDIR = ::opendir(path);
++        self.fDIR = sk_open_directory(path);
+ #ifdef SK_BUILD_FOR_IOS
+         // check bundle for directory
+         if (!self.fDIR && ios_get_path_in_bundle(path, &self.fPath)) {
+-            self.fDIR = ::opendir(self.fPath.c_str());
++            self.fDIR = sk_open_directory(self.fPath.c_str());
+         }
+ #endif
+         self.fSuffix.set(suffix);

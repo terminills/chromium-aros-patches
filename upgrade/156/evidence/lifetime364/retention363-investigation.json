@@ -1,0 +1,26 @@
+{
+  "source": "native-scopes344-all-snapshot/manifest.json",
+  "runtime": "compact346-result.json",
+  "ledger": "compact346-ledger-audit.json",
+  "functional_pass": true,
+  "retire_complete": 62,
+  "retire_deferred": 0,
+  "feature_provider_vptr_candidates": {
+    "baseline331": 252,
+    "candidate346": 0,
+    "limits": "Retained PA vptr scan is not a live-allocation census."
+  },
+  "generic_partition_allocated_bytes": {
+    "baseline331": 36499728,
+    "candidate346": 35399936
+  },
+  "memory_slope_mib_per_cycle": {
+    "baseline331": 5.02235,
+    "candidate346": 5.068996
+  },
+  "conclusion": "Feature-provider lifetime cleanup has supporting source and heap evidence but does not resolve whole-guest growth. IPC retained ownership remains a candidate.",
+  "next_source_findings": [
+    "ChildThreadImpl destructor explicitly leaks ChildProcessHost SharedRemote on process exit; native AROS children return in a resident image. Browser now waits both child task and transport retirement, allowing investigation of an explicit native release.",
+    "Process-local Mojo ipcz node has explicit ShutDown API but ScopedIPCSupport destructor is default. Need close after outstanding worker IPC drains and before I/O stop; no change staged."
+  ]
+}
