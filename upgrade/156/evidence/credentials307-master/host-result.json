@@ -1,0 +1,42 @@
+{
+  "tests": [
+    {
+      "test": "crypto",
+      "exit_code": 0,
+      "args": [
+        "gcc",
+        "-O1",
+        "-g",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer",
+        "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/AROS-master-rc229/workbench/libs/credentials/tests/crypto_host.c",
+        "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/AROS-master-rc229/workbench/libs/credentials/credentials_crypto.c",
+        "-o",
+        "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/credentials302/crypto",
+        "-lcrypto"
+      ],
+      "sources": {
+        "tests/crypto_host.c": "cbc497a44f6491ef3b2d2272ce0868d017dcc53e54c4ed55dff1a4a9378af71e",
+        "credentials_crypto.c": "3f1d862c408b4ecee8df114b4e1d60bf2a8df782ecc840f4061031ae77c7b52a"
+      }
+    },
+    {
+      "test": "names",
+      "exit_code": 0,
+      "args": [
+        "gcc",
+        "-O1",
+        "-g",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer",
+        "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/AROS-master-rc229/workbench/libs/credentials/tests/names_host.c",
+        "-o",
+        "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/credentials302/names"
+      ],
+      "sources": {
+        "tests/names_host.c": "1ecdbeba592b1e6a891f3d985d6bf63f510733b1592a7045f3157e38a2faaae1"
+      }
+    }
+  ],
+  "scope": "Host ASan/UBSan differential crypto and name-isolation tests; not native credentials or browser profile acceptance."
+}
