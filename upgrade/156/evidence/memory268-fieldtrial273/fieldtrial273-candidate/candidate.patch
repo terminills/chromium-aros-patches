@@ -1,0 +1,61 @@
+--- a/base/feature_list.cc
++++ b/base/feature_list.cc
+@@ -428,6 +428,16 @@
+ 
+ FeatureList::~FeatureList() = default;
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_retire_child_features() {
++  // Workers and child TLS consumers have finished. Detach only this logical
++  // owner's feature list; testing reset helpers also alter resident state.
++  FeatureList* retired = g_feature_list_instance;
++  g_feature_list_instance = nullptr;
++  delete retired;
++}
++#endif
++
+ FeatureList::ScopedDisallowOverrides::ScopedDisallowOverrides(
+     const char* reason)
+ #if DCHECK_IS_ON()
+--- a/base/metrics/field_trial.cc
++++ b/base/metrics/field_trial.cc
+@@ -462,6 +462,14 @@
+ #define global_ GetFieldTrialListForCurrentProcess()
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_retire_child_field_trials() {
++  // FeatureList contains references into this list and must be retired first.
++  // Its destructor clears this owner's registry slot and shared-memory handle.
++  delete FieldTrialList::GetInstance();
++}
++#endif
++
+ FieldTrialList::Observer::~Observer() = default;
+ 
+ FieldTrialList::FieldTrialList() {
+--- a/cef/libcef/browser/main_runner.cc
++++ b/cef/libcef/browser/main_runner.cc
+@@ -49,6 +49,8 @@
+ extern "C" void aros_base_drain_child_tls();
+ extern "C" void aros_blink_retire_child_histograms();
+ extern "C" void aros_base_retire_child_histograms();
++extern "C" void aros_base_retire_child_features();
++extern "C" void aros_base_retire_child_field_trials();
+ #endif
+ 
+ CefMainRunner::CefMainRunner(bool multi_threaded_message_loop,
+@@ -235,10 +237,12 @@
+   struct NativeCommandLineLifetime {
+     ~NativeCommandLineLifetime() {
+       // ContentMain, its workers and the delegate have unwound. Keep the
+-      // logical owner identity alive until every owner-scoped metric is gone.
++      // logical owner identity alive until owner-scoped metrics and feature trials are gone.
+       aros_base_drain_child_tls();
+       aros_blink_retire_child_histograms();
+       aros_base_retire_child_histograms();
++      aros_base_retire_child_features();
++      aros_base_retire_child_field_trials();
+       base::CommandLine::Reset();
+       CHECK(!base::CommandLine::InitializedForCurrentProcess());
+     }

@@ -1,0 +1,11 @@
+{
+  "scope": "Read-only source finding and retained native mapping evidence; no cleanup change applied or native bytes attributed.",
+  "files": [
+    "content/child/field_trial.cc",
+    "base/feature_list.cc",
+    "base/metrics/field_trial.cc"
+  ],
+  "finding": "Child initialization intentionally leaks FieldTrialList and FeatureList because upstream assumes process exit. The resident AROS helper currently retires TLS, histograms and command line but not these objects. Both registries use CommandLine pointer keys.",
+  "native_evidence": "252 post-host FieldTrialAllocator backing256KiB retains25 references after23 child tasks. This establishes retained handles, not their complete object-graph size or the cause of all per-cycle growth.",
+  "ordering_constraint": "FeatureList contains raw FieldTrial references. A retirement path must clear current-owner FeatureList before FieldTrialList, after all workers/delegates/TLS/metrics consumers finish, while logical owner identity remains valid. It must not call global testing reset helpers affecting siblings."
+}
