@@ -16,7 +16,7 @@
     "function": "IPC::ChannelProxy::GetRemoteAssociatedInterface",
     "caller": "extensions::RendererStartupHelper::BindNewRendererRemote",
     "x20": "0x10",
-    "interpretation": "thread_safe_channel_ was null before proxy/vtable lookup; upstream cause not yet established"
+    "interpretation": "Corrected351: caller keeps GetChannel() result in x21, which is zero at fault. ChannelProxy this is null; earlier internal thread_safe_channel_ diagnosis was unsupported. ARM341 frame chain places analogous call in ReadyToCommitNavigation."
   },
   "candidate338": "Skia font directory opendir still chooses/publishes fd nonatomically. Replace with open(O_DIRECTORY)+fdopendir as already used by base FileEnumerator. Known source race; exact overwrite in335 not yet directly observed.",
   "scope": "Native QEMU failures retained. Neither ARM browser readiness nor fix acceptance."
