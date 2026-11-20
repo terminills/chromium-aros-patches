@@ -13,6 +13,10 @@ add explicit allocator-cache retirement and child feature/trial cleanup. Native
 pass host and x64/ARM object checks; integrated native acceptance is pending.
 The current snapshot is287; older results below keep their build identities.
 
+[Fresh-master ARM desktop validation](evidence/master297-arm-desktop/README.md)
+now passes with Wanderer and About AROS. Two exact native desktop memory samples
+are retained. Current-build browser acceptance remains pending.
+
 The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
 used by the previous native Widevine path. It now builds against master;
 end-to-end CDM validation remains pending.
@@ -54,7 +58,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/native252-scroll267/release-candidate-gates.json).
+[current RC gates](evidence/master297-arm-desktop/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched

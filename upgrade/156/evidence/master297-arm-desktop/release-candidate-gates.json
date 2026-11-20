@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "252 native ten-cycle/full-host PASS; independent ledger23 zero-exit pairs,20 complete/0 deferred renderer retirements. Full-browser264 multitab closure fails separate scrolling-global assertion.",
+    "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
+    "persistent_profiles": "SQLite259 adapter native260 passes RAM/FAT writes, backup, reopen. Integrated287 browser acceptance queued290 after288 engines and289 clients/credentials.",
+    "memory": "276 retained252 native control: 30 pages, 63 child pairs, 60 complete retirements; 1229 PA ThreadCache records and 14938112 cached bytes remain after host exit. This does not account for all growth. 273 feature/trial cleanup and285 native-task PA cache retirement applied in287; host ASan/UBSan and x64/ARM objects PASS, native impact pending288.",
+    "native_browser_ui": "264 exact252 engine passes installed icon, NewTab, four tabs, version. Closing tabs triggers SyncScrollAttemptHeuristic image-global pointer assertion.266 task-local candidate host regression and x64/ARM objects pass, integrated267 native acceptance pending.",
+    "production_launcher": "Fresh-master ARM293 Wanderer/About desktop PASS after292 desktop dependencies; Chromium not installed there. ARM294 fresh icon/browser trial queued after288/289 builds. Existing ARM74 IPC startup fix242 included287, native browser acceptance pending. x64 installed icon/full browser previously226/232 PASS;290 current-build trial queued.",
+    "packaging": "29-file preparatory inventory includes native icons and verbatim AROS/GCC runtime notices. Final candidate archive and source-provenance review pending.",
+    "source_reproducibility": "287 complete21-repository replay PASS. Public2bae4998613772e4ee8460c049cdbc132859c302 pushed/verified.288 x64/ARM CEF archives building; both V8 archives revalidated unchanged. Frozen x64 SDK270 includes LinuxSO prerequisite; ARM SDK243.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}
