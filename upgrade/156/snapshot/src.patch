@@ -41647,7 +41647,7 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..9f0d245f35e641780f8bd10366061495
  
  }  // namespace content
 diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
-index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..1416dfad327ee84a9e8bf17e2fa61294ed32707a 100644
+index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..02eb2ea78e51a4b8fcf566ca035fd68f204bfc54 100644
 --- a/content/app/content_main_runner_impl.cc
 +++ b/content/app/content_main_runner_impl.cc
 @@ -24,6 +24,9 @@
@@ -41752,8 +41752,8 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..1416dfad327ee84a9e8bf17e2fa61294
 +  if (!process_type.empty()) {
 +    base::ThreadPoolInstance::Get()->JoinForTesting();
 +    base::ThreadPoolInstance::Set(nullptr);
-+
 +  }
++  tracing::PerfettoTracedProcess::RetireNativeTraceThread();
 +#endif
 +
    delegate_ = nullptr;
@@ -57143,7 +57143,7 @@ index b3cee97f10f8eff6eaac61dcb168cab4f477a07a..fc3b6b0a611d0c066aa0f03a63d75483
        deps += [ "//chromeos/dbus/constants" ]
      }
 diff --git a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
-index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e1b696050 100644
+index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a6732cbe781 100644
 --- a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
 +++ b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
 @@ -4,6 +4,9 @@
@@ -57231,7 +57231,31 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
    if (system_tracing_producer_socket_cb_) {
      task_runner_->PostTask(FROM_HERE,
                             std::move(system_tracing_producer_socket_cb_));
-@@ -186,15 +215,23 @@ base::Thread* PerfettoTracedProcess::GetTraceThread() {
+@@ -183,18 +212,47 @@ base::Thread* PerfettoTracedProcess::GetTraceThread() {
+   return PerfettoTracedProcess::Get().trace_process_thread_.get();
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++// static
++void PerfettoTracedProcess::RetireNativeTraceThread() {
++  auto* instance = CurrentInstance().load();
++  if (!instance || !instance->trace_process_thread_)
++    return;
++
++  // PerfettoPlatform and the muxer are engine-wide. Their first runner must
++  // outlive every logical process, including the owner which created it.
++  // Later owners have private auxiliary threads which normal OS process exit
++  // would discard. Join those explicitly on AROS. Keep the traced-process,
++  // backend and runner references valid for late trace-writer TLS cleanup.
++  if (instance->task_runner_ ==
++      base::tracing::PerfettoPlatform::Get().task_runner())
++    return;
++
++  instance->trace_process_thread_->Stop();
++  instance->trace_process_thread_.reset();
++}
++#endif
++
  // static
  PerfettoTracedProcess& PerfettoTracedProcess::MaybeCreateInstance(
      bool will_trace_thread_restart) {
@@ -57257,7 +57281,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
  }
  
  PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
-@@ -218,9 +255,9 @@ PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
+@@ -218,9 +276,9 @@ PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
        .real_process_id = real_pid};
    base::tracing::PerfettoPlatform::MaybeCreateInstance(task_runner_, options);
    DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -57269,7 +57293,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
  }
  
  PerfettoTracedProcess::PerfettoTracedProcess(
-@@ -236,13 +273,13 @@ PerfettoTracedProcess::PerfettoTracedProcess(
+@@ -236,13 +294,13 @@ PerfettoTracedProcess::PerfettoTracedProcess(
    base::tracing::PerfettoPlatform::Options options{.real_process_id = real_pid};
    base::tracing::PerfettoPlatform::MaybeCreateInstance(task_runner_, options);
    DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -57287,7 +57311,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
  }
  
  void PerfettoTracedProcess::SetConsumerConnectionFactory(
-@@ -264,7 +301,7 @@ base::SequencedTaskRunner* PerfettoTracedProcess::GetTaskRunner() {
+@@ -264,7 +322,7 @@ base::SequencedTaskRunner* PerfettoTracedProcess::GetTaskRunner() {
    return PerfettoTracedProcess::Get().task_runner_.get();
  }
  
@@ -57296,7 +57320,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
  void PerfettoTracedProcess::DeferOrConnectProducerSocket(
      perfetto::CreateSocketCallback cb) {
    CHECK(!system_tracing_producer_socket_cb_);
-@@ -292,11 +329,11 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer,
+@@ -292,11 +350,11 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer,
    init_args.disallow_merging_with_system_tracks = true;
    init_args.process_uuid =
        TraceStartupConfig::GetInstance().GetProcessTrackUuid();
@@ -57310,17 +57334,31 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..364da66cbe0abbacbd9f445c71db102e
      if (!TraceStartupConfig::GetInstance().GetProcessType().empty()) {
        // Sandboxed. Need to delegate to the browser process using Mojo.
        init_args.create_socket_async = ConnectProducerSocketAsync;
-@@ -372,4 +409,5 @@ void PerfettoTracedProcess::ShouldAllowSystemConsumerSession(
+@@ -372,4 +430,5 @@ void PerfettoTracedProcess::ShouldAllowSystemConsumerSession(
    result_callback(result);
  }
  
 +
  }  // namespace tracing
 diff --git a/services/tracing/public/cpp/perfetto/perfetto_traced_process.h b/services/tracing/public/cpp/perfetto/perfetto_traced_process.h
-index 2ca15e25d3c6ed9799475ca88b42e647933bd694..6129ec69222a09cba1ff9b872f3e3872e83a4a40 100644
+index 2ca15e25d3c6ed9799475ca88b42e647933bd694..405c4c28ec07b8996e784360cbba463e6c6c2e53 100644
 --- a/services/tracing/public/cpp/perfetto/perfetto_traced_process.h
 +++ b/services/tracing/public/cpp/perfetto/perfetto_traced_process.h
-@@ -208,7 +208,7 @@ class COMPONENT_EXPORT(TRACING_CPP) PerfettoTracedProcess
+@@ -157,6 +157,13 @@ class COMPONENT_EXPORT(TRACING_CPP) PerfettoTracedProcess
+   // task_runner for tracing is from the thread-pool.
+   static base::Thread* GetTraceThread();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Join this owner's auxiliary trace task after its other workers and AtExit
++  // callbacks have finished. The engine-wide muxer runner remains resident.
++  static void RetireNativeTraceThread();
++#endif
++
++
+   // Creates the process-wide instance of the PerfettoTracedProcess.
+   static PerfettoTracedProcess& MaybeCreateInstance(
+       bool will_trace_thread_restart);
+@@ -208,7 +215,7 @@ class COMPONENT_EXPORT(TRACING_CPP) PerfettoTracedProcess
    // Overrides SetAllowSystemTracingConsumerCallback() for testing.
    static void SetAllowSystemTracingConsumerForTesting(bool allow);
  
@@ -57329,7 +57367,7 @@ index 2ca15e25d3c6ed9799475ca88b42e647933bd694..6129ec69222a09cba1ff9b872f3e3872
    void DeferOrConnectProducerSocket(perfetto::CreateSocketCallback cb);
  #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
  
-@@ -244,7 +244,7 @@ class COMPONENT_EXPORT(TRACING_CPP) PerfettoTracedProcess
+@@ -244,7 +251,7 @@ class COMPONENT_EXPORT(TRACING_CPP) PerfettoTracedProcess
    std::unique_ptr<base::Thread> trace_process_thread_;
  
    bool will_trace_thread_restart_ = false;

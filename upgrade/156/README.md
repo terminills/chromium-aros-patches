@@ -12,13 +12,12 @@ installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
 storage/DOM/worker isolation, and profile close/reopen persistence. Source287
 and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
 cycles10 and30; memory plateau remains open. [Cold-boot profile persistence](evidence/cold317-profile/README.md) now passes for synthetic cookies and localStorage.
-The current snapshot is287; older results below retain their build identities.
+The current snapshot is319. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
 pass on x64 and ARM. Both SDKs include the generated prerequisites.
 [Fresh-master ARM desktop validation](evidence/master297-arm-desktop/README.md)
-passes Wanderer/About. ARM288 compilation passes; native link retry after
-building the missing EGL prerequisite and browser acceptance remain pending.
+passes Wanderer/About. Both320 native engine links now pass. ARM322 opens the engine after installing GL/Vulkan dependencies, but initialization encountered a missing profile assign; a corrected fresh boot is pending.
 
 The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
 used by the previous native Widevine path. It now builds against master;
@@ -61,7 +60,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/tasks326/release-candidate-gates.json).
+[current RC gates](evidence/trace333/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched

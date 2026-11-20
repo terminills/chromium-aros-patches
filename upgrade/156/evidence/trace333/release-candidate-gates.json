@@ -1,0 +1,27 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "Current287/288 fresh-master296 passes30 pages, independent ledger and full host return;62 complete/0 deferred renderer retirements.",
+    "sibling_app_isolation": "311 current engine on explicitly configured QEMU pcnet network PASS: storage/DOM/worker checks, B survives A closure,8 independent zero-exit child pairs and5 complete/0 deferred renderer retirements.308 prior disconnected-network failure retained.",
+    "persistent_profiles": "312 write/close/reopen/read and313 cold-VM boot read PASS for synthetic localStorage and persistent cookie. Cold boot uses byte-identical disk clone, read-only fixture and retained keyring/profile state. Not real-account authentication qualification.",
+    "memory": "323 source319/native320 ten-cycle lifecycle and ledger PASS; task count flat112 cycles2\u201310,44 posthost. Whole-guest 1499.22MiB cycle2 to1526.48MiB cycle10, posthost984.86MiB. Memory growth remains; longer331 pending330. Baseline318 had one deferred retirement versus0 here; posthost reduction is not solely trace-thread attribution.",
+    "native_browser_ui": "290 current native x64 keyboard icon launch, NewTab, four tabs, version156.0.8078.96, callbacks-drained closure and reopen PASS; prior scrolling-global closure regression not reproduced. PS/2 mouse input not qualified.",
+    "production_launcher": "290 source287 x64 native icon PASS.320 ARM link PASS.322 source287 engine opens but initialization stopped at missing PROFILE assign requester;327 Mesa builds and328 profile-configured retest pending.",
+    "packaging": "312 x64 inventory PASS30 files, hashes/ELF architecture/native icon magic/notices. No RC archive or upload yet.",
+    "source_reproducibility": "Current319 snapshot complete21-repository replay PASS; native320 x64 ten-cycle PASS, ARM link PASS.329 owner/profile followup staged and330 building, not current published snapshot.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification.",
+    "native_credentials": "Native305 ARM/306 x64 keyring API checks PASS; x64 browser312 close/reopen and313 cold boot synthetic profile persistence PASS. Real account login and ARM browser integration remain unqualified."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification",
+    "arm_qemu_usb": "301 QEMU-only DTB enabled controller and assigned device addresses, but transfers time out; USB input/network not qualified. Main294 uses known desktop DTB and native input.device diagnostic."
+  }
+}
