@@ -7,6 +7,10 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-20 UTC
 
+The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
+used by the previous native Widevine path. It now builds against master;
+end-to-end CDM validation remains pending.
+
 The latest [native252 lifecycle result and source267](evidence/native252-scroll267/README.md)
 confirm ten sessions,23 successful child exits and complete host shutdown, with
 renderer metrics backing reclaimed. The separate full-browser264 test exposes

@@ -1,0 +1,4808 @@
+From 4565772181852b838c67dac94186d7788585f64f Mon Sep 17 00:00:00 2001
+From: terminills <tdeters@gmail.com>
+Date: Fri, 20 Nov 2026 12:14:58 -0600
+Subject: [PATCH] Carry native x64 Linux shared-object loader for Chromium
+ prerequisite
+
+---
+ compiler/linuxso/linuxso.h           |  57 ++
+ compiler/linuxso/linuxso_cli.c       |  97 +++
+ compiler/linuxso/linuxso_intern.h    | 251 ++++++++
+ compiler/linuxso/lso_elf.c           | 705 ++++++++++++++++++++++
+ compiler/linuxso/lso_file.c          | 356 +++++++++++
+ compiler/linuxso/lso_lx.h            | 113 ++++
+ compiler/linuxso/lso_mem.c           | 750 ++++++++++++++++++++++++
+ compiler/linuxso/lso_pthread.c       | 605 +++++++++++++++++++
+ compiler/linuxso/lso_shim.c          | 843 +++++++++++++++++++++++++++
+ compiler/linuxso/lso_syscall.c       | 579 ++++++++++++++++++
+ compiler/linuxso/lso_syscall_tramp.S |  90 +++
+ compiler/linuxso/lso_task.c          | 206 +++++++
+ compiler/linuxso/mmakefile.src       |  40 ++
+ 13 files changed, 4692 insertions(+)
+ create mode 100644 compiler/linuxso/linuxso.h
+ create mode 100644 compiler/linuxso/linuxso_cli.c
+ create mode 100644 compiler/linuxso/linuxso_intern.h
+ create mode 100644 compiler/linuxso/lso_elf.c
+ create mode 100644 compiler/linuxso/lso_file.c
+ create mode 100644 compiler/linuxso/lso_lx.h
+ create mode 100644 compiler/linuxso/lso_mem.c
+ create mode 100644 compiler/linuxso/lso_pthread.c
+ create mode 100644 compiler/linuxso/lso_shim.c
+ create mode 100644 compiler/linuxso/lso_syscall.c
+ create mode 100644 compiler/linuxso/lso_syscall_tramp.S
+ create mode 100644 compiler/linuxso/lso_task.c
+ create mode 100644 compiler/linuxso/mmakefile.src
+
+diff --git a/compiler/linuxso/linuxso.h b/compiler/linuxso/linuxso.h
+new file mode 100644
+index 00000000..f53e87c1
+--- /dev/null
++++ b/compiler/linuxso/linuxso.h
+@@ -0,0 +1,57 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso -- load a Linux x86-64 ELF shared object (ET_DYN) into an AROS
++    process and run it against a glibc-ABI shim.
++
++    The loader maps the PT_LOAD segments into exec memory, applies the
++    dynamic relocations, resolves every undefined symbol against the shim
++    table (glibc/libpthread/libm/libdl/libgcc_s entry points implemented
++    on top of stdc/posixc/pthread), registers the object's .eh_frame with
++    the program's libgcc unwinder and runs the ELF constructors.  It is a
++    linklib, not a library: the shim must reach posixc/pthread through the
++    calling program's own bases from any thread the guest object creates,
++    which is exactly what a statically linked linklib gets for free.
++
++    Raw `syscall` instructions in the guest are trapped as #UD on native
++    x86-64 (IA32_EFER.SCE is off) and emulated by linuxso_syscall(); on
++    hosted AROS they reach the host kernel unchanged.
++*/
++
++#ifndef LINUXSO_H
++#define LINUXSO_H
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct LinuxSO;
++
++/*
++ * Load `path` (an AROS or unix-style path, opened through posixc).  On
++ * failure NULL is returned and, if errbuf is non-NULL, a one-line reason is
++ * copied into it (unresolved symbols are listed).
++ */
++struct LinuxSO *linuxso_open(const char *path, char *errbuf, size_t errlen);
++
++/* Look up an exported (defined, global or weak) symbol; NULL if absent. */
++void *linuxso_sym(struct LinuxSO *so, const char *name);
++
++/* Run the destructors, unregister the unwind info and free the mapping. */
++int linuxso_close(struct LinuxSO *so);
++
++/*
++ * Debug channel.  Set the LINUXSO_DEBUG environment variable (any value;
++ * a value naming a file, i.e. containing ':' or '/', also appends there)
++ * before linuxso_open() to get loader, shim and syscall-emulation traces on
++ * the kernel debug output (serial on native, stderr on hosted).
++ */
++int linuxso_debug_enabled(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* LINUXSO_H */
+diff --git a/compiler/linuxso/linuxso_cli.c b/compiler/linuxso/linuxso_cli.c
+new file mode 100644
+index 00000000..66231f41
+--- /dev/null
++++ b/compiler/linuxso/linuxso_cli.c
+@@ -0,0 +1,97 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    LinuxSO -- load a Linux x86-64 shared object and call an exported symbol.
++
++    Usage: LinuxSO <path> [symbol ...]
++
++    Every named symbol is looked up and, if found, called as
++    `const char *fn(void)` with the result printed as a string; a
++    `void:` prefix calls it as `void fn(void)` instead.  Symbols may also
++    be given space-separated in one argument.  The default symbol list
++    is the Widevine CDM's GetCdmVersion, which is the smallest end-to-end
++    proof: the object mapped, relocated, ran its constructors and
++    returned through the shim.
++*/
++
++#include <stdio.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <linuxso.h>
++
++int main(int argc, char **argv)
++{
++    const char *syms[64];
++    int nsyms = 0;
++    char err[512];
++    struct LinuxSO *so;
++    int i, rc = 0;
++
++    if (argc < 2)
++    {
++        fprintf(stderr, "usage: %s <path> [symbol ...]\n", argv[0]);
++        return 20;
++    }
++    for (i = 2; i < argc; i++)
++    {
++        char *tok = strtok(argv[i], " ");
++        while (tok && nsyms < 63)
++        {
++            syms[nsyms++] = tok;
++            tok = strtok(NULL, " ");
++        }
++    }
++    if (!nsyms)
++        syms[nsyms++] = "GetCdmVersion";
++    syms[nsyms] = NULL;
++
++    printf("LinuxSO: loading %s%s\n", argv[1], linuxso_debug_enabled() ? " (debug on)" : "");
++    fflush(stdout);
++    so = linuxso_open(argv[1], err, sizeof(err));
++    if (!so)
++    {
++        fprintf(stderr, "LinuxSO: %s: %s\n", argv[1], err);
++        return 10;
++    }
++    printf("LinuxSO: loaded\n");
++    fflush(stdout);
++
++    for (i = 0; syms[i]; i++)
++    {
++        const char *name = syms[i];
++        int isvoid = strncmp(name, "void:", 5) == 0;
++        const char *(*fn)(void);
++
++        if (isvoid)
++            name += 5;
++        fn = linuxso_sym(so, name);
++        if (!fn)
++        {
++            printf("LinuxSO: %s: not exported\n", name);
++            rc = 5;
++            continue;
++        }
++        printf("LinuxSO: calling %s at %p\n", name, (void *)fn);
++        fflush(stdout);
++        if (isvoid)
++        {
++            ((void (*)(void))fn)();
++            printf("LinuxSO: %s() returned\n", name);
++        }
++        else
++        {
++            const char *r = fn();
++            printf("LinuxSO: %s() = %p", name, (const void *)r);
++            if (r && (size_t)(uintptr_t)r > 0x10000)
++                printf(" \"%.80s\"", r);
++            printf("\n");
++        }
++        fflush(stdout);
++    }
++
++    linuxso_close(so);
++    printf("LinuxSO: closed\n");
++    return rc;
++}
+diff --git a/compiler/linuxso/linuxso_intern.h b/compiler/linuxso/linuxso_intern.h
+new file mode 100644
+index 00000000..7917e7a7
+--- /dev/null
++++ b/compiler/linuxso/linuxso_intern.h
+@@ -0,0 +1,251 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso internals shared by the ELF mapper and the glibc ABI shim.
++*/
++
++#ifndef LINUXSO_INTERN_H
++#define LINUXSO_INTERN_H
++
++#include <exec/types.h>
++#include <exec/lists.h>
++#include <exec/nodes.h>
++#include <exec/tasks.h>
++#include <stdint.h>
++#include <stddef.h>
++#include <time.h>
++
++#include "linuxso.h"
++
++/* Loader/shim trace: LINUXSO_DEBUG in the environment turns it on. */
++void lso_log(const char *fmt, ...);
++#define LSO_DEBUG(...) do { if (linuxso_debug_enabled()) lso_log(__VA_ARGS__); } while (0)
++
++/* ---- ELF64 (only what the mapper needs) ---------------------------------- */
++
++typedef struct {
++    unsigned char e_ident[16];
++    uint16_t e_type, e_machine;
++    uint32_t e_version;
++    uint64_t e_entry, e_phoff, e_shoff;
++    uint32_t e_flags;
++    uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
++} lso_Ehdr;
++
++typedef struct {
++    uint32_t p_type, p_flags;
++    uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
++} lso_Phdr;
++
++typedef struct {
++    uint32_t sh_name, sh_type;
++    uint64_t sh_flags, sh_addr, sh_offset, sh_size;
++    uint32_t sh_link, sh_info;
++    uint64_t sh_addralign, sh_entsize;
++} lso_Shdr;
++
++typedef struct {
++    int64_t d_tag;
++    uint64_t d_val;
++} lso_Dyn;
++
++typedef struct {
++    uint32_t st_name;
++    unsigned char st_info, st_other;
++    uint16_t st_shndx;
++    uint64_t st_value, st_size;
++} lso_Sym;
++
++typedef struct {
++    uint64_t r_offset, r_info;
++    int64_t r_addend;
++} lso_Rela;
++
++#define LSO_ET_DYN        3
++#define LSO_EM_X86_64     62
++#define LSO_PT_LOAD       1
++#define LSO_PT_DYNAMIC    2
++#define LSO_PT_TLS        7
++#define LSO_PF_X          1
++#define LSO_PF_W          2
++#define LSO_PF_R          4
++#define LSO_SHN_UNDEF     0
++#define LSO_STB_WEAK      2
++#define LSO_STT_TLS       6
++#define LSO_STT_FUNC      2
++#define LSO_STT_OBJECT    1
++#define LSO_STT_GNU_IFUNC 10
++
++#define LSO_DT_NULL       0
++#define LSO_DT_NEEDED     1
++#define LSO_DT_PLTRELSZ   2
++#define LSO_DT_PLTGOT     3
++#define LSO_DT_HASH       4
++#define LSO_DT_STRTAB     5
++#define LSO_DT_SYMTAB     6
++#define LSO_DT_RELA       7
++#define LSO_DT_RELASZ     8
++#define LSO_DT_RELAENT    9
++#define LSO_DT_INIT       12
++#define LSO_DT_FINI       13
++#define LSO_DT_SONAME     14
++#define LSO_DT_JMPREL     23
++#define LSO_DT_INIT_ARRAY 25
++#define LSO_DT_FINI_ARRAY 26
++#define LSO_DT_INIT_ARRAYSZ 27
++#define LSO_DT_FINI_ARRAYSZ 28
++#define LSO_DT_FLAGS      30
++
++#define LSO_R_X86_64_NONE      0
++#define LSO_R_X86_64_64        1
++#define LSO_R_X86_64_GLOB_DAT  6
++#define LSO_R_X86_64_JUMP_SLOT 7
++#define LSO_R_X86_64_RELATIVE  8
++#define LSO_R_X86_64_DTPMOD64  16
++#define LSO_R_X86_64_DTPOFF64  17
++#define LSO_R_X86_64_TPOFF64   18
++#define LSO_R_X86_64_IRELATIVE 37
++
++#define LSO_PAGE 4096UL
++
++/* ---- loaded object -------------------------------------------------------- */
++
++struct lso_atexit {
++    struct MinNode node;
++    void (*fn)(void *);
++    void *arg;
++    void *dso;
++};
++
++struct lso_segment {
++    uintptr_t start, end;   /* absolute, page rounded */
++    uint32_t flags;         /* PF_* */
++    uint64_t offset;        /* file offset */
++};
++
++struct LinuxSO {
++    struct MinNode node;            /* on lso_objects */
++    char *path;
++    char *unixpath;                 /* as reported in /proc/self/maps */
++    APTR alloc;                     /* AllocMem block */
++    size_t allocsize;
++    uintptr_t base;                 /* load bias (page aligned) */
++    size_t mapsize;
++    struct lso_segment seg[8];
++    int nseg;
++
++    /* dynamic section, absolute addresses */
++    const char *strtab;
++    const lso_Sym *symtab;
++    const uint32_t *hash;           /* DT_HASH: nbucket, nchain, buckets, chains */
++    void (*init)(void);
++    void (*fini)(void);
++    void (**init_array)(void);
++    size_t init_array_n;
++    void (**fini_array)(void);
++    size_t fini_array_n;
++
++    /* PT_TLS */
++    const void *tls_image;
++    size_t tls_filesz, tls_memsz, tls_align;
++    unsigned int tls_modid;         /* 1-based, index into the per-task DTV */
++
++    /* .eh_frame registration with the program's libgcc */
++    void *eh_frame;
++    void *eh_object;                /* libgcc's opaque struct object */
++
++    struct MinList atexit;          /* struct lso_atexit, newest first */
++    int refcount;
++};
++
++/* Registry of loaded objects (for /proc/self/maps and dlsym) */
++extern struct MinList lso_objects;
++extern struct SignalSemaphore lso_lock;
++
++/* glibc x86-64 time structures (AROS time_t is 32-bit, so these differ) */
++struct lx_timespec { int64_t tv_sec, tv_nsec; };
++struct lx_timeval { int64_t tv_sec, tv_usec; };
++
++/* ---- per-task shim state ------------------------------------------------- */
++
++#define LSO_MAX_TLS_MODULES 8
++
++struct lso_task {
++    int lx_errno;                   /* glibc-numbered errno for __errno_location */
++    void *tls[LSO_MAX_TLS_MODULES]; /* per-module TLS blocks, lazily created */
++    struct Task *task;
++    char thread_name[32];
++};
++
++struct lso_task *lso_task_get(void);   /* create on first use */
++void lso_task_free(struct Task *task); /* at thread exit */
++void lso_tls_release(struct lso_task *lt);
++
++/* ---- shim table ---------------------------------------------------------- */
++
++struct lso_symbol {
++    const char *name;
++    void *addr;
++};
++
++/* Sorted by name; lso_shim_lookup() binary-searches it. */
++void *lso_shim_lookup(const char *name);
++void lso_shim_init(void);                   /* once, before the first object loads */
++int lso_clock_gettime(int lx_clock, struct timespec *ts);
++unsigned int lso_ncpus(void);
++
++/* errno plumbing */
++int lso_errno_to_linux(int aros_errno);
++void lso_set_errno_from_aros(void);         /* copy the task's AROS errno, translated */
++void lso_set_errno(int lx_errno);
++int lso_pthread_ret(int aros_ret);          /* translate a pthread-style return code */
++
++/* Linux x86-64 errno numbers used by the shim */
++#define LX_EPERM   1
++#define LX_ENOENT  2
++#define LX_ESRCH   3
++#define LX_EINTR   4
++#define LX_EIO     5
++#define LX_EBADF   9
++#define LX_EAGAIN  11
++#define LX_ENOMEM  12
++#define LX_EACCES  13
++#define LX_EFAULT  14
++#define LX_EBUSY   16
++#define LX_EEXIST  17
++#define LX_ENOTDIR 20
++#define LX_EISDIR  21
++#define LX_EINVAL  22
++#define LX_ENFILE  23
++#define LX_EMFILE  24
++#define LX_ENOSPC  28
++#define LX_ESPIPE  29
++#define LX_EPIPE   32
++#define LX_ERANGE  34
++#define LX_EDEADLK 35
++#define LX_ENOSYS  38
++#define LX_ENOTSUP 95
++#define LX_ETIMEDOUT 110
++
++/* Linux syscall emulation (native #UD trap path and the syscall() wrapper) */
++long lso_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6);
++int lso_syscall_trap_install(void);
++long lso_getrandom(void *buf, size_t len);       /* rdrand-backed, never short */
++void lso_syscall_trap_remove(void);
++
++/* memory (mmap emulation) */
++void *lso_mmap(void *addr, size_t len, int prot, int flags, int fd, int64_t off);
++int lso_munmap(void *addr, size_t len);
++
++/* files: Linux <-> AROS open flags, glibc struct stat, synthetic /proc */
++int lso_open_flags_to_aros(int lxflags);
++int lso_open(const char *path, int lxflags, int mode);
++int lso_stat_to_glibc(const char *path, int fd, void *lxstat);
++void lso_procfs_maps(char *buf, size_t len);
++
++/* the loaded-object side of dlsym/__cxa_atexit */
++void *lso_objects_sym(const char *name);
++void lso_atexit_push(void (*fn)(void *), void *arg, void *dso);
++void lso_atexit_run(void *dso);
++
++#endif /* LINUXSO_INTERN_H */
+diff --git a/compiler/linuxso/lso_elf.c b/compiler/linuxso/lso_elf.c
+new file mode 100644
+index 00000000..0b418729
+--- /dev/null
++++ b/compiler/linuxso/lso_elf.c
+@@ -0,0 +1,705 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso ELF ET_DYN mapper: PT_LOAD into exec memory, dynamic
++    relocation against the shim table, .eh_frame registration and the
++    ELF constructor/destructor protocol.
++*/
++
++#include <proto/exec.h>
++#include <proto/dos.h>
++#include <exec/memory.h>
++#include <aros/debug.h>
++
++#include <fcntl.h>
++#include <unistd.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++#include "linuxso_intern.h"
++
++struct MinList lso_objects;
++struct SignalSemaphore lso_lock;
++static int lso_initialised;
++static int lso_debug = -1;
++static char *lso_debug_path;             /* LINUXSO_DEBUG=<file>: also append there */
++static unsigned int lso_next_tls_modid = 1;
++
++/* libgcc's frame registry (unwind-dw2-fde.c) */
++extern void __register_frame_info(const void *begin, void *ob);
++extern void *__deregister_frame_info(const void *begin);
++
++int linuxso_debug_enabled(void)
++{
++    if (lso_debug < 0)
++    {
++        const char *v = getenv("LINUXSO_DEBUG");
++
++        /* a value with a volume or directory separator names a log file:
++           on native there is no host stderr to read kprintf from */
++        if (v && (strchr(v, ':') || strchr(v, '/')))
++            lso_debug_path = strdup(v);
++        lso_debug = v != NULL;
++    }
++    return lso_debug;
++}
++
++void lso_log(const char *fmt, ...)
++{
++    char line[512];
++    struct timespec now;
++    va_list ap;
++    int n;
++
++    /* monotonic seconds first, so the trace answers "where did the time go" */
++    lso_clock_gettime(1, &now);
++    n = snprintf(line, sizeof(line), "%lu.%03lu ", (unsigned long)now.tv_sec,
++                 (unsigned long)(now.tv_nsec / 1000000));
++    va_start(ap, fmt);
++    vsnprintf(line + n, sizeof(line) - n, fmt, ap);
++    va_end(ap);
++    kprintf("[linuxso] %s\n", line);
++    if (lso_debug_path && FindTask(NULL)->tc_Node.ln_Type == NT_PROCESS)
++    {
++        /* open per line: a trap right after leaves the file complete */
++        BPTR fh = Open(lso_debug_path, MODE_READWRITE);
++        if (fh)
++        {
++            Seek(fh, 0, OFFSET_END);
++            Write(fh, "[linuxso] ", 10);
++            Write(fh, line, strlen(line));
++            Write(fh, "\n", 1);
++            Close(fh);
++        }
++    }
++}
++
++static void lso_init_once(void)
++{
++    int first;
++
++    Forbid();
++    first = !lso_initialised;
++    if (first)
++    {
++        NEWLIST(&lso_objects);
++        InitSemaphore(&lso_lock);
++        lso_initialised = 1;
++    }
++    Permit();
++    if (first)
++    {
++        lso_shim_init();
++        lso_syscall_trap_install();
++    }
++}
++
++static void seterr(char *errbuf, size_t errlen, const char *fmt, ...)
++{
++    va_list ap;
++
++    if (!errbuf || !errlen)
++        return;
++    va_start(ap, fmt);
++    vsnprintf(errbuf, errlen, fmt, ap);
++    va_end(ap);
++}
++
++static int read_at(int fd, void *buf, size_t len, uint64_t off)
++{
++    size_t done = 0;
++
++    while (done < len)
++    {
++        ssize_t n = pread(fd, (char *)buf + done, len - done, (off_t)(off + done));
++        if (n <= 0)
++            return -1;
++        done += n;
++    }
++    return 0;
++}
++
++static uint32_t elf_hash(const char *name)
++{
++    uint32_t h = 0, g;
++
++    while (*name)
++    {
++        h = (h << 4) + (unsigned char)*name++;
++        g = h & 0xf0000000;
++        if (g)
++            h ^= g >> 24;
++        h &= ~g;
++    }
++    return h;
++}
++
++/* Find a defined symbol in one object via DT_HASH. */
++static const lso_Sym *find_defined(struct LinuxSO *so, const char *name)
++{
++    uint32_t nbucket, nchain, i;
++    const uint32_t *bucket, *chain;
++
++    if (!so->hash)
++        return NULL;
++    nbucket = so->hash[0];
++    nchain = so->hash[1];
++    bucket = so->hash + 2;
++    chain = bucket + nbucket;
++    if (!nbucket)
++        return NULL;
++
++    for (i = bucket[elf_hash(name) % nbucket]; i && i < nchain; i = chain[i])
++    {
++        const lso_Sym *s = &so->symtab[i];
++        if (s->st_shndx != LSO_SHN_UNDEF && strcmp(so->strtab + s->st_name, name) == 0)
++            return s;
++    }
++    return NULL;
++}
++
++void *linuxso_sym(struct LinuxSO *so, const char *name)
++{
++    const lso_Sym *s;
++
++    if (!so || !name)
++        return NULL;
++    s = find_defined(so, name);
++    if (!s)
++        return NULL;
++    if ((s->st_info & 0xf) == LSO_STT_TLS)
++        return NULL;
++    LSO_DEBUG("sym %s -> %p", name, (void *)(so->base + s->st_value));
++    return (void *)(so->base + s->st_value);
++}
++
++void *lso_objects_sym(const char *name)
++{
++    struct LinuxSO *so;
++    void *p = NULL;
++
++    ObtainSemaphoreShared(&lso_lock);
++    ForeachNode(&lso_objects, so)
++    {
++        p = linuxso_sym(so, name);
++        if (p)
++            break;
++    }
++    ReleaseSemaphore(&lso_lock);
++    return p;
++}
++
++void lso_atexit_push(void (*fn)(void *), void *arg, void *dso)
++{
++    struct lso_atexit *a = AllocMem(sizeof(*a), MEMF_ANY | MEMF_CLEAR);
++    struct LinuxSO *so;
++
++    if (!a)
++        return;
++    a->fn = fn;
++    a->arg = arg;
++    a->dso = dso;
++
++    ObtainSemaphore(&lso_lock);
++    /* the CDM passes its own __dso_handle, which lives inside its mapping */
++    ForeachNode(&lso_objects, so)
++    {
++        if ((uintptr_t)dso >= so->base && (uintptr_t)dso < so->base + so->mapsize)
++        {
++            AddHead((struct List *)&so->atexit, (struct Node *)&a->node);
++            a = NULL;
++            break;
++        }
++    }
++    if (a)
++    {
++        /* unknown owner: attach to the most recently loaded object */
++        so = (struct LinuxSO *)GetHead(&lso_objects);
++        if (so)
++            AddHead((struct List *)&so->atexit, (struct Node *)&a->node);
++        else
++            FreeMem(a, sizeof(*a));
++    }
++    ReleaseSemaphore(&lso_lock);
++}
++
++static void run_atexit(struct LinuxSO *so)
++{
++    struct lso_atexit *a;
++
++    while ((a = (struct lso_atexit *)RemHead((struct List *)&so->atexit)))
++    {
++        LSO_DEBUG("atexit %p(%p)", a->fn, a->arg);
++        a->fn(a->arg);
++        FreeMem(a, sizeof(*a));
++    }
++}
++
++void lso_atexit_run(void *dso)
++{
++    struct LinuxSO *so;
++
++    ObtainSemaphore(&lso_lock);
++    ForeachNode(&lso_objects, so)
++    {
++        if (!dso || ((uintptr_t)dso >= so->base && (uintptr_t)dso < so->base + so->mapsize))
++            run_atexit(so);
++    }
++    ReleaseSemaphore(&lso_lock);
++}
++
++static const char *sym_name(struct LinuxSO *so, uint32_t idx)
++{
++    return so->strtab + so->symtab[idx].st_name;
++}
++
++/*
++ * Resolve the symbol of one relocation.  Defined symbols bind inside the
++ * object; undefined ones go to the shim.  Returns 0 and records the name
++ * when a non-weak symbol is missing.
++ */
++static int resolve(struct LinuxSO *so, uint32_t idx, uintptr_t *value,
++                   char *missing, size_t missinglen)
++{
++    const lso_Sym *s = &so->symtab[idx];
++    const char *name = sym_name(so, idx);
++    void *p;
++
++    if (s->st_shndx != LSO_SHN_UNDEF)
++    {
++        *value = so->base + s->st_value;
++        return 1;
++    }
++    p = lso_shim_lookup(name);
++    if (p)
++    {
++        *value = (uintptr_t)p;
++        return 1;
++    }
++    if ((s->st_info >> 4) == LSO_STB_WEAK)
++    {
++        LSO_DEBUG("weak undefined %s -> 0", name);
++        *value = 0;
++        return 1;
++    }
++    if (missing[0])
++        strncat(missing, " ", missinglen - strlen(missing) - 1);
++    strncat(missing, name, missinglen - strlen(missing) - 1);
++    *value = 0;
++    return 0;
++}
++
++static int apply_relocs(struct LinuxSO *so, const lso_Rela *rela, size_t n,
++                        char *missing, size_t missinglen)
++{
++    size_t i;
++    int failed = 0;
++
++    for (i = 0; i < n; i++)
++    {
++        uint32_t type = (uint32_t)rela[i].r_info;
++        uint32_t sym = (uint32_t)(rela[i].r_info >> 32);
++        uint64_t *where = (uint64_t *)(so->base + rela[i].r_offset);
++        uintptr_t S = 0;
++
++        switch (type)
++        {
++        case LSO_R_X86_64_NONE:
++            break;
++        case LSO_R_X86_64_RELATIVE:
++            *where = so->base + rela[i].r_addend;
++            break;
++        case LSO_R_X86_64_64:
++            if (!resolve(so, sym, &S, missing, missinglen)) failed++;
++            *where = S + rela[i].r_addend;
++            break;
++        case LSO_R_X86_64_GLOB_DAT:
++            if (!resolve(so, sym, &S, missing, missinglen)) failed++;
++            *where = S + rela[i].r_addend;
++            break;
++        case LSO_R_X86_64_JUMP_SLOT:
++            if (!resolve(so, sym, &S, missing, missinglen)) failed++;
++            *where = S;
++            break;
++        case LSO_R_X86_64_DTPMOD64:
++            /* module id of the TLS block; only our own module is supported */
++            *where = so->tls_modid;
++            break;
++        case LSO_R_X86_64_DTPOFF64:
++            *where = so->symtab[sym].st_value + rela[i].r_addend;
++            break;
++        case LSO_R_X86_64_TPOFF64:
++            /* initial-exec TLS needs a %fs-based block we do not own */
++            if (missing[0]) strncat(missing, " ", missinglen - strlen(missing) - 1);
++            strncat(missing, "<R_X86_64_TPOFF64>", missinglen - strlen(missing) - 1);
++            failed++;
++            break;
++        default:
++            LSO_DEBUG("unsupported relocation type %u at %p", type, where);
++            if (missing[0]) strncat(missing, " ", missinglen - strlen(missing) - 1);
++            strncat(missing, "<reloc-type>", missinglen - strlen(missing) - 1);
++            failed++;
++            break;
++        }
++    }
++    return failed;
++}
++
++static char *dupstr(const char *s)
++{
++    size_t n = strlen(s) + 1;
++    char *d = AllocVec(n, MEMF_ANY);
++    if (d)
++        memcpy(d, s, n);
++    return d;
++}
++
++/* "SYS:Applications/x/y.so" -> "/SYS/Applications/x/y.so" for /proc/self/maps */
++static char *unix_path(const char *p)
++{
++    const char *colon = strchr(p, ':');
++    char *u;
++    size_t n = strlen(p);
++
++    if (!colon || p[0] == '/')
++        return dupstr(p);
++    u = AllocVec(n + 2, MEMF_ANY);
++    if (!u)
++        return NULL;
++    u[0] = '/';
++    memcpy(u + 1, p, colon - p);
++    u[1 + (colon - p)] = '/';
++    strcpy(u + 2 + (colon - p), colon + 1);
++    return u;
++}
++
++static void free_object(struct LinuxSO *so)
++{
++    if (so->alloc)
++        FreeMem(so->alloc, so->allocsize);
++    if (so->eh_object)
++        FreeMem(so->eh_object, 64);
++    FreeVec(so->path);
++    FreeVec(so->unixpath);
++    FreeMem(so, sizeof(*so));
++}
++
++struct LinuxSO *linuxso_open(const char *path, char *errbuf, size_t errlen)
++{
++    struct LinuxSO *so;
++    lso_Ehdr eh;
++    lso_Phdr *ph = NULL;
++    lso_Shdr *sh = NULL;
++    char *shstr = NULL;
++    int fd = -1, i;
++    uintptr_t lo = ~(uintptr_t)0, hi = 0;
++    const lso_Dyn *dyn = NULL;
++    const lso_Rela *rela = NULL, *jmprel = NULL;
++    size_t relasz = 0, pltrelsz = 0;
++    char missing[1024];
++
++    lso_init_once();
++    if (errbuf && errlen)
++        errbuf[0] = 0;
++
++    so = AllocMem(sizeof(*so), MEMF_ANY | MEMF_CLEAR);
++    if (!so)
++    {
++        seterr(errbuf, errlen, "out of memory");
++        return NULL;
++    }
++    NEWLIST(&so->atexit);
++    so->refcount = 1;
++    so->path = dupstr(path);
++    so->unixpath = unix_path(path);
++
++    fd = open(path, O_RDONLY);
++    if (fd < 0)
++    {
++        seterr(errbuf, errlen, "cannot open %s", path);
++        goto fail;
++    }
++    if (read_at(fd, &eh, sizeof(eh), 0) < 0 || memcmp(eh.e_ident, "\177ELF\002\001", 6) != 0)
++    {
++        seterr(errbuf, errlen, "%s: not an ELF64 little-endian object", path);
++        goto fail;
++    }
++    if (eh.e_type != LSO_ET_DYN || eh.e_machine != LSO_EM_X86_64)
++    {
++        seterr(errbuf, errlen, "%s: not an x86-64 ET_DYN object (type %u machine %u)",
++               path, eh.e_type, eh.e_machine);
++        goto fail;
++    }
++    if (eh.e_phentsize != sizeof(lso_Phdr) || eh.e_phnum == 0 || eh.e_phnum > 64)
++    {
++        seterr(errbuf, errlen, "%s: bad program header table", path);
++        goto fail;
++    }
++
++    ph = AllocVec(eh.e_phnum * sizeof(lso_Phdr), MEMF_ANY);
++    if (!ph || read_at(fd, ph, eh.e_phnum * sizeof(lso_Phdr), eh.e_phoff) < 0)
++    {
++        seterr(errbuf, errlen, "%s: cannot read program headers", path);
++        goto fail;
++    }
++
++    /* extent of the image */
++    for (i = 0; i < eh.e_phnum; i++)
++    {
++        if (ph[i].p_type != LSO_PT_LOAD)
++            continue;
++        if (ph[i].p_vaddr < lo)
++            lo = ph[i].p_vaddr & ~(LSO_PAGE - 1);
++        if (ph[i].p_vaddr + ph[i].p_memsz > hi)
++            hi = ph[i].p_vaddr + ph[i].p_memsz;
++    }
++    if (hi == 0)
++    {
++        seterr(errbuf, errlen, "%s: no PT_LOAD segments", path);
++        goto fail;
++    }
++    hi = (hi + LSO_PAGE - 1) & ~(LSO_PAGE - 1);
++    so->mapsize = hi - lo;
++    so->allocsize = so->mapsize + LSO_PAGE;
++    /* Plain exec memory is executable on every AROS target LoadSeg works on. */
++    so->alloc = AllocMem(so->allocsize, MEMF_ANY | MEMF_CLEAR);
++    if (!so->alloc)
++    {
++        seterr(errbuf, errlen, "%s: cannot allocate %lu bytes for the image",
++               path, (unsigned long)so->allocsize);
++        goto fail;
++    }
++    so->base = (((uintptr_t)so->alloc + LSO_PAGE - 1) & ~(LSO_PAGE - 1)) - lo;
++    LSO_DEBUG("%s: image %lu bytes at %p (bias %p)", path,
++              (unsigned long)so->mapsize, (void *)(so->base + lo), (void *)so->base);
++
++    /* map the segments */
++    for (i = 0; i < eh.e_phnum; i++)
++    {
++        lso_Phdr *p = &ph[i];
++
++        switch (p->p_type)
++        {
++        case LSO_PT_LOAD:
++            if (p->p_filesz &&
++                read_at(fd, (void *)(so->base + p->p_vaddr), p->p_filesz, p->p_offset) < 0)
++            {
++                seterr(errbuf, errlen, "%s: short read on segment %d", path, i);
++                goto fail;
++            }
++            if (so->nseg < (int)(sizeof(so->seg) / sizeof(so->seg[0])))
++            {
++                so->seg[so->nseg].start = (so->base + p->p_vaddr) & ~(LSO_PAGE - 1);
++                so->seg[so->nseg].end = (so->base + p->p_vaddr + p->p_memsz + LSO_PAGE - 1) & ~(LSO_PAGE - 1);
++                so->seg[so->nseg].flags = p->p_flags;
++                so->seg[so->nseg].offset = p->p_offset & ~(LSO_PAGE - 1);
++                so->nseg++;
++            }
++            LSO_DEBUG("  PT_LOAD %c%c%c vaddr %p filesz %lx memsz %lx",
++                      (p->p_flags & LSO_PF_R) ? 'r' : '-', (p->p_flags & LSO_PF_W) ? 'w' : '-',
++                      (p->p_flags & LSO_PF_X) ? 'x' : '-', (void *)(so->base + p->p_vaddr),
++                      (unsigned long)p->p_filesz, (unsigned long)p->p_memsz);
++            break;
++        case LSO_PT_DYNAMIC:
++            dyn = (const lso_Dyn *)(so->base + p->p_vaddr);
++            break;
++        case LSO_PT_TLS:
++            so->tls_image = (const void *)(so->base + p->p_vaddr);
++            so->tls_filesz = p->p_filesz;
++            so->tls_memsz = p->p_memsz;
++            so->tls_align = p->p_align ? p->p_align : 16;
++            break;
++        default:
++            break;
++        }
++    }
++    if (!dyn)
++    {
++        seterr(errbuf, errlen, "%s: no PT_DYNAMIC", path);
++        goto fail;
++    }
++    if (so->tls_memsz)
++    {
++        if (lso_next_tls_modid > LSO_MAX_TLS_MODULES)
++        {
++            seterr(errbuf, errlen, "%s: too many TLS modules", path);
++            goto fail;
++        }
++        so->tls_modid = lso_next_tls_modid++;
++        LSO_DEBUG("  PT_TLS image %p filesz %lx memsz %lx align %lx -> module %u",
++                  so->tls_image, (unsigned long)so->tls_filesz, (unsigned long)so->tls_memsz,
++                  (unsigned long)so->tls_align, so->tls_modid);
++    }
++
++    /* dynamic section */
++    for (; dyn->d_tag != LSO_DT_NULL; dyn++)
++    {
++        switch (dyn->d_tag)
++        {
++        case LSO_DT_STRTAB:     so->strtab = (const char *)(so->base + dyn->d_val); break;
++        case LSO_DT_SYMTAB:     so->symtab = (const lso_Sym *)(so->base + dyn->d_val); break;
++        case LSO_DT_HASH:       so->hash = (const uint32_t *)(so->base + dyn->d_val); break;
++        case LSO_DT_RELA:       rela = (const lso_Rela *)(so->base + dyn->d_val); break;
++        case LSO_DT_RELASZ:     relasz = dyn->d_val; break;
++        case LSO_DT_JMPREL:     jmprel = (const lso_Rela *)(so->base + dyn->d_val); break;
++        case LSO_DT_PLTRELSZ:   pltrelsz = dyn->d_val; break;
++        case LSO_DT_INIT:       so->init = (void (*)(void))(so->base + dyn->d_val); break;
++        case LSO_DT_FINI:       so->fini = (void (*)(void))(so->base + dyn->d_val); break;
++        case LSO_DT_INIT_ARRAY: so->init_array = (void (**)(void))(so->base + dyn->d_val); break;
++        case LSO_DT_INIT_ARRAYSZ: so->init_array_n = dyn->d_val / sizeof(void *); break;
++        case LSO_DT_FINI_ARRAY: so->fini_array = (void (**)(void))(so->base + dyn->d_val); break;
++        case LSO_DT_FINI_ARRAYSZ: so->fini_array_n = dyn->d_val / sizeof(void *); break;
++        case LSO_DT_NEEDED:
++            LSO_DEBUG("  NEEDED %s (provided by the shim)", so->strtab ? so->strtab + dyn->d_val : "?");
++            break;
++        default:
++            break;
++        }
++    }
++    if (!so->strtab || !so->symtab)
++    {
++        seterr(errbuf, errlen, "%s: no dynamic symbol table", path);
++        goto fail;
++    }
++    if (!so->hash)
++    {
++        seterr(errbuf, errlen, "%s: no DT_HASH (DT_GNU_HASH only is not supported)", path);
++        goto fail;
++    }
++
++    /* relocate */
++    missing[0] = 0;
++    if (apply_relocs(so, rela, relasz / sizeof(lso_Rela), missing, sizeof(missing)) +
++        apply_relocs(so, jmprel, pltrelsz / sizeof(lso_Rela), missing, sizeof(missing)))
++    {
++        seterr(errbuf, errlen, "%s: unresolved symbols: %s", path, missing);
++        goto fail;
++    }
++    LSO_DEBUG("  relocated %lu + %lu entries", (unsigned long)(relasz / sizeof(lso_Rela)),
++              (unsigned long)(pltrelsz / sizeof(lso_Rela)));
++
++    /* .eh_frame: let the program's libgcc unwind through the object */
++    if (eh.e_shoff && eh.e_shentsize == sizeof(lso_Shdr) && eh.e_shnum && eh.e_shnum < 512 &&
++        eh.e_shstrndx < eh.e_shnum)
++    {
++        sh = AllocVec(eh.e_shnum * sizeof(lso_Shdr), MEMF_ANY);
++        if (sh && read_at(fd, sh, eh.e_shnum * sizeof(lso_Shdr), eh.e_shoff) == 0)
++        {
++            shstr = AllocVec(sh[eh.e_shstrndx].sh_size + 1, MEMF_ANY | MEMF_CLEAR);
++            if (shstr && read_at(fd, shstr, sh[eh.e_shstrndx].sh_size, sh[eh.e_shstrndx].sh_offset) == 0)
++            {
++                for (i = 0; i < eh.e_shnum; i++)
++                {
++                    if (sh[i].sh_name < sh[eh.e_shstrndx].sh_size &&
++                        strcmp(shstr + sh[i].sh_name, ".eh_frame") == 0 && sh[i].sh_addr)
++                    {
++                        so->eh_frame = (void *)(so->base + sh[i].sh_addr);
++                        break;
++                    }
++                }
++            }
++        }
++    }
++    if (so->eh_frame)
++    {
++        so->eh_object = AllocMem(64, MEMF_ANY | MEMF_CLEAR);
++        if (so->eh_object)
++            __register_frame_info(so->eh_frame, so->eh_object);
++        LSO_DEBUG("  .eh_frame at %p registered", so->eh_frame);
++    }
++    else
++        LSO_DEBUG("  no .eh_frame section found; C++ exceptions inside the object will terminate");
++
++    FreeVec(shstr);
++    FreeVec(sh);
++    FreeVec(ph);
++    close(fd);
++    shstr = NULL; sh = NULL; ph = NULL; fd = -1;
++
++    ObtainSemaphore(&lso_lock);
++    AddHead((struct List *)&lso_objects, (struct Node *)&so->node);
++    ReleaseSemaphore(&lso_lock);
++
++    /* constructors */
++    if (so->init)
++    {
++        LSO_DEBUG("  DT_INIT %p", so->init);
++        so->init();
++    }
++    for (i = 0; i < (int)so->init_array_n; i++)
++    {
++        if (so->init_array[i] && (uintptr_t)so->init_array[i] != ~(uintptr_t)0)
++        {
++            LSO_DEBUG("  init_array[%d] %p", i, so->init_array[i]);
++            so->init_array[i]();
++        }
++    }
++    LSO_DEBUG("%s: loaded", path);
++    return so;
++
++fail:
++    FreeVec(shstr);
++    FreeVec(sh);
++    FreeVec(ph);
++    if (fd >= 0)
++        close(fd);
++    if (so->tls_modid && so->tls_modid == lso_next_tls_modid - 1)
++        lso_next_tls_modid--;
++    free_object(so);
++    return NULL;
++}
++
++int linuxso_close(struct LinuxSO *so)
++{
++    int i;
++
++    if (!so)
++        return -1;
++    if (--so->refcount > 0)
++        return 0;
++
++    for (i = (int)so->fini_array_n - 1; i >= 0; i--)
++        if (so->fini_array[i] && (uintptr_t)so->fini_array[i] != ~(uintptr_t)0)
++            so->fini_array[i]();
++    if (so->fini)
++        so->fini();
++    run_atexit(so);
++
++    ObtainSemaphore(&lso_lock);
++    Remove((struct Node *)&so->node);
++    ReleaseSemaphore(&lso_lock);
++
++    if (so->eh_frame && so->eh_object)
++        __deregister_frame_info(so->eh_frame);
++    LSO_DEBUG("%s: unloaded", so->path);
++    free_object(so);
++    return 0;
++}
++
++/* /proc/self/maps as the guest expects it: one line per mapped segment. */
++void lso_procfs_maps(char *buf, size_t len)
++{
++    struct LinuxSO *so;
++    size_t used = 0;
++    int i;
++
++    buf[0] = 0;
++    ObtainSemaphoreShared(&lso_lock);
++    ForeachNode(&lso_objects, so)
++    {
++        for (i = 0; i < so->nseg && used < len; i++)
++        {
++            used += snprintf(buf + used, len - used, "%08lx-%08lx %c%c%cp %08lx 00:00 0 %s\n",
++                             (unsigned long)so->seg[i].start, (unsigned long)so->seg[i].end,
++                             (so->seg[i].flags & LSO_PF_R) ? 'r' : '-',
++                             (so->seg[i].flags & LSO_PF_W) ? 'w' : '-',
++                             (so->seg[i].flags & LSO_PF_X) ? 'x' : '-',
++                             (unsigned long)so->seg[i].offset,
++                             so->unixpath ? so->unixpath : "");
++        }
++    }
++    ReleaseSemaphore(&lso_lock);
++}
+diff --git a/compiler/linuxso/lso_file.c b/compiler/linuxso/lso_file.c
+new file mode 100644
+index 00000000..f075b9df
+--- /dev/null
++++ b/compiler/linuxso/lso_file.c
+@@ -0,0 +1,356 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso file ABI: Linux open flags and struct stat64 layout on top of
++    posixc, plus the handful of /proc and /sys files the guest reads
++    (synthesised into T: so the ordinary read/close path serves them).
++*/
++
++#include <proto/exec.h>
++#include <proto/dos.h>
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++
++/* Linux x86-64 open(2) flags */
++#define LX_O_ACCMODE   03
++#define LX_O_WRONLY    01
++#define LX_O_RDWR      02
++#define LX_O_CREAT     0100
++#define LX_O_EXCL      0200
++#define LX_O_TRUNC     01000
++#define LX_O_APPEND    02000
++#define LX_O_NONBLOCK  04000
++#define LX_O_DIRECTORY 0200000
++#define LX_O_NOFOLLOW  0400000
++#define LX_O_CLOEXEC   02000000
++
++int lso_open_flags_to_aros(int lx)
++{
++    int f;
++
++    switch (lx & LX_O_ACCMODE)
++    {
++    case LX_O_WRONLY: f = O_WRONLY; break;
++    case LX_O_RDWR:   f = O_RDWR; break;
++    default:          f = O_RDONLY; break;
++    }
++    if (lx & LX_O_CREAT)     f |= O_CREAT;
++    if (lx & LX_O_EXCL)      f |= O_EXCL;
++    if (lx & LX_O_TRUNC)     f |= O_TRUNC;
++    if (lx & LX_O_APPEND)    f |= O_APPEND;
++    if (lx & LX_O_NONBLOCK)  f |= O_NONBLOCK;
++    if (lx & LX_O_DIRECTORY) f |= O_DIRECTORY;
++    if (lx & LX_O_NOFOLLOW)  f |= O_NOFOLLOW;
++    if (lx & LX_O_CLOEXEC)   f |= O_CLOEXEC;
++    return f;
++}
++
++/* ---- synthetic /proc and /sys ------------------------------------------- */
++
++static int synth_counter;
++
++/*
++ * Returns a T: path holding the content of a /proc or /sys file the guest
++ * asked for, or NULL when the name is not one we serve.  buf receives the
++ * path.
++ */
++static const char *synth_path(const char *path, char *buf, size_t buflen)
++{
++    char *content = NULL;
++    size_t len = 0;
++    BPTR fh;
++    char small[64];
++
++    if (strcmp(path, "/proc/self/maps") == 0)
++    {
++        content = AllocVec(8192, MEMF_ANY | MEMF_CLEAR);
++        if (!content)
++            return NULL;
++        lso_procfs_maps(content, 8192);
++        len = strlen(content);
++    }
++    else if (strcmp(path, "/sys/devices/system/cpu/present") == 0 ||
++             strcmp(path, "/sys/devices/system/cpu/online") == 0 ||
++             strcmp(path, "/sys/devices/system/cpu/possible") == 0)
++    {
++        unsigned int n = lso_ncpus();
++        snprintf(small, sizeof(small), n > 1 ? "0-%u\n" : "0\n", n - 1);
++        content = small;
++        len = strlen(small);
++    }
++    else if (strcmp(path, "/proc/self/cmdline") == 0)
++    {
++        content = small;
++        len = snprintf(small, sizeof(small), "chromium") + 1;
++    }
++    else
++        return NULL;
++
++    snprintf(buf, buflen, "T:linuxso.%p.%d", FindTask(NULL), __sync_add_and_fetch(&synth_counter, 1));
++    fh = Open(buf, MODE_NEWFILE);
++    if (fh)
++    {
++        Write(fh, content, len);
++        Close(fh);
++    }
++    if (content != small)
++        FreeVec(content);
++    LSO_DEBUG("synthesised %s -> %s (%lu bytes)", path, buf, (unsigned long)len);
++    return fh ? buf : NULL;
++}
++
++static int is_proc_or_sys(const char *path)
++{
++    return strncmp(path, "/proc/", 6) == 0 || strncmp(path, "/sys/", 5) == 0 ||
++           strcmp(path, "/proc") == 0 || strcmp(path, "/sys") == 0 ||
++           (strncmp(path, "/dev/", 5) == 0 && strcmp(path, "/dev/null") != 0);
++}
++
++/* ---- /dev/urandom ---------------------------------------------------------
++ * A real fd number (NIL: underneath) whose reads are answered with random
++ * bytes for as long as the guest keeps asking; BoringSSL aborts on a short
++ * read, so a file snapshot would not do.
++ */
++#define LSO_MAX_RANDOM_FDS 8
++static int random_fds[LSO_MAX_RANDOM_FDS];   /* fd + 1, 0 = free */
++
++static int random_open(void)
++{
++    int fd = open("NIL:", O_RDONLY), i;
++
++    if (fd < 0)
++        return -1;
++    Forbid();
++    for (i = 0; i < LSO_MAX_RANDOM_FDS; i++)
++        if (!random_fds[i])
++        {
++            random_fds[i] = fd + 1;
++            break;
++        }
++    Permit();
++    if (i == LSO_MAX_RANDOM_FDS)
++    {
++        close(fd);
++        return -1;
++    }
++    return fd;
++}
++
++static int random_slot(int fd)
++{
++    int i;
++
++    for (i = 0; i < LSO_MAX_RANDOM_FDS; i++)
++        if (random_fds[i] == fd + 1)
++            return i;
++    return -1;
++}
++
++int lso_open(const char *path, int lxflags, int mode)
++{
++    char tmp[64];
++    int fd;
++
++    if (strcmp(path, "/dev/urandom") == 0 || strcmp(path, "/dev/random") == 0)
++    {
++        fd = random_open();
++        LSO_DEBUG("open(%s) -> random fd %d", path, fd);
++        if (fd < 0)
++            lso_set_errno(LX_EMFILE);
++        return fd;
++    }
++    if (is_proc_or_sys(path))
++    {
++        const char *p = synth_path(path, tmp, sizeof(tmp));
++        if (!p)
++        {
++            LSO_DEBUG("open(%s) -> ENOENT (not synthesised)", path);
++            lso_set_errno(LX_ENOENT);
++            return -1;
++        }
++        fd = open(p, O_RDONLY);
++    }
++    else
++        fd = open(path, lso_open_flags_to_aros(lxflags), mode);
++
++    if (fd < 0)
++    {
++        LSO_DEBUG("open(%s, %#o) -> errno %d", path, lxflags, errno);
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    LSO_DEBUG("open(%s, %#o) -> %d", path, lxflags, fd);
++    return fd;
++}
++
++FILE *lso_fopen(const char *path, const char *fmode)
++{
++    char tmp[64];
++    FILE *f;
++
++    if (is_proc_or_sys(path))
++    {
++        const char *p = synth_path(path, tmp, sizeof(tmp));
++        if (!p)
++        {
++            LSO_DEBUG("fopen(%s) -> ENOENT (not synthesised)", path);
++            lso_set_errno(LX_ENOENT);
++            return NULL;
++        }
++        f = fopen(p, "r");
++    }
++    else
++        f = fopen(path, fmode);
++    if (!f)
++        lso_set_errno_from_aros();
++    LSO_DEBUG("fopen(%s, %s) -> %p", path, fmode, f);
++    return f;
++}
++
++/* ---- struct stat64 -------------------------------------------------------- */
++
++struct lx_stat64 {
++    uint64_t st_dev;
++    uint64_t st_ino;
++    uint64_t st_nlink;
++    uint32_t st_mode;
++    uint32_t st_uid;
++    uint32_t st_gid;
++    uint32_t pad0;
++    uint64_t st_rdev;
++    int64_t st_size;
++    int64_t st_blksize;
++    int64_t st_blocks;
++    int64_t lx_atime, lx_atime_nsec;   /* glibc's st_atime is a macro */
++    int64_t lx_mtime, lx_mtime_nsec;
++    int64_t lx_ctime, lx_ctime_nsec;
++    int64_t reserved[3];
++};
++
++static void stat_convert(const struct stat *s, struct lx_stat64 *l)
++{
++    memset(l, 0, sizeof(*l));
++    l->st_dev = s->st_dev;
++    l->st_ino = s->st_ino;
++    l->st_nlink = s->st_nlink;
++    l->st_mode = s->st_mode;        /* S_IF* bits are the traditional octal values on both */
++    l->st_uid = s->st_uid;
++    l->st_gid = s->st_gid;
++    l->st_rdev = s->st_rdev;
++    l->st_size = s->st_size;
++    l->st_blksize = s->st_blksize ? s->st_blksize : 4096;
++    l->st_blocks = (s->st_size + 511) / 512;
++    l->lx_atime = s->st_atime;
++    l->lx_mtime = s->st_mtime;
++    l->lx_ctime = s->st_ctime;
++}
++
++int lso_stat_to_glibc(const char *path, int fd, void *out)
++{
++    struct stat s;
++    int r;
++
++    if (path)
++    {
++        if (is_proc_or_sys(path))
++        {
++            lso_set_errno(LX_ENOENT);
++            return -1;
++        }
++        r = stat(path, &s);
++    }
++    else
++        r = fstat(fd, &s);
++    if (r < 0)
++    {
++        LSO_DEBUG("stat(%s/%d) -> errno %d", path ? path : "-", fd, errno);
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    stat_convert(&s, (struct lx_stat64 *)out);
++    return 0;
++}
++
++int lx_xstat64(int ver, const char *path, void *buf)   { (void)ver; return lso_stat_to_glibc(path, -1, buf); }
++int lx_lxstat64(int ver, const char *path, void *buf)  { (void)ver; return lso_stat_to_glibc(path, -1, buf); }
++int lx_fxstat64(int ver, int fd, void *buf)            { (void)ver; return lso_stat_to_glibc(NULL, fd, buf); }
++int lx_stat64(const char *path, void *buf)             { return lso_stat_to_glibc(path, -1, buf); }
++int lx_fstat64(int fd, void *buf)                      { return lso_stat_to_glibc(NULL, fd, buf); }
++
++/* ---- fd calls with errno translation ------------------------------------- */
++
++int lx_open64(const char *path, int flags, ...)
++{
++    int mode = 0;
++
++    if (flags & LX_O_CREAT)
++    {
++        __builtin_va_list ap;
++        __builtin_va_start(ap, flags);
++        mode = __builtin_va_arg(ap, int);
++        __builtin_va_end(ap);
++    }
++    return lso_open(path, flags, mode);
++}
++
++int lx_creat64(const char *path, int mode)
++{
++    return lso_open(path, LX_O_WRONLY | LX_O_CREAT | LX_O_TRUNC, mode);
++}
++
++int lx_close(int fd)
++{
++    int r, slot = random_slot(fd);
++
++    if (slot >= 0)
++        random_fds[slot] = 0;
++    r = close(fd);
++    if (r < 0)
++        lso_set_errno_from_aros();
++    return r;
++}
++
++long lx_read(int fd, void *buf, size_t n)
++{
++    ssize_t r;
++
++    if (random_slot(fd) >= 0)
++        return lso_getrandom(buf, n);
++    r = read(fd, buf, n);
++    if (r < 0)
++        lso_set_errno_from_aros();
++    return r;
++}
++
++long lx_write(int fd, const void *buf, size_t n)
++{
++    ssize_t r = write(fd, buf, n);
++    if (r < 0)
++        lso_set_errno_from_aros();
++    return r;
++}
++
++long lx_pread64(int fd, void *buf, size_t n, int64_t off)
++{
++    ssize_t r = pread(fd, buf, n, (off_t)off);
++    if (r < 0)
++        lso_set_errno_from_aros();
++    return r;
++}
++
++int64_t lx_lseek64(int fd, int64_t off, int whence)
++{
++    off_t r = lseek(fd, (off_t)off, whence);
++    if (r < 0)
++        lso_set_errno_from_aros();
++    return r;
++}
+diff --git a/compiler/linuxso/lso_lx.h b/compiler/linuxso/lso_lx.h
+new file mode 100644
+index 00000000..50d08311
+--- /dev/null
++++ b/compiler/linuxso/lso_lx.h
+@@ -0,0 +1,113 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    Prototypes of the glibc-ABI entry points the shim table exports.
++    Every lx_* function takes and returns Linux/glibc layouts and sets
++    the guest's (glibc-numbered) errno.
++*/
++
++#ifndef LSO_LX_H
++#define LSO_LX_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <time.h>
++
++struct lx_mutex;
++struct lx_mutexattr;
++struct lx_cond;
++struct lx_condattr;
++struct lx_rwlock;
++struct lx_attr;
++struct lx_sem;
++struct lx_timespec;
++struct lx_timeval;
++
++/* lso_pthread.c */
++int lx_pthread_mutexattr_init(struct lx_mutexattr *a);
++int lx_pthread_mutexattr_destroy(struct lx_mutexattr *a);
++int lx_pthread_mutexattr_settype(struct lx_mutexattr *a, int kind);
++int lx_pthread_mutex_init(struct lx_mutex *m, const struct lx_mutexattr *a);
++int lx_pthread_mutex_destroy(struct lx_mutex *m);
++int lx_pthread_mutex_lock(struct lx_mutex *m);
++int lx_pthread_mutex_trylock(struct lx_mutex *m);
++int lx_pthread_mutex_unlock(struct lx_mutex *m);
++int lx_pthread_condattr_init(struct lx_condattr *a);
++int lx_pthread_condattr_destroy(struct lx_condattr *a);
++int lx_pthread_condattr_setclock(struct lx_condattr *a, int clock);
++int lx_pthread_cond_init(struct lx_cond *c, const struct lx_condattr *a);
++int lx_pthread_cond_destroy(struct lx_cond *c);
++int lx_pthread_cond_signal(struct lx_cond *c);
++int lx_pthread_cond_broadcast(struct lx_cond *c);
++int lx_pthread_cond_wait(struct lx_cond *c, struct lx_mutex *m);
++int lx_pthread_cond_timedwait(struct lx_cond *c, struct lx_mutex *m, const struct lx_timespec *abstime);
++int lx_pthread_rwlock_init(struct lx_rwlock *r, const void *attr);
++int lx_pthread_rwlock_destroy(struct lx_rwlock *r);
++int lx_pthread_rwlock_rdlock(struct lx_rwlock *r);
++int lx_pthread_rwlock_wrlock(struct lx_rwlock *r);
++int lx_pthread_rwlock_tryrdlock(struct lx_rwlock *r);
++int lx_pthread_rwlock_trywrlock(struct lx_rwlock *r);
++int lx_pthread_rwlock_unlock(struct lx_rwlock *r);
++int lx_pthread_once(int *once, void (*init_routine)(void));
++int lx_pthread_key_create(unsigned int *key, void (*dtor)(void *));
++int lx_pthread_key_delete(unsigned int key);
++void *lx_pthread_getspecific(unsigned int key);
++int lx_pthread_setspecific(unsigned int key, const void *value);
++int lx_pthread_attr_init(struct lx_attr *a);
++int lx_pthread_attr_destroy(struct lx_attr *a);
++int lx_pthread_attr_setdetachstate(struct lx_attr *a, int s);
++int lx_pthread_attr_getdetachstate(const struct lx_attr *a, int *s);
++int lx_pthread_attr_setstacksize(struct lx_attr *a, size_t s);
++int lx_pthread_attr_getstacksize(const struct lx_attr *a, size_t *s);
++int lx_pthread_create(unsigned long *thread, const struct lx_attr *a, void *(*fn)(void *), void *arg);
++int lx_pthread_join(unsigned long thread, void **ret);
++int lx_pthread_detach(unsigned long thread);
++unsigned long lx_pthread_self(void);
++int lx_pthread_equal(unsigned long a, unsigned long b);
++void lx_pthread_exit(void *ret);
++int lx_pthread_setname_np(unsigned long thread, const char *name);
++int lx_pthread_getaffinity_np(unsigned long thread, size_t setsize, unsigned long *set);
++int lx_sched_getaffinity(int pid, size_t setsize, unsigned long *set);
++int lx_sched_cpucount(size_t setsize, const unsigned long *set);
++int lx_sem_init(struct lx_sem *s, int pshared, unsigned int value);
++int lx_sem_destroy(struct lx_sem *s);
++int lx_sem_wait(struct lx_sem *s);
++int lx_sem_trywait(struct lx_sem *s);
++int lx_sem_post(struct lx_sem *s);
++
++/* lso_file.c */
++FILE *lso_fopen(const char *path, const char *mode);
++int lx_xstat64(int ver, const char *path, void *buf);
++int lx_lxstat64(int ver, const char *path, void *buf);
++int lx_fxstat64(int ver, int fd, void *buf);
++int lx_stat64(const char *path, void *buf);
++int lx_fstat64(int fd, void *buf);
++int lx_open64(const char *path, int flags, ...);
++int lx_creat64(const char *path, int mode);
++int lx_close(int fd);
++long lx_read(int fd, void *buf, size_t n);
++long lx_write(int fd, const void *buf, size_t n);
++long lx_pread64(int fd, void *buf, size_t n, int64_t off);
++int64_t lx_lseek64(int fd, int64_t off, int whence);
++
++/* lso_mem.c */
++void *lx_mmap64(void *addr, size_t len, int prot, int flags, int fd, int64_t off);
++int lx_munmap(void *addr, size_t len);
++int lx_mprotect(void *addr, size_t len, int prot);
++int lx_madvise(void *addr, size_t len, int advice);
++
++/* lso_shim.c */
++int lx_clock_gettime(int lx_clock, struct lx_timespec *ts);
++int lx_gettimeofday(struct lx_timeval *tv, void *tz);
++int lx_nanosleep(const struct lx_timespec *req, struct lx_timespec *rem);
++int lx_getrlimit64(int resource, void *r);
++int lx_uname(void *u);
++int lx_prctl(int option, unsigned long a2, unsigned long a3, unsigned long a4, unsigned long a5);
++
++/* lso_task.c */
++int *lso_errno_location(void);
++struct lso_tls_index;
++void *lso_tls_get_addr(struct lso_tls_index *ti);
++
++#endif /* LSO_LX_H */
+diff --git a/compiler/linuxso/lso_mem.c b/compiler/linuxso/lso_mem.c
+new file mode 100644
+index 00000000..6e4f8811
+--- /dev/null
++++ b/compiler/linuxso/lso_mem.c
+@@ -0,0 +1,750 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso mmap(2) family on exec memory.
++
++    Ordinary anonymous mappings come from AllocMem (page aligned) and
++    private file mappings are read in with pread; for those, protection
++    changes are accepted and ignored (AROS memory is RWX and the guest
++    only uses mprotect for W^X hygiene).
++
++    Address-space reservations are different: a guest allocator such as
++    PartitionAlloc reserves tens of GiB PROT_NONE up front and commits
++    small pieces later with mprotect(PROT_READ|PROT_WRITE), decommitting
++    them again with madvise(MADV_DONTNEED).  No amount of exec memory
++    satisfies that literally, so a reservation is a window that is backed
++    on demand:
++
++      hosted  - the host kernel does it; the window is a real host mmap
++                and mprotect/madvise/munmap on it go to the host too.
++      native  - the window lives above the kernel's identity map
++                (>= LSO_WINDOW_BASE, nothing else maps there) and each
++                2 MiB chunk is backed the first time it is committed,
++                with physical memory from AllocMem mapped in through
++                KrnMapGlobal.  Decommit zeroes the chunk (the MADV_DONTNEED
++                contract) but keeps it mapped: unmapping would need a TLB
++                shootdown on the other CPUs, and the address space is
++                reused by the allocator soon anyway.
++
++    Windows are handed out from a cursor shared by every process on the
++    machine (a named public semaphore), so no window is ever given out
++    twice per boot: a stale TLB entry left on another CPU by a finished
++    process can then never alias a live window.  At process exit the
++    windows still held are unmapped and their backing chunks returned.
++*/
++
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#include <exec/memory.h>
++#include <exec/semaphores.h>
++#include <aros/symbolsets.h>
++
++#define __HOSTLIB_NOLIBBASE__
++#define __HOSTLIB_LIBBASE HostLibBase
++#include <proto/hostlib.h>
++
++#include <errno.h>
++#include <string.h>
++#include <unistd.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++#define LX_PROT_NONE    0
++#define LX_MAP_SHARED   0x01
++#define LX_MAP_PRIVATE  0x02
++#define LX_MAP_FIXED    0x10
++#define LX_MAP_ANON     0x20
++#define LX_MAP_FAILED   ((void *)-1)
++#define LX_MADV_DONTNEED 4
++
++/* anonymous PROT_NONE mappings at least this big are reservations */
++#define LSO_RESERVE_MIN   (64UL << 20)
++
++/* native windows: 2 MiB chunks (KrnMapGlobal's page size) carved from
++   arenas so that every chunk is physically 2 MiB aligned */
++#define LSO_CHUNK_SHIFT   21
++#define LSO_CHUNK         (1UL << LSO_CHUNK_SHIFT)
++#define LSO_ARENA_CHUNKS  16
++#define LSO_WINDOW_BASE   (2UL << 40)     /* 2 TiB: above the identity map and 64-bit BARs */
++#define LSO_WINDOW_LIMIT  (64UL << 40)    /* 64 TiB: stay well inside canonical space */
++
++struct lso_mapping {
++    struct MinNode node;
++    APTR alloc;
++    size_t allocsize;
++    uintptr_t start;
++    size_t len;
++};
++
++struct lso_reserve {
++    struct MinNode node;
++    uintptr_t start;        /* current extent, trimmed by partial munmap */
++    size_t len;
++    uintptr_t base;         /* the window as handed out (native) */
++    size_t span;
++    int hosted;
++    APTR *chunks;           /* native: backing of chunk i of the window, NULL = uncommitted */
++    unsigned nchunks;
++};
++
++/* one per arena of chunks, so they can be given back at exit */
++struct lso_arena {
++    struct MinNode node;
++    APTR raw;
++    size_t size;
++};
++
++/* the machine-wide window cursor, a named public semaphore */
++#define LSO_WINDOWS_NAME "linuxso.windows"
++struct lso_windows {
++    struct SignalSemaphore sem;
++    char name[sizeof(LSO_WINDOWS_NAME)];
++    uintptr_t next;
++};
++
++static struct MinList mappings;
++static struct MinList reserves;
++static struct MinList arenas;
++static struct SignalSemaphore map_lock;
++static int map_ready;
++
++static struct lso_windows *windows;
++
++/* host mmap family (hosted only) */
++static APTR HostLibBase;
++static void *host_libc;
++static struct {
++    void *(*mmap)(void *, size_t, int, int, int, long);
++    int (*munmap)(void *, size_t);
++    int (*mprotect)(void *, size_t, int);
++    int (*madvise)(void *, size_t, int);
++} host;
++
++/* free chunk pool (native) */
++static APTR *chunk_free;
++static unsigned chunk_free_n, chunk_free_cap;
++static APTR mem_KernelBase;
++
++static void map_init(void)
++{
++    Forbid();
++    if (!map_ready)
++    {
++        NEWLIST(&mappings);
++        NEWLIST(&reserves);
++        NEWLIST(&arenas);
++        InitSemaphore(&map_lock);
++        map_ready = 1;
++    }
++    Permit();
++}
++
++/* the shared window cursor, created by the first process that needs it */
++static struct lso_windows *windows_get(void)
++{
++    struct lso_windows *w;
++
++    if (windows)
++        return windows;
++    Forbid();
++    w = (struct lso_windows *)FindSemaphore(LSO_WINDOWS_NAME);
++    if (!w)
++    {
++        /* outlives this process, so the name lives inside it */
++        w = AllocMem(sizeof(*w), MEMF_PUBLIC | MEMF_CLEAR);
++        if (w)
++        {
++            strcpy(w->name, LSO_WINDOWS_NAME);
++            w->sem.ss_Link.ln_Name = w->name;
++            w->next = LSO_WINDOW_BASE;
++            AddSemaphore(&w->sem);
++        }
++    }
++    Permit();
++    windows = w;
++    return w;
++}
++
++/* ---- hosted: host mmap through hostlib.resource --------------------------- */
++
++static int host_init(void)
++{
++    char *err = NULL;
++
++    if (host.mmap)
++        return 1;
++    if (!HostLibBase)
++        HostLibBase = OpenResource("hostlib.resource");
++    if (!HostLibBase)
++        return 0;
++    host_libc = HostLib_Open("libc.so.6", &err);
++    if (!host_libc)
++    {
++        LSO_DEBUG("HostLib_Open(libc.so.6) failed: %s", err ? err : "?");
++        if (err)
++            HostLib_FreeErrorStr(err);
++        return 0;
++    }
++    host.munmap = HostLib_GetPointer(host_libc, "munmap", NULL);
++    host.mprotect = HostLib_GetPointer(host_libc, "mprotect", NULL);
++    host.madvise = HostLib_GetPointer(host_libc, "madvise", NULL);
++    host.mmap = HostLib_GetPointer(host_libc, "mmap", NULL);
++    if (!host.munmap || !host.mprotect || !host.madvise || !host.mmap)
++    {
++        LSO_DEBUG("host libc lacks the mmap family");
++        host.mmap = NULL;
++        return 0;
++    }
++    return 1;
++}
++
++/* ---- native: on-demand backed windows ------------------------------------- */
++
++static APTR chunk_alloc(void)
++{
++    APTR chunk = NULL;
++
++    Forbid();
++    if (chunk_free_n)
++        chunk = chunk_free[--chunk_free_n];
++    Permit();
++    if (chunk)
++        return chunk;
++
++    /* a new arena: LSO_ARENA_CHUNKS aligned chunks plus alignment slack;
++       the first aligned chunk is returned, the rest go to the pool */
++    {
++        size_t size = (LSO_ARENA_CHUNKS + 1) * LSO_CHUNK;
++        APTR raw = AllocMem(size, MEMF_ANY | MEMF_CLEAR);
++        struct lso_arena *arena;
++        uintptr_t first, i;
++
++        if (!raw)
++            return NULL;
++        arena = AllocMem(sizeof(*arena), MEMF_ANY);
++        if (!arena)
++        {
++            FreeMem(raw, size);
++            return NULL;
++        }
++        arena->raw = raw;
++        arena->size = size;
++        first = ((uintptr_t)raw + LSO_CHUNK - 1) & ~(LSO_CHUNK - 1);
++
++        Forbid();
++        if (chunk_free_n + LSO_ARENA_CHUNKS - 1 > chunk_free_cap)
++        {
++            unsigned cap = chunk_free_cap ? chunk_free_cap * 2 : 64;
++            APTR *n;
++            while (cap < chunk_free_n + LSO_ARENA_CHUNKS - 1)
++                cap *= 2;
++            n = AllocMem(cap * sizeof(APTR), MEMF_ANY);
++            if (!n)
++            {
++                Permit();
++                FreeMem(arena, sizeof(*arena));
++                FreeMem(raw, size);
++                return NULL;
++            }
++            if (chunk_free)
++            {
++                memcpy(n, chunk_free, chunk_free_n * sizeof(APTR));
++                FreeMem(chunk_free, chunk_free_cap * sizeof(APTR));
++            }
++            chunk_free = n;
++            chunk_free_cap = cap;
++        }
++        for (i = 1; i < LSO_ARENA_CHUNKS; i++)
++            chunk_free[chunk_free_n++] = (APTR)(first + i * LSO_CHUNK);
++        AddTail((struct List *)&arenas, (struct Node *)&arena->node);
++        Permit();
++        LSO_DEBUG("chunk arena %p (+%lu MiB)", raw, (unsigned long)(size >> 20));
++        return (APTR)first;
++    }
++}
++
++static void chunk_release(APTR chunk)
++{
++    /* the chunk stays mapped in its window; it only returns to the pool
++       when the whole window goes away, and then it is zeroed first */
++    memset(chunk, 0, LSO_CHUNK);
++    Forbid();
++    if (chunk_free_n < chunk_free_cap)
++        chunk_free[chunk_free_n++] = chunk;
++    Permit();
++}
++
++/* back every chunk of the window touching [addr, addr+len) */
++static int window_commit(struct lso_reserve *r, uintptr_t addr, size_t len)
++{
++    uintptr_t first = (addr - r->base) >> LSO_CHUNK_SHIFT;
++    uintptr_t last = (addr + len - 1 - r->base) >> LSO_CHUNK_SHIFT;
++    uintptr_t i;
++    APTR KernelBase;
++
++    if (!mem_KernelBase)
++        mem_KernelBase = OpenResource("kernel.resource");
++    KernelBase = mem_KernelBase;
++    if (!KernelBase)
++        return -1;
++
++    for (i = first; i <= last && i < r->nchunks; i++)
++    {
++        APTR chunk, phys;
++        void *virt = (void *)(r->base + (i << LSO_CHUNK_SHIFT));
++
++        if (r->chunks[i])
++            continue;
++        chunk = chunk_alloc();
++        if (!chunk)
++        {
++            LSO_DEBUG("window %p: no memory for chunk %lu", (void *)r->base, (unsigned long)i);
++            return -1;
++        }
++        phys = KrnVirtualToPhysical(chunk);
++        if (KrnMapGlobal(virt, phys, LSO_CHUNK, MAP_Readable | MAP_Writable | MAP_Executable) != 0)
++        {
++            LSO_DEBUG("window %p: KrnMapGlobal(%p <- %p) failed", (void *)r->base, virt, phys);
++            chunk_release(chunk);
++            return -1;
++        }
++        r->chunks[i] = chunk;
++    }
++    return 0;
++}
++
++/* MADV_DONTNEED: the pages read as zero afterwards */
++static void window_discard(struct lso_reserve *r, uintptr_t addr, size_t len)
++{
++    uintptr_t end = addr + len, cur = addr;
++
++    while (cur < end)
++    {
++        uintptr_t i = (cur - r->base) >> LSO_CHUNK_SHIFT;
++        uintptr_t cend = r->base + ((i + 1) << LSO_CHUNK_SHIFT);
++        size_t n = (cend < end ? cend : end) - cur;
++
++        if (i < r->nchunks && r->chunks[i])
++            memset((void *)cur, 0, n);
++        cur += n;
++    }
++}
++
++static void *reserve_alloc(size_t len, int prot, int flags)
++{
++    struct lso_reserve *r = AllocMem(sizeof(*r), MEMF_ANY | MEMF_CLEAR);
++
++    if (!r)
++    {
++        lso_set_errno(LX_ENOMEM);
++        return LX_MAP_FAILED;
++    }
++
++    if (host_init())
++    {
++        void *p;
++
++        HostLib_Lock();
++        p = host.mmap(NULL, len, prot, flags & ~LX_MAP_FIXED, -1, 0);
++        HostLib_Unlock();
++        if (p == LX_MAP_FAILED)
++        {
++            FreeMem(r, sizeof(*r));
++            LSO_DEBUG("host mmap(%lx) failed", (unsigned long)len);
++            lso_set_errno(LX_ENOMEM);
++            return LX_MAP_FAILED;
++        }
++        r->hosted = 1;
++        r->start = r->base = (uintptr_t)p;
++        r->len = r->span = len;
++        LSO_DEBUG("reserve(%lx) -> host %p", (unsigned long)len, p);
++    }
++    else
++    {
++        /* hand out windows aligned to their own size (up to 64 GiB) so an
++           allocator's aligned-reservation dance succeeds first time */
++        size_t span = (len + LSO_CHUNK - 1) & ~(LSO_CHUNK - 1);
++        size_t align = LSO_CHUNK;
++        struct lso_windows *w = windows_get();
++        uintptr_t base;
++
++        if (!w)
++        {
++            FreeMem(r, sizeof(*r));
++            lso_set_errno(LX_ENOMEM);
++            return LX_MAP_FAILED;
++        }
++        while (align < span && align < (64UL << 30))
++            align <<= 1;
++
++        ObtainSemaphore(&w->sem);
++        base = (w->next + align - 1) & ~(align - 1);
++        if (base + span > LSO_WINDOW_LIMIT)
++        {
++            ReleaseSemaphore(&w->sem);
++            FreeMem(r, sizeof(*r));
++            LSO_DEBUG("reserve(%lx): window space exhausted", (unsigned long)len);
++            lso_set_errno(LX_ENOMEM);
++            return LX_MAP_FAILED;
++        }
++        w->next = base + span;
++        ReleaseSemaphore(&w->sem);
++
++        r->nchunks = span >> LSO_CHUNK_SHIFT;
++        r->chunks = AllocMem(r->nchunks * sizeof(APTR), MEMF_ANY | MEMF_CLEAR);
++        if (!r->chunks)
++        {
++            FreeMem(r, sizeof(*r));
++            lso_set_errno(LX_ENOMEM);
++            return LX_MAP_FAILED;
++        }
++        r->start = r->base = base;
++        r->len = r->span = span;
++        LSO_DEBUG("reserve(%lx) -> window %p (%u chunks)", (unsigned long)len, (void *)base, r->nchunks);
++
++        if (prot != LX_PROT_NONE && window_commit(r, base, span) != 0)
++        {
++            FreeMem(r->chunks, r->nchunks * sizeof(APTR));
++            FreeMem(r, sizeof(*r));
++            lso_set_errno(LX_ENOMEM);
++            return LX_MAP_FAILED;
++        }
++    }
++
++    ObtainSemaphore(&map_lock);
++    AddHead((struct List *)&reserves, (struct Node *)&r->node);
++    ReleaseSemaphore(&map_lock);
++    return (void *)r->start;
++}
++
++/* the reservation containing [addr, addr+len), or NULL; map_lock held */
++static struct lso_reserve *reserve_find(uintptr_t addr, size_t len)
++{
++    struct lso_reserve *r;
++
++    ForeachNode(&reserves, r)
++        if (addr >= r->start && addr + len <= r->start + r->len)
++            return r;
++    return NULL;
++}
++
++static void reserve_free(struct lso_reserve *r)
++{
++    if (r->hosted)
++    {
++        HostLib_Lock();
++        host.munmap((void *)r->start, r->len);
++        HostLib_Unlock();
++    }
++    else
++    {
++        unsigned i;
++        for (i = 0; i < r->nchunks; i++)
++            if (r->chunks[i])
++                chunk_release(r->chunks[i]);
++        FreeMem(r->chunks, r->nchunks * sizeof(APTR));
++    }
++    FreeMem(r, sizeof(*r));
++}
++
++/* ---- mmap ----------------------------------------------------------------- */
++
++void *lso_mmap(void *addr, size_t len, int prot, int flags, int fd, int64_t off)
++{
++    struct lso_mapping *m;
++    size_t rlen = (len + LSO_PAGE - 1) & ~(LSO_PAGE - 1);
++
++    map_init();
++    if (!len)
++    {
++        lso_set_errno(LX_EINVAL);
++        return LX_MAP_FAILED;
++    }
++    if ((flags & LX_MAP_FIXED) && addr)
++    {
++        /* MAP_FIXED over our own anonymous mapping is what a guest allocator
++           does to commit/decommit; the memory is there already */
++        struct lso_mapping *n;
++        struct lso_reserve *r;
++        int inside = 0;
++
++        ObtainSemaphoreShared(&map_lock);
++        r = reserve_find((uintptr_t)addr, rlen);
++        ForeachNode(&mappings, n)
++        {
++            if ((uintptr_t)addr >= n->start && (uintptr_t)addr + rlen <= n->start + n->len)
++            {
++                inside = 1;
++                break;
++            }
++        }
++        ReleaseSemaphore(&map_lock);
++        if (r && (flags & LX_MAP_ANON))
++        {
++            if (r->hosted)
++            {
++                void *p;
++                HostLib_Lock();
++                p = host.mmap(addr, rlen, prot, flags, -1, 0);
++                HostLib_Unlock();
++                LSO_DEBUG("mmap(FIXED %p, %lx) in host reservation -> %p", addr, (unsigned long)rlen, p);
++                if (p == LX_MAP_FAILED)
++                    lso_set_errno(LX_ENOMEM);
++                return p;
++            }
++            if (prot != LX_PROT_NONE && window_commit(r, (uintptr_t)addr, rlen) != 0)
++            {
++                lso_set_errno(LX_ENOMEM);
++                return LX_MAP_FAILED;
++            }
++            window_discard(r, (uintptr_t)addr, rlen);
++            LSO_DEBUG("mmap(FIXED %p, %lx) in window", addr, (unsigned long)rlen);
++            return addr;
++        }
++        if (inside && (flags & LX_MAP_ANON))
++        {
++            memset(addr, 0, rlen);
++            LSO_DEBUG("mmap(FIXED %p, %lx) inside existing mapping", addr, (unsigned long)rlen);
++            return addr;
++        }
++        LSO_DEBUG("mmap(FIXED %p, %lx) refused", addr, (unsigned long)rlen);
++        lso_set_errno(LX_EINVAL);
++        return LX_MAP_FAILED;
++    }
++    if (!(flags & LX_MAP_ANON) && (flags & LX_MAP_SHARED))
++    {
++        LSO_DEBUG("mmap(fd %d, MAP_SHARED) unsupported", fd);
++        lso_set_errno(LX_ENOTSUP);
++        return LX_MAP_FAILED;
++    }
++    if ((flags & LX_MAP_ANON) && prot == LX_PROT_NONE && rlen >= LSO_RESERVE_MIN)
++        return reserve_alloc(rlen, prot, flags);
++
++    m = AllocMem(sizeof(*m), MEMF_ANY | MEMF_CLEAR);
++    if (!m)
++    {
++        lso_set_errno(LX_ENOMEM);
++        return LX_MAP_FAILED;
++    }
++    m->allocsize = rlen + LSO_PAGE;
++    m->alloc = AllocMem(m->allocsize, MEMF_ANY | MEMF_CLEAR);
++    if (!m->alloc)
++    {
++        FreeMem(m, sizeof(*m));
++        LSO_DEBUG("mmap(%lx) out of memory", (unsigned long)rlen);
++        lso_set_errno(LX_ENOMEM);
++        return LX_MAP_FAILED;
++    }
++    m->start = ((uintptr_t)m->alloc + LSO_PAGE - 1) & ~(LSO_PAGE - 1);
++    m->len = rlen;
++
++    if (!(flags & LX_MAP_ANON))
++    {
++        size_t done = 0;
++        while (done < len)
++        {
++            ssize_t n = pread(fd, (char *)m->start + done, len - done, (off_t)(off + done));
++            if (n < 0)
++            {
++                lso_set_errno_from_aros();
++                FreeMem(m->alloc, m->allocsize);
++                FreeMem(m, sizeof(*m));
++                return LX_MAP_FAILED;
++            }
++            if (n == 0)
++                break;
++            done += n;
++        }
++        LSO_DEBUG("mmap(fd %d, off %lx, %lx) -> %p (%lu bytes read)", fd, (unsigned long)off,
++                  (unsigned long)rlen, (void *)m->start, (unsigned long)done);
++    }
++    else
++        LSO_DEBUG("mmap(anon %lx, prot %x, flags %x) -> %p", (unsigned long)rlen, prot, flags, (void *)m->start);
++
++    ObtainSemaphore(&map_lock);
++    AddHead((struct List *)&mappings, (struct Node *)&m->node);
++    ReleaseSemaphore(&map_lock);
++    return (void *)m->start;
++}
++
++int lso_munmap(void *addr, size_t len)
++{
++    struct lso_mapping *m, *found = NULL;
++    struct lso_reserve *r, *rfree = NULL;
++    uintptr_t a = (uintptr_t)addr;
++    size_t rlen = (len + LSO_PAGE - 1) & ~(LSO_PAGE - 1);
++
++    map_init();
++    ObtainSemaphore(&map_lock);
++    r = reserve_find(a, rlen);
++    if (r)
++    {
++        if (a == r->start && rlen >= r->len)
++        {
++            Remove((struct Node *)&r->node);
++            rfree = r;
++        }
++        else if (a == r->start)
++        {
++            /* head trim (an allocator aligning its reservation) */
++            r->start += rlen;
++            r->len -= rlen;
++        }
++        else if (a + rlen == r->start + r->len)
++            r->len -= rlen;       /* tail trim */
++        /* a hole in the middle: the range stays reserved, nothing lost */
++        if (!rfree && r->hosted)
++        {
++            HostLib_Lock();
++            host.munmap(addr, rlen);
++            HostLib_Unlock();
++        }
++        ReleaseSemaphore(&map_lock);
++        LSO_DEBUG("munmap(%p, %lx) %s reservation", addr, (unsigned long)rlen, rfree ? "frees" : "trims");
++        if (rfree)
++            reserve_free(rfree);
++        return 0;
++    }
++    ForeachNode(&mappings, m)
++    {
++        if (m->start == a)
++        {
++            found = m;
++            break;
++        }
++    }
++    if (found)
++    {
++        if (len < found->len)
++        {
++            /* partial unmap at the front: keep the block, nothing to give back */
++            LSO_DEBUG("munmap(%p, %lx) partial of %lx: kept", addr, (unsigned long)len, (unsigned long)found->len);
++            found = NULL;
++        }
++        else
++            Remove((struct Node *)&found->node);
++    }
++    ReleaseSemaphore(&map_lock);
++
++    if (found)
++    {
++        LSO_DEBUG("munmap(%p, %lx)", addr, (unsigned long)len);
++        FreeMem(found->alloc, found->allocsize);
++        FreeMem(found, sizeof(*found));
++        return 0;
++    }
++    /* unmapping a tail or the middle of a mapping: accepted, memory stays */
++    return 0;
++}
++
++void *lx_mmap64(void *addr, size_t len, int prot, int flags, int fd, int64_t off)
++{
++    return lso_mmap(addr, len, prot, flags, fd, off);
++}
++
++int lx_munmap(void *addr, size_t len)
++{
++    return lso_munmap(addr, len);
++}
++
++int lx_mprotect(void *addr, size_t len, int prot)
++{
++    struct lso_reserve *r;
++    int ret = 0;
++
++    map_init();
++    ObtainSemaphore(&map_lock);
++    r = reserve_find((uintptr_t)addr, len);
++    if (r)
++    {
++        if (r->hosted)
++        {
++            HostLib_Lock();
++            ret = host.mprotect(addr, len, prot);
++            HostLib_Unlock();
++        }
++        else if (prot != LX_PROT_NONE)
++            ret = window_commit(r, (uintptr_t)addr, len);
++    }
++    ReleaseSemaphore(&map_lock);
++    if (ret != 0)
++    {
++        LSO_DEBUG("mprotect(%p, %lx, %x) failed", addr, (unsigned long)len, prot);
++        lso_set_errno(LX_ENOMEM);
++        return -1;
++    }
++    return 0;
++}
++
++int lx_madvise(void *addr, size_t len, int advice)
++{
++    struct lso_reserve *r;
++
++    map_init();
++    ObtainSemaphore(&map_lock);
++    r = reserve_find((uintptr_t)addr, len);
++    if (r)
++    {
++        if (r->hosted)
++        {
++            HostLib_Lock();
++            host.madvise(addr, len, advice);
++            HostLib_Unlock();
++        }
++        else if (advice == LX_MADV_DONTNEED)
++            window_discard(r, (uintptr_t)addr, len);
++    }
++    ReleaseSemaphore(&map_lock);
++    return 0;
++}
++
++/* ---- process exit --------------------------------------------------------- */
++
++/*
++ * Whatever the guest still holds goes back: windows are unmapped (the
++ * present bit cleared; the address range is never handed out again this
++ * boot, so no shootdown is needed) before their arenas return to exec.
++ */
++static void lso_mem_exit(void)
++{
++    struct lso_reserve *r, *r2;
++    struct lso_mapping *m, *m2;
++    struct lso_arena *a, *a2;
++    APTR KernelBase = mem_KernelBase;
++
++    if (!map_ready)
++        return;
++
++    ForeachNodeSafe(&reserves, r, r2)
++    {
++        if (!r->hosted && KernelBase)
++        {
++            unsigned i;
++            for (i = 0; i < r->nchunks; i++)
++                if (r->chunks[i])
++                    KrnMapGlobal((void *)(r->base + (i << LSO_CHUNK_SHIFT)), NULL, LSO_CHUNK, 0);
++        }
++        Remove((struct Node *)&r->node);
++        reserve_free(r);
++    }
++    ForeachNodeSafe(&mappings, m, m2)
++    {
++        Remove((struct Node *)&m->node);
++        if (m->alloc)
++            FreeMem(m->alloc, m->allocsize);
++        FreeMem(m, sizeof(*m));
++    }
++    ForeachNodeSafe(&arenas, a, a2)
++    {
++        Remove((struct Node *)&a->node);
++        FreeMem(a->raw, a->size);
++        FreeMem(a, sizeof(*a));
++    }
++    if (chunk_free)
++        FreeMem(chunk_free, chunk_free_cap * sizeof(APTR));
++    chunk_free = NULL;
++    chunk_free_n = chunk_free_cap = 0;
++}
++
++ADD2EXIT(lso_mem_exit, 0);
+diff --git a/compiler/linuxso/lso_pthread.c b/compiler/linuxso/lso_pthread.c
+new file mode 100644
+index 00000000..5a9718ec
+--- /dev/null
++++ b/compiler/linuxso/lso_pthread.c
+@@ -0,0 +1,605 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso glibc pthread/semaphore ABI on top of the AROS pthread linklib.
++
++    glibc's synchronisation objects are much smaller than AROS's (mutex 40
++    vs 248 bytes, cond 48 vs 264, rwlock 56 vs 232, sem_t 32 vs 552), so
++    every guest object carries a pointer to a heap-allocated AROS object in
++    its first word.  Static initialisers are all-zero on glibc; the pointer
++    is created on first use under one global semaphore.
++*/
++
++#include <proto/exec.h>
++#include <exec/memory.h>
++
++#include <errno.h>
++#include <pthread.h>
++#include <semaphore.h>
++#include <string.h>
++#include <time.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++/* Linux values */
++#define LX_CLOCK_REALTIME  0
++#define LX_CLOCK_MONOTONIC 1
++#define LX_PTHREAD_CREATE_DETACHED 1
++#define LX_CPU_SETSIZE 1024
++
++
++static struct SignalSemaphore lazy_lock;
++static int lazy_lock_ready;
++
++static void lazy_init(void)
++{
++    Forbid();
++    if (!lazy_lock_ready)
++    {
++        InitSemaphore(&lazy_lock);
++        lazy_lock_ready = 1;
++    }
++    Permit();
++}
++
++/* ---- guest object layouts ------------------------------------------------ */
++
++struct lx_mutex {            /* 40 bytes on glibc */
++    pthread_mutex_t *impl;
++    uint32_t magic;
++    uint32_t pad;
++    int kind;                /* glibc __kind offset 16: static recursive initialiser sets 1 */
++    int pad2[3];
++};
++
++struct lx_cond {             /* 48 bytes */
++    pthread_cond_t *impl;
++    uint32_t magic;
++    int clock;               /* Linux clock id, set by pthread_cond_init */
++    uint64_t pad[4];
++};
++
++struct lx_rwlock {           /* 56 bytes */
++    pthread_rwlock_t *impl;
++    uint32_t magic;
++    uint32_t pad;
++    uint64_t pad2[5];
++};
++
++struct lx_sem {              /* 32 bytes */
++    sem_t *impl;
++    uint32_t magic;
++    uint32_t pad;
++    uint64_t pad2[2];
++};
++
++struct lx_attr {             /* 56 bytes */
++    uint32_t magic;
++    int detachstate;
++    size_t stacksize;
++    uint64_t pad[5];
++};
++
++struct lx_mutexattr { int kind; };
++struct lx_condattr { int value; };   /* (clock << 1) | 1 */
++
++#define LX_MAGIC_MUTEX 0x4d4f534c
++#define LX_MAGIC_COND  0x434f534c
++#define LX_MAGIC_RW    0x574f534c
++#define LX_MAGIC_SEM   0x534f534c
++#define LX_MAGIC_ATTR  0x414f534c
++
++/* ---- lazy creation -------------------------------------------------------- */
++
++static pthread_mutex_t *mutex_impl(struct lx_mutex *m)
++{
++    pthread_mutex_t *impl = *(pthread_mutex_t *volatile *)&m->impl;
++
++    if (impl)
++        return impl;
++    lazy_init();
++    ObtainSemaphore(&lazy_lock);
++    impl = m->impl;
++    if (!impl)
++    {
++        impl = AllocMem(sizeof(*impl), MEMF_ANY | MEMF_CLEAR);
++        if (impl)
++        {
++            pthread_mutexattr_t a;
++            pthread_mutexattr_init(&a);
++            pthread_mutexattr_settype(&a, m->kind == 1 ? PTHREAD_MUTEX_RECURSIVE :
++                                          m->kind == 2 ? PTHREAD_MUTEX_ERRORCHECK : PTHREAD_MUTEX_NORMAL);
++            pthread_mutex_init(impl, &a);
++            pthread_mutexattr_destroy(&a);
++            m->magic = LX_MAGIC_MUTEX;
++            __sync_synchronize();
++            m->impl = impl;
++        }
++    }
++    ReleaseSemaphore(&lazy_lock);
++    return impl;
++}
++
++static pthread_cond_t *cond_impl(struct lx_cond *c)
++{
++    pthread_cond_t *impl = *(pthread_cond_t *volatile *)&c->impl;
++
++    if (impl)
++        return impl;
++    lazy_init();
++    ObtainSemaphore(&lazy_lock);
++    impl = c->impl;
++    if (!impl)
++    {
++        impl = AllocMem(sizeof(*impl), MEMF_ANY | MEMF_CLEAR);
++        if (impl)
++        {
++            pthread_cond_init(impl, NULL);
++            c->magic = LX_MAGIC_COND;
++            __sync_synchronize();
++            c->impl = impl;
++        }
++    }
++    ReleaseSemaphore(&lazy_lock);
++    return impl;
++}
++
++static pthread_rwlock_t *rw_impl(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = *(pthread_rwlock_t *volatile *)&r->impl;
++
++    if (impl)
++        return impl;
++    lazy_init();
++    ObtainSemaphore(&lazy_lock);
++    impl = r->impl;
++    if (!impl)
++    {
++        impl = AllocMem(sizeof(*impl), MEMF_ANY | MEMF_CLEAR);
++        if (impl)
++        {
++            pthread_rwlock_init(impl, NULL);
++            r->magic = LX_MAGIC_RW;
++            __sync_synchronize();
++            r->impl = impl;
++        }
++    }
++    ReleaseSemaphore(&lazy_lock);
++    return impl;
++}
++
++/* ---- mutex ---------------------------------------------------------------- */
++
++int lx_pthread_mutexattr_init(struct lx_mutexattr *a)    { a->kind = 0; return 0; }
++int lx_pthread_mutexattr_destroy(struct lx_mutexattr *a) { (void)a; return 0; }
++int lx_pthread_mutexattr_settype(struct lx_mutexattr *a, int kind) { a->kind = kind; return 0; }
++
++int lx_pthread_mutex_init(struct lx_mutex *m, const struct lx_mutexattr *a)
++{
++    memset(m, 0, sizeof(*m));
++    m->kind = a ? a->kind : 0;
++    return mutex_impl(m) ? 0 : LX_ENOMEM;
++}
++
++int lx_pthread_mutex_destroy(struct lx_mutex *m)
++{
++    pthread_mutex_t *impl = m->impl;
++
++    if (impl)
++    {
++        m->impl = NULL;
++        pthread_mutex_destroy(impl);
++        FreeMem(impl, sizeof(*impl));
++    }
++    m->magic = 0;
++    return 0;
++}
++
++int lx_pthread_mutex_lock(struct lx_mutex *m)
++{
++    pthread_mutex_t *impl = mutex_impl(m);
++    return impl ? lso_pthread_ret(pthread_mutex_lock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_mutex_trylock(struct lx_mutex *m)
++{
++    pthread_mutex_t *impl = mutex_impl(m);
++    return impl ? lso_pthread_ret(pthread_mutex_trylock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_mutex_unlock(struct lx_mutex *m)
++{
++    pthread_mutex_t *impl = m->impl;
++    return impl ? lso_pthread_ret(pthread_mutex_unlock(impl)) : LX_EPERM;
++}
++
++/* ---- condition variables -------------------------------------------------- */
++
++int lx_pthread_condattr_init(struct lx_condattr *a)    { a->value = 1; return 0; }
++int lx_pthread_condattr_destroy(struct lx_condattr *a) { (void)a; return 0; }
++int lx_pthread_condattr_setclock(struct lx_condattr *a, int clock)
++{
++    if (clock != LX_CLOCK_REALTIME && clock != LX_CLOCK_MONOTONIC)
++        return LX_EINVAL;
++    a->value = (clock << 1) | 1;
++    return 0;
++}
++
++int lx_pthread_cond_init(struct lx_cond *c, const struct lx_condattr *a)
++{
++    memset(c, 0, sizeof(*c));
++    c->clock = a ? (a->value >> 1) : LX_CLOCK_REALTIME;
++    return cond_impl(c) ? 0 : LX_ENOMEM;
++}
++
++int lx_pthread_cond_destroy(struct lx_cond *c)
++{
++    pthread_cond_t *impl = c->impl;
++
++    if (impl)
++    {
++        c->impl = NULL;
++        pthread_cond_destroy(impl);
++        FreeMem(impl, sizeof(*impl));
++    }
++    c->magic = 0;
++    return 0;
++}
++
++int lx_pthread_cond_signal(struct lx_cond *c)
++{
++    pthread_cond_t *impl = cond_impl(c);
++    return impl ? lso_pthread_ret(pthread_cond_signal(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_cond_broadcast(struct lx_cond *c)
++{
++    pthread_cond_t *impl = cond_impl(c);
++    return impl ? lso_pthread_ret(pthread_cond_broadcast(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_cond_wait(struct lx_cond *c, struct lx_mutex *m)
++{
++    pthread_cond_t *impl = cond_impl(c);
++    pthread_mutex_t *mi = mutex_impl(m);
++
++    if (!impl || !mi)
++        return LX_ENOMEM;
++    return lso_pthread_ret(pthread_cond_wait(impl, mi));
++}
++
++int lx_pthread_cond_timedwait(struct lx_cond *c, struct lx_mutex *m, const struct lx_timespec *abstime)
++{
++    pthread_cond_t *impl = cond_impl(c);
++    pthread_mutex_t *mi = mutex_impl(m);
++    struct timespec now, rel;
++
++    if (!impl || !mi)
++        return LX_ENOMEM;
++    if (!abstime)
++        return lso_pthread_ret(pthread_cond_wait(impl, mi));
++    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
++        return LX_EINVAL;
++
++    /* the guest's abstime is on the cond's clock; AROS wants a relative delay */
++    lso_clock_gettime(c->clock, &now);
++    rel.tv_sec = (time_t)(abstime->tv_sec - now.tv_sec);
++    rel.tv_nsec = abstime->tv_nsec - now.tv_nsec;
++    if (rel.tv_nsec < 0)
++    {
++        rel.tv_nsec += 1000000000L;
++        rel.tv_sec--;
++    }
++    if (rel.tv_sec < 0)
++        return LX_ETIMEDOUT;
++    return lso_pthread_ret(pthread_cond_timedwait_relative_np(impl, mi, &rel));
++}
++
++/* ---- rwlock --------------------------------------------------------------- */
++
++int lx_pthread_rwlock_init(struct lx_rwlock *r, const void *attr)
++{
++    (void)attr;
++    memset(r, 0, sizeof(*r));
++    return rw_impl(r) ? 0 : LX_ENOMEM;
++}
++
++int lx_pthread_rwlock_destroy(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = r->impl;
++
++    if (impl)
++    {
++        r->impl = NULL;
++        pthread_rwlock_destroy(impl);
++        FreeMem(impl, sizeof(*impl));
++    }
++    r->magic = 0;
++    return 0;
++}
++
++int lx_pthread_rwlock_rdlock(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = rw_impl(r);
++    return impl ? lso_pthread_ret(pthread_rwlock_rdlock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_rwlock_wrlock(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = rw_impl(r);
++    return impl ? lso_pthread_ret(pthread_rwlock_wrlock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_rwlock_tryrdlock(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = rw_impl(r);
++    return impl ? lso_pthread_ret(pthread_rwlock_tryrdlock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_rwlock_trywrlock(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = rw_impl(r);
++    return impl ? lso_pthread_ret(pthread_rwlock_trywrlock(impl)) : LX_ENOMEM;
++}
++
++int lx_pthread_rwlock_unlock(struct lx_rwlock *r)
++{
++    pthread_rwlock_t *impl = r->impl;
++    return impl ? lso_pthread_ret(pthread_rwlock_unlock(impl)) : LX_EPERM;
++}
++
++/* ---- once ----------------------------------------------------------------- */
++
++static pthread_mutex_t once_lock;
++static int once_lock_ready;
++
++int lx_pthread_once(int *once, void (*init_routine)(void))
++{
++    if (*(volatile int *)once == 2)
++        return 0;
++    Forbid();
++    if (!once_lock_ready)
++    {
++        pthread_mutexattr_t a;
++        pthread_mutexattr_init(&a);
++        pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
++        pthread_mutex_init(&once_lock, &a);
++        pthread_mutexattr_destroy(&a);
++        once_lock_ready = 1;
++    }
++    Permit();
++    pthread_mutex_lock(&once_lock);
++    if (*once != 2)
++    {
++        *once = 1;
++        init_routine();
++        __sync_synchronize();
++        *once = 2;
++    }
++    pthread_mutex_unlock(&once_lock);
++    return 0;
++}
++
++/* ---- keys ----------------------------------------------------------------- */
++
++int lx_pthread_key_create(unsigned int *key, void (*dtor)(void *))
++{
++    pthread_key_t k;
++    int r = pthread_key_create(&k, dtor);
++    if (r == 0)
++        *key = k;
++    return lso_pthread_ret(r);
++}
++
++int lx_pthread_key_delete(unsigned int key)
++{
++    return lso_pthread_ret(pthread_key_delete((pthread_key_t)key));
++}
++
++void *lx_pthread_getspecific(unsigned int key)
++{
++    return pthread_getspecific((pthread_key_t)key);
++}
++
++int lx_pthread_setspecific(unsigned int key, const void *value)
++{
++    return lso_pthread_ret(pthread_setspecific((pthread_key_t)key, value));
++}
++
++/* ---- attributes ----------------------------------------------------------- */
++
++int lx_pthread_attr_init(struct lx_attr *a)
++{
++    memset(a, 0, sizeof(*a));
++    a->magic = LX_MAGIC_ATTR;
++    return 0;
++}
++
++int lx_pthread_attr_destroy(struct lx_attr *a)    { a->magic = 0; return 0; }
++int lx_pthread_attr_setdetachstate(struct lx_attr *a, int s) { a->detachstate = s; return 0; }
++int lx_pthread_attr_getdetachstate(const struct lx_attr *a, int *s) { *s = a->detachstate; return 0; }
++int lx_pthread_attr_setstacksize(struct lx_attr *a, size_t s)
++{
++    if (s < 16384)
++        return LX_EINVAL;
++    a->stacksize = s;
++    return 0;
++}
++int lx_pthread_attr_getstacksize(const struct lx_attr *a, size_t *s) { *s = a->stacksize; return 0; }
++
++/* ---- threads -------------------------------------------------------------- */
++
++struct lx_thread_start {
++    void *(*fn)(void *);
++    void *arg;
++};
++
++static void *thread_trampoline(void *p)
++{
++    struct lx_thread_start s = *(struct lx_thread_start *)p;
++    void *ret;
++
++    FreeMem(p, sizeof(s));
++    ret = s.fn(s.arg);
++    lso_task_free(FindTask(NULL));
++    return ret;
++}
++
++int lx_pthread_create(unsigned long *thread, const struct lx_attr *a,
++                      void *(*fn)(void *), void *arg)
++{
++    pthread_attr_t attr;
++    pthread_t t = 0;
++    struct lx_thread_start *s;
++    int r;
++
++    s = AllocMem(sizeof(*s), MEMF_ANY);
++    if (!s)
++        return LX_EAGAIN;
++    s->fn = fn;
++    s->arg = arg;
++
++    pthread_attr_init(&attr);
++    if (a && a->magic == LX_MAGIC_ATTR)
++    {
++        if (a->stacksize)
++            pthread_attr_setstacksize(&attr, a->stacksize);
++        if (a->detachstate == LX_PTHREAD_CREATE_DETACHED)
++            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
++    }
++    r = pthread_create(&t, &attr, thread_trampoline, s);
++    pthread_attr_destroy(&attr);
++    if (r)
++    {
++        FreeMem(s, sizeof(*s));
++        return lso_pthread_ret(r);
++    }
++    *thread = t;
++    LSO_DEBUG("pthread_create -> %lu (stack %lu)", (unsigned long)t,
++              (unsigned long)((a && a->magic == LX_MAGIC_ATTR) ? a->stacksize : 0));
++    return 0;
++}
++
++int lx_pthread_join(unsigned long thread, void **ret)
++{
++    return lso_pthread_ret(pthread_join((pthread_t)thread, ret));
++}
++
++int lx_pthread_detach(unsigned long thread)
++{
++    return lso_pthread_ret(pthread_detach((pthread_t)thread));
++}
++
++unsigned long lx_pthread_self(void)
++{
++    return (unsigned long)pthread_self();
++}
++
++int lx_pthread_equal(unsigned long a, unsigned long b)
++{
++    return a == b;
++}
++
++void lx_pthread_exit(void *ret)
++{
++    lso_task_free(FindTask(NULL));
++    pthread_exit(ret);
++}
++
++int lx_pthread_setname_np(unsigned long thread, const char *name)
++{
++    return lso_pthread_ret(pthread_setname_np((pthread_t)thread, name));
++}
++
++int lx_pthread_getaffinity_np(unsigned long thread, size_t setsize, unsigned long *set)
++{
++    unsigned int n = lso_ncpus(), i;
++
++    (void)thread;
++    if (setsize < sizeof(unsigned long))
++        return LX_EINVAL;
++    memset(set, 0, setsize);
++    for (i = 0; i < n && i < setsize * 8; i++)
++        set[i / 64] |= 1UL << (i % 64);
++    return 0;
++}
++
++int lx_sched_getaffinity(int pid, size_t setsize, unsigned long *set)
++{
++    (void)pid;
++    if (lx_pthread_getaffinity_np(0, setsize, set))
++    {
++        lso_set_errno(LX_EINVAL);
++        return -1;
++    }
++    return 0;
++}
++
++int lx_sched_cpucount(size_t setsize, const unsigned long *set)
++{
++    size_t i;
++    int n = 0;
++
++    for (i = 0; i < setsize / sizeof(unsigned long); i++)
++        n += __builtin_popcountl(set[i]);
++    return n;
++}
++
++/* ---- semaphores ----------------------------------------------------------- */
++
++int lx_sem_init(struct lx_sem *s, int pshared, unsigned int value)
++{
++    sem_t *impl;
++
++    (void)pshared;
++    memset(s, 0, sizeof(*s));
++    impl = AllocMem(sizeof(*impl), MEMF_ANY | MEMF_CLEAR);
++    if (!impl)
++    {
++        lso_set_errno(LX_ENOMEM);
++        return -1;
++    }
++    if (sem_init(impl, 0, value))
++    {
++        FreeMem(impl, sizeof(*impl));
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    s->impl = impl;
++    s->magic = LX_MAGIC_SEM;
++    return 0;
++}
++
++int lx_sem_destroy(struct lx_sem *s)
++{
++    sem_t *impl = s->impl;
++
++    if (impl)
++    {
++        s->impl = NULL;
++        sem_destroy(impl);
++        FreeMem(impl, sizeof(*impl));
++    }
++    s->magic = 0;
++    return 0;
++}
++
++static int sem_call(struct lx_sem *s, int (*fn)(sem_t *))
++{
++    if (!s->impl)
++    {
++        lso_set_errno(LX_EINVAL);
++        return -1;
++    }
++    if (fn(s->impl))
++    {
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    return 0;
++}
++
++int lx_sem_wait(struct lx_sem *s)    { return sem_call(s, sem_wait); }
++int lx_sem_trywait(struct lx_sem *s) { return sem_call(s, sem_trywait); }
++int lx_sem_post(struct lx_sem *s)    { return sem_call(s, sem_post); }
+diff --git a/compiler/linuxso/lso_shim.c b/compiler/linuxso/lso_shim.c
+new file mode 100644
+index 00000000..278d7604
+--- /dev/null
++++ b/compiler/linuxso/lso_shim.c
+@@ -0,0 +1,843 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso glibc ABI shim: the symbol table the mapper resolves a Linux
++    x86-64 shared object's imports against, plus the small functions that
++    have no direct AROS CRT counterpart (auxv, ctype tables, locale
++    handles, uname, sysconf, timegm, ...).  Functions whose ABI is the same
++    on both sides are passed straight to the AROS CRT.
++*/
++
++#define _GNU_SOURCE
++#define _POSIX_C_SOURCE 200809L
++
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#include <exec/memory.h>
++#include <exec/tasks.h>
++#include <aros/debug.h>
++
++#include <errno.h>
++#include <math.h>
++#include <sched.h>
++#include <setjmp.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/resource.h>
++#include <sys/time.h>
++#include <sys/utsname.h>
++#include <time.h>
++#include <unistd.h>
++#include <wchar.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++/* the program's libgcc unwinder */
++extern void _Unwind_DeleteException(void *);
++extern unsigned long _Unwind_GetIP(void *);
++extern void *_Unwind_GetLanguageSpecificData(void *);
++extern unsigned long _Unwind_GetRegionStart(void *);
++extern int _Unwind_RaiseException(void *);
++extern void _Unwind_Resume(void *);
++extern void _Unwind_SetGR(void *, int, unsigned long);
++extern void _Unwind_SetIP(void *, unsigned long);
++
++/* ---- data symbols --------------------------------------------------------- */
++
++/* glibc exports these as variables the guest reads through GLOB_DAT */
++static FILE *lx_stdin, *lx_stdout, *lx_stderr;
++static void *lx_libc_stack_end;
++
++/* ---- misc ----------------------------------------------------------------- */
++
++static void lx_abort(void)
++{
++    lso_log("abort() called by guest");
++    abort();
++}
++
++static void lx_stack_chk_fail(void)
++{
++    lso_log("__stack_chk_fail: guest stack smashing detected");
++    abort();
++}
++
++#define LX_AT_PAGESZ  6
++#define LX_AT_HWCAP   16
++#define LX_AT_SECURE  23
++#define LX_AT_RANDOM  25
++#define LX_AT_HWCAP2  26
++
++static unsigned long lx_getauxval(unsigned long type)
++{
++    static unsigned char at_random[16];
++    static int at_random_ready;
++
++    switch (type)
++    {
++    case LX_AT_PAGESZ:
++        return LSO_PAGE;
++    case LX_AT_RANDOM:
++        if (!at_random_ready)
++        {
++            unsigned int i;
++            for (i = 0; i < sizeof(at_random); i++)
++                at_random[i] = (unsigned char)(rand() ^ (uintptr_t)&i ^ i);
++            at_random_ready = 1;
++        }
++        return (unsigned long)at_random;
++    case LX_AT_HWCAP:
++    {
++        unsigned int a, b, c, d;
++        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
++        return d;
++    }
++    case LX_AT_SECURE:
++    case LX_AT_HWCAP2:
++        return 0;
++    default:
++        LSO_DEBUG("getauxval(%lu) unknown", type);
++        lso_set_errno(LX_ENOENT);
++        return 0;
++    }
++}
++
++/* glibc's ctype tables are indexed -128..255 through a pointer to entry 128 */
++static int32_t ctype_tolower_tab[384];
++static int32_t ctype_toupper_tab[384];
++static const int32_t *ctype_tolower_ptr, *ctype_toupper_ptr;
++
++static void ctype_init(void)
++{
++    int i;
++
++    for (i = 0; i < 384; i++)
++    {
++        int c = i - 128;
++        int lo = c, up = c;
++        if (c >= 'A' && c <= 'Z')
++            lo = c - 'A' + 'a';
++        if (c >= 'a' && c <= 'z')
++            up = c - 'a' + 'A';
++        ctype_tolower_tab[i] = lo;
++        ctype_toupper_tab[i] = up;
++    }
++    ctype_tolower_ptr = ctype_tolower_tab + 128;
++    ctype_toupper_ptr = ctype_toupper_tab + 128;
++}
++
++static const int32_t **lx_ctype_tolower_loc(void) { return &ctype_tolower_ptr; }
++static const int32_t **lx_ctype_toupper_loc(void) { return &ctype_toupper_ptr; }
++static size_t lx_ctype_get_mb_cur_max(void)       { return 1; }
++
++static int lx_cxa_atexit(void (*fn)(void *), void *arg, void *dso)
++{
++    lso_atexit_push(fn, arg, dso);
++    return 0;
++}
++
++static void lx_cxa_finalize(void *dso)
++{
++    lso_atexit_run(dso);
++}
++
++static void *lx_dlsym(void *handle, const char *name)
++{
++    void *p = lso_shim_lookup(name);
++
++    (void)handle;
++    if (!p)
++        p = lso_objects_sym(name);
++    LSO_DEBUG("dlsym(%p, %s) -> %p", handle, name, p);
++    return p;
++}
++
++static int lx_dlclose(void *handle)
++{
++    LSO_DEBUG("dlclose(%p)", handle);
++    return 0;
++}
++
++static void *lx_dlopen(const char *name, int flags)
++{
++    LSO_DEBUG("dlopen(%s, %x) -> NULL", name ? name : "(self)", flags);
++    if (!name)
++        return (void *)1;   /* the program itself: dlsym then searches everything */
++    return NULL;
++}
++
++static char *lx_dlerror(void)
++{
++    return "linuxso: dlopen is not supported";
++}
++
++/* Linux resource numbers */
++#define LX_RLIMIT_STACK  3
++#define LX_RLIMIT_NOFILE 7
++#define LX_RLIMIT_AS     9
++#define LX_RLIM_INFINITY (~0UL)
++
++struct lx_rlimit { unsigned long cur, max; };
++
++int lx_getrlimit64(int resource, void *out)
++{
++    struct lx_rlimit *r = out;
++
++    switch (resource)
++    {
++    case LX_RLIMIT_STACK:
++    {
++        struct Task *t = FindTask(NULL);
++        r->cur = r->max = (char *)t->tc_SPUpper - (char *)t->tc_SPLower;
++        break;
++    }
++    case LX_RLIMIT_NOFILE:
++    {
++        struct rlimit rl;
++        if (getrlimit(RLIMIT_NOFILE, &rl) == 0)
++            r->cur = r->max = rl.rlim_cur;
++        else
++            r->cur = r->max = 1024;
++        break;
++    }
++    default:
++        r->cur = r->max = LX_RLIM_INFINITY;
++        break;
++    }
++    return 0;
++}
++
++int lx_gettimeofday(struct lx_timeval *tv, void *tz)
++{
++    struct timeval a;
++
++    (void)tz;
++    if (gettimeofday(&a, NULL) < 0)
++    {
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    tv->tv_sec = a.tv_sec;
++    tv->tv_usec = a.tv_usec;
++    return 0;
++}
++
++int lso_clock_gettime(int lx_clock, struct timespec *ts)
++{
++    int id;
++
++    switch (lx_clock)
++    {
++    case 0:  /* REALTIME */
++    case 5:  /* REALTIME_COARSE */
++        id = CLOCK_REALTIME;
++        break;
++    case 2:  /* PROCESS_CPUTIME_ID: no per-process accounting, use uptime */
++    case 3:  /* THREAD_CPUTIME_ID */
++    default: /* MONOTONIC, MONOTONIC_RAW, MONOTONIC_COARSE, BOOTTIME */
++        id = CLOCK_MONOTONIC;
++        break;
++    }
++    if (clock_gettime(id, ts) < 0)
++    {
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    return 0;
++}
++
++int lx_clock_gettime(int lx_clock, struct lx_timespec *ts)
++{
++    struct timespec a;
++
++    if (lso_clock_gettime(lx_clock, &a) < 0)
++        return -1;
++    ts->tv_sec = a.tv_sec;
++    ts->tv_nsec = a.tv_nsec;
++    return 0;
++}
++
++int lx_nanosleep(const struct lx_timespec *req, struct lx_timespec *rem)
++{
++    struct timespec a, r = { 0, 0 };
++
++    a.tv_sec = (time_t)req->tv_sec;
++    a.tv_nsec = (long)req->tv_nsec;
++    if (nanosleep(&a, &r) < 0)
++    {
++        if (rem)
++        {
++            rem->tv_sec = r.tv_sec;
++            rem->tv_nsec = r.tv_nsec;
++        }
++        lso_set_errno_from_aros();
++        return -1;
++    }
++    return 0;
++}
++
++static int lx_usleep(unsigned int us)
++{
++    return usleep(us);
++}
++
++static int lx_sched_yield(void)
++{
++    return sched_yield();
++}
++
++static int lx_sched_setscheduler(int pid, int policy, const void *param)
++{
++    (void)pid; (void)policy; (void)param;
++    return 0;
++}
++
++static int lx_setpriority(int which, unsigned int who, int prio)
++{
++    (void)which; (void)who; (void)prio;
++    return 0;
++}
++
++#define LX_PR_SET_NAME 15
++#define LX_PR_GET_NAME 16
++
++int lx_prctl(int option, unsigned long a2, unsigned long a3, unsigned long a4, unsigned long a5)
++{
++    (void)a3; (void)a4; (void)a5;
++    if (option == LX_PR_SET_NAME)
++        return lx_pthread_setname_np(lx_pthread_self(), (const char *)a2);
++    if (option == LX_PR_GET_NAME)
++    {
++        struct Task *t = FindTask(NULL);
++        strncpy((char *)a2, t->tc_Node.ln_Name ? t->tc_Node.ln_Name : "", 15);
++        ((char *)a2)[15] = 0;
++        return 0;
++    }
++    LSO_DEBUG("prctl(%d) ignored", option);
++    return 0;
++}
++
++static int lx_register_atfork(void *prepare, void *parent, void *child, void *dso)
++{
++    (void)prepare; (void)parent; (void)child; (void)dso;
++    return 0;
++}
++
++unsigned int lso_ncpus(void)
++{
++    static unsigned int n;
++
++    if (!n)
++    {
++        APTR KernelBase = OpenResource("kernel.resource");
++        if (KernelBase)
++            n = KrnGetCPUCount();
++        if (!n)
++            n = 1;
++    }
++    return n;
++}
++
++/* glibc's numeric sysconf names */
++static long lx_sysconf(int name)
++{
++    switch (name)
++    {
++    case 0:   return 2097152;               /* _SC_ARG_MAX */
++    case 2:   return 100;                   /* _SC_CLK_TCK */
++    case 4:   return 1024;                  /* _SC_OPEN_MAX */
++    case 30:  return LSO_PAGE;              /* _SC_PAGESIZE */
++    case 70:  return 1024;                  /* _SC_GETPW_R_SIZE_MAX */
++    case 75:  return 16384;                 /* _SC_THREAD_STACK_MIN */
++    case 83:                                /* _SC_NPROCESSORS_CONF */
++    case 84:  return lso_ncpus();           /* _SC_NPROCESSORS_ONLN */
++    case 85:  return AvailMem(MEMF_TOTAL) / LSO_PAGE;  /* _SC_PHYS_PAGES */
++    case 86:  return AvailMem(MEMF_ANY) / LSO_PAGE;    /* _SC_AVPHYS_PAGES */
++    case 149: return 200809L;               /* _SC_MONOTONIC_CLOCK */
++    case 190: return 64;                    /* _SC_LEVEL1_DCACHE_LINESIZE */
++    default:
++        LSO_DEBUG("sysconf(%d) unknown", name);
++        lso_set_errno(LX_EINVAL);
++        return -1;
++    }
++}
++
++struct lx_utsname { char sysname[65], nodename[65], release[65], version[65], machine[65], domainname[65]; };
++
++int lx_uname(void *out)
++{
++    struct lx_utsname *u = out;
++    struct utsname a;
++
++    memset(u, 0, sizeof(*u));
++    strcpy(u->sysname, "Linux");
++    if (uname(&a) == 0)
++        strncpy(u->nodename, a.nodename, sizeof(u->nodename) - 1);
++    else
++        strcpy(u->nodename, "aros");
++    strcpy(u->release, "6.8.0");
++    strcpy(u->version, "#1 SMP");
++    strcpy(u->machine, "x86_64");
++    strcpy(u->domainname, "(none)");
++    return 0;
++}
++
++static long lx_syscall(long nr, ...)
++{
++    va_list ap;
++    long a[6], i, r;
++
++    va_start(ap, nr);
++    for (i = 0; i < 6; i++)
++        a[i] = va_arg(ap, long);
++    va_end(ap);
++    r = lso_syscall(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
++    if (r < 0 && r > -4096)
++    {
++        lso_set_errno((int)-r);
++        return -1;
++    }
++    return r;
++}
++
++static time_t lx_timegm(struct tm *tm)
++{
++    /* days from civil, proleptic Gregorian (Howard Hinnant's algorithm) */
++    long y = tm->tm_year + 1900;
++    long m = tm->tm_mon + 1;
++    long d = tm->tm_mday;
++    long era, yoe, doy, doe, days;
++
++    y -= m <= 2;
++    era = (y >= 0 ? y : y - 399) / 400;
++    yoe = y - era * 400;
++    doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
++    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
++    days = era * 146097 + doe - 719468;
++    return (time_t)days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
++}
++
++static int lx_bcmp(const void *a, const void *b, size_t n)
++{
++    return memcmp(a, b, n);
++}
++
++static const char *lx_strerror_text(int lx)
++{
++    switch (lx)
++    {
++    case 0:            return "Success";
++    case LX_EPERM:     return "Operation not permitted";
++    case LX_ENOENT:    return "No such file or directory";
++    case LX_EINTR:     return "Interrupted system call";
++    case LX_EIO:       return "Input/output error";
++    case LX_EBADF:     return "Bad file descriptor";
++    case LX_EAGAIN:    return "Resource temporarily unavailable";
++    case LX_ENOMEM:    return "Cannot allocate memory";
++    case LX_EACCES:    return "Permission denied";
++    case LX_EBUSY:     return "Device or resource busy";
++    case LX_EEXIST:    return "File exists";
++    case LX_EINVAL:    return "Invalid argument";
++    case LX_ENOSYS:    return "Function not implemented";
++    case LX_ENOTSUP:   return "Operation not supported";
++    case LX_ETIMEDOUT: return "Connection timed out";
++    default:           return NULL;
++    }
++}
++
++/* GNU strerror_r: returns a string, not necessarily buf */
++static char *lx_strerror_r(int lx, char *buf, size_t len)
++{
++    const char *t = lx_strerror_text(lx);
++
++    if (t)
++        return (char *)t;
++    snprintf(buf, len, "Unknown error %d", lx);
++    return buf;
++}
++
++static void lx_perror(const char *s)
++{
++    char buf[64];
++    int e = *lso_errno_location();
++
++    fprintf(stderr, "%s%s%s\n", s ? s : "", s && *s ? ": " : "", lx_strerror_r(e, buf, sizeof(buf)));
++}
++
++static char *lx_getenv(const char *name)
++{
++    return getenv(name);
++}
++
++static unsigned int lx_geteuid(void) { return geteuid(); }
++static int lx_getpid(void)           { return getpid(); }
++
++/* ---- locale --------------------------------------------------------------- */
++
++#define LX_LC_GLOBAL_LOCALE ((void *)-1L)
++static int lx_fake_locale;
++
++static void *lx_newlocale(int mask, const char *name, void *base)
++{
++    (void)mask; (void)name; (void)base;
++    return &lx_fake_locale;
++}
++
++static void lx_freelocale(void *loc) { (void)loc; }
++
++static void *lx_uselocale(void *loc)
++{
++    (void)loc;
++    return LX_LC_GLOBAL_LOCALE;
++}
++
++static double lx_strtod_l(const char *s, char **end, void *loc)       { (void)loc; return strtod(s, end); }
++static float lx_strtof_l(const char *s, char **end, void *loc)        { (void)loc; return strtof(s, end); }
++static long double lx_strtold_l(const char *s, char **end, void *loc) { (void)loc; return strtold(s, end); }
++static long long lx_strtoll_l(const char *s, char **end, int base, void *loc)
++{
++    (void)loc;
++    return strtoll(s, end, base);
++}
++static unsigned long long lx_strtoull_l(const char *s, char **end, int base, void *loc)
++{
++    (void)loc;
++    return strtoull(s, end, base);
++}
++static size_t lx_strftime_l(char *s, size_t max, const char *fmt, const struct tm *tm, void *loc)
++{
++    (void)loc;
++    return strftime(s, max, fmt, tm);
++}
++
++/* ---- fortified and renamed stdio/string ---------------------------------- */
++
++static int lx_vsnprintf_chk(char *s, size_t maxlen, int flag, size_t slen, const char *fmt, va_list ap)
++{
++    (void)flag; (void)slen;
++    return vsnprintf(s, maxlen, fmt, ap);
++}
++
++static void *lx_memcpy_chk(void *d, const void *s, size_t n, size_t dlen)
++{
++    if (n > dlen)
++        lx_stack_chk_fail();
++    return memcpy(d, s, n);
++}
++
++static char *lx_strncat_chk(char *d, const char *s, size_t n, size_t dlen)
++{
++    (void)dlen;
++    return strncat(d, s, n);
++}
++
++static int lx_isoc99_sscanf(const char *s, const char *fmt, ...)
++{
++    va_list ap;
++    int r;
++
++    va_start(ap, fmt);
++    r = vsscanf(s, fmt, ap);
++    va_end(ap);
++    return r;
++}
++
++static int lx_isoc99_vsscanf(const char *s, const char *fmt, va_list ap)
++{
++    return vsscanf(s, fmt, ap);
++}
++
++static size_t lx_mbrlen(const char *s, size_t n, void *ps)
++{
++    return mbrlen(s, n, (mbstate_t *)ps);
++}
++
++/* glibc mbstate_t is 8 bytes, AROS's is 12: give the CRT its own state */
++static mbstate_t shim_mbstate;
++
++static size_t lx_mbrtowc(wchar_t *pwc, const char *s, size_t n, void *ps)
++{
++    (void)ps;
++    return mbrtowc(pwc, s, n, &shim_mbstate);
++}
++
++static size_t lx_wcrtomb(char *s, wchar_t wc, void *ps)
++{
++    (void)ps;
++    return wcrtomb(s, wc, &shim_mbstate);
++}
++
++static size_t lx_mbsrtowcs(wchar_t *dst, const char **src, size_t len, void *ps)
++{
++    (void)ps;
++    return mbsrtowcs(dst, src, len, &shim_mbstate);
++}
++
++static size_t lx_mbsnrtowcs(wchar_t *dst, const char **src, size_t nms, size_t len, void *ps)
++{
++    (void)ps;
++    return mbsnrtowcs(dst, src, nms, len, &shim_mbstate);
++}
++
++static size_t lx_wcsnrtombs(char *dst, const wchar_t **src, size_t nwc, size_t len, void *ps)
++{
++    (void)ps;
++    return wcsnrtombs(dst, src, nwc, len, &shim_mbstate);
++}
++
++/* ---- message catalogs ----------------------------------------------------- */
++
++static void *lx_catopen(const char *name, int flag)
++{
++    (void)name; (void)flag;
++    return (void *)-1;
++}
++
++static char *lx_catgets(void *catd, int set, int msg, const char *dflt)
++{
++    (void)catd; (void)set; (void)msg;
++    return (char *)dflt;
++}
++
++static int lx_catclose(void *catd)
++{
++    (void)catd;
++    return 0;
++}
++
++/* ---- the table ------------------------------------------------------------ */
++
++/* Keep sorted by strcmp order: lso_shim_lookup() binary-searches. */
++static const struct lso_symbol shim_table[] = {
++    { "OPENSSL_memory_alloc",   NULL },
++    { "OPENSSL_memory_free",    NULL },
++    { "OPENSSL_memory_get_size", NULL },
++    { "_ITM_deregisterTMCloneTable", NULL },
++    { "_ITM_registerTMCloneTable", NULL },
++    { "_Unwind_DeleteException", (void *)_Unwind_DeleteException },
++    { "_Unwind_GetIP",          (void *)_Unwind_GetIP },
++    { "_Unwind_GetLanguageSpecificData", (void *)_Unwind_GetLanguageSpecificData },
++    { "_Unwind_GetRegionStart", (void *)_Unwind_GetRegionStart },
++    { "_Unwind_RaiseException", (void *)_Unwind_RaiseException },
++    { "_Unwind_Resume",         (void *)_Unwind_Resume },
++    { "_Unwind_SetGR",          (void *)_Unwind_SetGR },
++    { "_Unwind_SetIP",          (void *)_Unwind_SetIP },
++    { "__ctype_get_mb_cur_max", (void *)lx_ctype_get_mb_cur_max },
++    { "__ctype_tolower_loc",    (void *)lx_ctype_tolower_loc },
++    { "__ctype_toupper_loc",    (void *)lx_ctype_toupper_loc },
++    { "__cxa_atexit",           (void *)lx_cxa_atexit },
++    { "__cxa_finalize",         (void *)lx_cxa_finalize },
++    { "__errno_location",       (void *)lso_errno_location },
++    { "__fxstat64",             (void *)lx_fxstat64 },
++    { "__gmon_start__",         NULL },
++    { "__isoc99_sscanf",        (void *)lx_isoc99_sscanf },
++    { "__isoc99_vsscanf",       (void *)lx_isoc99_vsscanf },
++    { "__libc_stack_end",       &lx_libc_stack_end },
++    { "__lxstat64",             (void *)lx_lxstat64 },
++    { "__mbrlen",               (void *)lx_mbrlen },
++    { "__memcpy_chk",           (void *)lx_memcpy_chk },
++    { "__register_atfork",      (void *)lx_register_atfork },
++    { "__sched_cpucount",       (void *)lx_sched_cpucount },
++    { "__stack_chk_fail",       (void *)lx_stack_chk_fail },
++    { "__strncat_chk",          (void *)lx_strncat_chk },
++    { "__tls_get_addr",         (void *)lso_tls_get_addr },
++    { "__vsnprintf_chk",        (void *)lx_vsnprintf_chk },
++    { "__xstat64",              (void *)lx_xstat64 },
++    { "_setjmp",                (void *)setjmp },
++    { "abort",                  (void *)lx_abort },
++    { "bcmp",                   (void *)lx_bcmp },
++    { "catclose",               (void *)lx_catclose },
++    { "catgets",                (void *)lx_catgets },
++    { "catopen",                (void *)lx_catopen },
++    { "ceil",                   (void *)ceil },
++    { "ceilf",                  (void *)ceilf },
++    { "clock_gettime",          (void *)lx_clock_gettime },
++    { "close",                  (void *)lx_close },
++    { "creat64",                (void *)lx_creat64 },
++    { "dlclose",                (void *)lx_dlclose },
++    { "dlerror",                (void *)lx_dlerror },
++    { "dlopen",                 (void *)lx_dlopen },
++    { "dlsym",                  (void *)lx_dlsym },
++    { "exp",                    (void *)exp },
++    { "fclose",                 (void *)fclose },
++    { "fflush",                 (void *)fflush },
++    { "fgets",                  (void *)fgets },
++    { "floor",                  (void *)floor },
++    { "fopen64",                (void *)lso_fopen },
++    { "fprintf",                (void *)fprintf },
++    { "fputc",                  (void *)fputc },
++    { "fputwc",                 (void *)fputwc },
++    { "freelocale",             (void *)lx_freelocale },
++    { "frexp",                  (void *)frexp },
++    { "fstat64",                (void *)lx_fstat64 },
++    { "fwrite",                 (void *)fwrite },
++    { "getauxval",              (void *)lx_getauxval },
++    { "getc",                   (void *)getc },
++    { "getenv",                 (void *)lx_getenv },
++    { "geteuid",                (void *)lx_geteuid },
++    { "getpid",                 (void *)lx_getpid },
++    { "getrlimit64",            (void *)lx_getrlimit64 },
++    { "gettimeofday",           (void *)lx_gettimeofday },
++    { "getwc",                  (void *)getwc },
++    { "gmtime_r",               (void *)gmtime_r },
++    { "ldexp",                  (void *)ldexp },
++    { "localtime_r",            (void *)localtime_r },
++    { "log",                    (void *)log },
++    { "log2",                   (void *)log2 },
++    { "longjmp",                (void *)longjmp },
++    { "lseek64",                (void *)lx_lseek64 },
++    { "madvise",                (void *)lx_madvise },
++    { "mbrtowc",                (void *)lx_mbrtowc },
++    { "mbsnrtowcs",             (void *)lx_mbsnrtowcs },
++    { "mbsrtowcs",              (void *)lx_mbsrtowcs },
++    { "mbtowc",                 (void *)mbtowc },
++    { "memchr",                 (void *)memchr },
++    { "memcmp",                 (void *)memcmp },
++    { "memcpy",                 (void *)memcpy },
++    { "memmove",                (void *)memmove },
++    { "memset",                 (void *)memset },
++    { "mktime",                 (void *)mktime },
++    { "mmap64",                 (void *)lx_mmap64 },
++    { "mprotect",               (void *)lx_mprotect },
++    { "munmap",                 (void *)lx_munmap },
++    { "nanosleep",              (void *)lx_nanosleep },
++    { "newlocale",              (void *)lx_newlocale },
++    { "open64",                 (void *)lx_open64 },
++    { "perror",                 (void *)lx_perror },
++    { "prctl",                  (void *)lx_prctl },
++    { "pread64",                (void *)lx_pread64 },
++    { "pthread_attr_destroy",   (void *)lx_pthread_attr_destroy },
++    { "pthread_attr_getdetachstate", (void *)lx_pthread_attr_getdetachstate },
++    { "pthread_attr_getstacksize", (void *)lx_pthread_attr_getstacksize },
++    { "pthread_attr_init",      (void *)lx_pthread_attr_init },
++    { "pthread_attr_setdetachstate", (void *)lx_pthread_attr_setdetachstate },
++    { "pthread_attr_setstacksize", (void *)lx_pthread_attr_setstacksize },
++    { "pthread_cond_broadcast", (void *)lx_pthread_cond_broadcast },
++    { "pthread_cond_destroy",   (void *)lx_pthread_cond_destroy },
++    { "pthread_cond_init",      (void *)lx_pthread_cond_init },
++    { "pthread_cond_signal",    (void *)lx_pthread_cond_signal },
++    { "pthread_cond_timedwait", (void *)lx_pthread_cond_timedwait },
++    { "pthread_cond_wait",      (void *)lx_pthread_cond_wait },
++    { "pthread_condattr_destroy", (void *)lx_pthread_condattr_destroy },
++    { "pthread_condattr_init",  (void *)lx_pthread_condattr_init },
++    { "pthread_condattr_setclock", (void *)lx_pthread_condattr_setclock },
++    { "pthread_create",         (void *)lx_pthread_create },
++    { "pthread_detach",         (void *)lx_pthread_detach },
++    { "pthread_equal",          (void *)lx_pthread_equal },
++    { "pthread_exit",           (void *)lx_pthread_exit },
++    { "pthread_getaffinity_np", (void *)lx_pthread_getaffinity_np },
++    { "pthread_getspecific",    (void *)lx_pthread_getspecific },
++    { "pthread_join",           (void *)lx_pthread_join },
++    { "pthread_key_create",     (void *)lx_pthread_key_create },
++    { "pthread_key_delete",     (void *)lx_pthread_key_delete },
++    { "pthread_mutex_destroy",  (void *)lx_pthread_mutex_destroy },
++    { "pthread_mutex_init",     (void *)lx_pthread_mutex_init },
++    { "pthread_mutex_lock",     (void *)lx_pthread_mutex_lock },
++    { "pthread_mutex_trylock",  (void *)lx_pthread_mutex_trylock },
++    { "pthread_mutex_unlock",   (void *)lx_pthread_mutex_unlock },
++    { "pthread_mutexattr_destroy", (void *)lx_pthread_mutexattr_destroy },
++    { "pthread_mutexattr_init", (void *)lx_pthread_mutexattr_init },
++    { "pthread_mutexattr_settype", (void *)lx_pthread_mutexattr_settype },
++    { "pthread_once",           (void *)lx_pthread_once },
++    { "pthread_rwlock_destroy", (void *)lx_pthread_rwlock_destroy },
++    { "pthread_rwlock_init",    (void *)lx_pthread_rwlock_init },
++    { "pthread_rwlock_rdlock",  (void *)lx_pthread_rwlock_rdlock },
++    { "pthread_rwlock_tryrdlock", (void *)lx_pthread_rwlock_tryrdlock },
++    { "pthread_rwlock_trywrlock", (void *)lx_pthread_rwlock_trywrlock },
++    { "pthread_rwlock_unlock",  (void *)lx_pthread_rwlock_unlock },
++    { "pthread_rwlock_wrlock",  (void *)lx_pthread_rwlock_wrlock },
++    { "pthread_self",           (void *)lx_pthread_self },
++    { "pthread_setname_np",     (void *)lx_pthread_setname_np },
++    { "pthread_setspecific",    (void *)lx_pthread_setspecific },
++    { "qsort",                  (void *)qsort },
++    { "rand",                   (void *)rand },
++    { "read",                   (void *)lx_read },
++    { "round",                  (void *)round },
++    { "sched_getaffinity",      (void *)lx_sched_getaffinity },
++    { "sched_setscheduler",     (void *)lx_sched_setscheduler },
++    { "sched_yield",            (void *)lx_sched_yield },
++    { "sem_destroy",            (void *)lx_sem_destroy },
++    { "sem_init",               (void *)lx_sem_init },
++    { "sem_post",               (void *)lx_sem_post },
++    { "sem_trywait",            (void *)lx_sem_trywait },
++    { "sem_wait",               (void *)lx_sem_wait },
++    { "setpriority",            (void *)lx_setpriority },
++    { "snprintf",               (void *)snprintf },
++    { "stat64",                 (void *)lx_stat64 },
++    { "stderr",                 &lx_stderr },
++    { "stdin",                  &lx_stdin },
++    { "stdout",                 &lx_stdout },
++    { "strchr",                 (void *)strchr },
++    { "strcmp",                 (void *)strcmp },
++    { "strerror_r",             (void *)lx_strerror_r },
++    { "strftime_l",             (void *)lx_strftime_l },
++    { "strlen",                 (void *)strlen },
++    { "strncpy",                (void *)strncpy },
++    { "strrchr",                (void *)strrchr },
++    { "strstr",                 (void *)strstr },
++    { "strtod_l",               (void *)lx_strtod_l },
++    { "strtof_l",               (void *)lx_strtof_l },
++    { "strtol",                 (void *)strtol },
++    { "strtold_l",              (void *)lx_strtold_l },
++    { "strtoll_l",              (void *)lx_strtoll_l },
++    { "strtoul",                (void *)strtoul },
++    { "strtoull_l",             (void *)lx_strtoull_l },
++    { "syscall",                (void *)lx_syscall },
++    { "sysconf",                (void *)lx_sysconf },
++    { "timegm",                 (void *)lx_timegm },
++    { "uname",                  (void *)lx_uname },
++    { "ungetc",                 (void *)ungetc },
++    { "ungetwc",                (void *)ungetwc },
++    { "uselocale",              (void *)lx_uselocale },
++    { "usleep",                 (void *)lx_usleep },
++    { "vasprintf",              (void *)vasprintf },
++    { "vfprintf",               (void *)vfprintf },
++    { "vsnprintf",              (void *)vsnprintf },
++    { "wcrtomb",                (void *)lx_wcrtomb },
++    { "wcslen",                 (void *)wcslen },
++    { "wcsnrtombs",             (void *)lx_wcsnrtombs },
++    { "wmemchr",                (void *)wmemchr },
++    { "write",                  (void *)lx_write },
++};
++
++#define SHIM_COUNT (sizeof(shim_table) / sizeof(shim_table[0]))
++
++void *lso_shim_lookup(const char *name)
++{
++    size_t lo = 0, hi = SHIM_COUNT;
++
++    while (lo < hi)
++    {
++        size_t mid = (lo + hi) / 2;
++        int c = strcmp(shim_table[mid].name, name);
++        if (c == 0)
++            return shim_table[mid].addr;
++        if (c < 0)
++            lo = mid + 1;
++        else
++            hi = mid;
++    }
++    return NULL;
++}
++
++void lso_shim_init(void)
++{
++    struct Task *t = FindTask(NULL);
++    size_t i;
++
++    lx_stdin = stdin;
++    lx_stdout = stdout;
++    lx_stderr = stderr;
++    lx_libc_stack_end = t->tc_SPUpper;
++    ctype_init();
++
++    /* the binary search silently misses entries out of order: check once */
++    for (i = 1; i < SHIM_COUNT; i++)
++    {
++        if (strcmp(shim_table[i - 1].name, shim_table[i].name) >= 0)
++            lso_log("shim table out of order at '%s' / '%s'", shim_table[i - 1].name, shim_table[i].name);
++    }
++}
+diff --git a/compiler/linuxso/lso_syscall.c b/compiler/linuxso/lso_syscall.c
+new file mode 100644
+index 00000000..67a37177
+--- /dev/null
++++ b/compiler/linuxso/lso_syscall.c
+@@ -0,0 +1,579 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso Linux x86-64 system call emulation.
++
++    Two paths end up here: the guest's syscall() import, and (native only)
++    inline `syscall` instructions.  With IA32_EFER.SCE off those raise #UD;
++    a kernel.resource exception handler recognises the 0f 05 opcode,
++    parks the return address on the task's stack and redirects RIP to
++    lso_syscall_tramp, which calls lso_syscall() in task context.
++
++    Results follow the raw kernel convention: -errno (Linux numbering) on
++    failure.  Unknown numbers are logged and answered with -ENOSYS so the
++    set the guest actually needs can be grown from the trace.
++*/
++
++#include <proto/exec.h>
++#include <proto/kernel.h>
++#include <exec/memory.h>
++#include <exec/ports.h>
++#include <exec/io.h>
++#include <devices/timer.h>
++#include <aros/x86_64/cpucontext.h>
++#include <aros/symbolsets.h>
++
++#include <errno.h>
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/time.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++extern void lso_syscall_tramp(void);
++
++/* ---- #UD trap ------------------------------------------------------------ */
++
++static APTR trap_handle;
++static APTR trap_KernelBase;
++
++/*
++ * Runs in trap context on every #UD in the system; only a `syscall`
++ * opcode is ours.  No logging here: the task's own context does that.
++ */
++static int ud_handler(struct ExceptionContext *regs, void *d1, void *d2)
++{
++    const unsigned char *ip = (const unsigned char *)regs->rip;
++    UQUAD *slot;
++
++    (void)d1; (void)d2;
++    if (!ip || ip[0] != 0x0f || ip[1] != 0x05)
++        return 0;
++
++    /* return address below the red zone, then divert to the trampoline */
++    slot = (UQUAD *)(regs->rsp - 136);
++    *slot = regs->rip + 2;
++    regs->rsp = (UQUAD)slot;
++    regs->rip = (UQUAD)lso_syscall_tramp;
++    return 1;
++}
++
++int lso_syscall_trap_install(void)
++{
++    APTR KernelBase;
++
++    if (trap_handle)
++        return 0;
++    /* hosted kernels execute syscall natively; only native needs the trap */
++    if (OpenResource("hostlib.resource"))
++    {
++        LSO_DEBUG("hosted kernel: raw syscalls run on the host, no #UD trap");
++        return 0;
++    }
++    KernelBase = OpenResource("kernel.resource");
++    if (!KernelBase)
++        return -1;
++    trap_handle = KrnAddExceptionHandler(6, ud_handler, NULL, NULL);
++    trap_KernelBase = KernelBase;
++    LSO_DEBUG("#UD syscall trap %s", trap_handle ? "installed" : "NOT installed");
++    return trap_handle ? 0 : -1;
++}
++
++void lso_syscall_trap_remove(void)
++{
++    APTR KernelBase = trap_KernelBase;
++
++    if (trap_handle && KernelBase)
++    {
++        KrnRemExceptionHandler(trap_handle);
++        trap_handle = NULL;
++    }
++}
++
++/* the handler lives in this program's memory: it must go before we do */
++ADD2EXIT(lso_syscall_trap_remove, 0);
++
++/* ---- helpers -------------------------------------------------------------- */
++
++#define LX_ENOTTY 25
++#define LX_ECHILD 10
++
++static long neg_errno(void)
++{
++    int e = *lso_errno_location();
++    return -(e ? e : LX_EIO);
++}
++
++static int have_rdrand(void)
++{
++    static int r = -1;
++
++    if (r < 0)
++    {
++        unsigned int a, b, c, d;
++        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
++        r = (c >> 30) & 1;
++    }
++    return r;
++}
++
++long lso_getrandom(void *buf, size_t len)
++{
++    unsigned char *p = buf;
++    size_t i = 0;
++
++    while (i < len)
++    {
++        unsigned long v;
++        unsigned char ok = 0;
++
++        if (have_rdrand())
++        {
++            int tries = 10;
++            while (tries-- && !ok)
++                __asm__ volatile("rdrand %0; setc %1" : "=r"(v), "=qm"(ok));
++        }
++        if (!ok)
++        {
++            struct timeval tv;
++            gettimeofday(&tv, NULL);
++            v = ((unsigned long)rand() << 32) ^ (unsigned long)rand() ^ tv.tv_usec ^ (uintptr_t)&v;
++        }
++        memcpy(p + i, &v, len - i < sizeof(v) ? len - i : sizeof(v));
++        i += sizeof(v);
++    }
++    return len;
++}
++
++static long sys_gettid(void)
++{
++    /* glibc pthread ids are 0 for foreign tasks; fold the Task pointer instead */
++    uintptr_t t = (uintptr_t)FindTask(NULL);
++    return (long)(((t >> 4) ^ (t >> 32)) & 0x3fffffff) + 2;
++}
++
++/* ---- futex ---------------------------------------------------------------- */
++
++#define LX_FUTEX_WAIT        0
++#define LX_FUTEX_WAKE        1
++#define LX_FUTEX_WAIT_BITSET 9
++#define LX_FUTEX_WAKE_BITSET 10
++#define LX_FUTEX_PRIVATE     128
++#define LX_FUTEX_CLOCK_REALTIME 256
++#define LX_FUTEX_CMD_MASK    (~(LX_FUTEX_PRIVATE | LX_FUTEX_CLOCK_REALTIME))
++
++struct futex_waiter {
++    struct MinNode node;
++    volatile int *addr;
++    struct Task *task;
++    unsigned int bitset;
++    BYTE sigbit;
++    int woken;
++};
++
++static struct MinList futex_waiters;
++static struct SignalSemaphore futex_lock;
++static int futex_ready;
++
++static void futex_init(void)
++{
++    Forbid();
++    if (!futex_ready)
++    {
++        NEWLIST(&futex_waiters);
++        InitSemaphore(&futex_lock);
++        futex_ready = 1;
++    }
++    Permit();
++}
++
++/* relative timeout in microseconds, or -1 for none */
++static long futex_timeout_us(int cmd, int op, const struct lx_timespec *ts)
++{
++    struct timespec now;
++    long us;
++
++    if (!ts)
++        return -1;
++    if (cmd == LX_FUTEX_WAIT)
++        return ts->tv_sec * 1000000L + ts->tv_nsec / 1000;
++    /* WAIT_BITSET: absolute on CLOCK_MONOTONIC unless CLOCK_REALTIME is set */
++    lso_clock_gettime((op & LX_FUTEX_CLOCK_REALTIME) ? 0 : 1, &now);
++    us = (ts->tv_sec - now.tv_sec) * 1000000L + (ts->tv_nsec - now.tv_nsec) / 1000;
++    return us < 0 ? 0 : us;
++}
++
++static long sys_futex(volatile int *uaddr, int op, int val, const struct lx_timespec *ts,
++                      volatile int *uaddr2, unsigned int val3)
++{
++    int cmd = op & LX_FUTEX_CMD_MASK;
++    struct futex_waiter w, *n, *n2;
++
++    (void)uaddr2;
++    futex_init();
++    switch (cmd)
++    {
++    case LX_FUTEX_WAIT:
++    case LX_FUTEX_WAIT_BITSET:
++    {
++        long us = futex_timeout_us(cmd, op, ts);
++        struct MsgPort *port = NULL;
++        struct timerequest *tr = NULL;
++        ULONG sigmask, got;
++        int timedout = 0;
++
++        w.addr = uaddr;
++        w.task = FindTask(NULL);
++        w.bitset = cmd == LX_FUTEX_WAIT ? ~0u : val3;
++        w.woken = 0;
++        w.sigbit = AllocSignal(-1);
++        if (w.sigbit < 0)
++            return -LX_EAGAIN;
++        sigmask = 1UL << w.sigbit;
++
++        ObtainSemaphore(&futex_lock);
++        if (*uaddr != val)
++        {
++            ReleaseSemaphore(&futex_lock);
++            FreeSignal(w.sigbit);
++            return -LX_EAGAIN;
++        }
++        AddTail((struct List *)&futex_waiters, (struct Node *)&w.node);
++        ReleaseSemaphore(&futex_lock);
++
++        if (us == 0)
++        {
++            timedout = 1;
++        }
++        else
++        {
++            if (us > 0)
++            {
++                port = CreateMsgPort();
++                tr = port ? (struct timerequest *)CreateIORequest(port, sizeof(*tr)) : NULL;
++                if (tr && OpenDevice("timer.device", UNIT_MICROHZ, (struct IORequest *)tr, 0) == 0)
++                {
++                    tr->tr_node.io_Command = TR_ADDREQUEST;
++                    tr->tr_time.tv_secs = us / 1000000;
++                    tr->tr_time.tv_micro = us % 1000000;
++                    SendIO((struct IORequest *)tr);
++                    sigmask |= 1UL << port->mp_SigBit;
++                }
++                else
++                {
++                    if (tr)
++                        DeleteIORequest((struct IORequest *)tr);
++                    if (port)
++                        DeleteMsgPort(port);
++                    tr = NULL;
++                    port = NULL;
++                }
++            }
++            got = Wait(sigmask);
++            if (tr)
++            {
++                if (!CheckIO((struct IORequest *)tr))
++                    AbortIO((struct IORequest *)tr);
++                WaitIO((struct IORequest *)tr);
++                if ((got & (1UL << port->mp_SigBit)) && !(got & (1UL << w.sigbit)))
++                    timedout = 1;
++                CloseDevice((struct IORequest *)tr);
++                DeleteIORequest((struct IORequest *)tr);
++                DeleteMsgPort(port);
++            }
++        }
++
++        ObtainSemaphore(&futex_lock);
++        if (!w.woken)
++            Remove((struct Node *)&w.node);
++        ReleaseSemaphore(&futex_lock);
++        FreeSignal(w.sigbit);
++        if (w.woken)
++            return 0;
++        return timedout ? -LX_ETIMEDOUT : -LX_EINTR;
++    }
++    case LX_FUTEX_WAKE:
++    case LX_FUTEX_WAKE_BITSET:
++    {
++        unsigned int mask = cmd == LX_FUTEX_WAKE ? ~0u : val3;
++        long woken = 0;
++
++        ObtainSemaphore(&futex_lock);
++        ForeachNodeSafe(&futex_waiters, n, n2)
++        {
++            if (woken >= val)
++                break;
++            if (n->addr == uaddr && (n->bitset & mask))
++            {
++                Remove((struct Node *)&n->node);
++                n->woken = 1;
++                Signal(n->task, 1UL << n->sigbit);
++                woken++;
++            }
++        }
++        ReleaseSemaphore(&futex_lock);
++        return woken;
++    }
++    default:
++        LSO_DEBUG("futex op %d unsupported", op);
++        return -LX_ENOSYS;
++    }
++}
++
++/* ---- the dispatcher ------------------------------------------------------- */
++
++#define SYS_read            0
++#define SYS_write           1
++#define SYS_open            2
++#define SYS_close           3
++#define SYS_stat            4
++#define SYS_fstat           5
++#define SYS_lstat           6
++#define SYS_lseek           8
++#define SYS_mmap            9
++#define SYS_mprotect        10
++#define SYS_munmap          11
++#define SYS_brk             12
++#define SYS_rt_sigaction    13
++#define SYS_rt_sigprocmask  14
++#define SYS_ioctl           16
++#define SYS_pread64         17
++#define SYS_sched_yield     24
++#define SYS_madvise         28
++#define SYS_nanosleep       35
++#define SYS_getpid          39
++#define SYS_exit            60
++#define SYS_kill            62
++#define SYS_uname           63
++#define SYS_fcntl           72
++#define SYS_getcwd          79
++#define SYS_readlink        89
++#define SYS_gettimeofday    96
++#define SYS_getrlimit       97
++#define SYS_sysinfo         99
++#define SYS_ptrace          101
++#define SYS_getuid          102
++#define SYS_getgid          104
++#define SYS_geteuid         107
++#define SYS_getegid         108
++#define SYS_getppid         110
++#define SYS_sigaltstack     131
++#define SYS_prctl           157
++#define SYS_arch_prctl      158
++#define SYS_gettid          186
++#define SYS_futex           202
++#define SYS_sched_getaffinity 204
++#define SYS_clock_gettime   228
++#define SYS_clock_getres    229
++#define SYS_clock_nanosleep 230
++#define SYS_exit_group      231
++#define SYS_tgkill          234
++#define SYS_openat          257
++#define SYS_newfstatat      262
++#define SYS_set_robust_list 273
++#define SYS_prlimit64       302
++#define SYS_getrandom       318
++#define SYS_membarrier      324
++#define SYS_statx           332
++#define SYS_rseq            334
++
++#define LX_AT_FDCWD       (-100)
++#define LX_AT_EMPTY_PATH  0x1000
++#define LX_TIMER_ABSTIME  1
++#define LX_SIGABRT        6
++#define LX_SIGKILL        9
++#define LX_ARCH_GET_FS    0x1003
++
++static long ret_or_errno(long r)
++{
++    return r < 0 ? neg_errno() : r;
++}
++
++long lso_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
++{
++    long r;
++
++    switch (nr)
++    {
++    case SYS_read:      r = ret_or_errno(lx_read((int)a1, (void *)a2, (size_t)a3)); break;
++    case SYS_write:     r = ret_or_errno(lx_write((int)a1, (const void *)a2, (size_t)a3)); break;
++    case SYS_open:      r = ret_or_errno(lso_open((const char *)a1, (int)a2, (int)a3)); break;
++    case SYS_openat:
++        if (a1 != LX_AT_FDCWD && ((const char *)a2)[0] != '/')
++        {
++            LSO_DEBUG("openat(dirfd %ld, %s) relative dirfd unsupported", a1, (const char *)a2);
++            r = -LX_ENOTSUP;
++        }
++        else
++            r = ret_or_errno(lso_open((const char *)a2, (int)a3, (int)a4));
++        break;
++    case SYS_close:     r = ret_or_errno(lx_close((int)a1)); break;
++    case SYS_stat:
++    case SYS_lstat:     r = ret_or_errno(lso_stat_to_glibc((const char *)a1, -1, (void *)a2)); break;
++    case SYS_fstat:     r = ret_or_errno(lso_stat_to_glibc(NULL, (int)a1, (void *)a2)); break;
++    case SYS_newfstatat:
++        if ((a4 & LX_AT_EMPTY_PATH) && ((const char *)a2)[0] == 0)
++            r = ret_or_errno(lso_stat_to_glibc(NULL, (int)a1, (void *)a3));
++        else if (a1 != LX_AT_FDCWD && ((const char *)a2)[0] != '/')
++            r = -LX_ENOTSUP;
++        else
++            r = ret_or_errno(lso_stat_to_glibc((const char *)a2, -1, (void *)a3));
++        break;
++    case SYS_lseek:     r = ret_or_errno(lx_lseek64((int)a1, a2, (int)a3)); break;
++    case SYS_pread64:   r = ret_or_errno(lx_pread64((int)a1, (void *)a2, (size_t)a3, a4)); break;
++    case SYS_mmap:
++    {
++        void *p = lx_mmap64((void *)a1, (size_t)a2, (int)a3, (int)a4, (int)a5, a6);
++        r = p == (void *)-1 ? neg_errno() : (long)p;
++        break;
++    }
++    case SYS_munmap:    r = ret_or_errno(lx_munmap((void *)a1, (size_t)a2)); break;
++    case SYS_mprotect:  r = ret_or_errno(lx_mprotect((void *)a1, (size_t)a2, (int)a3)); break;
++    case SYS_madvise:   r = ret_or_errno(lx_madvise((void *)a1, (size_t)a2, (int)a3)); break;
++    case SYS_brk:       r = -LX_ENOMEM; break;
++    case SYS_rt_sigaction:
++    case SYS_rt_sigprocmask:
++    case SYS_sigaltstack:
++    case SYS_set_robust_list:
++        r = 0; break;
++    case SYS_rseq:      r = -LX_ENOSYS; break;
++    case SYS_ioctl:     r = -LX_ENOTTY; break;
++    case SYS_fcntl:
++        switch (a2)
++        {
++        case 1: /* F_GETFD */ r = 0; break;
++        case 2: /* F_SETFD */ r = 0; break;
++        case 3: /* F_GETFL */ r = 0; break;
++        case 4: /* F_SETFL */ r = 0; break;
++        default: r = -LX_EINVAL; break;
++        }
++        break;
++    case SYS_sched_yield: r = 0; sched_yield(); break;
++    case SYS_nanosleep:
++        r = lx_nanosleep((const struct lx_timespec *)a1, (struct lx_timespec *)a2) < 0 ? -LX_EINTR : 0;
++        break;
++    case SYS_clock_nanosleep:
++    {
++        struct lx_timespec req = *(const struct lx_timespec *)a3;
++        if (a2 & LX_TIMER_ABSTIME)
++        {
++            struct timespec now;
++            lso_clock_gettime((int)a1, &now);
++            req.tv_sec -= now.tv_sec;
++            req.tv_nsec -= now.tv_nsec;
++            if (req.tv_nsec < 0) { req.tv_nsec += 1000000000L; req.tv_sec--; }
++            if (req.tv_sec < 0) { r = 0; break; }
++        }
++        r = lx_nanosleep(&req, (struct lx_timespec *)a4) < 0 ? -LX_EINTR : 0;
++        break;
++    }
++    case SYS_getpid:    r = getpid(); break;
++    case SYS_getppid:   r = 1; break;
++    case SYS_gettid:    r = sys_gettid(); break;
++    case SYS_getuid:
++    case SYS_geteuid:   r = geteuid(); break;
++    case SYS_getgid:
++    case SYS_getegid:   r = 1000; break;
++    case SYS_uname:     r = lx_uname((void *)a1); break;
++    case SYS_getcwd:
++        if ((size_t)a2 < 2)
++            r = -LX_ERANGE;
++        else
++        {
++            strcpy((char *)a1, "/");
++            r = 2;
++        }
++        break;
++    case SYS_readlink:
++        LSO_DEBUG("readlink(%s) -> ENOENT", (const char *)a1);
++        r = -LX_ENOENT;
++        break;
++    case SYS_gettimeofday:
++        r = lx_gettimeofday((struct lx_timeval *)a1, NULL) < 0 ? neg_errno() : 0;
++        break;
++    case SYS_clock_gettime:
++        r = lx_clock_gettime((int)a1, (struct lx_timespec *)a2) < 0 ? neg_errno() : 0;
++        break;
++    case SYS_clock_getres:
++        if (a2)
++        {
++            ((struct lx_timespec *)a2)->tv_sec = 0;
++            ((struct lx_timespec *)a2)->tv_nsec = 1000;
++        }
++        r = 0;
++        break;
++    case SYS_getrlimit:  r = lx_getrlimit64((int)a1, (void *)a2); break;
++    case SYS_prlimit64:
++        if (a4)
++            r = lx_getrlimit64((int)a2, (void *)a4);
++        else
++            r = 0;
++        break;
++    case SYS_sysinfo:    r = -LX_ENOSYS; break;
++    case SYS_ptrace:     r = 0; break;   /* PTRACE_TRACEME succeeds: nobody is attached */
++    case SYS_prctl:      r = lx_prctl((int)a1, a2, a3, a4, a5); break;
++    case SYS_arch_prctl:
++        if (a1 == LX_ARCH_GET_FS && trap_KernelBase)
++        {
++            /* rdmsr is supervisor-only; tasks run in user mode on pc-x86_64 */
++            APTR KernelBase = trap_KernelBase;
++            if (KrnIsSuper())
++            {
++                unsigned int lo, hi;
++                __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xc0000100));
++                *(unsigned long *)a2 = ((unsigned long)hi << 32) | lo;
++                r = 0;
++            }
++            else
++                r = -LX_EINVAL;
++        }
++        else
++        {
++            LSO_DEBUG("arch_prctl(%#lx) refused", a1);
++            r = -LX_EINVAL;
++        }
++        break;
++    case SYS_futex:
++        r = sys_futex((volatile int *)a1, (int)a2, (int)a3, (const struct lx_timespec *)a4,
++                      (volatile int *)a5, (unsigned int)a6);
++        break;
++    case SYS_sched_getaffinity:
++        r = lx_sched_getaffinity((int)a1, (size_t)a2, (unsigned long *)a3) < 0 ? -LX_EINVAL
++            : (long)(a2 < 8 ? a2 : 8);
++        break;
++    case SYS_getrandom:  r = lso_getrandom((void *)a1, (size_t)a2); break;
++    case SYS_membarrier: r = 0; break;
++    case SYS_statx:      r = -LX_ENOSYS; break;
++    case SYS_kill:
++    case SYS_tgkill:
++    {
++        long sig = nr == SYS_kill ? a2 : a3;
++        lso_log("guest %s(sig %ld)", nr == SYS_kill ? "kill" : "tgkill", sig);
++        if (sig == LX_SIGABRT || sig == LX_SIGKILL)
++            abort();
++        r = 0;
++        break;
++    }
++    case SYS_exit:
++        LSO_DEBUG("thread exit(%ld)", a1);
++        lx_pthread_exit((void *)a1);
++        r = 0;
++        break;
++    case SYS_exit_group:
++        lso_log("guest exit_group(%ld): aborting the process", a1);
++        abort();
++        break;
++    default:
++        lso_log("syscall %ld(%#lx, %#lx, %#lx, %#lx, %#lx, %#lx) unhandled -> ENOSYS",
++                nr, a1, a2, a3, a4, a5, a6);
++        r = -LX_ENOSYS;
++        break;
++    }
++    if (linuxso_debug_enabled() && nr != SYS_futex && nr != SYS_clock_gettime)
++        lso_log("syscall %ld(%#lx, %#lx, %#lx) -> %ld", nr, a1, a2, a3, r);
++    return r;
++}
+diff --git a/compiler/linuxso/lso_syscall_tramp.S b/compiler/linuxso/lso_syscall_tramp.S
+new file mode 100644
+index 00000000..8e007761
+--- /dev/null
++++ b/compiler/linuxso/lso_syscall_tramp.S
+@@ -0,0 +1,90 @@
++#   Copyright (C) 2026, The AROS Development Team. All rights reserved.
++#
++#   Desc: linuxso native syscall trampoline (x86-64).
++#
++#   IA32_EFER.SCE is off on AROS, so a guest `syscall` instruction raises
++#   #UD.  The kernel.resource exception handler in lso_syscall.c stores the
++#   instruction's return address 136 bytes below the trapped RSP (keeping
++#   the 128-byte red zone intact), points RIP here and returns from the
++#   trap; from then on we run in ordinary task context, so the emulation
++#   may block.  Linux preserves every register except RAX, RCX and R11
++#   across syscall; the C emulation clobbers the SysV caller-saved set and
++#   any SSE state, hence the saves.
++#
++#   Entry:  RAX = nr, RDI RSI RDX R10 R8 R9 = arguments, [RSP] = return RIP
++#   Exit:   RAX = result (negative errno on failure), RSP as before the trap
++
++	.text
++	.align	16
++	.globl	lso_syscall_tramp
++	.type	lso_syscall_tramp, @function
++
++lso_syscall_tramp:
++	push	%rbp
++	mov	%rsp, %rbp
++	push	%rdi
++	push	%rsi
++	push	%rdx
++	push	%r8
++	push	%r9
++	push	%r10
++	and	$-16, %rsp
++	sub	$256, %rsp
++	movups	%xmm0,   0(%rsp)
++	movups	%xmm1,  16(%rsp)
++	movups	%xmm2,  32(%rsp)
++	movups	%xmm3,  48(%rsp)
++	movups	%xmm4,  64(%rsp)
++	movups	%xmm5,  80(%rsp)
++	movups	%xmm6,  96(%rsp)
++	movups	%xmm7, 112(%rsp)
++	movups	%xmm8, 128(%rsp)
++	movups	%xmm9, 144(%rsp)
++	movups	%xmm10, 160(%rsp)
++	movups	%xmm11, 176(%rsp)
++	movups	%xmm12, 192(%rsp)
++	movups	%xmm13, 208(%rsp)
++	movups	%xmm14, 224(%rsp)
++	movups	%xmm15, 240(%rsp)
++
++	# lso_syscall(nr, a1, a2, a3, a4, a5, a6): a6 goes on the stack
++	sub	$8, %rsp
++	push	%r9
++	mov	%r8, %r9
++	mov	%r10, %r8
++	mov	%rdx, %rcx
++	mov	%rsi, %rdx
++	mov	%rdi, %rsi
++	mov	%rax, %rdi
++	call	lso_syscall
++	add	$16, %rsp
++
++	movups	  0(%rsp), %xmm0
++	movups	 16(%rsp), %xmm1
++	movups	 32(%rsp), %xmm2
++	movups	 48(%rsp), %xmm3
++	movups	 64(%rsp), %xmm4
++	movups	 80(%rsp), %xmm5
++	movups	 96(%rsp), %xmm6
++	movups	112(%rsp), %xmm7
++	movups	128(%rsp), %xmm8
++	movups	144(%rsp), %xmm9
++	movups	160(%rsp), %xmm10
++	movups	176(%rsp), %xmm11
++	movups	192(%rsp), %xmm12
++	movups	208(%rsp), %xmm13
++	movups	224(%rsp), %xmm14
++	movups	240(%rsp), %xmm15
++	lea	-48(%rbp), %rsp
++	pop	%r10
++	pop	%r9
++	pop	%r8
++	pop	%rdx
++	pop	%rsi
++	pop	%rdi
++	pop	%rbp
++	# [RSP] = return RIP, stored 136 bytes below the original RSP
++	pop	%r11
++	add	$128, %rsp
++	jmp	*%r11
++	.size	lso_syscall_tramp, .-lso_syscall_tramp
+diff --git a/compiler/linuxso/lso_task.c b/compiler/linuxso/lso_task.c
+new file mode 100644
+index 00000000..d68d82e1
+--- /dev/null
++++ b/compiler/linuxso/lso_task.c
+@@ -0,0 +1,206 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    linuxso per-task state: glibc-numbered errno, the guest's TLS blocks
++    (__tls_get_addr) and the errno/return-code translation tables.
++*/
++
++#include <proto/exec.h>
++/* keep the resource base private to the linklib (no exported TaskResBase) */
++#define TaskResBase lso_TaskResBase
++static APTR lso_TaskResBase;
++#include <proto/task.h>
++#include <exec/memory.h>
++
++#include <errno.h>
++#include <string.h>
++
++#include "linuxso_intern.h"
++#include "lso_lx.h"
++
++static LONG lso_slot = -1;
++
++static void slot_init(void)
++{
++    Forbid();
++    if (lso_slot < 0)
++    {
++        if (!TaskResBase)
++            TaskResBase = OpenResource("task.resource");
++        if (TaskResBase)
++            lso_slot = AllocTaskStorageSlot();
++    }
++    Permit();
++}
++
++struct lso_task *lso_task_get(void)
++{
++    struct lso_task *lt;
++
++    if (lso_slot < 0)
++        slot_init();
++    if (lso_slot < 0)
++        return NULL;
++    lt = (struct lso_task *)GetTaskStorageSlot(lso_slot);
++    if (!lt)
++    {
++        lt = AllocMem(sizeof(*lt), MEMF_ANY | MEMF_CLEAR);
++        if (!lt)
++            return NULL;
++        lt->task = FindTask(NULL);
++        SetTaskStorageSlot(lso_slot, (IPTR)lt);
++        LSO_DEBUG("task %p '%s': shim context %p", lt->task, lt->task->tc_Node.ln_Name, lt);
++    }
++    return lt;
++}
++
++void lso_tls_release(struct lso_task *lt)
++{
++    int i;
++
++    for (i = 0; i < LSO_MAX_TLS_MODULES; i++)
++    {
++        if (lt->tls[i])
++        {
++            FreeVec(lt->tls[i]);
++            lt->tls[i] = NULL;
++        }
++    }
++}
++
++/* Called on the exiting task itself (pthread start trampoline). */
++void lso_task_free(struct Task *task)
++{
++    struct lso_task *lt;
++
++    if (lso_slot < 0)
++        return;
++    lt = (struct lso_task *)GetTaskStorageSlot(lso_slot);
++    if (!lt || lt->task != task)
++        return;
++    SetTaskStorageSlot(lso_slot, 0);
++    lso_tls_release(lt);
++    FreeMem(lt, sizeof(*lt));
++}
++
++/* ---- errno ---------------------------------------------------------------- */
++
++int lso_errno_to_linux(int e)
++{
++    switch (e)
++    {
++    case 0:          return 0;
++    case EPERM:      return LX_EPERM;
++    case ENOENT:     return LX_ENOENT;
++    case ESRCH:      return LX_ESRCH;
++    case EINTR:      return LX_EINTR;
++    case EIO:        return LX_EIO;
++    case EBADF:      return LX_EBADF;
++    case EAGAIN:     return LX_EAGAIN;
++    case ENOMEM:     return LX_ENOMEM;
++    case EACCES:     return LX_EACCES;
++    case EFAULT:     return LX_EFAULT;
++    case EBUSY:      return LX_EBUSY;
++    case EEXIST:     return LX_EEXIST;
++    case ENOTDIR:    return LX_ENOTDIR;
++    case EISDIR:     return LX_EISDIR;
++    case EINVAL:     return LX_EINVAL;
++    case ENFILE:     return LX_ENFILE;
++    case EMFILE:     return LX_EMFILE;
++    case ENOSPC:     return LX_ENOSPC;
++    case ESPIPE:     return LX_ESPIPE;
++    case EPIPE:      return LX_EPIPE;
++    case ERANGE:     return LX_ERANGE;
++    case EDEADLK:    return LX_EDEADLK;
++    case ENOSYS:     return LX_ENOSYS;
++    case ENOTSUP:    return LX_ENOTSUP;
++    case ETIMEDOUT:  return LX_ETIMEDOUT;
++    default:         return LX_EIO;
++    }
++}
++
++void lso_set_errno(int lx)
++{
++    struct lso_task *lt = lso_task_get();
++    if (lt)
++        lt->lx_errno = lx;
++}
++
++void lso_set_errno_from_aros(void)
++{
++    lso_set_errno(lso_errno_to_linux(errno));
++}
++
++int lso_pthread_ret(int r)
++{
++    return r ? lso_errno_to_linux(r) : 0;
++}
++
++int *lso_errno_location(void)
++{
++    static int fallback;
++    struct lso_task *lt = lso_task_get();
++    return lt ? &lt->lx_errno : &fallback;
++}
++
++/* ---- TLS ------------------------------------------------------------------ */
++
++struct lso_tls_index {
++    unsigned long module;
++    unsigned long offset;
++};
++
++static struct LinuxSO *module_by_id(unsigned int id)
++{
++    struct LinuxSO *so, *found = NULL;
++
++    ObtainSemaphoreShared(&lso_lock);
++    ForeachNode(&lso_objects, so)
++    {
++        if (so->tls_modid == id)
++        {
++            found = so;
++            break;
++        }
++    }
++    ReleaseSemaphore(&lso_lock);
++    return found;
++}
++
++void *lso_tls_get_addr(struct lso_tls_index *ti)
++{
++    struct lso_task *lt = lso_task_get();
++    unsigned int id = (unsigned int)ti->module;
++    void *block;
++
++    if (!lt || id == 0 || id > LSO_MAX_TLS_MODULES)
++        return NULL;
++    block = lt->tls[id - 1];
++    if (!block)
++    {
++        struct LinuxSO *so = module_by_id(id);
++        size_t align, size;
++        char *raw;
++
++        if (!so)
++            return NULL;
++        align = so->tls_align < 16 ? 16 : so->tls_align;
++        size = so->tls_memsz + align;
++        raw = AllocVec(size, MEMF_ANY | MEMF_CLEAR);
++        if (!raw)
++            return NULL;
++        block = (void *)(((uintptr_t)raw + align - 1) & ~(align - 1));
++        memcpy(block, so->tls_image, so->tls_filesz);
++        /* keep the raw pointer for FreeVec: the aligned block never moves
++           more than align-1 bytes, and AllocVec's own header sits below raw */
++        lt->tls[id - 1] = raw;
++        LSO_DEBUG("task %p: TLS block for module %u at %p (%lu bytes)",
++                  lt->task, id, block, (unsigned long)so->tls_memsz);
++        return (char *)block + ti->offset;
++    }
++    {
++        struct LinuxSO *so = module_by_id(id);
++        size_t align = (so && so->tls_align > 16) ? so->tls_align : 16;
++        return (char *)(((uintptr_t)block + align - 1) & ~(align - 1)) + ti->offset;
++    }
++}
+diff --git a/compiler/linuxso/mmakefile.src b/compiler/linuxso/mmakefile.src
+new file mode 100644
+index 00000000..47ee934e
+--- /dev/null
++++ b/compiler/linuxso/mmakefile.src
+@@ -0,0 +1,40 @@
++#   Copyright (C) 2026, The AROS Development Team. All rights reserved.
++#
++#   linuxso: static link library that maps Linux x86-64 ELF shared objects
++#   (ET_DYN) into an AROS process and serves their glibc imports.
++
++include $(SRCDIR)/config/aros.cfg
++
++# x86-64 only: the objects it loads are x86-64 code and lso_syscall_tramp.S
++# is 64-bit assembly, so it cannot be built for any other CPU (the i386
++# regression build failed on it, 2026-09-21). It must not sit under
++# core-linklibs, which every module build depends on; hang it off the
++# per-CPU linklibs metatarget instead (cf. arch/arm-all/arm-aeabi). Users
++# such as cef-blink name it in uselibs and pull linklibs-linuxso directly.
++#MM- linklibs-x86_64 : linklibs-linuxso
++#MM linklibs-linuxso : includes linuxso-includes-copy
++
++#MM- includes-copy : linuxso-includes-copy
++#MM- compiler-includes : linuxso-includes-copy
++
++%copy_includes mmake=linuxso-includes-copy includes="linuxso.h"
++
++LINUXSOFILES := \
++    lso_elf \
++    lso_task \
++    lso_pthread \
++    lso_file \
++    lso_mem \
++    lso_shim \
++    lso_syscall
++
++%build_linklib mmake=linklibs-linuxso \
++    libname=linuxso \
++    files="$(LINUXSOFILES)" \
++    asmfiles="lso_syscall_tramp"
++
++#MM- test-linuxso : linklibs-linuxso linklibs-pthread
++
++%build_prog mmake=test-linuxso \
++    progname=LinuxSO targetdir=$(AROS_TESTS) \
++    files="linuxso_cli" uselibs="linuxso pthread"
+-- 
+2.53.0
+
