@@ -1,0 +1,33 @@
+diff --git a/crypto/x509/x509_def.cc b/crypto/x509/x509_def.cc
+index 9ff94f98064495eb8baec6790cf66ee873974473..ca38bfdb895883e0a062c4d6eb444581d3887105 100644
+--- a/crypto/x509/x509_def.cc
++++ b/crypto/x509/x509_def.cc
+@@ -18,6 +18,8 @@
+ 
+ #if defined(OPENSSL_FUCHSIA)
+ #define OPENSSLDIR "/config/ssl"
++#elif defined(__AROS__)
++#define OPENSSLDIR "PROGDIR:etc/ssl"
+ #else
+ #define OPENSSLDIR "/etc/ssl"
+ #endif
+diff --git a/include/openssl/target.h b/include/openssl/target.h
+index 2372a055d049fb4b08246a0007a2eec8964a027a..98b881579c50c3bc26966774651c60a8f0568a7f 100644
+--- a/include/openssl/target.h
++++ b/include/openssl/target.h
+@@ -187,6 +187,15 @@
+ #define OPENSSL_OPENBSD
+ #endif
+ 
++#if defined(__AROS__)
++#define OPENSSL_AROS
++// Chromium supplies TLS with custom BIOs and owns socket lifecycle. AROS
++// bsdsocket.library bases are task-owned; the generic socket BIO has no
++// opener context with which to access them safely.
++#define OPENSSL_NO_SOCK
++#endif
++
++
+ // BoringSSL requires platform's locking APIs to make internal global state
+ // thread-safe, including the PRNG. On some single-threaded embedded platforms,
+ // locking APIs may not exist, so this dependency may be disabled with the

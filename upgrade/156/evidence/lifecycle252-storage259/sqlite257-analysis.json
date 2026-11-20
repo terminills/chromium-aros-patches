@@ -1,0 +1,14 @@
+{
+  "status": "native reproducer confirmed",
+  "scope": "Actual Chromium SQLite/native VFS on fresh master247, isolated RAM versus private FAT",
+  "control": "sqlite255 default journal writes/backup/reopen pass both",
+  "trigger": "TRUNCATE journal mode, schema transaction followed by insertion transaction",
+  "observed": "FAT lseek(fd=4,offset=0,SEEK_SET) fails errno1219; SQLite extended778; inserted row count0. RAM succeeds count16.",
+  "source_evidence": [
+    "AROS master e2331300 compiler/crt/posixc/ftruncate.c restores old cursor after shrink",
+    "rom/filesys/fat/ops.c OpSetFileSize updates file size without clamping lock->pos",
+    "rom/filesys/fat/packet.c ACTION_SEEK rejects CURRENT0 when cursor beyond new EOF",
+    "compiler/crt/posixc/__dos64.c __dos64_lseek reads current position before absolute seek"
+  ],
+  "hypothesis": "Shrink leaves physical cursor beyond EOF; getpos fails, preventing subsequent absolute seek. Pretruncate clamp in SQLite only is under native probe258; no SDK change."
+}

@@ -7,6 +7,13 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-20 UTC
 
+The latest [lifecycle252 and SQLite259 development evidence](evidence/lifecycle252-storage259/README.md)
+contains a replayable source snapshot, retained native regression and a native-tested
+Chromium-local fix for the FAT SQLite journal error. Full candidate252 native
+acceptance and browser integration of259 remain pending; the results below belong
+to the explicitly named earlier builds. The companion production compact linker
+is published at aros-web77a301c.
+
 Native x64 candidate226 launches through the installed AROS icon, paints New Tab,
 opens four tabs and chrome://version, closes, and reopens through the same
 resident host. Its second session passes two500-iteration calculation,
@@ -36,7 +43,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/native-browser226/release-candidate-gates.json).
+[current RC gates](evidence/lifecycle252-storage259/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched
@@ -45,7 +52,7 @@ full-browser comparison; see [cold-load evidence](evidence/compact-image198/READ
 Fresh x64 andARM SDK builds pass against upstream AROS master b6dcaeea plus
 [replayable private prerequisites](evidence/native-browser226/master229-source).
 The ARM production kernel, workbench and external targets pass; optional
-full-build developer tests hit a retained GCC16 ICE. The x64 OS build continues.
+full-build developer tests hit a retained GCC16 ICE. The x64 OS build and independent desktop boot pass.
 Candidate226 still uses its original frozen SDK/runtime; no latest-master
 browser rebuild is claimed.
 
