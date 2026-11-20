@@ -11,7 +11,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
 storage/DOM/worker isolation, and profile close/reopen persistence. Source287
 and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
-cycles10 and30; memory plateau and cold-profile qualification remain open.
+cycles10 and30; memory plateau remains open. [Cold-boot profile persistence](evidence/cold317-profile/README.md) now passes for synthetic cookies and localStorage.
 The current snapshot is287; older results below retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
@@ -53,7 +53,7 @@ with1095.54MiB remaining after host exit. This is OS-plus-resident-engine use,
 not per-app RSS or evidence of engine duplication. The fresh FAT profile also
 reports a heavy-ad SQLite cache I/O error; profile acceptance is still pending.
 [Compact226 inputs, raw logs, native ledger, screenshots and measurements](evidence/compact226-native)
-are retained. Current independent-app isolation and profile close/reopen pass in311/312; cold-profile replay remains open.
+are retained. Current independent-app isolation and profile close/reopen pass in311/312; cold-profile replay passes in313.
 
 The Wanderer drawer title corruption after closure remains under investigation.
 ARM74 opens the installed browser window and About AROS, but full browser
@@ -61,7 +61,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/native316-x64/release-candidate-gates.json).
+[current RC gates](evidence/cold317-profile/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched

@@ -1,0 +1,62 @@
+{
+  "cold_boot_read_pass": true,
+  "read_only_fixture": true,
+  "existing_profile_reused": true,
+  "source_vm_stopped": {
+    "pid": 4121699,
+    "start_ticks": "197842693",
+    "exited": true,
+    "qmp": [
+      {
+        "return": {}
+      },
+      {
+        "return": {}
+      }
+    ],
+    "scope": "Browser closed with callbacks drained, waited for writes, then private VM powered off. Resident engine not claimed gracefully shut down; cold test uses retained disk clone."
+  },
+  "disk_clone": {
+    "source": "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/master312-x64-vm/profile.img",
+    "source_disk_sha256": "5b8cdb2b605fd89fbb134dfc2c91c507f9beff2064f2d356dda6889231d23a07",
+    "cloned_disk": "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/cold313-x64-vm/profile.img",
+    "base_iso_sha256": "43a1109a94afae591828bc466bed49eb22c731974a1a4cb3bd42ca967c2e6d6d",
+    "iso": "/tmp/job0254-cold313/cold313.iso",
+    "iso_sha256": "b2afbc6e20d5e3e586a0aaef58c6ced54a4873cb6a8570b03ff1aec0a351f9ae",
+    "qemu_command": [
+      "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/qemu-x64/usr/bin/qemu-system-x86_64",
+      "-name",
+      "job0254-cold313-browser",
+      "-machine",
+      "pc,accel=kvm",
+      "-cpu",
+      "host",
+      "-m",
+      "4096",
+      "-smp",
+      "1",
+      "-cdrom",
+      "/tmp/job0254-cold313/cold313.iso",
+      "-drive",
+      "file=/run/media/terminills/Dev_Stuff/job0254-01a1e62b/cold313-x64-vm/profile.img,format=raw,if=ide,index=0",
+      "-boot",
+      "d",
+      "-display",
+      "none",
+      "-vga",
+      "std",
+      "-serial",
+      "file:/run/media/terminills/Dev_Stuff/job0254-01a1e62b/cold313-x64-vm/serial.log",
+      "-qmp",
+      "unix:/run/media/terminills/Dev_Stuff/job0254-01a1e62b/cold313-x64-vm/qmp.sock,server=on,wait=off",
+      "-nic",
+      "user,model=pcnet",
+      "-pidfile",
+      "/run/media/terminills/Dev_Stuff/job0254-01a1e62b/cold313-x64-vm/qemu.pid",
+      "-daemonize"
+    ],
+    "scope": "Cold VM boot with byte-identical saved profile disk copy and unchanged Chromium binaries. Persistence result requires native read-page inspection."
+  },
+  "screenshot": "cold313-profile-read.png",
+  "scope": "Fresh private QEMU boot of byte-identical saved312 disk. Native browser reads synthetic persistent cookie and localStorage without rewriting. Browser was cleanly closed before source VM poweroff; resident engine was not claimed gracefully stopped. Not real-account/sign-in or hardware qualification."
+}

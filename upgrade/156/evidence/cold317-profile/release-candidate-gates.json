@@ -1,0 +1,27 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "Current287/288 fresh-master296 passes30 pages, independent ledger and full host return;62 complete/0 deferred renderer retirements.",
+    "sibling_app_isolation": "311 current engine on explicitly configured QEMU pcnet network PASS: storage/DOM/worker checks, B survives A closure,8 independent zero-exit child pairs and5 complete/0 deferred renderer retirements.308 prior disconnected-network failure retained.",
+    "persistent_profiles": "312 write/close/reopen/read and313 cold-VM boot read PASS for synthetic localStorage and persistent cookie. Cold boot uses byte-identical disk clone, read-only fixture and retained keyring/profile state. Not real-account authentication qualification.",
+    "memory": "296 lifecycle PASS but memory plateau FAIL: cycle10-to30 growth205.440521MiB, fitted10.011853MiB/cycle. Post-host1245.0365MiB used,76 PA cache records/526704 cached bytes. No attribution of all retained memory to caches; prior252/276 is not an isolated performance comparison.",
+    "native_browser_ui": "290 current native x64 keyboard icon launch, NewTab, four tabs, version156.0.8078.96, callbacks-drained closure and reopen PASS; prior scrolling-global closure regression not reproduced. PS/2 mouse input not qualified.",
+    "production_launcher": "290 x64 native icon keyboard launch and reopen PASS. ARM archive288 PASS; native link missing EGL prerequisite, current-master314 EGL built and retry running; ARM browser294 pending.",
+    "packaging": "312 x64 inventory PASS30 files, hashes/ELF architecture/native icon magic/notices. No RC archive or upload yet.",
+    "source_reproducibility": "287 complete21-repository replay PASS. Public source2bae499 plus desktop evidence618e628 remote verified. SDK304 adds seven generated credentials prerequisites to each existing sysroot while compiler readers paused;20583 x64 and19531 ARM original files hash-verified unchanged. Both288 CEF builds resumed; V8 unchanged.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification.",
+    "native_credentials": "303 credentials headers/library build PASS for x64 and ARM. Native305 ARM and306 x64 synthetic keyring round-trip, collection separation, readonly, lock/unlock and corrupt-seed preservation PASS. Browser profile integration remains pending290/294."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification",
+    "arm_qemu_usb": "301 QEMU-only DTB enabled controller and assigned device addresses, but transfers time out; USB input/network not qualified. Main294 uses known desktop DTB and native input.device diagnostic."
+  }
+}
