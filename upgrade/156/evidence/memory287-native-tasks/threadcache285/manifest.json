@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "file": "base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h",
+      "before": "f3bc04f793cd28670fdda3154df6907b56779eb16f5a590f9f98cccc3dbee976",
+      "after": "54658e465ada9a3b499f5d22146e2b4dc24d04405626ed58feecfebd7f4560c3"
+    },
+    {
+      "file": "base/allocator/partition_allocator/src/partition_alloc/thread_cache.h",
+      "before": "d6d1694fe3e9c126d05571585298d993fdc2268f4f6246508de3ce198ba16e4f",
+      "after": "21202275c4974adf2ec0c794a921540b2f2abb537bfa880aeab1b433fa4a2a55"
+    },
+    {
+      "file": "base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc",
+      "before": "107889ad6ccfa9118f85000c3695a88f0fcb5f580538a0935658d0c7f390ee27",
+      "after": "daec389a0e6d13be97af2ee54a268a5c1e465b95749eb89f93dbb54bbeb3bf7b"
+    },
+    {
+      "file": "base/threading/thread_local_storage.cc",
+      "before": "91c892e8cf7b0f9bb870945ea7853de9a6da28eb35e3ee9f2bb4d1063c21426b",
+      "after": "6ecab217d9c99d9cd449f981fb2fe68ee9c16abf8172442fe0f1175ed8aed4e5"
+    }
+  ],
+  "scope": "Staged only. Explicit cache deletion at existing native Exec task exit hook, after base TLS. Preserve existing pthread-created thread callbacks. Complete task.resource TLS migration deferred until all CRT/foreign-thread exit paths are covered. Native memory impact unverified."
+}

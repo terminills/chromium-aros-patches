@@ -7,11 +7,17 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-20 UTC
 
+[Source287 and native task cache evidence](evidence/memory287-native-tasks/README.md)
+add explicit allocator-cache retirement and child feature/trial cleanup. Native
+276 completes30 cycles but leaves1,229 cache records after host exit. The fixes
+pass host and x64/ARM object checks; integrated native acceptance is pending.
+The current snapshot is287; older results below keep their build identities.
+
 The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
 used by the previous native Widevine path. It now builds against master;
 end-to-end CDM validation remains pending.
 
-The latest [native252 lifecycle result and source267](evidence/native252-scroll267/README.md)
+The earlier [native252 lifecycle result and source267](evidence/native252-scroll267/README.md)
 confirm ten sessions,23 successful child exits and complete host shutdown, with
 renderer metrics backing reclaimed. The separate full-browser264 test exposes
 a scroll-global assertion on multitab closure; the task-local fix passes host

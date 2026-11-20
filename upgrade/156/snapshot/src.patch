@@ -832,6 +832,21 @@ index 0c78ce42a8c5e9af77274987f906d3ecf8007015..ad8bd9791cb8bc24744090729b07002c
  #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
    uint16_t* offset_ptr = &PA_UNSAFE_TODO(table_begin_[table_index]);
  #if PA_BUILDFLAG(DCHECKS_ARE_ON)
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h b/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h
+index e9fd205a9f033d617df5153b22ed13c86326f8a4..c942cfa7f9b156cbe77d68acc81f14a2cf8d3a91 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h
+@@ -211,6 +211,10 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) ThreadCache {
+   static void Init(PartitionRoot* root);
+   static bool IsInitialized();
+ 
++#if PA_BUILDFLAG(IS_AROS)
++  // Native Exec task exit has no pthread destructor pass.
++  static void DeleteForCurrentNativeTask();
++#endif
+   static void DeleteForTesting();
+ 
+   // Deletes existing thread cache and creates a new one for |root|.
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h b/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h
 index 266ce80a76d9b8d71e7fba750e5ef1a02fef776f..b0cb70cf7fc2ea29ef4cc54eb836db802ce59839 100644
 --- a/base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h
@@ -2720,6 +2735,66 @@ index 5037b7034d475130a21ccb9f23011b72f2e1f100..9f7203e0ea4e5524c4cbbb505e5c5c55
  #else
  #include <malloc.h>
  #endif
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc
+index 04dfbef111fd502a6c2efd5a5ed19309a2e2dbf7..2d806517e6d01c455514616a427e52364c85ed52 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc
+@@ -352,6 +352,27 @@ void ThreadCache::EnsureThreadSpecificDataInitialized() {
+   g_thread_cache_key_created = true;
+ }
+ 
++#if PA_BUILDFLAG(IS_AROS)
++void ThreadCache::DeleteForCurrentNativeTask() {
++  {
++    internal::ScopedGuard lock(ThreadCacheRegistry::GetLock());
++    if (!g_thread_cache_key_created)
++      return;
++  }
++  // This callback runs on the exiting task after its Chromium TLS consumers.
++  // Keep deletion outside the registry lock: the destructor unregisters here.
++  Delete(internal::PartitionTlsGet(internal::g_thread_cache_key));
++  // Late CRT/owner cleanup can still allocate. Prevent cache resurrection;
++  // those operations must use the shared root directly instead.
++  internal::PartitionTlsSet(internal::g_thread_cache_key,
++                            reinterpret_cast<void*>(kTombstone));
++#if PA_CONFIG(THREAD_CACHE_FAST_TLS)
++  PA_UNSAFE_TODO(internal::g_thread_caches[internal::kThreadCacheTombstoneIndex]) =
++      reinterpret_cast<ThreadCache*>(kTombstone);
++#endif
++}
++#endif
++
+ // static
+ void ThreadCache::DeleteForTesting() {
+   ThreadCache::Delete(internal::PartitionTlsGet(internal::g_thread_cache_key));
+@@ -952,6 +973,12 @@ void ThreadCache::SetLargestCachedSize(size_t size) {
+   internal::ThreadCache::SetLargestCachedSize(size);
+ }
+ 
++#if PA_BUILDFLAG(IS_AROS)
++void ThreadCache::OnNativeTaskExit() {
++  internal::ThreadCache::DeleteForCurrentNativeTask();
++}
++#endif
++
+ void ThreadCache::PurgeCurrentThread() {
+   for (size_t i = 0; i < internal::kMaxThreadCacheIndex; i++) {
+     auto* tcache = internal::ThreadCache::Get(i);
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h
+index cba9d4d88366c5803d01a9c23a000858e9c83021..a9220a5c14cf30aac05e663b6100cb20840548d6 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h
+@@ -67,6 +67,10 @@ struct ThreadCache {
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC)
+   static void SetLargestCachedSize(size_t size);
+ 
++#if PA_BUILDFLAG(IS_AROS)
++  PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void OnNativeTaskExit();
++#endif
++
+   // Purge the thread cache of the current thread, if one exists.
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void PurgeCurrentThread();
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void PurgeAllThread();
 diff --git a/base/aros/crash_annotations.cc b/base/aros/crash_annotations.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..ed6ca8a3b9f7957611d1252a6e04f17f715f9f21
@@ -4414,7 +4489,7 @@ index 389eecbd79c62d781107b4c1c78cf2e7db9387a2..7e2b66fc9ae6b42f1938120b5402ffd9
  
  #endif  // BASE_BASE_SWITCHES_H_
 diff --git a/base/command_line.cc b/base/command_line.cc
-index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df1755b868 100644
+index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..49c75ded265b52088e8e98e6ddcc257f1021d520 100644
 --- a/base/command_line.cc
 +++ b/base/command_line.cc
 @@ -7,6 +7,13 @@
@@ -4458,7 +4533,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
  
  #if BUILDFLAG(IS_WIN)
  #include <windows.h>
-@@ -36,10 +54,61 @@
+@@ -36,10 +54,64 @@
  
  namespace base {
  
@@ -4477,7 +4552,8 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
 +  std::map<uint64_t, CommandLine*> command_lines;
 +  std::map<CommandLine*, uint64_t> process_identities;
 +  uint64_t next_identity = 1;
-+  std::map<uint64_t, CommandLine*> thread_bindings;
++  // Workers capture a monotonic identity before native task creation.
++  std::map<uint64_t, uint64_t> thread_bindings;
 +  std::map<CommandLine*, std::unique_ptr<CommandLine>> initial_command_lines;
 +};
 +
@@ -4495,11 +4571,13 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
 +  }
 +  const auto bound = registry.thread_bindings.find(GetETaskID(task));
 +  if (bound != registry.thread_bindings.end()) {
-+    for (const auto& entry : registry.command_lines) {
-+      if (entry.second == bound->second) {
-+        return bound->second;
-+      }
++    for (const auto& entry : registry.process_identities) {
++      if (entry.second == bound->second)
++        return entry.first;
 +    }
++    // An explicit but retired owner must not adopt the browser parent or a
++    // different CommandLine allocated at the same address.
++    return nullptr;
 +  }
 +
 +  for (size_t depth = 0; task && depth < 64; ++depth) {
@@ -4520,7 +4598,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
  DuplicateSwitchHandler* g_duplicate_switch_handler = nullptr;
  
  constexpr CommandLine::CharType kSwitchTerminator[] = FILE_PATH_LITERAL("--");
-@@ -264,13 +333,29 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
+@@ -264,13 +336,29 @@ void CommandLine::InitUsingArgvForTesting(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(int argc, const char* const* argv) {
@@ -4550,7 +4628,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
    current_process_commandline_ = new CommandLine(NO_PROGRAM);
  #if BUILDFLAG(IS_WIN)
    current_process_commandline_->ParseFromString(::GetCommandLineW());
-@@ -279,6 +364,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -279,6 +367,7 @@ bool CommandLine::Init(int argc, const char* const* argv) {
    UNSAFE_BUFFERS(current_process_commandline_->InitFromArgv(argc, argv));
  #else
  #error Unsupported platform
@@ -4558,7 +4636,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
  #endif
  
    return true;
-@@ -286,35 +372,132 @@ bool CommandLine::Init(int argc, const char* const* argv) {
+@@ -286,35 +375,132 @@ bool CommandLine::Init(int argc, const char* const* argv) {
  
  // static
  bool CommandLine::Init(const StringVector& argv) {
@@ -4668,7 +4746,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
 +  return *it->second;
 +}
 +
-+void CommandLine::ArosBindCurrentThread(CommandLine* command_line) {
++void CommandLine::ArosBindCurrentThread(uint64_t process_identity) {
 +  auto& registry = GetCommandLineProcessRegistry();
 +  AutoLock lock(registry.lock);
 +  // Explicit worker binding supersedes a retired entry if Exec IDs wrap.
@@ -4677,7 +4755,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
 +  if (retired != registry.command_lines.end() && !retired->second) {
 +    registry.command_lines.erase(retired);
 +  }
-+  registry.thread_bindings[GetETaskID(FindTask(nullptr))] = command_line;
++  registry.thread_bindings[GetETaskID(FindTask(nullptr))] = process_identity;
 +}
 +
 +// static
@@ -4691,7 +4769,7 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
  // static
  CommandLine CommandLine::FromArgvWithoutProgram(const StringVector& argv) {
    CommandLine cmd(NO_PROGRAM);
-@@ -438,11 +621,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
+@@ -438,11 +624,10 @@ void CommandLine::AppendSwitchNative(std::string_view switch_string,
  #if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)
    sequence_checker_.Check();
  #endif
@@ -4705,16 +4783,17 @@ index 3a95f227d419ebe02319c065f3cdedf2a65c69a4..fa5c9ccae8b51db37e4db38048af30df
  #endif
    size_t prefix_length = GetSwitchPrefixLength(combined_switch_string);
 diff --git a/base/command_line.h b/base/command_line.h
-index 49c60f3e12494248d66e3cbdaf324d3a150b5473..0166b500aec45a070ddff7a9ba52009bf7569473 100644
+index 49c60f3e12494248d66e3cbdaf324d3a150b5473..612fc38a7d74e7b40d81f6e59b4c24f57b7d0808 100644
 --- a/base/command_line.h
 +++ b/base/command_line.h
-@@ -131,6 +131,12 @@ class BASE_EXPORT CommandLine {
+@@ -131,6 +131,13 @@ class BASE_EXPORT CommandLine {
    // Returns true if the CommandLine has been initialized for the given process.
    static bool InitializedForCurrentProcess();
  
 +#if BUILDFLAG(IS_AROS)
-+  // Binds the calling task to |command_line|'s process for its lifetime.
-+  static void ArosBindCurrentThread(CommandLine* command_line);
++  // Binds this task to the owner's identity captured before task creation.
++  // Zero remains bootstrap; retired identities cannot inherit another owner.
++  static void ArosBindCurrentThread(uint64_t process_identity);
 +  static void ArosUnbindCurrentThread();
 +#endif
 +
@@ -4966,7 +5045,7 @@ index 0000000000000000000000000000000000000000..e39877c604521046c35f83c7d92efcb0
 +}  // namespace internal
 +}  // namespace base::debug
 diff --git a/base/feature_list.cc b/base/feature_list.cc
-index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..7bdfe8e513bb9a0bda2fe750f3d2dc945d5c1087 100644
+index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..2f2024b0aaa2af2467772f0bf060802898b913a4 100644
 --- a/base/feature_list.cc
 +++ b/base/feature_list.cc
 @@ -5,9 +5,9 @@
@@ -5023,6 +5102,23 @@ index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..7bdfe8e513bb9a0bda2fe750f3d2dc94
  
  using FeatureStateCache = base::Feature::FeatureStateCache;
  using base::internal::RuntimeMutabilityResult;
+@@ -400,6 +428,16 @@ FeatureList::FeatureList() : caching_context_(g_current_caching_context++) {}
+ 
+ FeatureList::~FeatureList() = default;
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_retire_child_features() {
++  // Workers and child TLS consumers have finished. Detach only this logical
++  // owner's feature list; testing reset helpers also alter resident state.
++  FeatureList* retired = g_feature_list_instance;
++  g_feature_list_instance = nullptr;
++  delete retired;
++}
++#endif
++
+ FeatureList::ScopedDisallowOverrides::ScopedDisallowOverrides(
+     const char* reason)
+ #if DCHECK_IS_ON()
 diff --git a/base/files/file_enumerator_posix.cc b/base/files/file_enumerator_posix.cc
 index ea0f65383ff106ce6f81b0f7abf575fec11bae14..024c1d11e51c9eca95972983793a2ebb01aed329 100644
 --- a/base/files/file_enumerator_posix.cc
@@ -8746,7 +8842,7 @@ index dc4158ffdf656780aa8538246646555c067970e9..8525588448e208511d75319a2b79b484
      instance->Set(WrapUnique(new WorkIdProvider));
    }
 diff --git a/base/metrics/field_trial.cc b/base/metrics/field_trial.cc
-index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..573decaf20e711238de03e716edc9b8b808d082e 100644
+index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..0f98d8e7d4f083428cd13851e102af5bd4671454 100644
 --- a/base/metrics/field_trial.cc
 +++ b/base/metrics/field_trial.cc
 @@ -5,6 +5,7 @@
@@ -8757,7 +8853,7 @@ index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..573decaf20e711238de03e716edc9b8b
  #include <string_view>
  #include <utility>
  
-@@ -430,6 +431,37 @@ void FieldTrial::GetStateWhileLocked(PickleState* field_trial_state) {
+@@ -430,6 +431,45 @@ void FieldTrial::GetStateWhileLocked(PickleState* field_trial_state) {
  // static
  FieldTrialList* FieldTrialList::global_ = nullptr;
  
@@ -8790,6 +8886,14 @@ index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..573decaf20e711238de03e716edc9b8b
 +}  // namespace
 +
 +#define global_ GetFieldTrialListForCurrentProcess()
++#endif
++
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_retire_child_field_trials() {
++  // FeatureList contains references into this list and must be retired first.
++  // Its destructor clears this owner's registry slot and shared-memory handle.
++  delete FieldTrialList::GetInstance();
++}
 +#endif
 +
  FieldTrialList::Observer::~Observer() = default;
@@ -8828,7 +8932,7 @@ index 91e2662df18e8c5186b78c43cced984281a4d5c7..ce4cae3d99c43f6854f7eec6b128130a
  // Defines the static `atomic_histogram_pointer` and forwards to
  // HISTOGRAM_POINTER_USE.
 diff --git a/base/metrics/persistent_histogram_allocator.cc b/base/metrics/persistent_histogram_allocator.cc
-index 7e2c897e8994215715434ebda68e1eef354f7d2a..11711e86ce8bfc0cabf711717648f337842de5de 100644
+index 7e2c897e8994215715434ebda68e1eef354f7d2a..93a60d39cc63e6789090d60c9d1cc7ffc7fe3135 100644
 --- a/base/metrics/persistent_histogram_allocator.cc
 +++ b/base/metrics/persistent_histogram_allocator.cc
 @@ -39,6 +39,11 @@
@@ -8856,6 +8960,61 @@ index 7e2c897e8994215715434ebda68e1eef354f7d2a..11711e86ce8bfc0cabf711717648f337
  
  // Calculate the number of bytes required to store all of a histogram's
  // "counts". This will return zero (0) if `bucket_count` is not valid.
+@@ -733,9 +743,22 @@ PersistentHistogramAllocator::GetOrCreateStatisticsRecorderHistogram(
+ GlobalHistogramAllocator::~GlobalHistogramAllocator() {
+   // GlobalHistogramAllocator should never be destroyed because Histogram
+   // objects may keep pointers to its memory.
++#if BUILDFLAG(IS_AROS)
++  CHECK_NE(Get(), this);
++#else
+   NOTREACHED();
++#endif
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++// static
++void GlobalHistogramAllocator::RetireForArosProcessExit() {
++  if (!StatisticsRecorder::RetireForArosProcessExit())
++    return;
++  delete g_histogram_allocator.exchange(nullptr, std::memory_order_acq_rel);
++}
++#endif
++
+ // static
+ void GlobalHistogramAllocator::CreateWithPersistentMemory(
+     void* base,
+@@ -1106,3 +1129,15 @@ void GlobalHistogramAllocator::ImportHistogramsToStatisticsRecorder() {
+ }
+ 
+ }  // namespace base
++
++#if BUILDFLAG(IS_AROS)
++namespace base::internal { void OnNativeTaskExit(); }
++extern "C" void aros_base_drain_child_tls() {
++  // TLS destructors can report metrics. Run them with the histograms and their
++  // backing still alive, after the outer CEF child entry has fully unwound.
++  base::internal::OnNativeTaskExit();
++}
++extern "C" void aros_base_retire_child_histograms() {
++  base::GlobalHistogramAllocator::RetireForArosProcessExit();
++}
++#endif
+diff --git a/base/metrics/persistent_histogram_allocator.h b/base/metrics/persistent_histogram_allocator.h
+index 3b4cf58532a2a15b4911ae6d59ac678d011184a6..ff204dd4957184edd72df29e0406ecf8cb7b47c7 100644
+--- a/base/metrics/persistent_histogram_allocator.h
++++ b/base/metrics/persistent_histogram_allocator.h
+@@ -498,6 +498,11 @@ class BASE_EXPORT GlobalHistogramAllocator
+   // other ways. Do not destroy the returned allocator since already created
+   // histograms may still keep pointers to allocated memory.
+   static GlobalHistogramAllocator* ReleaseForTesting();
++#if BUILDFLAG(IS_AROS)
++  // Called only at the joined native-child exit boundary, never while its
++  // histogram producers or consumers can still access their process state.
++  static void RetireForArosProcessExit();
++#endif
+ 
+   // Stores a pathname to which the contents of this allocator should be saved
+   // in order to persist the data for a later use.
 diff --git a/base/metrics/persistent_histogram_storage.cc b/base/metrics/persistent_histogram_storage.cc
 index 4475ed0ec2c93d519e6b36bbe85e89062b353db7..788467e538404a0d3dce6028f08fc9dd53821f1c 100644
 --- a/base/metrics/persistent_histogram_storage.cc
@@ -8973,7 +9132,7 @@ index 28b60a6bbb55b3efe60ec34b79524ce194c54ff4..ca7a05cf3bff7182cfd687a9bb0c0a8c
  }
  
 diff --git a/base/metrics/statistics_recorder.cc b/base/metrics/statistics_recorder.cc
-index 98233a7724bb39baaaf1701317cc74cc018a243e..fcc5009db1b28c72a5cc2e2e97e5b34b2c479f63 100644
+index 98233a7724bb39baaaf1701317cc74cc018a243e..2d59f7d8c47221883b5e946491cf251a8771704c 100644
 --- a/base/metrics/statistics_recorder.cc
 +++ b/base/metrics/statistics_recorder.cc
 @@ -26,6 +26,11 @@
@@ -9025,11 +9184,56 @@ index 98233a7724bb39baaaf1701317cc74cc018a243e..fcc5009db1b28c72a5cc2e2e97e5b34b
  StatisticsRecorder::ScopedHistogramSampleObserver::
      ScopedHistogramSampleObserver(std::string_view name,
                                    OnSampleCallback callback)
+@@ -481,6 +509,32 @@ size_t StatisticsRecorder::GetHistogramCount() {
+   return const_top->histograms_.size();
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++// static
++bool StatisticsRecorder::RetireForArosProcessExit() {
++  StatisticsRecorder* recorder;
++  HistogramMap histograms;
++  {
++    const AutoLock auto_lock(GetLock());
++    recorder = top_;
++    if (!recorder)
++      return true;
++    // A temporary recorder does not own the process-wide lifetime boundary.
++    if (recorder->previous_)
++      return false;
++    histograms.swap(recorder->histograms_);
++    have_active_callbacks_.store(false, std::memory_order_relaxed);
++    global_sample_callback_.store(nullptr, std::memory_order_relaxed);
++  }
++  // Persistent samples and bucket ranges must remain valid until all histogram
++  // destructors have run. The backing allocator is released by our caller.
++  for (const auto& entry : histograms)
++    delete entry.second;
++  delete recorder;
++  return true;
++}
++#endif
++
+ // static
+ void StatisticsRecorder::ForgetHistogramForTesting(std::string_view name) {
+   const AutoLock auto_lock(GetLock());
 diff --git a/base/metrics/statistics_recorder.h b/base/metrics/statistics_recorder.h
-index c68f41832c9036256d5a57364e6680f0d2cb664a..d5d1f87428e45c51f2a96c49fcea4f7d312d5c8c 100644
+index c68f41832c9036256d5a57364e6680f0d2cb664a..f7007be55bca18af66491a8419b1aab2c3a72ae3 100644
 --- a/base/metrics/statistics_recorder.h
 +++ b/base/metrics/statistics_recorder.h
-@@ -339,14 +339,22 @@ class BASE_EXPORT StatisticsRecorder {
+@@ -271,6 +271,11 @@ class BASE_EXPORT StatisticsRecorder {
+   //
+   // This method is thread safe.
+   static size_t GetHistogramCount();
++#if BUILDFLAG(IS_AROS)
++  // Only after every thread and callback of the current native child has
++  // stopped. Other process identities retain their own recorders unchanged.
++  static bool RetireForArosProcessExit();
++#endif
+ 
+   // Initializes logging histograms with --v=1. Safe to call multiple times.
+   // Is called from ctor but for browser it seems that it is more useful to
+@@ -339,14 +344,22 @@ class BASE_EXPORT StatisticsRecorder {
    // Returns the global callback, if any, that should be called every time a
    // histogram sample is added.
    static GlobalSampleCallback global_sample_callback() {
@@ -9052,7 +9256,7 @@ index c68f41832c9036256d5a57364e6680f0d2cb664a..d5d1f87428e45c51f2a96c49fcea4f7d
    }
  
   private:
-@@ -437,6 +445,12 @@ class BASE_EXPORT StatisticsRecorder {
+@@ -437,6 +450,12 @@ class BASE_EXPORT StatisticsRecorder {
    // Current global recorder. This recorder is used by static methods. When a
    // new global recorder is created by CreateTemporaryForTesting(), then the
    // previous global recorder is referenced by top_->previous_.
@@ -9065,7 +9269,7 @@ index c68f41832c9036256d5a57364e6680f0d2cb664a..d5d1f87428e45c51f2a96c49fcea4f7d
    static StatisticsRecorder* top_ GUARDED_BY(GetLock());
  
    // Tracks whether InitLogOnShutdownWhileLocked() has registered a logging
-@@ -449,6 +463,7 @@ class BASE_EXPORT StatisticsRecorder {
+@@ -449,6 +468,7 @@ class BASE_EXPORT StatisticsRecorder {
    // Stores a raw callback which should be called on any every histogram sample
    // which gets added.
    static std::atomic<GlobalSampleCallback> global_sample_callback_;
@@ -11721,6 +11925,53 @@ index 2bf2f919fe5cba57049cb7e80a92603c8d4980b8..b41c6ec513895b20b38bcdfeb1ecb520
    static_assert(
        std::is_base_of_v<WatchableIOMessagePumpPosix, MessagePumpForUI>,
        "CurrentThreadForUI::WatchFileDescriptor is supported only"
+diff --git a/base/task/post_job.cc b/base/task/post_job.cc
+index 02987d5fde9fe0dc001fac97a2adee08b47abf6f..9d30b29c798ebaed828c07e9d6c21b770709facc 100644
+--- a/base/task/post_job.cc
++++ b/base/task/post_job.cc
+@@ -4,6 +4,12 @@
+ 
+ #include "base/task/post_job.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/debug/stack_trace.h"
++#include "base/logging.h"
++#endif
++
+ #include "base/task/scoped_set_task_priority_for_current_thread.h"
+ #include "base/task/thread_pool/job_task_source.h"
+ #include "base/task/thread_pool/pooled_task_runner_delegate.h"
+@@ -23,10 +29,12 @@ scoped_refptr<internal::JobTaskSource> CreateJobTaskSource(
+       << "Hint: if this is in a unit test, you're likely merely missing a "
+          "base::test::TaskEnvironment member in your fixture.\n";
+ 
+-  return base::MakeRefCounted<internal::JobTaskSource>(
++  auto source = base::MakeRefCounted<internal::JobTaskSource>(
+       from_here, traits, internal::GetCurrentTaskImportance(),
+       std::move(worker_task), std::move(max_concurrency_callback),
+       static_cast<internal::ThreadPoolImpl*>(ThreadPoolInstance::Get()));
++
++  return source;
+ }
+ 
+ }  // namespace
+@@ -139,6 +147,15 @@ void JobHandle::Join() {
+ }
+ 
+ void JobHandle::Cancel() {
++#if BUILDFLAG(IS_AROS)
++  if (!internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
++          task_source_->delegate())) {
++    LOG(ERROR) << "[Chromium:AROS:JobLifetime] cancellation owner mismatch source="
++               << task_source_.get() << " delegate=" << task_source_->delegate()
++               << " current_pool=" << ThreadPoolInstance::Get();
++    base::debug::StackTrace().Print();
++  }
++#endif
+   DCHECK(internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+       task_source_->delegate()));
+   task_source_->Cancel();
 diff --git a/base/task/sequence_manager/sequence_manager_impl.cc b/base/task/sequence_manager/sequence_manager_impl.cc
 index a9384472895193fb5c97d3a155c6589cd681bd97..cc47515cd5fe7aa14887a3393057f5bf1f2e14c7 100644
 --- a/base/task/sequence_manager/sequence_manager_impl.cc
@@ -13704,18 +13955,19 @@ index 0000000000000000000000000000000000000000..165171e8880b2bce4c3d967890282dee
 +}
 +}  // namespace base
 diff --git a/base/threading/platform_thread_posix.cc b/base/threading/platform_thread_posix.cc
-index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3b466e16f 100644
+index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..4794be8ad9e44056cbd7f0b58d1c9a6d8ae20280 100644
 --- a/base/threading/platform_thread_posix.cc
 +++ b/base/threading/platform_thread_posix.cc
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,8 @@
  #include <memory>
  #include <tuple>
  
 +#include "base/command_line.h"
++#include "base/aros/process_local.h"
  #include "base/compiler_specific.h"
  #include "base/lazy_instance.h"
  #include "base/logging.h"
-@@ -29,7 +30,7 @@
+@@ -29,7 +31,7 @@
  #include "build/build_config.h"
  #include "partition_alloc/buildflags.h"
  
@@ -13724,43 +13976,56 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  #include "base/posix/can_lower_nice_to.h"
  #endif
  
-@@ -51,6 +52,14 @@
- #include "partition_alloc/stack/stack.h"  // nogncheck
- #endif
+@@ -49,10 +51,28 @@
  
+ #if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+ #include "partition_alloc/stack/stack.h"  // nogncheck
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/internal/thread_cache_internal.h"  // nogncheck
++#endif
++#endif
++
 +// The Exec API macros (Allocate(), SysBase, ...) clash with PartitionAlloc
 +// identifiers, so include them last.
 +#if BUILDFLAG(IS_AROS)
 +#include "base/threading/aros_native_task.h"
 +#include <exec/tasks.h>
 +#include <proto/exec.h>
-+#endif
-+
+ #endif
+ 
  namespace base {
  
++#if BUILDFLAG(IS_AROS)
++namespace internal {
++// Native Exec tasks need an explicit TLS destructor pass before owner unbinding.
++void OnNativeTaskExit();
++}  // namespace internal
++#endif
++
  void InitThreading();
-@@ -66,6 +75,9 @@ struct ThreadParams {
+ void TerminateOnThread();
+ size_t GetDefaultThreadStackSize(const pthread_attr_t& attributes);
+@@ -66,6 +86,9 @@ struct ThreadParams {
    bool joinable = false;
    ThreadType thread_type = ThreadType::kDefault;
    MessagePumpType message_pump_type = MessagePumpType::DEFAULT;
 +#if BUILDFLAG(IS_AROS)
-+  raw_ptr<CommandLine> command_line = nullptr;
++  uint64_t process_identity = 0;
 +#endif
  };
  
  void* ThreadFunc(void* params) {
-@@ -76,6 +88,10 @@ void* ThreadFunc(void* params) {
+@@ -76,6 +99,9 @@ void* ThreadFunc(void* params) {
          static_cast<ThreadParams*>(params));
  
      delegate = thread_params->delegate;
 +#if BUILDFLAG(IS_AROS)
-+    if (thread_params->command_line)
-+      CommandLine::ArosBindCurrentThread(thread_params->command_line);
++    CommandLine::ArosBindCurrentThread(thread_params->process_identity);
 +#endif
      if (!thread_params->joinable) {
        base::DisallowSingleton();
      }
-@@ -93,6 +109,12 @@ void* ThreadFunc(void* params) {
+@@ -93,6 +119,12 @@ void* ThreadFunc(void* params) {
      // where they were created. This explicitly sets the priority of all new
      // threads.
      PlatformThread::SetDefaultThreadType(thread_params->thread_type);
@@ -13773,9 +14038,13 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    }
  
    ThreadIdNameManager::GetInstance()->RegisterThread(
-@@ -113,6 +135,9 @@ void* ThreadFunc(void* params) {
+@@ -112,7 +144,13 @@ void* ThreadFunc(void* params) {
+   partition_alloc::internal::StackTopRegistry::Get().NotifyThreadDestroyed();
  #endif
  
++#if BUILDFLAG(IS_AROS)
++  internal::OnNativeTaskExit();
++#endif
    base::TerminateOnThread();
 +#if BUILDFLAG(IS_AROS)
 +  CommandLine::ArosUnbindCurrentThread();
@@ -13783,7 +14052,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    return nullptr;
  }
  
-@@ -125,6 +150,30 @@ bool CreateThread(size_t stack_size,
+@@ -125,6 +163,29 @@ bool CreateThread(size_t stack_size,
    DCHECK(thread_handle);
    base::InitThreading();
  
@@ -13793,8 +14062,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
 +  params->joinable = joinable;
 +  params->thread_type = thread_type;
 +  params->message_pump_type = message_pump_type;
-+  if (CommandLine::InitializedForCurrentProcess())
-+    params->command_line = CommandLine::ForCurrentProcess();
++  params->process_identity = aros::CurrentProcessIdentity();
 +  ArosPlatformTask* task = ArosPlatformTaskStart(
 +      [](void* argument) { ThreadFunc(argument); }, params.get(),
 +      stack_size, "Chromium worker", 0);
@@ -13814,7 +14082,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    pthread_attr_t attributes;
    pthread_attr_init(&attributes);
  
-@@ -143,14 +192,35 @@ bool CreateThread(size_t stack_size,
+@@ -143,14 +204,34 @@ bool CreateThread(size_t stack_size,
      pthread_attr_setstacksize(&attributes, stack_size);
    }
  
@@ -13835,8 +14103,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    params->thread_type = thread_type;
    params->message_pump_type = message_pump_type;
 +#if BUILDFLAG(IS_AROS)
-+  if (CommandLine::InitializedForCurrentProcess())
-+    params->command_line = CommandLine::ForCurrentProcess();
++  params->process_identity = aros::CurrentProcessIdentity();
 +#endif
  
    pthread_t handle;
@@ -13850,7 +14117,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    bool success = !err;
    if (success) {
      // ThreadParams should be deleted on the created thread after used.
-@@ -166,6 +236,7 @@ bool CreateThread(size_t stack_size,
+@@ -166,6 +247,7 @@ bool CreateThread(size_t stack_size,
    pthread_attr_destroy(&attributes);
  
    return success;
@@ -13858,7 +14125,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  }
  
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-@@ -270,6 +341,8 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
+@@ -270,6 +352,8 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
  
  #elif BUILDFLAG(IS_POSIX) && BUILDFLAG(IS_AIX)
    return PlatformThreadId(pthread_self());
@@ -13867,7 +14134,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AIX)
    return PlatformThreadId(reinterpret_cast<int64_t>(pthread_self()));
  #endif
-@@ -277,12 +350,21 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
+@@ -277,12 +361,21 @@ PlatformThreadId PlatformThreadBase::CurrentId() {
  
  // static
  PlatformThreadRef PlatformThreadBase::CurrentRef() {
@@ -13889,7 +14156,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  }
  
  #if !BUILDFLAG(IS_APPLE)
-@@ -349,12 +431,22 @@ void PlatformThreadBase::Join(PlatformThreadHandle thread_handle) {
+@@ -349,12 +442,22 @@ void PlatformThreadBase::Join(PlatformThreadHandle thread_handle) {
    // blocking tasks.
    base::internal::ScopedBlockingCallWithBaseSyncPrimitives scoped_blocking_call(
        FROM_HERE, base::BlockingType::MAY_BLOCK);
@@ -13912,7 +14179,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  }
  
  // Mac and Fuchsia have their own SetCurrentThreadType() and
-@@ -363,6 +455,9 @@ void PlatformThreadBase::Detach(PlatformThreadHandle thread_handle) {
+@@ -363,6 +466,9 @@ void PlatformThreadBase::Detach(PlatformThreadHandle thread_handle) {
  
  // static
  bool PlatformThreadBase::CanChangeThreadType(ThreadType from, ThreadType to) {
@@ -13922,7 +14189,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
    if (from >= to) {
      // Decreasing thread priority on POSIX is always allowed.
      return true;
-@@ -372,6 +467,7 @@ bool PlatformThreadBase::CanChangeThreadType(ThreadType from, ThreadType to) {
+@@ -372,6 +478,7 @@ bool PlatformThreadBase::CanChangeThreadType(ThreadType from, ThreadType to) {
    }
  
    return internal::CanLowerNiceTo(internal::ThreadTypeToNiceValue(to));
@@ -13930,7 +14197,7 @@ index 2c34251a848d3b1c84eb6f9b03027effad92e1e2..8769927f672ff2b30cfd6ca754e85bf3
  }
  
  // static
-@@ -392,9 +488,13 @@ ThreadType PlatformThreadBase::GetCurrentEffectiveThreadTypeForTest() {
+@@ -392,9 +499,13 @@ ThreadType PlatformThreadBase::GetCurrentEffectiveThreadTypeForTest() {
  
  // static
  size_t PlatformThreadBase::GetDefaultThreadStackSize() {
@@ -13965,6 +14232,46 @@ index d04df30a6535b030e3bf67469121ebd24c0ea6fb..71e2c4050b138ab04ee09da3777f7c65
  #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
    using RefType = pthread_t;
  #endif
+diff --git a/base/threading/thread_local_storage.cc b/base/threading/thread_local_storage.cc
+index 650035de59b1862e1bc1ede42683b407348a3306..4006c3305fc506f6fbf58642a3af4d2c73e16304 100644
+--- a/base/threading/thread_local_storage.cc
++++ b/base/threading/thread_local_storage.cc
+@@ -3,6 +3,9 @@
+ // found in the LICENSE file.
+ 
+ #include "base/threading/thread_local_storage.h"
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/thread_cache.h"
++#endif
+ 
+ #include <algorithm>
+ #include <array>
+@@ -417,6 +420,25 @@ namespace base {
+ 
+ namespace internal {
+ 
++
++#if BUILDFLAG(IS_AROS)
++void OnNativeTaskExit() {
++  const PlatformThreadLocalStorage::TLSKey key =
++      g_native_tls_key.load(std::memory_order_relaxed);
++  if (key != PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES) {
++    TlsVectorEntry* vector = nullptr;
++    const TlsVectorState state = GetTlsVectorStateAndValue(key, &vector);
++    // Reentrant destruction must leave the allocator available to the outer
++    // destructor pass. Repeated completed notifications are harmless.
++    if (state == TlsVectorState::kDestroying)
++      return;
++    if (state == TlsVectorState::kInUse)
++      OnThreadExitInternal(vector);
++  }
++  partition_alloc::ThreadCache::OnNativeTaskExit();
++}
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ void PlatformThreadLocalStorage::OnThreadExit() {
+   PlatformThreadLocalStorage::TLSKey key =
 diff --git a/base/time/time.cc b/base/time/time.cc
 index b100e4b8e6f01c99343465b98ba480a237ab80dd..d94f121f5f045dae1a34a2f7be5c7d5237dc48f2 100644
 --- a/base/time/time.cc
@@ -41340,10 +41647,20 @@ index 0fd60fa820805069ff01a2442f14de2b5e984e5a..9f0d245f35e641780f8bd10366061495
  
  }  // namespace content
 diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
-index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd23877921ac9e1be 100644
+index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..1416dfad327ee84a9e8bf17e2fa61294ed32707a 100644
 --- a/content/app/content_main_runner_impl.cc
 +++ b/content/app/content_main_runner_impl.cc
-@@ -55,6 +55,7 @@
+@@ -24,6 +24,9 @@
+ #include "base/base_switches.h"
+ #include "base/byte_size.h"
+ #include "base/command_line.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/metrics/persistent_histogram_allocator.h"
++#endif
+ #include "base/debug/debugger.h"
+ #include "base/debug/leak_annotations.h"
+ #include "base/debug/stack_trace.h"
+@@ -55,6 +58,7 @@
  #include "base/threading/hang_watcher.h"
  #include "base/threading/platform_thread.h"
  #include "base/time/default_clock.h"
@@ -41351,7 +41668,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
  #include "base/time/time.h"
  #include "base/trace_event/trace_event.h"
  #include "build/branding_buildflags.h"
-@@ -819,8 +820,14 @@ NO_STACK_PROTECTOR int RunOtherNamedProcessTypeMain(
+@@ -819,8 +823,14 @@ NO_STACK_PROTECTOR int RunOtherNamedProcessTypeMain(
          DCHECK_GE(std::get<int>(exit_code), 0);
          return std::get<int>(exit_code);
        }
@@ -41367,7 +41684,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
      }
    }
  
-@@ -1022,9 +1029,18 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+@@ -1022,9 +1032,18 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
        return TerminateForFatalInitializationError();
      }
    }
@@ -41386,7 +41703,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
  #endif  // BUILDFLAG(IS_ANDROID) && (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE)
  
  #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
-@@ -1041,18 +1057,12 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+@@ -1041,18 +1060,12 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
        }));
  
  #if !defined(OFFICIAL_BUILD) || BUILDFLAG(CHROME_FOR_TESTING)
@@ -41406,7 +41723,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
      base::debug::EnableInProcessStackDumping();
    }
  
-@@ -1243,8 +1253,13 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
+@@ -1243,8 +1256,13 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
      return RunBrowser(std::move(main_params), start_minimal_browser);
    }
  
@@ -41422,7 +41739,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
  }
  
  int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
-@@ -1479,10 +1494,29 @@ void ContentMainRunnerImpl::Shutdown() {
+@@ -1479,10 +1497,30 @@ void ContentMainRunnerImpl::Shutdown() {
  
    exit_manager_.reset(nullptr);
  
@@ -41435,6 +41752,7 @@ index 92ab96d48ce1419d2af33390b0a5b5e2ef745ea2..99ae28d177d4b4b8798b6a9dd2387792
 +  if (!process_type.empty()) {
 +    base::ThreadPoolInstance::Get()->JoinForTesting();
 +    base::ThreadPoolInstance::Set(nullptr);
++
 +  }
 +#endif
 +
@@ -45037,7 +45355,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..4b9edefe3eca4df5e709fcafe9da1a32ceefa975 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0fef152a507c2fe1ffd12bf3b065fe41f6b66c39 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
 @@ -57,6 +57,9 @@
@@ -45137,7 +45455,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..4b9edefe3eca4df5e709fcafe9da1a32
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +714,51 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +714,55 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
@@ -45150,7 +45468,11 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..4b9edefe3eca4df5e709fcafe9da1a32
 +  }
 +  if (main_thread_scheduler_) {
 +    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
-+    main_thread_scheduler_->Shutdown();
++    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([] {
++      // Queue deletion must precede isolate retirement; clocks and helper
++      // state must survive the synchronous Oilpan finalizers it triggers.
++      blink::RetireMainThreadIsolateForAros();
++    }));
 +    LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
 +  }
 +  // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.
@@ -45190,7 +45512,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..4b9edefe3eca4df5e709fcafe9da1a32
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +769,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +773,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
@@ -47545,6 +47867,21 @@ index 659b975aee729f08cd392fe7b37ba06999719894..9280d5c4d99bf7e2a8255ffea9a61d05
  }
  
  void HeadlessContentMainDelegate::PreSandboxStartup() {
+diff --git a/ipc/ipc_channel_proxy.cc b/ipc/ipc_channel_proxy.cc
+index d6f7b9f1a1febaa001d824e82dbd5bc008b61413..652b4980ccc8b3a694b1d3b78055414f0b9336ab 100644
+--- a/ipc/ipc_channel_proxy.cc
++++ b/ipc/ipc_channel_proxy.cc
+@@ -228,7 +228,9 @@ void ChannelProxy::Init(mojo::ScopedMessagePipeHandle channel_handle,
+                         bool create_pipe_now) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   DCHECK(!did_init_);
+-#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_AROS)
++  // Native AROS also needs the server channel and thread-safe proxy before
++  // renderer startup binds associated interfaces on the listener thread.
+   // When we are creating a server on POSIX, we need its file descriptor
+   // to be created immediately so that it can be accessed and passed
+   // to other processes. Forcing it to be created immediately avoids
 diff --git a/ipc/ipc_mojo_bootstrap.cc b/ipc/ipc_mojo_bootstrap.cc
 index 9d98d8ef0d07b90d36ed0ae0a982051078324b04..1c079a502df01a5c85332598c82e07b4b027dd30 100644
 --- a/ipc/ipc_mojo_bootstrap.cc
@@ -58314,6 +58651,56 @@ index 9ef66ec39e8cb8ef9a8753baf7bbddc227768d77..77f7dbee62878c5343b06fa1707a1001
   private:
    static void InitializeMainThreadCommon(
        std::unique_ptr<MainThread> main_thread);
+diff --git a/third_party/blink/public/platform/scheduler/web_thread_scheduler.h b/third_party/blink/public/platform/scheduler/web_thread_scheduler.h
+index a737cf06f53a570a41b5cc9cd2af7e7a72cbb372..ff5a4c91a7d59d83c4975565d20e5f0987c5066d 100644
+--- a/third_party/blink/public/platform/scheduler/web_thread_scheduler.h
++++ b/third_party/blink/public/platform/scheduler/web_thread_scheduler.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ 
++#include "base/functional/callback.h"
+ #include "base/message_loop/message_pump.h"
+ #include "base/task/sequence_manager/sequence_manager.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -42,6 +43,11 @@ class BLINK_PLATFORM_EXPORT WebThreadScheduler
+   // queues. After this call any work posted to the task runners will be
+   // silently dropped.
+   virtual void Shutdown() = 0;
++#if BUILDFLAG(IS_AROS)
++  // Release queued owners first, then run synchronous isolate cleanup while
++  // scheduler clocks and helpers remain available to Oilpan finalizers.
++  virtual void ShutdownWithCleanup(base::OnceClosure cleanup);
++#endif
+ 
+   static std::unique_ptr<WebThreadScheduler> CreateMainThreadScheduler(
+       std::unique_ptr<base::MessagePump> message_pump);
+diff --git a/third_party/blink/public/web/blink.h b/third_party/blink/public/web/blink.h
+index eed893864a344767a9d9df6fab71866065d19a9a..87e7e7705bc6469b4906859117bdd188473fe0fb 100644
+--- a/third_party/blink/public/web/blink.h
++++ b/third_party/blink/public/web/blink.h
+@@ -33,6 +33,8 @@
+ 
+ #include <vector>
+ 
++#include "build/build_config.h"
++
+ #include "third_party/blink/public/platform/web_common.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "v8/include/v8-isolate.h"
+@@ -84,6 +86,12 @@ BLINK_EXPORT void InitializeWithoutIsolateForTesting(
+ // must be called before this.
+ BLINK_EXPORT v8::Isolate* CreateMainThreadIsolate();
+ 
++#if BUILDFLAG(IS_AROS)
++// Called on the native renderer owner before its scheduler is stopped. Returns
++// false if live pages or workers still prevent retiring the main isolate.
++BLINK_EXPORT bool RetireMainThreadIsolateForAros();
++#endif
++
+ // Alters the rendering of content to conform to a fixed set of rules.
+ BLINK_EXPORT void SetWebTestMode(bool);
+ BLINK_EXPORT bool WebTestMode();
 diff --git a/third_party/blink/public/web/web_element.h b/third_party/blink/public/web/web_element.h
 index b56dc499e4c31eb7cb10bd1b79e56dafa63d9fa9..c39757bccdded4b7544522137cb88bd3271c6557 100644
 --- a/third_party/blink/public/web/web_element.h
@@ -58652,10 +59039,26 @@ index 0a8db62080e2e8a182467c60d1174bb40c198ec5..7c3cc3818f7b34a810247dd7a7a20185
      sources += [
        "memory_usage_monitor_posix.cc",
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
-index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..c4afba40f2f90c57db4f19213fac1df793a980a7 100644
+index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..8c5b29282edba1edcc382f3c465d5daaddbe0318 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc
 +++ b/third_party/blink/renderer/controller/blink_initializer.cc
-@@ -155,9 +155,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
+@@ -35,6 +35,15 @@
+ #include <utility>
+ 
+ #include "base/command_line.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/logging.h"
++#include "v8/include/v8-statistics.h"
++#include "third_party/blink/renderer/core/page/page.h"
++#include "third_party/blink/renderer/core/workers/worker_thread.h"
++#include "third_party/blink/renderer/platform/heap/thread_state.h"
++#include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
++#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
++#endif
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+@@ -155,9 +164,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
  
    GetBlinkInitializer().RegisterInterfaces(*binders);
  
@@ -58672,6 +59075,52 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..c4afba40f2f90c57db4f19213fac1df7
  
    GetBlinkInitializer().RegisterMemoryWatchers(platform);
  
+@@ -215,6 +231,45 @@ v8::Isolate* CreateMainThreadIsolate() {
+   return V8Initializer::InitializeMainThread();
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++bool RetireMainThreadIsolateForAros() {
++  CHECK(IsMainThread());
++  v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
++  if (!isolate)
++    return true;
++  // Do not retire an isolate while a live page can still execute JS.
++  if (!Page::OrdinaryPages().empty()) {
++    LOG(WARNING) << "[Chromium:AROS:IsolateRetire] deferred pages="
++                 << Page::OrdinaryPages().size();
++    return false;
++  }
++  MemoryCache::Get()->EvictResources();
++  V8PerIsolateData::From(isolate)->ClearScriptRegexpContext();
++  // Collect detached page/worker wrappers while their root registries and
++  // scheduler are still valid. Use the production GC request, not the test
++  // heap-recovery callback or test-only cache/collection interfaces.
++  isolate->LowMemoryNotification();
++  if (!Page::OrdinaryPages().empty() || WorkerThread::WorkerThreadCount()) {
++    LOG(WARNING) << "[Chromium:AROS:IsolateRetire] deferred after GC pages="
++                 << Page::OrdinaryPages().size() << " workers="
++                 << WorkerThread::WorkerThreadCount();
++    return false;
++  }
++  v8::HeapStatistics stats;
++  isolate->GetHeapStatistics(&stats);
++  LOG(INFO) << "[Chromium:AROS:IsolateRetire] begin heap="
++            << stats.total_heap_size() << " used=" << stats.used_heap_size();
++  // Oilpan finalizers still need the owning task, scheduler and compositor.
++  // Destroying the scheduler first would invalidate those dependencies.
++  ThreadScheduler::Current()->SetV8Isolate(nullptr);
++  V8PerIsolateData::WillBeDestroyed(isolate);
++  V8PerIsolateData::Destroy(isolate);
++  ThreadState::DetachCurrentThread();
++  LOG(INFO) << "[Chromium:AROS:IsolateRetire] complete";
++  return true;
++}
++#endif
++
+ // Function defined in third_party/blink/public/web/blink.h.
+ void SetIsWebSecurityDisabled(bool value) {
+   Agent::SetIsWebSecurityDisabled(value);
 diff --git a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
 index f6070712991c1267775f63be1d68d07ebedbdaae..e99991a956777581cd9ddc1259fb011257a059c8 100644
 --- a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
@@ -58848,6 +59297,36 @@ index 6e9590e9d94bc7c4bfc5872d7ee67f1c1e14be9a..706910fc689fc3d63a2da636d9899bbe
    DCHECK(!create_function_);
    create_function_ = function;
  }
+diff --git a/third_party/blink/renderer/core/animation/underlying_value_owner.cc b/third_party/blink/renderer/core/animation/underlying_value_owner.cc
+index ac080dcd472941720b7575214d07f12ffe7e609c..e819c0cb050bedf2e7c179e560b606f24cd1fcaa 100644
+--- a/third_party/blink/renderer/core/animation/underlying_value_owner.cc
++++ b/third_party/blink/renderer/core/animation/underlying_value_owner.cc
+@@ -7,6 +7,10 @@
+ 
+ #include <memory>
+ 
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace blink {
+ 
+ struct NullValueWrapper {
+@@ -38,7 +42,14 @@ void UnderlyingValueOwner::SetNonInterpolableValue(
+ }
+ 
+ const InterpolationValue& UnderlyingValueOwner::Value() const {
++#if defined(__AROS__)
++  // This wrapper contains a Persistent belonging to the creating Oilpan heap.
++  struct NullInterpolationOwnerTag;
++  auto& null_value_wrapper =
++      base::aros::ProcessLocalValue<NullValueWrapper, NullInterpolationOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(NullValueWrapper, null_value_wrapper, ());
++#endif
+   return *this ? *value_ : null_value_wrapper.value->underlying();
+ }
+ 
 diff --git a/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc b/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc
 index e01c5ddb7e06068e8a0673786c27db7325bb0fec..86266a8a9ea9322df9b09e41b2e1ed5a73c14e6e 100644
 --- a/third_party/blink/renderer/core/clipboard/dragged_isolated_file_system.cc
@@ -59135,6 +59614,38 @@ index ddcaaa95027173113d9eb4d11fa7e6fff51476b5..6f3ca4bb18dd24f3c0b7f199ffce9aaf
  }
  
  // Parse the parameters of a CSS function: Zero or more comma-separated
+diff --git a/third_party/blink/renderer/core/css/post_style_update_scope.cc b/third_party/blink/renderer/core/css/post_style_update_scope.cc
+index 45092d010c6a0b5a462858f4f0ba5a94a4b1df59..4aec36ff6758bb18b06b3caf8a8d99a4697c70f3 100644
+--- a/third_party/blink/renderer/core/css/post_style_update_scope.cc
++++ b/third_party/blink/renderer/core/css/post_style_update_scope.cc
+@@ -13,7 +13,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local PostStyleUpdateScope* PostStyleUpdateScope::current_ = nullptr;
++#else
+ PostStyleUpdateScope* PostStyleUpdateScope::current_ = nullptr;
++#endif
+ 
+ PostStyleUpdateScope::AnimationData*
+ PostStyleUpdateScope::CurrentAnimationData() {
+diff --git a/third_party/blink/renderer/core/css/post_style_update_scope.h b/third_party/blink/renderer/core/css/post_style_update_scope.h
+index 90ed7f610bd73eabbda0efa9cb47a2e10ccdc89c..763042b073d5671e54129bedd4c7a047fa9d339f 100644
+--- a/third_party/blink/renderer/core/css/post_style_update_scope.h
++++ b/third_party/blink/renderer/core/css/post_style_update_scope.h
+@@ -131,7 +131,11 @@ class CORE_EXPORT PostStyleUpdateScope {
+     return nullify_pseudo_data_ ? nullptr : &pseudo_data_;
+   }
+ 
++#if defined(__AROS__)
++  static thread_local PostStyleUpdateScope* current_;
++#else
+   static PostStyleUpdateScope* current_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc b/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
 index 9f7f69c8bdbf456c9c3fe81a4cacb7ef6243740d..0863970fc46be25693ccec400a1b30314d361ce5 100644
 --- a/third_party/blink/renderer/core/css/resolver/style_builder_converter.cc
@@ -59170,6 +59681,68 @@ index 750f48d6e90605ee7c5bd7309a23a9cdd3b680cf..d8d326665ce3c5f76bb266896e255ed2
          } else {
            locals.Set(name, variable_data);
            cq_dependent_locals.erase(name);
+diff --git a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc
+index 154dd7e9af800cd573c42279a1afde2bd940edcf..3bcd6599a12fb03826efcfbe862f5e32d215d23e 100644
+--- a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc
++++ b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.cc
+@@ -44,10 +44,26 @@ static CustomElementDefinition* DefinitionIfStyleChangedCallback(
+ 
+ }  // namespace
+ 
++#if defined(__AROS__)
++thread_local unsigned StyleAttributeMutationScope::scope_count_ = 0;
++#else
+ unsigned StyleAttributeMutationScope::scope_count_ = 0;
++#endif
++#if defined(__AROS__)
++thread_local Element* StyleAttributeMutationScope::current_element_ = nullptr;
++#else
+ Element* StyleAttributeMutationScope::current_element_ = nullptr;
++#endif
++#if defined(__AROS__)
++thread_local bool StyleAttributeMutationScope::should_notify_inspector_ = false;
++#else
+ bool StyleAttributeMutationScope::should_notify_inspector_ = false;
++#endif
++#if defined(__AROS__)
++thread_local bool StyleAttributeMutationScope::should_deliver_ = false;
++#else
+ bool StyleAttributeMutationScope::should_deliver_ = false;
++#endif
+ 
+ StyleAttributeMutationScope::StyleAttributeMutationScope(
+     AbstractPropertySetCSSStyleDeclaration* decl) {
+diff --git a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h
+index 759c8ad9577904f461b93304bc1de7e5f6d1e8ae..a578cae3becfbfe6b4d99ac7e71c61e224c8aeeb 100644
+--- a/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h
++++ b/third_party/blink/renderer/core/css/style_attribute_mutation_scope.h
+@@ -53,10 +53,26 @@ class StyleAttributeMutationScope {
+  private:
+   void Initialize(Element*);
+ 
++#if defined(__AROS__)
++  static thread_local unsigned scope_count_;
++#else
+   static unsigned scope_count_;
++#endif
++#if defined(__AROS__)
++  static thread_local Element* current_element_;
++#else
+   static Element* current_element_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool should_notify_inspector_;
++#else
+   static bool should_notify_inspector_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool should_deliver_;
++#else
+   static bool should_deliver_;
++#endif
+ 
+   MutationObserverInterestGroup* mutation_recipients_ = nullptr;
+   MutationRecord* mutation_ = nullptr;
 diff --git a/third_party/blink/renderer/core/css/style_environment_variables.cc b/third_party/blink/renderer/core/css/style_environment_variables.cc
 index fac008246a1c0411d1d5d258626a66300d2dcec5..3cfa4288ab1a4901d63a063ad768d9003ebcf0bf 100644
 --- a/third_party/blink/renderer/core/css/style_environment_variables.cc
@@ -59215,6 +59788,38 @@ index 65c73be5339131b213bb7ab20712e6b70757c9e8..2aaa95e7ca535cfa22bfc18a9764b90d
                                /*new_parent=*/nullptr,
                                /*mixin_parameter_bindings=*/nullptr))
                          : nullptr),
+diff --git a/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc b/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc
+index 031108238b345bdc63db77f8777e39322d3db3f7..10358b51124ce73d86a9f60c471126561782bee9 100644
+--- a/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc
++++ b/third_party/blink/renderer/core/dom/events/scoped_event_queue.cc
+@@ -39,7 +39,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local ScopedEventQueue* ScopedEventQueue::instance_ = nullptr;
++#else
+ ScopedEventQueue* ScopedEventQueue::instance_ = nullptr;
++#endif
+ 
+ ScopedEventQueue::ScopedEventQueue()
+     : queued_events_(MakeGarbageCollected<GCedHeapVector<Member<Event>>>()),
+diff --git a/third_party/blink/renderer/core/dom/events/scoped_event_queue.h b/third_party/blink/renderer/core/dom/events/scoped_event_queue.h
+index 4604902945b3c5aade33e6b2673c8a13665798e8..538d6feda7076f35af4ea0e90157bfe9bc90053f 100644
+--- a/third_party/blink/renderer/core/dom/events/scoped_event_queue.h
++++ b/third_party/blink/renderer/core/dom/events/scoped_event_queue.h
+@@ -63,7 +63,11 @@ class CORE_EXPORT ScopedEventQueue {
+   Persistent<GCedHeapVector<Member<Event>>> queued_events_;
+   unsigned scoping_level_;
+ 
++#if defined(__AROS__)
++  static thread_local ScopedEventQueue* instance_;
++#else
+   static ScopedEventQueue* instance_;
++#endif
+ };
+ 
+ class EventQueueScope {
 diff --git a/third_party/blink/renderer/core/dom/node_rare_data.h b/third_party/blink/renderer/core/dom/node_rare_data.h
 index ee97bc28a0061959540f40926cf2b8e2bd49d4cf..7c5fb70d6074440230361d210c101cefa9043fef 100644
 --- a/third_party/blink/renderer/core/dom/node_rare_data.h
@@ -59230,6 +59835,82 @@ index ee97bc28a0061959540f40926cf2b8e2bd49d4cf..7c5fb70d6074440230361d210c101cef
  
    void Trace(Visitor*) const;
  
+diff --git a/third_party/blink/renderer/core/dom/range.cc b/third_party/blink/renderer/core/dom/range.cc
+index fcea0d96675b5f7b3ae3ff4a859b62b32ae21b3e..c1291e770e59298e7ae4257cdeb54e3a4de65eea 100644
+--- a/third_party/blink/renderer/core/dom/range.cc
++++ b/third_party/blink/renderer/core/dom/range.cc
+@@ -117,23 +117,39 @@ class RangeUpdateScope {
+   }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local int scope_count_;
++#else
+   static int scope_count_;
++#endif
+ #if DCHECK_IS_ON()
+   // This raw pointer is safe because
+   //  - s_currentRange has a valid pointer only if RangeUpdateScope instance is
+   //  live.
+   //  - RangeUpdateScope is used only in Range member functions.
++#if defined(__AROS__)
++  static thread_local Range* current_range_;
++#else
+   static Range* current_range_;
++#endif
+ #endif
+   Range* range_ = nullptr;
+   Document* old_document_ = nullptr;
+ 
+ };
+ 
++#if defined(__AROS__)
++thread_local int RangeUpdateScope::scope_count_ = 0;
++#else
+ int RangeUpdateScope::scope_count_ = 0;
++#endif
+ #if DCHECK_IS_ON()
++#if defined(__AROS__)
++thread_local Range* RangeUpdateScope::current_range_;
++#else
+ Range* RangeUpdateScope::current_range_;
+ #endif
++#endif
+ 
+ Range::Range(Document& owner_document)
+     : owner_document_(&owner_document),
+diff --git a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc
+index d725eb10272d720ad5727706819e65025d1ef595..1f72bf9f4aad0381ed9fc2961326eaaa01a2c2af 100644
+--- a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc
++++ b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.cc
+@@ -6,7 +6,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local bool SuggestionMarkerReplacementScope::currently_in_scope_ = false;
++#else
+ bool SuggestionMarkerReplacementScope::currently_in_scope_ = false;
++#endif
+ 
+ SuggestionMarkerReplacementScope::SuggestionMarkerReplacementScope() {
+   DCHECK(!currently_in_scope_);
+diff --git a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h
+index 6c5d695c77cfeaaa16eccb86b488fd12413b8bec..8e88c92e101fc4b74fe8a2a54e867115849cc80a 100644
+--- a/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h
++++ b/third_party/blink/renderer/core/editing/markers/suggestion_marker_replacement_scope.h
+@@ -24,7 +24,11 @@ class CORE_EXPORT SuggestionMarkerReplacementScope {
+   static bool CurrentlyInScope();
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool currently_in_scope_;
++#else
+   static bool currently_in_scope_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/core/execution_context/agent.cc b/third_party/blink/renderer/core/execution_context/agent.cc
 index 87d8ad6feaebe19c2741799e52a88e1de891f318..5596f5bd4cb105faa5b613e6ddb60a66111ec2f6 100644
 --- a/third_party/blink/renderer/core/execution_context/agent.cc
@@ -59287,6 +59968,30 @@ index 83f427c5ec9b75cbf41935af9935f9fa293ea11c..771c789a45cbdbc2623fae3966dba5f0
  #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
    return kLinuxX86_64;
  #elif BUILDFLAG(IS_IOS)
+diff --git a/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc b/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc
+index fdef6fd4b207cd8a12c94ef3a146b55dc6b96d80..6234031ed1a5bbfc986ebd12ce13acb807d2221b 100644
+--- a/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.cc
+@@ -308,10 +308,19 @@ class ClientMessageLoopAdapter : public MainThreadDebugger::ClientMessageLoop {
+   WeakPersistent<WebLocalFrameImpl> paused_frame_;
+   scoped_refptr<InspectorTaskRunner>
+       inspector_task_runner_for_instrumentation_pause_;
++#if defined(__AROS__)
++  // The debugger and nested loop belong to this native renderer main task.
++  static thread_local ClientMessageLoopAdapter* instance_;
++#else
+   static ClientMessageLoopAdapter* instance_;
++#endif
+ };
+ 
++#if defined(__AROS__)
++thread_local ClientMessageLoopAdapter* ClientMessageLoopAdapter::instance_ = nullptr;
++#else
+ ClientMessageLoopAdapter* ClientMessageLoopAdapter::instance_ = nullptr;
++#endif
+ 
+ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
+                                          bool restore) {
 diff --git a/third_party/blink/renderer/core/exported/web_element.cc b/third_party/blink/renderer/core/exported/web_element.cc
 index d52d452a863be6b6cf2a829aee4b81a068fa5f7b..9a0aa0f9d6595bd1e2fe7e0dd0c94608de9a7223 100644
 --- a/third_party/blink/renderer/core/exported/web_element.cc
@@ -59684,6 +60389,29 @@ index dd94769995b46ca30e2e5b27055662e14cbbeddf..8447a7c2d3fb2a1a714d93473ca882d2
      case WindowShowState::kEnd:
        break;
    }
+diff --git a/third_party/blink/renderer/core/fullscreen/fullscreen.cc b/third_party/blink/renderer/core/fullscreen/fullscreen.cc
+index eac4cc103a8276e7d6c37c11a788579a1d052b9e..d8ddde45b1ddddf7d91f5d404bee710ec5356bb3 100644
+--- a/third_party/blink/renderer/core/fullscreen/fullscreen.cc
++++ b/third_party/blink/renderer/core/fullscreen/fullscreen.cc
+@@ -412,10 +412,18 @@ class RequestFullscreenScope {
+   static bool RunningRequestFullscreen() { return running_request_fullscreen_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool running_request_fullscreen_;
++#else
+   static bool running_request_fullscreen_;
++#endif
+ };
+ 
++#if defined(__AROS__)
++thread_local bool RequestFullscreenScope::running_request_fullscreen_ = false;
++#else
+ bool RequestFullscreenScope::running_request_fullscreen_ = false;
++#endif
+ 
+ // Walks the frame tree and returns the first local ancestor frame, if any.
+ LocalFrame* NextLocalAncestor(Frame& frame) {
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 index 2a5404e4cf7c111f20515886466bc45610d6a5b6..68a4490b291711d82f783c9d880530d504bb5521 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
@@ -59705,6 +60433,71 @@ index 2a5404e4cf7c111f20515886466bc45610d6a5b6..68a4490b291711d82f783c9d880530d5
  }
  
  CanvasRenderingContext* HTMLCanvasElement::GetCanvasRenderingContext(
+diff --git a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc
+index e2e5cb4464d8fa03163950d7589cec8757feb490..e770dbb0ea568a82238d4a0d54b6cab9bac2998c 100644
+--- a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc
++++ b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.cc
+@@ -12,7 +12,12 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++// Renderer main threads share this library, but never their reaction scopes.
++thread_local CEReactionsScope* CEReactionsScope::top_of_stack_ = nullptr;
++#else
+ CEReactionsScope* CEReactionsScope::top_of_stack_ = nullptr;
++#endif
+ 
+ // static
+ CEReactionsScope* CEReactionsScope::Current() {
+diff --git a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h
+index 6f8f0a5c5543423c8c71729a353e73d6636339ac..12fcd20a7a6917fd903511f4b3ad87eb6c6fbba7 100644
+--- a/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h
++++ b/third_party/blink/renderer/core/html/custom/ce_reactions_scope.h
+@@ -35,7 +35,11 @@ class CORE_EXPORT CEReactionsScope final {
+                              CustomElementReaction&);
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local CEReactionsScope* top_of_stack_;
++#else
+   static CEReactionsScope* top_of_stack_;
++#endif
+   CustomElementReactionStack* stack_ = nullptr;
+   CEReactionsScope* prev_;
+   v8::TryCatch try_catch_;
+diff --git a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc
+index 9e517d073d2a38ad3c0e8cc6e4c74fff0e3877fd..69a7defb614d77ebdd0efd6f1da2ac2ee7e3b977 100644
+--- a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc
++++ b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.cc
+@@ -94,7 +94,11 @@ CustomElementConstructionStack* GetCustomElementConstructionStack(
+   return construction_stack_iter->value;
+ }
+ 
++#if defined(__AROS__)
++thread_local wtf_size_t CustomElementConstructionStackScope::nesting_level_ = 0;
++#else
+ wtf_size_t CustomElementConstructionStackScope::nesting_level_ = 0;
++#endif
+ 
+ CustomElementConstructionStackScope::CustomElementConstructionStackScope(
+     CustomElementDefinition& definition,
+diff --git a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h
+index 37df4e6f54da602fad3330953cf913a436de1c50..b66f2dacba36b164da39e6827922b0bcb12f4395 100644
+--- a/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h
++++ b/third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h
+@@ -77,7 +77,11 @@ class CORE_EXPORT CustomElementConstructionStackScope final {
+   wtf_size_t depth_;
+ #endif
+ 
++#if defined(__AROS__)
++  static thread_local wtf_size_t nesting_level_;
++#else
+   static wtf_size_t nesting_level_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/core/inspector/devtools_session.cc b/third_party/blink/renderer/core/inspector/devtools_session.cc
 index 1c8215256431b11172c16647082167fc8e4d915c..b2dc55c1e390840ec9010a525f6d186942df24b5 100644
 --- a/third_party/blink/renderer/core/inspector/devtools_session.cc
@@ -59760,6 +60553,119 @@ index 7220f56eecd0dccc55150d377cdd7bfbc6013aac..687997bedd957442eb5afc540f3d8b37
  if (is_android) {
    blink_core_sources_layout += [
      "layout_theme_android.cc",
+diff --git a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc
+index 473c4ce5e0b185ecb36b87513e2f65edf7046751..96af006ee96084a06cb1b4189a775d113a99a94f 100644
+--- a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc
++++ b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local CustomLayoutScope* CustomLayoutScope::current_scope_ = nullptr;
++#else
+ CustomLayoutScope* CustomLayoutScope::current_scope_ = nullptr;
++#endif
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h
+index 48399f068a6be42aa2e6174d535873d31d14675a..82a251ef13cd3c7776e46916252ecc104fa4cd87 100644
+--- a/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h
++++ b/third_party/blink/renderer/core/layout/custom/custom_layout_scope.h
+@@ -62,7 +62,11 @@ class CustomLayoutScope {
+   CustomLayoutToken* Token() { return token_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local CustomLayoutScope* current_scope_;
++#else
+   static CustomLayoutScope* current_scope_;
++#endif
+ 
+   CustomLayoutScope* prev_scope_;
+   CustomLayoutWorkQueue queue_;
+diff --git a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc
+index 84ab76c7e17ab92d80dabba9813da7ff952889ba..91d64c155f92bb9e0bea8c4eeae0805dca325deb 100644
+--- a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc
++++ b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local unsigned DisableLayoutSideEffectsScope::count_ = 0;
++#else
+ unsigned DisableLayoutSideEffectsScope::count_ = 0;
++#endif
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h
+index 4a3e54c9d456b0a8c5a21b21bd1f7df7be3ffc8f..4655123a58e547baa9e3da0fe1b303b65cc27559 100644
+--- a/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h
++++ b/third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h
+@@ -27,7 +27,11 @@ class CORE_EXPORT DisableLayoutSideEffectsScope {
+   static bool IsDisabled() { return count_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local unsigned count_;
++#else
+   static unsigned count_;
++#endif
+ };
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/layout/layout_shift_tracker.cc b/third_party/blink/renderer/core/layout/layout_shift_tracker.cc
+index 9281e498296146ce5dc41442b941e495835ab667..3584fd3dd19dcdf521b1b647cdde304bfa891ac4 100644
+--- a/third_party/blink/renderer/core/layout/layout_shift_tracker.cc
++++ b/third_party/blink/renderer/core/layout/layout_shift_tracker.cc
+@@ -37,10 +37,18 @@
+ namespace blink {
+ 
+ using ReattachHookScope = LayoutShiftTracker::ReattachHookScope;
++#if defined(__AROS__)
++thread_local ReattachHookScope* ReattachHookScope::top_ = nullptr;
++#else
+ ReattachHookScope* ReattachHookScope::top_ = nullptr;
++#endif
+ 
+ using ContainingBlockScope = LayoutShiftTracker::ContainingBlockScope;
++#if defined(__AROS__)
++thread_local ContainingBlockScope* ContainingBlockScope::top_ = nullptr;
++#else
+ ContainingBlockScope* ContainingBlockScope::top_ = nullptr;
++#endif
+ 
+ namespace {
+ 
+diff --git a/third_party/blink/renderer/core/layout/layout_shift_tracker.h b/third_party/blink/renderer/core/layout/layout_shift_tracker.h
+index a3de935a1c1cf5add01b6926dbb15a045bdafe42..07825141066ee2dcbbfbc259741fa0374fdfc235 100644
+--- a/third_party/blink/renderer/core/layout/layout_shift_tracker.h
++++ b/third_party/blink/renderer/core/layout/layout_shift_tracker.h
+@@ -117,7 +117,11 @@ class CORE_EXPORT LayoutShiftTracker final
+ 
+    private:
+     ReattachHookScope* outer_;
++#if defined(__AROS__)
++    static thread_local ReattachHookScope* top_;
++#else
+     static ReattachHookScope* top_;
++#endif
+     struct Geometry {
+       PhysicalOffset paint_offset;
+       PhysicalSize size;
+@@ -156,7 +160,11 @@ class CORE_EXPORT LayoutShiftTracker final
+    private:
+     friend class LayoutShiftTracker;
+     ContainingBlockScope* outer_;
++#if defined(__AROS__)
++    static thread_local ContainingBlockScope* top_;
++#else
+     static ContainingBlockScope* top_;
++#endif
+     PhysicalSize old_size_;
+     PhysicalSize new_size_;
+     PhysicalRect old_rect_;
 diff --git a/third_party/blink/renderer/core/layout/layout_theme_aros.cc b/third_party/blink/renderer/core/layout/layout_theme_aros.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..177224d4408d86975c3f2b333f884810a25dc8e0
@@ -59912,6 +60818,152 @@ index dce0c22ee0020ee0b1873d148912bdf8ef84f549..dc4bb1804311892f957ff221bf86d734
    return pages->Value();
  }
  
+diff --git a/third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.cc b/third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.cc
+index 1cd9066b5984209f5aafb426527344f2b9024834..e7492a212ff2c11acf1f499074e174eb3668974c 100644
+--- a/third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.cc
++++ b/third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.cc
+@@ -5,6 +5,7 @@
+ #include "third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.h"
+ 
+ #include "base/check_op.h"
++#include "build/build_config.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/local_frame_metrics_aggregator.h"
+@@ -14,7 +15,14 @@ namespace blink {
+ 
+ namespace {
+ 
++// Each native AROS renderer has its own main Exec task. This pointer tracks
++// stack scopes on that task; sharing it across renderer tasks corrupts the
++// nesting chain when another renderer starts or finishes a frame.
++#if BUILDFLAG(IS_AROS)
++thread_local SyncScrollAttemptHeuristic* g_sync_scroll_attempt_heuristic = nullptr;
++#else
+ SyncScrollAttemptHeuristic* g_sync_scroll_attempt_heuristic = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+diff --git a/third_party/blink/renderer/core/paint/paint_layer.cc b/third_party/blink/renderer/core/paint/paint_layer.cc
+index 8d31c36dd6ec3c2cffb141b875d4518d8f6e5d03..a1e27d02a45abb7558aeac693a69b7f382fa8620 100644
+--- a/third_party/blink/renderer/core/paint/paint_layer.cc
++++ b/third_party/blink/renderer/core/paint/paint_layer.cc
+@@ -2895,7 +2895,11 @@ void PaintLayer::Trace(Visitor* visitor) const {
+   DisplayItemClient::Trace(visitor);
+ }
+ 
++#if defined(__AROS__)
++thread_local bool CheckAncestorPositionVisibilityScope::should_check_ = false;
++#else
+ bool CheckAncestorPositionVisibilityScope::should_check_ = false;
++#endif
+ 
+ }  // namespace blink
+ 
+diff --git a/third_party/blink/renderer/core/paint/paint_layer.h b/third_party/blink/renderer/core/paint/paint_layer.h
+index dc57da420d63f30dc152dba0d2451b9402a20863..a7a9638fad71af7209bc3a63370ece63bba5b76c 100644
+--- a/third_party/blink/renderer/core/paint/paint_layer.h
++++ b/third_party/blink/renderer/core/paint/paint_layer.h
+@@ -869,7 +869,11 @@ class CheckAncestorPositionVisibilityScope {
+   static bool ShouldCheck() { return should_check_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local bool should_check_;
++#else
+   static bool should_check_;
++#endif
+   base::AutoReset<bool> reset_;
+ };
+ 
+diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+index 6108c996216661a61085fdcd0493c29a26581adc..d376d628deaee8b7fad2021fcab5a4463cf69c4a 100644
+--- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
++++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+@@ -3051,7 +3051,11 @@ void PaintLayerScrollableArea::ScrollbarManager::Trace(
+   visitor->Trace(v_bar_);
+ }
+ 
++#if defined(__AROS__)
++thread_local int PaintLayerScrollableArea::FreezeScrollbarsScope::count_ = 0;
++#else
+ int PaintLayerScrollableArea::FreezeScrollbarsScope::count_ = 0;
++#endif
+ 
+ PaintLayerScrollableArea::FreezeScrollbarsRootScope::FreezeScrollbarsRootScope(
+     const LayoutBox& box,
+@@ -3072,7 +3076,11 @@ PaintLayerScrollableArea::FreezeScrollbarsRootScope::
+     scrollable_area_->ClearScrollbarRoot();
+ }
+ 
++#if defined(__AROS__)
++thread_local int PaintLayerScrollableArea::DelayScrollOffsetClampScope::count_ = 0;
++#else
+ int PaintLayerScrollableArea::DelayScrollOffsetClampScope::count_ = 0;
++#endif
+ 
+ PaintLayerScrollableArea::DelayScrollOffsetClampScope::
+     DelayScrollOffsetClampScope() {
+diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h
+index 67b10dc7e276d33501061464cdd0c07253aba88a..52406b3faed57ba8086d761686ffe69070292e0a 100644
+--- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h
++++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h
+@@ -224,7 +224,11 @@ class CORE_EXPORT PaintLayerScrollableArea final
+     static bool ScrollbarsAreFrozen() { return count_; }
+ 
+    private:
++#if defined(__AROS__)
++    static thread_local int count_;
++#else
+     static int count_;
++#endif
+   };
+ 
+   // Possible root for scrollbar freezing. When established, the root box itself
+@@ -269,7 +273,11 @@ class CORE_EXPORT PaintLayerScrollableArea final
+     static void ClampScrollableAreas();
+     static HeapVector<Member<PaintLayerScrollableArea>>& NeedsClampList();
+ 
++#if defined(__AROS__)
++    static thread_local int count_;
++#else
+     static int count_;
++#endif
+   };
+ 
+   // FIXME: We should pass in the LayoutBox but this opens a window
+diff --git a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc
+index d8fdfbdbd57db286040719c3ae6c89aeb5bf514a..09975b9bf33a076d3cd863737376791ed7ef9aec 100644
+--- a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc
++++ b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.cc
+@@ -6,6 +6,10 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local unsigned PrePaintDisableSideEffectsScope::count_ = 0;
++#else
+ unsigned PrePaintDisableSideEffectsScope::count_ = 0;
++#endif
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h
+index 776b90561e432d5a6e2da8bf61d9469bb0652a4c..84a07706c30ef1d28bb468430b8f9b0845fbcbdb 100644
+--- a/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h
++++ b/third_party/blink/renderer/core/paint/pre_paint_disable_side_effects_scope.h
+@@ -29,7 +29,11 @@ class CORE_EXPORT PrePaintDisableSideEffectsScope {
+   static bool IsDisabled() { return count_; }
+ 
+  private:
++#if defined(__AROS__)
++  static thread_local unsigned count_;
++#else
+   static unsigned count_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
 index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..b825389dfd3b910e5245232c8dd45905142bd5a8 100644
 --- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
@@ -59945,11 +60997,101 @@ index d8e29a451b7e6d6acdd637b5d7a63f8e4e6f53e9..b825389dfd3b910e5245232c8dd45905
    KURL script_url = global_scope_creation_params->script_url;
  
    if (global_scope_creation_params->web_worker_fetch_context) {
+diff --git a/third_party/blink/renderer/core/workers/worker_backing_thread.cc b/third_party/blink/renderer/core/workers/worker_backing_thread.cc
+index 5a7ed8806602946412eddd4dd732d603e6d0aed6..e7457056d02b7a491e0e7f3d8de38bb20acc5591 100644
+--- a/third_party/blink/renderer/core/workers/worker_backing_thread.cc
++++ b/third_party/blink/renderer/core/workers/worker_backing_thread.cc
+@@ -3,6 +3,10 @@
+ // found in the LICENSE file.
+ 
+ #include "third_party/blink/renderer/core/workers/worker_backing_thread.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #include <memory>
+ 
+@@ -30,39 +34,74 @@ namespace blink {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct WorkerIsolateOwnerState {
++  HashSet<v8::Isolate*> isolates;
++  HashSet<v8::Isolate*> foregrounded_isolates;
++  v8::Isolate::Priority priority = v8::Isolate::Priority::kUserBlocking;
++  bool battery_saver = false;
++  bool memory_saver = false;
++};
++WorkerIsolateOwnerState& CurrentWorkerIsolateState() {
++  struct WorkerIsolateOwnerTag;
++  return base::aros::ProcessLocalValue<WorkerIsolateOwnerState,
++                                       WorkerIsolateOwnerTag>();
++}
++#endif
++
+ base::Lock& IsolatesLock() {
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(base::Lock, lock, ());
+   return lock;
+ }
+ 
+ HashSet<v8::Isolate*>& Isolates() EXCLUSIVE_LOCKS_REQUIRED(IsolatesLock()) {
++#if BUILDFLAG(IS_AROS)
++  return CurrentWorkerIsolateState().isolates;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<v8::Isolate*>, isolates, ());
+   return isolates;
++#endif
+ }
+ 
+ HashSet<v8::Isolate*>& ForegroundedIsolates()
+     EXCLUSIVE_LOCKS_REQUIRED(IsolatesLock()) {
++#if BUILDFLAG(IS_AROS)
++  return CurrentWorkerIsolateState().foregrounded_isolates;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<v8::Isolate*>, foregrounded_isolates,
+                                   ());
+   return foregrounded_isolates;
++#endif
+ }
+ 
+ v8::Isolate::Priority& IsolateCurrentPriority()
+     EXCLUSIVE_LOCKS_REQUIRED(IsolatesLock()) {
++#if BUILDFLAG(IS_AROS)
++  return CurrentWorkerIsolateState().priority;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(v8::Isolate::Priority,
+                                   isolate_current_priority,
+                                   (v8::Isolate::Priority::kUserBlocking));
+   return isolate_current_priority;
++#endif
+ }
+ 
+ bool& BatterySaverModeEnabled() EXCLUSIVE_LOCKS_REQUIRED(IsolatesLock()) {
++#if BUILDFLAG(IS_AROS)
++  return CurrentWorkerIsolateState().battery_saver;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(bool, battery_saver_mode_enabled, ());
+   return battery_saver_mode_enabled;
++#endif
+ }
+ 
+ bool& MemorySaverModeEnabled() EXCLUSIVE_LOCKS_REQUIRED(IsolatesLock()) {
++#if BUILDFLAG(IS_AROS)
++  return CurrentWorkerIsolateState().memory_saver;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(bool, memory_saver_mode_enabled, ());
+   return memory_saver_mode_enabled;
++#endif
+ }
+ 
+ void AddWorkerIsolate(v8::Isolate* isolate) {
 diff --git a/third_party/blink/renderer/core/workers/worker_thread.cc b/third_party/blink/renderer/core/workers/worker_thread.cc
-index 99d22843a34bbcd2ede8eb87ad00b034c0c3b869..5fedfc8944d8ed6223e79ee85831239285579fa6 100644
+index 99d22843a34bbcd2ede8eb87ad00b034c0c3b869..baeca62ee38374a64cdaec38294b958c6d5312a1 100644
 --- a/third_party/blink/renderer/core/workers/worker_thread.cc
 +++ b/third_party/blink/renderer/core/workers/worker_thread.cc
-@@ -33,12 +33,14 @@
+@@ -33,12 +33,17 @@
  #include <utility>
  
  #include "base/memory/raw_ptr.h"
@@ -59961,10 +61103,13 @@ index 99d22843a34bbcd2ede8eb87ad00b034c0c3b869..5fedfc8944d8ed6223e79ee858312392
  #include "base/threading/thread_restrictions.h"
  #include "third_party/blink/public/common/features.h"
 +#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
  #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -177,12 +179,13 @@ void WorkerThread::Start(
+@@ -177,12 +182,13 @@ void WorkerThread::Start(
      std::unique_ptr<WorkerDevToolsParams> devtools_params) {
    DCHECK_CALLED_ON_VALID_THREAD(parent_thread_checker_);
    devtools_worker_token_ = devtools_params->devtools_worker_token;
@@ -59979,7 +61124,37 @@ index 99d22843a34bbcd2ede8eb87ad00b034c0c3b869..5fedfc8944d8ed6223e79ee858312392
                                thread_startup_data : std::nullopt,
                            std::move(devtools_params)));
  }
-@@ -861,7 +864,15 @@ void WorkerThread::PerformShutdownOnWorkerThread() {
+@@ -393,13 +399,29 @@ unsigned WorkerThread::WorkerThreadCount() {
+ }
+ 
+ HashSet<WorkerThread*>& WorkerThread::InitializingWorkerThreads() {
++#if BUILDFLAG(IS_AROS)
++  // A resident engine contains multiple logical renderer processes.
++  // Count and enumerate only this renderer's workers; worker tasks inherit
++  // the same monotonic owner identity as their creating renderer.
++  struct InitializingWorkersOwnerTag;
++  return base::aros::ProcessLocalValue<HashSet<WorkerThread*>, InitializingWorkersOwnerTag>();
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<WorkerThread*>, threads, ());
+   return threads;
++#endif
+ }
+ 
+ HashSet<WorkerThread*>& WorkerThread::WorkerThreads() {
++#if BUILDFLAG(IS_AROS)
++  // A resident engine contains multiple logical renderer processes.
++  // Count and enumerate only this renderer's workers; worker tasks inherit
++  // the same monotonic owner identity as their creating renderer.
++  struct ActiveWorkersOwnerTag;
++  return base::aros::ProcessLocalValue<HashSet<WorkerThread*>, ActiveWorkersOwnerTag>();
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(HashSet<WorkerThread*>, threads, ());
+   return threads;
++#endif
+ }
+ 
+ bool WorkerThread::IsForciblyTerminated() {
+@@ -861,7 +883,15 @@ void WorkerThread::PerformShutdownOnWorkerThread() {
    console_message_storage_.Clear();
    inspector_issue_storage_.Clear();
  
@@ -60008,6 +61183,38 @@ index 73b73ce04e37296f87136e54bc60fae3a1153374..302db647149cdf22348563db0fae04fe
  
    // Tasks managed by this scheduler are canceled when the global scope is
    // closed.
+diff --git a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc
+index e4a048dffa2c35d9c5ef33cc0170040f176d7cdb..24bc2b97b22b4491342ceb5860273186de7eab17 100644
+--- a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc
++++ b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.cc
+@@ -27,7 +27,11 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local Document* XMLDocumentParserScope::current_document_ = nullptr;
++#else
+ Document* XMLDocumentParserScope::current_document_ = nullptr;
++#endif
+ 
+ XMLDocumentParserScope::XMLDocumentParserScope(Document* document)
+     : old_document_(current_document_),
+diff --git a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h
+index 198366ddf9ab2f95c10b24bfcfed6a4acb89c0d3..a279a2eb04c1359da400fdfa11c6934bb6a6d0a8 100644
+--- a/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h
++++ b/third_party/blink/renderer/core/xml/parser/xml_document_parser_scope.h
+@@ -46,7 +46,11 @@ class XMLDocumentParserScope {
+   XMLDocumentParserScope& operator=(const XMLDocumentParserScope&) = delete;
+   ~XMLDocumentParserScope();
+ 
++#if defined(__AROS__)
++  static thread_local Document* current_document_;
++#else
+   static Document* current_document_;
++#endif
+ 
+  private:
+   Document* old_document_;
 diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
 index 57908c79e9e445feb9eeb52f56d317505fa5db5a..699d5fa3ceff2001043b10f054b68ea3b7c3af24 100644
 --- a/third_party/blink/renderer/modules/BUILD.gn
@@ -60587,6 +61794,116 @@ index 6101076273a181fea07fe49ade81946eca6a9b69..04b8d186b1e8f926faff4b1fc315f4ab
    }
  }
  
+diff --git a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
+index 02521e3f6a2d31d15731a6405eaa0333bde81f8f..c872bf1af38934ae0fc1cb8968dfb8f9e4b0c1d0 100644
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
+@@ -29,6 +29,9 @@
+  */
+ 
+ #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
+ 
+ #include <memory>
+ #include <optional>
+@@ -76,7 +79,11 @@ static WorldMap& GetWorldMap() {
+ 
+ }  // namespace
+ 
++#if defined(__AROS__)
++thread_local unsigned DOMWrapperWorld::number_of_non_main_worlds_in_main_thread_ = 0;
++#else
+ unsigned DOMWrapperWorld::number_of_non_main_worlds_in_main_thread_ = 0;
++#endif
+ 
+ DOMWrapperWorld* DOMWrapperWorld::Create(v8::Isolate* isolate,
+                                          WorldType world_type,
+@@ -191,8 +198,13 @@ typedef HashMap<int, scoped_refptr<SecurityOrigin>>
+     IsolatedWorldSecurityOriginMap;
+ static IsolatedWorldSecurityOriginMap& IsolatedWorldSecurityOrigins() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldSecurityOriginMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldSecurityOriginMap, IsolatedWorldSecurityOriginMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldSecurityOriginMap, map, ());
+   return map;
++#endif
+ }
+ 
+ static scoped_refptr<SecurityOrigin> GetIsolatedWorldSecurityOrigin(
+@@ -232,8 +244,13 @@ void DOMWrapperWorld::SetIsolatedWorldSecurityOrigin(
+ typedef HashMap<int, String> IsolatedWorldStableIdMap;
+ static IsolatedWorldStableIdMap& IsolatedWorldStableIds() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldStableIdMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldStableIdMap, IsolatedWorldStableIdMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldStableIdMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldStableId() const {
+@@ -252,8 +269,13 @@ void DOMWrapperWorld::SetNonMainWorldStableId(int32_t world_id,
+ typedef HashMap<int, String> IsolatedWorldHumanReadableNameMap;
+ static IsolatedWorldHumanReadableNameMap& IsolatedWorldHumanReadableNames() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldHumanReadableNameMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldHumanReadableNameMap, IsolatedWorldHumanReadableNameMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldHumanReadableNameMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldHumanReadableName() const {
+@@ -273,8 +295,13 @@ void DOMWrapperWorld::SetNonMainWorldHumanReadableName(
+ typedef HashMap<int, String> IsolatedWorldEmbedderWorldIdMap;
+ static IsolatedWorldEmbedderWorldIdMap& IsolatedWorldEmbedderWorldIds() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  struct IsolatedWorldEmbedderWorldIdMapOwnerTag;
++  return base::aros::ProcessLocalValue<IsolatedWorldEmbedderWorldIdMap, IsolatedWorldEmbedderWorldIdMapOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(IsolatedWorldEmbedderWorldIdMap, map, ());
+   return map;
++#endif
+ }
+ 
+ String DOMWrapperWorld::NonMainWorldEmbedderWorldId() const {
+@@ -306,7 +333,11 @@ std::optional<int> DOMWrapperWorld::GenerateWorldIdForType(
+       NOTREACHED();
+     case WorldType::kInspectorIsolated: {
+       DCHECK(IsMainThread());
++#if defined(__AROS__)
++      static thread_local int next_devtools_isolated_world_id =
++#else
+       static int next_devtools_isolated_world_id =
++#endif
+           IsolatedWorldId::kDevToolsFirstIsolatedWorldId;
+       if (next_devtools_isolated_world_id >
+           IsolatedWorldId::kDevToolsLastIsolatedWorldId) {
+diff --git a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
+index 25d4e36cc5056e08ea38f2ae6149dfa7337cda56..ac3e00d933125d930dbed6c36b3f36714df5fe6d 100644
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
+@@ -222,7 +222,11 @@ class PLATFORM_EXPORT DOMWrapperWorld final
+   // out of DOMWrapperWorld.
+   static std::optional<int> GenerateWorldIdForType(WorldType);
+ 
++#if defined(__AROS__)
++  static thread_local unsigned number_of_non_main_worlds_in_main_thread_;
++#else
+   static unsigned number_of_non_main_worlds_in_main_thread_;
++#endif
+ 
+   const WorldType world_type_;
+   const int32_t world_id_;
 diff --git a/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc b/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc
 index 160a98c6f74a60e0e8353c98ca1da931b0b67f71..b3dff5b7ad5bfdcb117975f9ee072e16cc51e600 100644
 --- a/third_party/blink/renderer/platform/bindings/parkable_string_manager.cc
@@ -60673,6 +61990,93 @@ index 1f8fbdc3ca82c4debcc8cbe3e1f4d8be880ddc8c..a39c807500ec3797e114fdc73ca793e4
  
    // V8GCController is exceptionally allowed to call Enter/Exit.
    friend class V8GCController;
+diff --git a/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.cc b/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.cc
+index c14630360577ff83bcb5221ccaadc90a1d932b28..dbbcaf4f5810837983b64c8df2a35453eb28d4e8 100644
+--- a/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.cc
++++ b/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.cc
+@@ -5,16 +5,45 @@
+ #include "third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h"
+ 
+ #include "base/metrics/histogram_macros.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "base/time/time.h"
+ #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+ 
+ namespace blink {
+ 
++#if BUILDFLAG(IS_AROS)
++struct V8HistogramAccumulator::ArosState {
++  base::Lock lock;
++  V8HistogramAccumulator* accumulator = nullptr;
++};
++V8HistogramAccumulator::ArosState& V8HistogramAccumulator::GetArosState() {
++  return base::aros::ProcessLocalValue<ArosState, V8HistogramAccumulator>();
++}
++void V8HistogramAccumulator::RetireForArosProcessExit() {
++  auto& state = GetArosState();
++  base::AutoLock lock(state.lock);
++  delete state.accumulator;
++  state.accumulator = nullptr;
++}
++#endif
++
+ // static
+ V8HistogramAccumulator* V8HistogramAccumulator::GetInstance() {
++#if BUILDFLAG(IS_AROS)
++  // A resident engine serves independent renderers. Cached histogram pointers
++  // and cumulative counters must belong to the command-line owner, not image.
++  auto& state = GetArosState();
++  base::AutoLock lock(state.lock);
++  if (!state.accumulator)
++    state.accumulator = new V8HistogramAccumulator;
++  return state.accumulator;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(V8HistogramAccumulator, histogram_accumulator,
+                                   ());
+   return &histogram_accumulator;
++#endif
+ }
+ 
+ void* V8HistogramAccumulator::RegisterHistogram(base::HistogramBase* histogram,
+@@ -82,3 +111,11 @@ V8HistogramAccumulator::V8HistogramAccumulator() {
+ }
+ 
+ }  // namespace blink
++
++#if BUILDFLAG(IS_AROS)
++// Private exact-build bridge hook, called only after the child and its workers
++// have returned. The public CEF ABI is unchanged.
++extern "C" void aros_blink_retire_child_histograms() {
++  blink::V8HistogramAccumulator::RetireForArosProcessExit();
++}
++#endif
+diff --git a/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h b/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h
+index 1a27c26e330a1021577857061c50bb3b9bab30ac..711991082fd24708d2c138ec05505434d3effeaf 100644
+--- a/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h
++++ b/third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h
+@@ -24,6 +24,9 @@ namespace blink {
+ class PLATFORM_EXPORT V8HistogramAccumulator {
+  public:
+   static V8HistogramAccumulator* GetInstance();
++#if BUILDFLAG(IS_AROS)
++  static void RetireForArosProcessExit();
++#endif
+ 
+   void* RegisterHistogram(base::HistogramBase* histogram,
+                           const std::string& name);
+@@ -34,6 +37,10 @@ class PLATFORM_EXPORT V8HistogramAccumulator {
+   V8HistogramAccumulator& operator=(const V8HistogramAccumulator&) = delete;
+ 
+  private:
++#if BUILDFLAG(IS_AROS)
++  struct ArosState;
++  static ArosState& GetArosState();
++#endif
+   V8HistogramAccumulator();
+   ~V8HistogramAccumulator() = default;
+ 
 diff --git a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc b/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
 index 6580983ed4acaf309f5da7a659f1afb61bc430ed..ae527428a2bdb0d7f1c04b522ea3568076a638ba 100644
 --- a/third_party/blink/renderer/platform/bindings/v8_per_isolate_data.cc
@@ -61118,6 +62522,55 @@ index 6781015c43c451b9be03dcab46a9594a1cb0126e..445eb5bd5beb4f9a248c2487e422f2d7
    sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());
    SkFontConfigInterface::FontIdentity font_identity;
    font_identity.fID = config_id;
+diff --git a/third_party/blink/renderer/platform/geometry/length.cc b/third_party/blink/renderer/platform/geometry/length.cc
+index cfbf02371caf155958d7f50e0accdf96ba794891..249ee79ba342586d4ca6cebc7f9e5a6a5942ef1c 100644
+--- a/third_party/blink/renderer/platform/geometry/length.cc
++++ b/third_party/blink/renderer/platform/geometry/length.cc
+@@ -27,6 +27,10 @@
+ 
+ #include <array>
+ 
++#if defined(__AROS__)
++#include "base/aros/process_local.h"
++#endif
++
+ #include "third_party/blink/renderer/platform/geometry/blend.h"
+ #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+@@ -149,8 +153,16 @@ class CalculationValueHandleMap {
+ 
+ static CalculationValueHandleMap& CalcHandles() {
+   DCHECK(IsMainThread());
++#if defined(__AROS__)
++  // The wrapper owns an Oilpan Persistent internally, so the generic
++  // Persistent-only static trait cannot infer its renderer ownership.
++  struct CalculationValueHandlesOwnerTag;
++  return base::aros::ProcessLocalValue<CalculationValueHandleMap,
++                                      CalculationValueHandlesOwnerTag>();
++#else
+   DEFINE_STATIC_LOCAL(CalculationValueHandleMap, handle_map, ());
+   return handle_map;
++#endif
+ }
+ 
+ Length::Length(const CalculationValue* calc)
+diff --git a/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc b/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
+index 4853d61575db1047cfb905705a95cd8036fa072f..e2c7ad4042d4751759eddbfa9e179b61e33f8393 100644
+--- a/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
++++ b/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc
+@@ -55,7 +55,12 @@ namespace blink {
+ // we update the property trees. We should explore optimizing our management of
+ // the sequence number through the use of a dirty bit or similar. See
+ // http://crbug.com/692842#c4.
++#if defined(__AROS__)
++// Each native renderer updates its property trees on its own main task.
++static thread_local int g_s_property_tree_sequence_number = 1;
++#else
+ static int g_s_property_tree_sequence_number = 1;
++#endif
+ 
+ namespace {
+ 
 diff --git a/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc b/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc
 index a18326420bd3aea0f8d95286a71a5a0722315a6d..66a7165899cef991e6585b8c83b870e2a2bcba21 100644
 --- a/third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.cc
@@ -61210,6 +62663,47 @@ index 8c1faf00c6ba46f1054fc8f69baca9645de1bce8..65330f8b2fe22a51ffe8c02556dc17a6
  }
  
  bool EffectPaintPropertyNodeOrAlias::Changed(
+diff --git a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc
+index e30ba93aa5a1cb29bf45072c253f6fcfcf292a3d..80ab69e039c0d1fe4a288ee0d84a9b9cf9cc6423 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc
++++ b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.cc
+@@ -6,7 +6,15 @@
+ 
+ namespace blink {
+ 
++#if defined(__AROS__)
++thread_local int IgnorePaintTimingScope::ignore_depth_ = 0;
++#else
+ int IgnorePaintTimingScope::ignore_depth_ = 0;
++#endif
++#if defined(__AROS__)
++thread_local bool IgnorePaintTimingScope::is_document_element_invisible_ = false;
++#else
+ bool IgnorePaintTimingScope::is_document_element_invisible_ = false;
++#endif
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h
+index b6f01c7644f1636d97dd281ec47efe7fd28964ac..89968179aa9679bb7dbd00143e9d3a74c6a64c9b 100644
+--- a/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h
++++ b/third_party/blink/renderer/platform/graphics/paint/ignore_paint_timing_scope.h
+@@ -46,8 +46,16 @@ class PLATFORM_EXPORT IgnorePaintTimingScope {
+  private:
+   base::AutoReset<int> reset_ignore_depth_;
+   base::AutoReset<bool> reset_is_document_element_invisible_;
++#if defined(__AROS__)
++  static thread_local int ignore_depth_;
++#else
+   static int ignore_depth_;
++#endif
++#if defined(__AROS__)
++  static thread_local bool is_document_element_invisible_;
++#else
+   static bool is_document_element_invisible_;
++#endif
+ };
+ 
+ }  // namespace blink
 diff --git a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc b/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
 index b961b6642c7201277148cd67d4f68588e2dc1470..ccb383b2d41f1b19ad0c78913f2b7bb71bd92989 100644
 --- a/third_party/blink/renderer/platform/graphics/paint/paint_artifact.cc
@@ -61555,6 +63049,34 @@ index c49040357e6c160655dea172dd0082a92814b0f0..ab96d59a2013526183ab2ecc3bdeb602
  #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_table_backing.h"
  #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector_backing.h"
  #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+diff --git a/third_party/blink/renderer/platform/heap/thread_state.cc b/third_party/blink/renderer/platform/heap/thread_state.cc
+index d96c1e5629f3de07b554d148eaaf1426fc7fcdf4..3d227689112ffa72e557048b95ff166ab722091e 100644
+--- a/third_party/blink/renderer/platform/heap/thread_state.cc
++++ b/third_party/blink/renderer/platform/heap/thread_state.cc
+@@ -192,6 +192,23 @@ ThreadState::ThreadState(
+ 
+ ThreadState::~ThreadState() {
+   DCHECK(IsCreationThread());
++#if BUILDFLAG(IS_AROS)
++  auto* storage = ThreadStateStorage::Current();
++  if (storage->IsMainThread()) {
++    // Native renderer retirement reaches this only after its owning isolate
++    // and CppHeap are destroyed. The main storage belongs to the logical
++    // process and was placement-constructed; never delete that storage.
++    CHECK(!isolate_);
++    CHECK(!cpp_heap_);
++    CHECK(!owning_cpp_heap_);
++    CHECK_EQ(storage, ThreadStateStorage::MainThreadStateStorage());
++    storage->allocation_handle_ = nullptr;
++    storage->heap_handle_ = nullptr;
++    storage->thread_state_ = nullptr;
++    g_thread_specific_ = nullptr;
++    return;
++  }
++#endif
+   owning_cpp_heap_.reset();
+   ThreadStateStorage::DetachNonMainThread(*ThreadStateStorage::Current());
+ }
 diff --git a/third_party/blink/renderer/platform/heap/thread_state_storage.cc b/third_party/blink/renderer/platform/heap/thread_state_storage.cc
 index 6f932420bd60adc2300eedce075433f55d366ce9..60055ca6d86b452677183789139daa0c1ad6023d 100644
 --- a/third_party/blink/renderer/platform/heap/thread_state_storage.cc
@@ -61828,10 +63350,42 @@ index 6eb483256948e65217f4434815c96e07b42fefa2..4eccd7b15172c10410cdbf1c7d6c4b4a
  static constexpr base::TimeDelta kDefaultStrongReferencePruneDelay =
  #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-index eb403c197b6dd9ba138e05cd4b1902628ad51985..0293bbc5f4eda9ab3d283574f0e7892226f2e822 100644
+index eb403c197b6dd9ba138e05cd4b1902628ad51985..1adaa9e135c5e897e31f123ecacbf36e709ff18a 100644
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-@@ -3183,6 +3183,8 @@ void ResourceFetcher::PrepareForLeakDetection() {
+@@ -34,6 +34,10 @@
+ #include <string_view>
+ #include <utility>
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "base/auto_reset.h"
+ #include "base/feature_list.h"
+ #include "base/logging.h"
+@@ -278,9 +282,20 @@ bool ShouldResourceBeKeptStrongReference(
+ }
+ 
+ static ResourceFetcher::ResourceFetcherSet& MainThreadFetchersSet() {
++#if BUILDFLAG(IS_AROS)
++  // Each native renderer owns an Oilpan heap. An image-global Persistent would
++  // be cleared when its first heap retires, invalidating other renderers.
++  struct MainThreadFetchersProcessTag;
++  auto& fetchers = base::aros::ProcessLocalValue<
++      Persistent<ResourceFetcher::ResourceFetcherSet>,
++      MainThreadFetchersProcessTag>();
++  if (!fetchers)
++    fetchers = MakeGarbageCollected<ResourceFetcher::ResourceFetcherSet>();
++#else
+   DEFINE_STATIC_LOCAL(
+       Persistent<ResourceFetcher::ResourceFetcherSet>, fetchers,
+       (MakeGarbageCollected<ResourceFetcher::ResourceFetcherSet>()));
++#endif
+   return *fetchers;
+ }
+ 
+@@ -3183,6 +3198,8 @@ void ResourceFetcher::PrepareForLeakDetection() {
  void ResourceFetcher::StopFetchingInternal(StopFetchingTarget target) {
    // TODO(toyoshim): May want to suspend scheduler while canceling loaders so
    // that the cancellations below do not awake unnecessary scheduling.
@@ -62100,11 +63654,52 @@ index 3436a306e389556cf18339fd4145ec5cc3bd2903..8ca9375f636093e2520503cef7942e66
    if (rate <= 1) {
      if (throttling_thread_) {
        throttling_thread_.reset();
+diff --git a/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc b/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc
+index e32fe1b6a602494f0dae8bf9deecd51cae55e9aa..1307a8fe2294e1f234fa2d6e6a00e9f6da298fcd 100644
+--- a/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc
++++ b/third_party/blink/renderer/platform/scheduler/common/web_thread_scheduler.cc
+@@ -35,6 +35,12 @@ CreateSequenceManagerSettings() {
+ 
+ WebThreadScheduler::~WebThreadScheduler() = default;
+ 
++#if BUILDFLAG(IS_AROS)
++void WebThreadScheduler::ShutdownWithCleanup(base::OnceClosure cleanup) {
++  NOTREACHED();  // Only the renderer main scheduler supports isolate cleanup.
++}
++#endif
++
+ // static
+ std::unique_ptr<WebThreadScheduler>
+ WebThreadScheduler::CreateMainThreadScheduler(
 diff --git a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
-index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..f8e5bb936a3cb93a314f50acb66b4b42e0677dbd 100644
+index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..ec1760480158db5d45e6aa2096f44c29036b4bb3 100644
 --- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
 +++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.cc
-@@ -1018,6 +1018,7 @@ void MainThreadSchedulerImpl::WillBeginFrame(const viz::BeginFrameArgs& args) {
+@@ -708,6 +708,12 @@ bool MainThreadSchedulerImpl::
+ }
+ 
+ void MainThreadSchedulerImpl::Shutdown() {
++#if BUILDFLAG(IS_AROS)
++  ShutdownWithCleanup(base::OnceClosure());
++}
++
++void MainThreadSchedulerImpl::ShutdownWithCleanup(base::OnceClosure cleanup) {
++#endif
+   if (was_shutdown_)
+     return;
+   base::TimeTicks now = NowTicks();
+@@ -717,6 +723,10 @@ void MainThreadSchedulerImpl::Shutdown() {
+   ThreadSchedulerBase::Shutdown();
+ 
+   ShutdownAllQueues();
++#if BUILDFLAG(IS_AROS)
++  if (cleanup)
++    std::move(cleanup).Run();
++#endif
+ 
+   // Shut down |helper_| first, so that the ForceUpdatePolicy() call
+   // from |idle_helper_| early-outs and doesn't do anything.
+@@ -1018,6 +1028,7 @@ void MainThreadSchedulerImpl::WillBeginFrame(const viz::BeginFrameArgs& args) {
                                time_now);
        break;
      default:
@@ -62112,6 +63707,38 @@ index 365ce53b567c9076d8b982e8021f2e1f3a7b7ab5..f8e5bb936a3cb93a314f50acb66b4b42
    }
    // Calls ::ApplyPerformanceState if something's changed.
    performance_helper_.Check(time_now);
+diff --git a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h
+index 4e3fddf3073ad853d4c0bb4771e0b843f2ef6fa4..8aa8da8c31d00eb109984b47832f04aaa7f1b8c0 100644
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h
+@@ -209,6 +209,9 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
+ 
+   // WebThreadScheduler and ThreadScheduler implementation:
+   void Shutdown() override;
++#if BUILDFLAG(IS_AROS)
++  void ShutdownWithCleanup(base::OnceClosure cleanup) override;
++#endif
+ 
+   // MainThreadScheduler implementation:
+   scoped_refptr<base::SingleThreadTaskRunner> NonWakingTaskRunner() override;
+diff --git a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc
+index dc1c7fa44cdc3521b715c66e73367259ce534f69..77519e3fa9a734663dc2e59169fbd2d2cb4c1eb2 100644
+--- a/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc
++++ b/third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.cc
+@@ -194,6 +194,13 @@ void MainThreadTaskQueue::DetachTaskQueue() {
+ void MainThreadTaskQueue::SetOnIPCTaskPosted(
+     base::RepeatingCallback<void(const base::sequence_manager::Task&)>
+         on_ipc_task_posted_callback) {
++#if BUILDFLAG(IS_AROS)
++  // Native renderer retirement runs Oilpan finalizers after queued V8 owners
++  // have been deleted. Removing the last PageScheduler can enable IPC tracking
++  // again, but a shut-down queue cannot accept a new task-posted handler.
++  if (!task_queue_)
++    return;
++#endif
+   // We use the frame_scheduler_ to track metrics so as to ensure that metrics
+   // are not tied to individual task queues.
+   on_ipc_task_posted_callback_handle_ = task_queue_->AddOnTaskPostedHandler(
 diff --git a/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc b/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc
 index dc7300635f0e8cbcf836e3340eab5249ea00f11e..be1ca6af35956f745cd9d260eb26b1c0b0ac2a0d 100644
 --- a/third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.cc
@@ -62304,6 +63931,110 @@ index 9dcb1221dbfef57b13da7903580cbc1230ba2c8f..cc0a9d528c6ca5b82f0fff67725f9979
      BUILDFLAG(IS_FREEBSD) || BUILDFLAG(IS_FUCHSIA)
    pthread_attr_t attr;
    int error;
+diff --git a/third_party/blink/renderer/platform/wtf/std_lib_extras.h b/third_party/blink/renderer/platform/wtf/std_lib_extras.h
+index f2351cf2d020782220cae8d6a6924d33f67fcb81..392c30083524ea83372450076c98604918d787f8 100644
+--- a/third_party/blink/renderer/platform/wtf/std_lib_extras.h
++++ b/third_party/blink/renderer/platform/wtf/std_lib_extras.h
+@@ -32,6 +32,9 @@
+ #include "base/check.h"
+ #include "base/dcheck_is_on.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
+ #include "third_party/blink/renderer/platform/wtf/sanitizers.h"
+ #include "third_party/blink/renderer/platform/wtf/type_traits.h"
+@@ -40,6 +43,18 @@
+ #include "third_party/blink/renderer/platform/wtf/threading.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread) \
++  struct Name##ArosSingletonTag;                                            \
++  Type& Name = blink::ArosStaticSingletonGet<Type, Name##ArosSingletonTag>(   \
++      allow_cross_thread,                                                  \
++      [&]() {                                                              \
++        return new blink::StaticSingleton<Type>::WrapperType Arguments;    \
++      },                                                                   \
++      [&](void* leaked_ptr) {                                               \
++        new (leaked_ptr) blink::StaticSingleton<Type>::WrapperType Arguments; \
++      })
++#else
+ #define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread)   \
+   static blink::StaticSingleton<Type> s_##Name(                               \
+       [&]() {                                                                 \
+@@ -50,6 +65,8 @@
+       });                                                                     \
+   Type& Name = s_##Name.Get(allow_cross_thread)
+ 
++#endif
++
+ // Use |DEFINE_STATIC_LOCAL()| to declare and define a static local variable
+ // (|static T;|) so that it is leaked and its destructors are not called at
+ // exit.
+@@ -69,6 +86,14 @@
+ #define DEFINE_THREAD_SAFE_STATIC_LOCAL(Type, Name, Arguments) \
+   DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, true)
+ 
++#if BUILDFLAG(IS_AROS)
++namespace cppgc::internal {
++template <typename T, typename WeaknessPolicy, typename LocationPolicy,
++          typename CheckingPolicy>
++class BasicPersistent;
++}  // namespace cppgc::internal
++#endif
++
+ namespace blink {
+ 
+ template <typename Type>
+@@ -152,6 +177,46 @@ class StaticSingleton final {
+ #endif
+ };
+ 
++#if BUILDFLAG(IS_AROS)
++class CustomCountHistogram;
++
++template <typename T>
++struct IsArosHeapPersistent : std::false_type {};
++template <typename T, typename Weakness, typename Location, typename Checking>
++struct IsArosHeapPersistent<
++    cppgc::internal::BasicPersistent<T, Weakness, Location, Checking>>
++    : std::true_type {};
++
++// Heap roots must belong to the logical renderer that allocated their pointee.
++// The handle wrapper retains static lifetime; its heap clears it on retirement.
++// A distinct call-site tag and monotonic owner identity prevent later renderers
++// or sibling applications from inheriting that cleared root. Histogram wrappers
++// likewise cache owner-scoped pointers and must not survive into another owner.
++// Ordinary statics
++// and explicitly cross-thread persistent handles keep their existing semantics.
++template <typename Type, typename Tag, typename HeapNew, typename PlacementNew>
++Type& ArosStaticSingletonGet(bool allow_cross_thread, const HeapNew& heap_new,
++                            const PlacementNew& placement_new) {
++  if constexpr (IsArosHeapPersistent<std::remove_cv_t<Type>>::value ||
++                std::is_same_v<std::remove_cv_t<Type>, CustomCountHistogram>) {
++    struct OwnerSlot {
++      base::Lock lock;
++      StaticSingleton<Type>* singleton = nullptr;
++    };
++    auto& slot = base::aros::ProcessLocalValue<OwnerSlot, Tag>();
++    // Serialize first construction within this owner, retaining the ordinary
++    // singleton's initialization and thread-use checks.
++    base::AutoLock lock(slot.lock);
++    if (!slot.singleton)
++      slot.singleton = new StaticSingleton<Type>(heap_new, placement_new);
++    return slot.singleton->Get(allow_cross_thread);
++  } else {
++    static StaticSingleton<Type> singleton(heap_new, placement_new);
++    return singleton.Get(allow_cross_thread);
++  }
++}
++#endif
++
+ // Use this to declare and define a static local pointer to a ref-counted object
+ // so that it is leaked so that the object's destructors are not called at
+ // exit.  This macro should be used with ref-counted objects rather than
 diff --git a/third_party/blink/renderer/platform/wtf/text/string_impl.cc b/third_party/blink/renderer/platform/wtf/text/string_impl.cc
 index bb8b17dc97c0d61c4ae14a7dddf741e175d8d4f7..1607a39a3eee26e022e620a12b746a458823ddf3 100644
 --- a/third_party/blink/renderer/platform/wtf/text/string_impl.cc
@@ -64292,10 +66023,10 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +#endif
 diff --git a/third_party/sqlite/sqlite3_aros_vfs.c b/third_party/sqlite/sqlite3_aros_vfs.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..07ac73ad044659b095dcdc13a739656d42a3806d
+index 0000000000000000000000000000000000000000..219dffb376e65a9e6b45ebf0f4170d488e2bcf74
 --- /dev/null
 +++ b/third_party/sqlite/sqlite3_aros_vfs.c
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,65 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -64303,6 +66034,20 @@ index 0000000000000000000000000000000000000000..07ac73ad044659b095dcdc13a739656d
 +#if defined(__AROS__)
 +#include <proto/dos.h>
 +#include <string.h>
++#include <unistd.h>
++
++// AROS FAT can leave the native handle cursor beyond EOF after shrinking.
++// posixc then cannot query that cursor, even to perform an absolute seek.
++// Keep SQLite's cursor inside the new extent before truncating. This is a
++// private VFS operation, not a replacement for POSIX ftruncate semantics.
++int chromiumArosSqliteTruncate(int fd, off_t length) {
++  if (length >= 0) {
++    off_t current = lseek(fd, 0, SEEK_CUR);
++    if (current < 0) return -1;
++    if (current > length && lseek(fd, length, SEEK_SET) < 0) return -1;
++  }
++  return ftruncate(fd, length);
++}
 +
 +// SQLite's Unix walker prefixes getcwd() to native assigns and inserts '/'
 +// before volume names. Resolve through DOS locks instead, including the parent
@@ -64348,10 +66093,10 @@ index 0000000000000000000000000000000000000000..07ac73ad044659b095dcdc13a739656d
 +
 +#endif  // defined(__AROS__)
 diff --git a/third_party/sqlite/sqlite3_shim_fixups.h b/third_party/sqlite/sqlite3_shim_fixups.h
-index d927981a57c8b1e57f5e94c27ba42d648d44718d..9129159816eba42a4446426654486c8dccee5fc8 100644
+index d927981a57c8b1e57f5e94c27ba42d648d44718d..6c231d4dcc69830e158d7bc9338a2060b9f0837b 100644
 --- a/third_party/sqlite/sqlite3_shim_fixups.h
 +++ b/third_party/sqlite/sqlite3_shim_fixups.h
-@@ -8,6 +8,34 @@
+@@ -8,6 +8,40 @@
  // This file contains various fixups for the amalgamated SQLite code.
  // It is intended to be included in sqlite3_shim.c only.
  
@@ -64364,12 +66109,18 @@ index d927981a57c8b1e57f5e94c27ba42d648d44718d..9129159816eba42a4446426654486c8d
 +#define _POSIX_C_SOURCE 200809L
 +#endif
 +#include <pthread.h>
++#include <unistd.h>
 +#undef GLOBAL
 +
 +// posixc implements getcwd(), but its current strict-C header grouping does
 +// not expose the POSIX.1 declaration. Keep the compatibility declaration
 +// local to SQLite's shim.
 +extern char* getcwd(char* buffer, size_t size);
++
++// Only SQLite uses this adapter. Its Unix VFS seeks explicitly for every
++// read/write and does not rely on the descriptor cursor surviving truncate.
++int chromiumArosSqliteTruncate(int fd, off_t length);
++#define ftruncate chromiumArosSqliteTruncate
 +
 +int chromiumArosFullPathname(const char* input, int capacity, char* out);
 +#define SQLITE_AROS_FULL_PATHNAME chromiumArosFullPathname

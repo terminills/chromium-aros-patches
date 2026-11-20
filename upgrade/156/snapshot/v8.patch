@@ -1316,6 +1316,35 @@ index 4bab9166baa1e3f0bbf0c7ef4724614131cceb48..2871ef72551d0b470497c8756a6612f1
    int mib[2] = {CTL_HW, HW_MEMSIZE};
    int64_t memsize = 0;
    size_t len = sizeof(memsize);
+diff --git a/src/compiler-dispatcher/optimizing-compile-dispatcher.cc b/src/compiler-dispatcher/optimizing-compile-dispatcher.cc
+index 00b43f297347ae12c79944228029b4763d4878ea..3c5a6f0e0eeea75ec9dff20fae7c41dcc74a1800 100644
+--- a/src/compiler-dispatcher/optimizing-compile-dispatcher.cc
++++ b/src/compiler-dispatcher/optimizing-compile-dispatcher.cc
+@@ -258,10 +258,23 @@ void OptimizingCompileTaskExecutor::CancelCompilationJobsForIsolate(
+ 
+ OptimizingCompileDispatcher::OptimizingCompileDispatcher(
+     Isolate* isolate, OptimizingCompileTaskExecutor* task_executor)
+-    : isolate_(isolate), task_executor_(task_executor) {}
++    : isolate_(isolate), task_executor_(task_executor) {
++#if V8_OS_AROS
++  // A resident V8 image serves independent native process owners. The group's
++  // first isolate may retire its worker pool while other isolates remain.
++  // Keep compiler jobs within the isolate's owning pool and lifetime; shared
++  // executable code and read-only group data remain in the resident engine.
++  task_executor_ = new OptimizingCompileTaskExecutor;
++  task_executor_->EnsureStarted();
++#endif
++}
+ 
+ OptimizingCompileDispatcher::~OptimizingCompileDispatcher() {
+   DCHECK_EQ(output_queue_.size(), 0);
++#if V8_OS_AROS
++  task_executor_->Stop();
++  delete task_executor_;
++#endif
+ }
+ 
+ void OptimizingCompileDispatcher::QueueFinishedJob(
 diff --git a/src/deoptimizer/translation-opcode.h b/src/deoptimizer/translation-opcode.h
 index 0bc7a1c202b9780746eee100b8f4648245a6ae7c..147b68fedf7c0ae9bdfe6e959a38973a595163f2 100644
 --- a/src/deoptimizer/translation-opcode.h
@@ -1829,6 +1858,20 @@ index 64d996f2b252fb34e12539417f60d2f77d2d8b6d..4b6184eb12d399a0472657c6e446e9ca
    int tasks = std::max(
        1, std::min({num_scavenge_tasks, kMaxScavengerTasks, num_cores}));
    if (!heap->CanPromoteYoungAndExpandOldGeneration(
+diff --git a/src/init/isolate-group.cc b/src/init/isolate-group.cc
+index 21f4929fa28e76cce97b52efc33d5bdf311a7d71..de2dbafeeeaa83aee82d12b0d3858dc848256012 100644
+--- a/src/init/isolate-group.cc
++++ b/src/init/isolate-group.cc
+@@ -357,7 +357,9 @@ void IsolateGroup::AddIsolate(Isolate* isolate) {
+     main_isolate_ = isolate;
+   }
+ 
++#if !V8_OS_AROS
+   optimizing_compile_task_executor_->EnsureStarted();
++#endif
+ 
+   if (v8_flags.shared_heap) {
+     if (!global_safepoint_) {
 diff --git a/src/init/v8.cc b/src/init/v8.cc
 index 91463a1ead928784754d811c469d1167b862db9f..78fb01c2dbf68ae748e84f7a443c63d73786d917 100644
 --- a/src/init/v8.cc

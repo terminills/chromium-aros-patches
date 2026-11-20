@@ -1,0 +1,105 @@
+--- a/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/internal/thread_cache_internal.h
+@@ -211,6 +211,10 @@
+   static void Init(PartitionRoot* root);
+   static bool IsInitialized();
+ 
++#if PA_BUILDFLAG(IS_AROS)
++  // Native Exec task exit has no pthread destructor pass.
++  static void DeleteForCurrentNativeTask();
++#endif
+   static void DeleteForTesting();
+ 
+   // Deletes existing thread cache and creates a new one for |root|.
+--- a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.h
+@@ -67,6 +67,10 @@
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC)
+   static void SetLargestCachedSize(size_t size);
+ 
++#if PA_BUILDFLAG(IS_AROS)
++  PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void OnNativeTaskExit();
++#endif
++
+   // Purge the thread cache of the current thread, if one exists.
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void PurgeCurrentThread();
+   PA_COMPONENT_EXPORT(PARTITION_ALLOC) static void PurgeAllThread();
+--- a/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc
++++ b/base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc
+@@ -351,6 +351,27 @@
+   PA_CHECK(ok);
+   g_thread_cache_key_created = true;
+ }
++
++#if PA_BUILDFLAG(IS_AROS)
++void ThreadCache::DeleteForCurrentNativeTask() {
++  {
++    internal::ScopedGuard lock(ThreadCacheRegistry::GetLock());
++    if (!g_thread_cache_key_created)
++      return;
++  }
++  // This callback runs on the exiting task after its Chromium TLS consumers.
++  // Keep deletion outside the registry lock: the destructor unregisters here.
++  Delete(internal::PartitionTlsGet(internal::g_thread_cache_key));
++  // Late CRT/owner cleanup can still allocate. Prevent cache resurrection;
++  // those operations must use the shared root directly instead.
++  internal::PartitionTlsSet(internal::g_thread_cache_key,
++                            reinterpret_cast<void*>(kTombstone));
++#if PA_CONFIG(THREAD_CACHE_FAST_TLS)
++  PA_UNSAFE_TODO(internal::g_thread_caches[internal::kThreadCacheTombstoneIndex]) =
++      reinterpret_cast<ThreadCache*>(kTombstone);
++#endif
++}
++#endif
+ 
+ // static
+ void ThreadCache::DeleteForTesting() {
+@@ -952,6 +973,12 @@
+   internal::ThreadCache::SetLargestCachedSize(size);
+ }
+ 
++#if PA_BUILDFLAG(IS_AROS)
++void ThreadCache::OnNativeTaskExit() {
++  internal::ThreadCache::DeleteForCurrentNativeTask();
++}
++#endif
++
+ void ThreadCache::PurgeCurrentThread() {
+   for (size_t i = 0; i < internal::kMaxThreadCacheIndex; i++) {
+     auto* tcache = internal::ThreadCache::Get(i);
+--- a/base/threading/thread_local_storage.cc
++++ b/base/threading/thread_local_storage.cc
+@@ -3,6 +3,9 @@
+ // found in the LICENSE file.
+ 
+ #include "base/threading/thread_local_storage.h"
++#if BUILDFLAG(IS_AROS)
++#include "partition_alloc/thread_cache.h"
++#endif
+ 
+ #include <algorithm>
+ #include <array>
+@@ -422,12 +425,17 @@
+ void OnNativeTaskExit() {
+   const PlatformThreadLocalStorage::TLSKey key =
+       g_native_tls_key.load(std::memory_order_relaxed);
+-  if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES) return;
+-  TlsVectorEntry* vector = nullptr;
+-  const TlsVectorState state = GetTlsVectorStateAndValue(key, &vector);
+-  // Reentrant and repeated exit notifications must not destroy twice.
+-  if (state != TlsVectorState::kInUse) return;
+-  OnThreadExitInternal(vector);
++  if (key != PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES) {
++    TlsVectorEntry* vector = nullptr;
++    const TlsVectorState state = GetTlsVectorStateAndValue(key, &vector);
++    // Reentrant destruction must leave the allocator available to the outer
++    // destructor pass. Repeated completed notifications are harmless.
++    if (state == TlsVectorState::kDestroying)
++      return;
++    if (state == TlsVectorState::kInUse)
++      OnThreadExitInternal(vector);
++  }
++  partition_alloc::ThreadCache::OnNativeTaskExit();
+ }
+ #endif
+ 

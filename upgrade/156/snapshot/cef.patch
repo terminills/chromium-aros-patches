@@ -563,7 +563,7 @@ index b2f30ae0a0a23593f035ab5029bec530831553fc..8a9c81fe5b3470635a356849a32b3d2a
        std::move(native_delegate), use_shared_texture, use_external_begin_frame);
  #endif
 diff --git a/libcef/browser/main_runner.cc b/libcef/browser/main_runner.cc
-index 367b389745a19674736df255ed967175e5c58006..f9eb2df80bc17f48fdc306b0aa32359bcc7fb408 100644
+index 367b389745a19674736df255ed967175e5c58006..2f2682c0bb917cd159f7019c06eda4eacf3e61ab 100644
 --- a/libcef/browser/main_runner.cc
 +++ b/libcef/browser/main_runner.cc
 @@ -6,6 +6,7 @@
@@ -584,7 +584,22 @@ index 367b389745a19674736df255ed967175e5c58006..f9eb2df80bc17f48fdc306b0aa32359b
  #include "components/keep_alive_registry/keep_alive_types.h"
  #include "components/metrics/persistent_system_profile.h"
  #include "content/app/content_main_runner_impl.h"
-@@ -208,15 +211,29 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
+@@ -42,6 +45,14 @@
+ #include "sandbox/win/src/sandbox_types.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_drain_child_tls();
++extern "C" void aros_blink_retire_child_histograms();
++extern "C" void aros_base_retire_child_histograms();
++extern "C" void aros_base_retire_child_features();
++extern "C" void aros_base_retire_child_field_trials();
++#endif
++
+ CefMainRunner::CefMainRunner(bool multi_threaded_message_loop,
+                              bool external_message_pump)
+     : multi_threaded_message_loop_(multi_threaded_message_loop),
+@@ -208,15 +219,36 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
      return CEF_RESULT_CODE_BAD_PROCESS_TYPE;
    }
  
@@ -605,6 +620,13 @@ index 367b389745a19674736df255ed967175e5c58006..f9eb2df80bc17f48fdc306b0aa32359b
 +  // so a later native task reusing this Exec address gets a new owner identity.
 +  struct NativeCommandLineLifetime {
 +    ~NativeCommandLineLifetime() {
++      // ContentMain, its workers and the delegate have unwound. Keep the
++      // logical owner identity alive until owner-scoped metrics and feature trials are gone.
++      aros_base_drain_child_tls();
++      aros_blink_retire_child_histograms();
++      aros_base_retire_child_histograms();
++      aros_base_retire_child_features();
++      aros_base_retire_child_field_trials();
 +      base::CommandLine::Reset();
 +      CHECK(!base::CommandLine::InitializedForCurrentProcess());
 +    }
