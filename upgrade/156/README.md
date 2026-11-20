@@ -7,19 +7,18 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-20 UTC
 
-[Source287 and native task cache evidence](evidence/memory287-native-tasks/README.md)
-add explicit allocator-cache retirement and child feature/trial cleanup. Native
-276 completes30 cycles but leaves1,229 cache records after host exit. The fixes
-pass host and x64/ARM object checks; integrated native acceptance is pending.
-The current snapshot is287; older results below keep their build identities.
+[Current native x64 validation](evidence/native316-x64/README.md) passes
+installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
+storage/DOM/worker isolation, and profile close/reopen persistence. Source287
+and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
+cycles10 and30; memory plateau and cold-profile qualification remain open.
+The current snapshot is287; older results below retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
-now pass on x64 and ARM. Both SDKs include the generated credentials prerequisites;
-current-build browser profile integration is still pending.
-
+pass on x64 and ARM. Both SDKs include the generated prerequisites.
 [Fresh-master ARM desktop validation](evidence/master297-arm-desktop/README.md)
-now passes with Wanderer and About AROS. Two exact native desktop memory samples
-are retained. Current-build browser acceptance remains pending.
+passes Wanderer/About. ARM288 compilation passes; native link retry after
+building the missing EGL prerequisite and browser acceptance remain pending.
 
 The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
 used by the previous native Widevine path. It now builds against master;
@@ -54,7 +53,7 @@ with1095.54MiB remaining after host exit. This is OS-plus-resident-engine use,
 not per-app RSS or evidence of engine duplication. The fresh FAT profile also
 reports a heavy-ad SQLite cache I/O error; profile acceptance is still pending.
 [Compact226 inputs, raw logs, native ledger, screenshots and measurements](evidence/compact226-native)
-are retained. Current independent-app isolation and profile replay remain open.
+are retained. Current independent-app isolation and profile close/reopen pass in311/312; cold-profile replay remains open.
 
 The Wanderer drawer title corruption after closure remains under investigation.
 ARM74 opens the installed browser window and About AROS, but full browser
@@ -62,7 +61,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/credentials307-master/release-candidate-gates.json).
+[current RC gates](evidence/native316-x64/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched

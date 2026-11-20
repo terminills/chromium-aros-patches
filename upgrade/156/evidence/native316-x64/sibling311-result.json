@@ -1,0 +1,198 @@
+{
+  "page_checks_pass": true,
+  "isolated_app_checks": true,
+  "survivor_after_A_closed": true,
+  "missing_markers": [],
+  "native_fault": false,
+  "timed_out": false,
+  "retire_complete": 5,
+  "retire_deferred": 0,
+  "native_child_accounting": {
+    "all_started_children_returned": false,
+    "observed_child_ids": [
+      "120",
+      "142",
+      "162",
+      "179",
+      "204",
+      "220",
+      "76",
+      "91"
+    ],
+    "entry_events": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "91",
+        "utility"
+      ],
+      [
+        "120",
+        "renderer"
+      ],
+      [
+        "142",
+        "renderer"
+      ],
+      [
+        "162",
+        "renderer"
+      ],
+      [
+        "179",
+        "renderer"
+      ],
+      [
+        "204",
+        "renderer"
+      ],
+      [
+        "220",
+        "utility"
+      ]
+    ],
+    "entry_details": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "91",
+        "utility"
+      ],
+      [
+        "120",
+        "renderer"
+      ],
+      [
+        "142",
+        "renderer"
+      ],
+      [
+        "162",
+        "renderer"
+      ],
+      [
+        "179",
+        "renderer"
+      ],
+      [
+        "204",
+        "renderer"
+      ],
+      [
+        "220",
+        "utility"
+      ]
+    ],
+    "entries": {
+      "76": "gpu-process",
+      "91": "utility",
+      "120": "renderer",
+      "142": "renderer",
+      "162": "renderer",
+      "179": "renderer",
+      "204": "renderer",
+      "220": "utility"
+    },
+    "exits": [
+      [
+        "142",
+        "renderer",
+        "0"
+      ],
+      [
+        "162",
+        "renderer",
+        "0"
+      ],
+      [
+        "204",
+        "renderer",
+        "0"
+      ],
+      [
+        "120",
+        "renderer",
+        "0"
+      ],
+      [
+        "220",
+        "utility",
+        "0"
+      ],
+      [
+        "76",
+        "gpu-process",
+        "0"
+      ],
+      [
+        "179",
+        "renderer",
+        "0"
+      ]
+    ],
+    "errors": [
+      "entry and successful exit IDs/types differ"
+    ],
+    "method": "Only complete line-terminated E/DETAIL/X records are accepted. Every observed ID, including partial E records, has child-emitted E or complete DETAIL entry and matching unique zero exit. Launch alone cannot supply entry. Conflicting types, duplicates, unknown exits, missing exits and additional verbose entries fail."
+  },
+  "captures": [
+    "appB-survives",
+    "two-apps"
+  ],
+  "scope": "Native QEMU shared-engine application isolation; no security sandbox or general memory plateau claim.",
+  "functional_pass": true,
+  "gates": {
+    "page_checks": true,
+    "terminal_markers": true,
+    "no_fault": true,
+    "not_timed_out": true,
+    "native_ledger": true,
+    "serial_ids_covered": true,
+    "two_renderer_children": true,
+    "retirement": true,
+    "no_ledger_io_failure": true
+  },
+  "children": {
+    "162": "renderer",
+    "91": "utility",
+    "204": "renderer",
+    "142": "renderer",
+    "179": "renderer",
+    "120": "renderer",
+    "220": "utility",
+    "76": "gpu-process"
+  },
+  "ledger_files": {
+    "Ledger311/162.enter": "089b3ef9900e408828287cb9300080c8cf12d7749f863494e4b58b9a8b6d05b0",
+    "Ledger311/91.enter": "1a9b537daa2aff72667e7e1f726ae95f826c635b56fa0dc3e8b1680199f38039",
+    "Ledger311/91.exit": "1337ba4ff51ec75e57ab0a1f15e78d078fdb945a6abffdb8584cc05400144ebe",
+    "Ledger311/162.exit": "981327140c7c3c2831d4d1f506d16765e6a110455d8443a77c7b07178880e73d",
+    "Ledger311/204.enter": "42be103db48a19ecec471c89799ab2a1ced07e2322df4e3f2d8c44c0d4ef3b0f",
+    "Ledger311/142.enter": "a9b2075478234cbff25f21a6897f79f15c4c216a188e9669127a90c803d654d2",
+    "Ledger311/142.exit": "d8813e83d1efbe1863d9e332bf25b20844a3d1ffb8644cf591d12e5e7bb9441b",
+    "Ledger311/179.enter": "10dbcffde4e5ab47b5132f689db3156d8fa41a86eb6703fbef7072f009b62fc5",
+    "Ledger311/120.enter": "5f823334373e0da34a8174790bd3163b29efc8a4f06edc4ab9e9db61b8826eea",
+    "Ledger311/220.exit": "27de6d0f8ec2d666b498a05b303ac1aac4ce1b1a1d4d48843a267b173180fba2",
+    "Ledger311/120.exit": "dd97402ce53983709030f770e954a0a212d51ac25710896ff787a96403319778",
+    "Ledger311/76.exit": "637b9eedb5c43c1661c5f339f0dd01e0363176ec730a696995e169a9f52ce3c5",
+    "Ledger311/204.exit": "ab04fb1a2f23e33b90b94ac7cfeca0b66d25b7dd2b20c8f8c31cd3c933ce5189",
+    "Ledger311/179.exit": "829497ab7e1d8ec5acf6235faea787ef788921a462bb9577a1166fc0b282bcee",
+    "Ledger311/220.enter": "ee3dd10dcf481f969ce74be61580ffd2eb9a014f6579096d6d31c37b364628e1",
+    "Ledger311/76.enter": "1d7ab4ff6e30fdea0c431f2337f758e85c754c97c8685be5582f83874e0014a9"
+  },
+  "disk_sha256": "e6b913e83b94d48d0a42e167bb3e90399291760a7fd228360bd4d9fd099c9623",
+  "disk_read_after_exact_vm_exit": true,
+  "pid_exited": 4119635,
+  "qmp_quit": [
+    {
+      "return": {}
+    },
+    {
+      "return": {}
+    }
+  ]
+}
