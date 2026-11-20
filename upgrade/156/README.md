@@ -12,12 +12,12 @@ installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
 storage/DOM/worker isolation, and profile close/reopen persistence. Source287
 and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
 cycles10 and30; memory plateau remains open. [Cold-boot profile persistence](evidence/cold317-profile/README.md) now passes for synthetic cookies and localStorage.
-The current snapshot is344. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
+The current snapshot is360. [Renderer retirement and production configuration](evidence/retirement389/README.md) pass both native engine links, x64 two-app isolation and browser profile close/reopen. Production profiles now exclude Chromium developer field-trial experiments; rebuilt ARM acceptance remains pending. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
 pass on x64 and ARM. Both SDKs include the generated prerequisites.
 [Fresh-master ARM desktop validation](evidence/master297-arm-desktop/README.md)
-passes Wanderer/About. Both330 native engine links pass. ARM341 with source338/native339 gets past the earlier directory fault but still faults before first paint: a retiring renderer remains visible as live after its channel is cleared. The fix is staged privately; full ARM browser readiness remains open.
+passes Wanderer/About. Both330 native engine links pass. ARM341 with source338/native339 gets past the earlier directory fault but still faults before first paint: a retiring renderer remains visible as live after its channel is cleared. The retirement fix is included in source360 and both native361 links pass; full ARM browser readiness remains open.
 
 The fresh x64 SDK also requires the [retained LinuxSO loader prerequisite](evidence/linuxso270/README.md)
 used by the previous native Widevine path. It now builds against master;
@@ -60,7 +60,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/lifetime364/release-candidate-gates.json).
+[current RC gates](evidence/retirement389/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched

@@ -1,0 +1,39 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "346 source344/native345 PASS30 pages,62 complete/0 deferred retirements and independent ledger.",
+    "sibling_app_isolation": "366 source360/native361 PASS independent app state and survivor after A close, 8 ledger-backed successful child exits; serial alone is incomplete.",
+    "persistent_profiles": "371 source360/native361 synthetic cookie/localStorage write/close/reopen/read PASS with PROFILE assign absent. Historical cold-boot312/313 retains source287 identity. Real-account authentication unqualified.",
+    "memory": "346 growth cycle10 to30 99.72MiB, fitted slope5.07MiB/cycle;331 baseline86.95MiB/5.02. Feature-provider vptr candidates252 to0 and generic heap allocated bytes36,499,728 to35,399,936 support cleanup, but memory plateau remains unresolved. Whole-guest results, not per-app RSS.",
+    "native_browser_ui": "371 source360/native361 New Tab and profile test render, close and reopen PASS. Earlier four-tab/version evidence retains its original source identity.",
+    "production_launcher": "Both native361 links PASS. ARM359 diagnostic confirms explicit shutdown followed by stale live renderer/channel-null crash. Source360 addresses retirement liveness; ARM acceptance pending. Experimental WebUI restart trial found in retained341 data; production profiles378 exclude developer fieldtrial config.",
+    "packaging": "312 x64 inventory PASS30 files, hashes/ELF architecture/native icon magic/notices. No RC archive or upload yet.",
+    "source_reproducibility": "Source360 complete 21-repository replay and both native361 links PASS. Production GN profiles378 disable developer fieldtrial testing configuration; build379 pending. Snapshot360 source is unchanged by378.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification.",
+    "native_credentials": "Native305 ARM/306 x64 keyring API checks PASS; x64 browser312 close/reopen and313 cold boot synthetic profile persistence PASS. Real account login and ARM browser integration remain unqualified."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification",
+    "arm_qemu_usb": "301 QEMU-only DTB enabled controller and assigned device addresses, but transfers time out; USB input/network not qualified. Main294 uses known desktop DTB and native input.device diagnostic."
+  },
+  "arm341_followup": {
+    "result": "FAIL before first paint",
+    "diagnosis": "Retained host4 is top-chrome-webui with retirement_started=1, initialized=1, dead=0, channel=null and RESULT_CODE_KILLED. Actual shared trial data enables WebUIReloadButtonStudy, whose developer config includes a 5s unresponsive restart timeout and 100000ms renderer commit delay. Source360 fixes retirement liveness and reuse/callback guards; native links and x64 regressions pass, ARM runtime remains pending.",
+    "source": "source338",
+    "native": "native339",
+    "evidence": [
+      "arm341-host-retirement-fields.json",
+      "arm341-shutdown-reason374.json",
+      "arm341-process-args375.json",
+      "arm341-field-trials375.json"
+    ]
+  }
+}

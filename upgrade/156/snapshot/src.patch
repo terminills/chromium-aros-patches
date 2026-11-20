@@ -43067,7 +43067,7 @@ index 410948963a049c056bc605867a9fa5866347c435..e80365c1b3cff6de0cd5dd0dd788b5f8
            GetProcess()->GetDeprecatedID(),
            browser_calc_origin_to_commit.value(),
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096abd1e62ed 100644
+index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221cbc8c3f7 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -59,6 +59,8 @@
@@ -43079,18 +43079,19 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  #include "base/supports_user_data.h"
  #include "base/system/sys_info.h"
  #include "base/task/sequenced_task_runner.h"
-@@ -224,6 +226,10 @@
+@@ -224,6 +226,11 @@
  #include "url/gurl.h"
  #include "url/origin.h"
  
 +#if BUILDFLAG(IS_AROS)
 +#include "base/aros/platform_spoof.h"
++extern "C" void ArosRphKPrintF(const char*, ...) asm("KPrintF");
 +#endif
 +
  #if BUILDFLAG(IS_ANDROID)
  #include "base/android/child_process_binding_types.h"
  #include "content/browser/font_unique_name_lookup/font_unique_name_lookup_service.h"
-@@ -310,6 +316,15 @@ namespace {
+@@ -310,6 +317,15 @@ namespace {
  
  using perfetto::protos::pbzero::ChromeTrackEvent;
  
@@ -43106,7 +43107,64 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  // Stores the maximum number of renderer processes the content module can
  // create. Only applies if it is set to a non-zero value.
  size_t g_max_renderer_count_override = 0;
-@@ -3765,6 +3780,28 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
+@@ -1891,6 +1907,19 @@ bool RenderProcessHostImpl::IsMock() const {
+ }
+ 
+ bool RenderProcessHostImpl::Init() {
++#if BUILDFLAG(IS_AROS)
++  ArosRphKPrintF("[AROS-RPH351] init host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
++#if BUILDFLAG(IS_AROS)
++  // The old task and transport still belong to this host until retirement
++  // completes. A disconnected host cannot initialize a replacement yet.
++  if (aros_retirement_started_)
++    return false;
++#endif
++
+   // calling Init() more than once does nothing, this makes it more convenient
+   // for the view host which may not be sure in some cases
+   if (IsInitializedAndNotDead())
+@@ -2222,6 +2251,12 @@ void RenderProcessHostImpl::MaybeNotifyVizOfRendererBlockStateChanged(
+ }
+ 
+ void RenderProcessHostImpl::InitializeChannelProxy() {
++#if BUILDFLAG(IS_AROS)
++  ArosRphKPrintF("[AROS-RPH351] create-channel host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
+   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner =
+       GetIOThreadTaskRunner({});
+ 
+@@ -2312,6 +2347,12 @@ void RenderProcessHostImpl::InitializeSharedMemoryRegionsOnceChannelIsUp() {
+ }
+ 
+ void RenderProcessHostImpl::ResetChannelProxy() {
++#if BUILDFLAG(IS_AROS)
++  ArosRphKPrintF("[AROS-RPH351] reset-channel host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
+   if (!channel_)
+     return;
+ 
+@@ -3211,6 +3252,10 @@ ProcessLock RenderProcessHostImpl::GetProcessLock() const {
+ }
+ 
+ bool RenderProcessHostImpl::MayReuseHost() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return false;
++#endif
+   return GetContentClient()->browser()->MayReuseHost(this);
+ }
+ 
+@@ -3765,6 +3810,28 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
      command_line->AppendSwitch(switches::kEnableMainFrameBeforeActivation);
  }
  
@@ -43135,7 +43193,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  void RenderProcessHostImpl::AppendRendererCommandLine(
      base::CommandLine* command_line) {
    // Pass the process type first, so it shows first in process listings.
-@@ -3828,6 +3865,10 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+@@ -3828,6 +3895,10 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
      command_line->AppendSwitch(switches::kDisallowV8FeatureFlagOverrides);
    }
  
@@ -43146,7 +43204,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
    if (features::IsTouchTextEditingRedesignEnabled()) {
      command_line->AppendSwitchASCII(
          blink::switches::kTouchTextSelectionStrategy,
-@@ -3875,6 +3916,10 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+@@ -3875,6 +3946,10 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
  #if BUILDFLAG(IS_MAC)
        // Allow this to be set when invoking the browser and relayed along.
        sandbox::policy::switches::kEnableSandboxLogging,
@@ -43157,7 +43215,18 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  #endif
        switches::kAllowCommandLinePlugins,
        switches::kAllowFileAccessFromFiles,
-@@ -4217,7 +4262,21 @@ bool RenderProcessHostImpl::Shutdown(int exit_code) {
+@@ -4131,6 +4206,10 @@ const base::Process& RenderProcessHostImpl::GetProcess() {
+ }
+ 
+ bool RenderProcessHostImpl::IsReady() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return false;
++#endif
+   // The process launch result (that sets GetHandle()) and the channel
+   // connection (that sets channel_connected_) can happen in either order.
+   return GetProcess().Handle() && channel_connected_;
+@@ -4217,7 +4296,21 @@ bool RenderProcessHostImpl::Shutdown(int exit_code) {
  
    shutdown_exit_code_ = exit_code;
    shutdown_requested_ = true;
@@ -43179,10 +43248,27 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  }
  
  bool RenderProcessHostImpl::ShutdownRequested() {
-@@ -4369,6 +4428,20 @@ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
+@@ -4340,6 +4433,10 @@ void RenderProcessHostImpl::OnAssociatedInterfaceRequest(
+ }
+ 
+ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return;
++#endif
+   channel_connected_ = true;
+ 
+ #if BUILDFLAG(IS_MAC)
+@@ -4369,6 +4466,26 @@ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
  }
  
  void RenderProcessHostImpl::OnChannelError() {
++#if BUILDFLAG(IS_AROS)
++  ArosRphKPrintF("[AROS-RPH351] channel-error host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
 +#if BUILDFLAG(IS_AROS)
 +  if (aros_retirement_started_)
 +    return;
@@ -43200,7 +43286,35 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
    ChildProcessTerminationInfo info =
        GetChildTerminationInfo(true /* already_dead */);
    ProcessDied(info);
-@@ -5695,6 +5768,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
+@@ -4397,6 +4514,13 @@ base::SafeRef<RenderProcessHost> RenderProcessHostImpl::GetSafeRef() const {
+ }
+ 
+ bool RenderProcessHostImpl::IsInitializedAndNotDead() {
++#if BUILDFLAG(IS_AROS)
++  // Retirement tears down IPC before the native task finishes unwinding.
++  // Frame/navigation liveness must stop at that boundary, not at ProcessDied.
++  // Otherwise ReadyToCommitNavigation can reach a null ChannelProxy.
++  if (aros_retirement_started_)
++    return false;
++#endif
+   return is_initialized_ && !is_dead_;
+ }
+ 
+@@ -4801,6 +4925,13 @@ RenderProcessHostImpl::StartRtpDump(bool incoming,
+ }
+ 
+ IPC::ChannelProxy* RenderProcessHostImpl::GetChannel() {
++#if BUILDFLAG(IS_AROS)
++  if (!channel_)
++    ArosRphKPrintF("[AROS-RPH351] get-channel host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
+   return channel_.get();
+ }
+ 
+@@ -5695,6 +5826,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
    return info;
  }
  
@@ -43330,7 +43444,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  void RenderProcessHostImpl::ProcessDied(
      const ChildProcessTerminationInfo& termination_info) {
    TRACE_EVENT0("content", "RenderProcessHostImpl::ProcessDied");
-@@ -5728,6 +5924,13 @@ void RenderProcessHostImpl::ProcessDied(
+@@ -5728,6 +5982,13 @@ void RenderProcessHostImpl::ProcessDied(
    // when the process is respawned after a crash.
    did_update_renderer_locked_state_ = false;
  
@@ -43344,7 +43458,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
    UpdateProcessPriority();
  
    // RenderProcessExited relies on the exit code set during shutdown.
-@@ -5775,6 +5978,36 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5775,6 +6036,36 @@ void RenderProcessHostImpl::FastShutdown() {
    // to fast shutdown.
    fast_shutdown_started_ = true;
  
@@ -43381,7 +43495,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
    // Tell observers that the process exited cleanly, even though it will be
    // destroyed a little bit later. Observers shouldn't rely on this process
    // anymore.
-@@ -5783,6 +6016,7 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5783,6 +6074,7 @@ void RenderProcessHostImpl::FastShutdown() {
    termination_info.exit_code = 0;
  
    ProcessDied(termination_info);
@@ -43389,6 +43503,23 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..87d9d89872f7098a250d550cfdfa096a
  }
  
  void RenderProcessHostImpl::ResetIPC() {
+@@ -6116,6 +6408,16 @@ void RenderProcessHostImpl::SendProcessStateToRenderer() {
+ }
+ 
+ void RenderProcessHostImpl::OnProcessLaunched() {
++#if BUILDFLAG(IS_AROS)
++  if (aros_retirement_started_)
++    return;
++#endif
++#if BUILDFLAG(IS_AROS)
++  ArosRphKPrintF("[AROS-RPH351] launched host=%p channel=%p dead=%d deleting=%d caller=%p\n",
++          this, channel_.get(), int(is_dead_), int(deleting_soon_),
++          __builtin_return_address(0));
++#endif
++
+   // No point doing anything, since this object will be destructed soon.  We
+   // especially don't want to send the OnRenderProcessHostCreated notification,
+   // since some clients might expect a RenderProcessHostDestroyed() afterwards
 diff --git a/content/browser/renderer_host/render_process_host_impl.h b/content/browser/renderer_host/render_process_host_impl.h
 index ef1ccc3400f358801abe44a1027be2a4a413b995..10d4d71059b6ae00b0b8533597f3a0671f2e506e 100644
 --- a/content/browser/renderer_host/render_process_host_impl.h
