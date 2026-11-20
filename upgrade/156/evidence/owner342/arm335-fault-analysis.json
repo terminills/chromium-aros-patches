@@ -1,0 +1,23 @@
+{
+  "source": "master335-inputs.json",
+  "memory": "master335-startup-fault-qmp.json",
+  "first_fault": {
+    "pc": "0xf821f6f8",
+    "far": "0xaa1f03e1580000d0",
+    "caller_lr": "0xc796a0",
+    "caller": "posixc.library readdir calls ExNext",
+    "correction": "Earlier provisional Examine label was ambiguous: Examine and ExNext share the matching opcode sequence. Caller library code selects DOS vector18 ExNext.",
+    "caller_of_readdir": "base::FileEnumerator::Next at link0x3a305c",
+    "runtime_engine_bias": "0x7ddf000"
+  },
+  "host_fault": {
+    "pc": "0x92323fc",
+    "link_pc": "0x14533fc",
+    "function": "IPC::ChannelProxy::GetRemoteAssociatedInterface",
+    "caller": "extensions::RendererStartupHelper::BindNewRendererRemote",
+    "x20": "0x10",
+    "interpretation": "thread_safe_channel_ was null before proxy/vtable lookup; upstream cause not yet established"
+  },
+  "candidate338": "Skia font directory opendir still chooses/publishes fd nonatomically. Replace with open(O_DIRECTORY)+fdopendir as already used by base FileEnumerator. Known source race; exact overwrite in335 not yet directly observed.",
+  "scope": "Native QEMU failures retained. Neither ARM browser readiness nor fix acceptance."
+}

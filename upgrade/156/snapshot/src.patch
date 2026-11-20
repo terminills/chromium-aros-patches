@@ -34260,10 +34260,10 @@ index e36249713bfd5c254a322c3c55fd31d129937fab..f0cff934441ec52c1e1a0d6862b20fa2
    DIR_USER_NATIVE_MESSAGING,  // Directory with Native Messaging Hosts
 diff --git a/chrome/common/chrome_paths_aros.cc b/chrome/common/chrome_paths_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..03eb8951546030335126b4181cf4e37a557413db
+index 0000000000000000000000000000000000000000..aa3d4e9cf287ee2cdabbe729eb69e66830f1faad
 --- /dev/null
 +++ b/chrome/common/chrome_paths_aros.cc
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,131 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -34274,6 +34274,9 @@ index 0000000000000000000000000000000000000000..03eb8951546030335126b4181cf4e37a
 +#include "base/files/file_util.h"
 +#include "base/path_service.h"
 +#include "chrome/common/chrome_paths.h"
++
++#include <dos/dosextens.h>
++#include <proto/dos.h>
 +
 +namespace chrome {
 +namespace {
@@ -34287,7 +34290,15 @@ index 0000000000000000000000000000000000000000..03eb8951546030335126b4181cf4e37a
 +constexpr char kVolatileUserDirectory[] = "RAM:";
 +
 +bool HasUserProfile() {
-+  return base::DirectoryExists(base::FilePath(kProfileAssign));
++  // Probing an absent AROS assign through stat/Lock opens a system requester.
++  // Check the DOS name registry before asking whether its target is a drawer.
++  constexpr ULONG flags = LDF_READ | LDF_ASSIGNS | LDF_VOLUMES | LDF_DEVICES;
++  struct DosList* list = LockDosList(flags);
++  if (!list)
++    return false;
++  const bool present = FindDosEntry(list, "PROFILE", flags) != nullptr;
++  UnLockDosList(flags);
++  return present && base::DirectoryExists(base::FilePath(kProfileAssign));
 +}
 +
 +base::FilePath GetUserDirectory(const char* name) {
@@ -57143,10 +57154,10 @@ index b3cee97f10f8eff6eaac61dcb168cab4f477a07a..fc3b6b0a611d0c066aa0f03a63d75483
        deps += [ "//chromeos/dbus/constants" ]
      }
 diff --git a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
-index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a6732cbe781 100644
+index b5c73fc035e18107a9b0b830faa6a5d388553da3..6e32e32227d518fe603beec9efeefcfa63076a94 100644
 --- a/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
 +++ b/services/tracing/public/cpp/perfetto/perfetto_traced_process.cc
-@@ -4,6 +4,9 @@
+@@ -4,7 +4,13 @@
  
  #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
  
@@ -57154,9 +57165,13 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
 +#include <atomic>
 +
  #include "base/command_line.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  #include "base/functional/bind.h"
  #include "base/functional/callback_helpers.h"
-@@ -12,6 +15,7 @@
+ #include "base/logging.h"
+@@ -12,6 +18,7 @@
  #include "base/metrics/histogram_functions.h"
  #include "base/no_destructor.h"
  #include "base/process/process_handle.h"
@@ -57164,7 +57179,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  #include "base/task/sequenced_task_runner.h"
  #include "base/task/thread_pool.h"
  #include "base/threading/thread.h"
-@@ -30,7 +34,8 @@
+@@ -30,7 +37,8 @@
  #include "third_party/perfetto/include/perfetto/tracing/platform.h"
  #include "third_party/perfetto/include/perfetto/tracing/tracing.h"
  
@@ -57174,7 +57189,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  // As per 'gn help check':
  /*
    If you have conditional includes, make sure the build conditions and the
-@@ -40,12 +45,36 @@
+@@ -40,12 +48,35 @@
  // We add the nogncheck to ensure this doesn't trigger incorrect errors on
  // non-android builds.
  #include "third_party/perfetto/include/perfetto/tracing/default_socket.h"  // nogncheck
@@ -57190,11 +57205,10 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
 +std::atomic<PerfettoTracedProcess*>& CurrentInstance() {
 +  struct Registry {
 +    base::Lock lock;
-+    std::map<const base::CommandLine*, std::atomic<PerfettoTracedProcess*>> slots;
++    std::map<uint64_t, std::atomic<PerfettoTracedProcess*>> slots;
 +  };
-+  const auto* identity = base::CommandLine::InitializedForCurrentProcess()
-+                             ? base::CommandLine::ForCurrentProcess() : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local std::atomic<PerfettoTracedProcess*>* cached_slot = nullptr;
 +  if (cached_slot && cached_identity == identity)
 +    return *cached_slot;
@@ -57213,7 +57227,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  bool g_system_consumer_enabled_for_testing = false;
  
  void OnPerfettoLogMessage(perfetto::base::LogMessageCallbackArgs args) {
-@@ -55,7 +84,7 @@ void OnPerfettoLogMessage(perfetto::base::LogMessageCallbackArgs args) {
+@@ -55,7 +86,7 @@ void OnPerfettoLogMessage(perfetto::base::LogMessageCallbackArgs args) {
        << args.message;
  }
  
@@ -57222,7 +57236,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  // The async socket connection function passed to the client library for
  // connecting the producer socket in the browser process via mojo IPC.
  // |cb| is a callback from within the client library this function calls when
-@@ -170,7 +199,7 @@ void PerfettoTracedProcess::RestartThreadInSandbox() {
+@@ -170,7 +201,7 @@ void PerfettoTracedProcess::RestartThreadInSandbox() {
    tracing_backend_->DetachFromMuxerSequence();
    CustomEventRecorder::GetInstance()->DetachFromSequence();
    will_trace_thread_restart_ = false;
@@ -57231,7 +57245,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
    if (system_tracing_producer_socket_cb_) {
      task_runner_->PostTask(FROM_HERE,
                             std::move(system_tracing_producer_socket_cb_));
-@@ -183,18 +212,47 @@ base::Thread* PerfettoTracedProcess::GetTraceThread() {
+@@ -183,18 +214,47 @@ base::Thread* PerfettoTracedProcess::GetTraceThread() {
    return PerfettoTracedProcess::Get().trace_process_thread_.get();
  }
  
@@ -57281,7 +57295,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  }
  
  PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
-@@ -218,9 +276,9 @@ PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
+@@ -218,9 +278,9 @@ PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
        .real_process_id = real_pid};
    base::tracing::PerfettoPlatform::MaybeCreateInstance(task_runner_, options);
    DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -57293,7 +57307,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  }
  
  PerfettoTracedProcess::PerfettoTracedProcess(
-@@ -236,13 +294,13 @@ PerfettoTracedProcess::PerfettoTracedProcess(
+@@ -236,13 +296,13 @@ PerfettoTracedProcess::PerfettoTracedProcess(
    base::tracing::PerfettoPlatform::Options options{.real_process_id = real_pid};
    base::tracing::PerfettoPlatform::MaybeCreateInstance(task_runner_, options);
    DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -57311,7 +57325,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  }
  
  void PerfettoTracedProcess::SetConsumerConnectionFactory(
-@@ -264,7 +322,7 @@ base::SequencedTaskRunner* PerfettoTracedProcess::GetTaskRunner() {
+@@ -264,7 +324,7 @@ base::SequencedTaskRunner* PerfettoTracedProcess::GetTaskRunner() {
    return PerfettoTracedProcess::Get().task_runner_.get();
  }
  
@@ -57320,7 +57334,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
  void PerfettoTracedProcess::DeferOrConnectProducerSocket(
      perfetto::CreateSocketCallback cb) {
    CHECK(!system_tracing_producer_socket_cb_);
-@@ -292,11 +350,11 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer,
+@@ -292,11 +352,11 @@ void PerfettoTracedProcess::SetupClientLibrary(bool enable_consumer,
    init_args.disallow_merging_with_system_tracks = true;
    init_args.process_uuid =
        TraceStartupConfig::GetInstance().GetProcessTrackUuid();
@@ -57334,7 +57348,7 @@ index b5c73fc035e18107a9b0b830faa6a5d388553da3..9e056e4acbd6fa39c13eec7852ba1a67
      if (!TraceStartupConfig::GetInstance().GetProcessType().empty()) {
        // Sandboxed. Need to delegate to the browser process using Mojo.
        init_args.create_socket_async = ConnectProducerSocketAsync;
-@@ -372,4 +430,5 @@ void PerfettoTracedProcess::ShouldAllowSystemConsumerSession(
+@@ -372,4 +432,5 @@ void PerfettoTracedProcess::ShouldAllowSystemConsumerSession(
    result_callback(result);
  }
  

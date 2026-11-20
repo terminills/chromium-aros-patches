@@ -1,0 +1,21 @@
+{
+  "functional_pass": true,
+  "gates": {
+    "write": true,
+    "read_after_reopen": true,
+    "callbacks_drained": true,
+    "second_browser_created": true,
+    "no_native_fault": true
+  },
+  "source": "native-scopes329-all-snapshot/manifest.json",
+  "engine": "master330-x64-cef-link-result.json",
+  "inputs": "master337-inputs.json",
+  "screenshots": [
+    "master337-version-ready.png",
+    "master337-profile-write.png",
+    "master337-profile-read-retry.png"
+  ],
+  "serial_sha256": "d6c34abc85181d4a309a2869b446723938005a3a8bf1cc44bab62c819207d573",
+  "scope": "Native x86 QEMU version page and synthetic cookie/localStorage close/reopen persistence. Startup PROFILE assign deliberately absent; no insert-volume requester observed. No coldboot or real account validation in337.",
+  "interaction_note": "Initial four Ctrl-W sequence closed Chromium and the drawer; first read input was sent to desktop. Preserved failed action logs. Relaunch via Wanderer Execute SYS:System/Chromium and second read succeeded."
+}

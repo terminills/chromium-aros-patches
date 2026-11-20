@@ -1,0 +1,27 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "331 source329/native330 PASS30 pages, independent ledger,62 complete/0 deferred renderer retirements and full host return.",
+    "sibling_app_isolation": "334 source329/native330 PASS independent app storage/DOM/workers, B survives A close,8 child entry/zero-exit pairs,5 complete and0 deferred retirements.",
+    "persistent_profiles": "337 source329/native330 synthetic cookie/localStorage write/close/reopen/read PASS with PROFILE assign absent. Earlier312/313 cold-boot evidence retains source287 identity. Real account authentication unqualified.",
+    "memory": "331 thirty-cycle whole-guest growth cycle10 to30 is86.95MiB (296 baseline205.44MiB); fitted slope5.02MiB/cycle versus10.01 baseline. Tasks return to112 atcycle30 and44 posthost. Posthost1089.17MiB. Growth remains unresolved, not a plateau or per-app RSS claim.",
+    "native_browser_ui": "337 source329/native330 version156.0.8078.96 and close/reopen PASS; earlier290 four-tab/installed-icon checks retain source287 identity. PS/2 mouse input unqualified.",
+    "production_launcher": "Both330 native links PASS. ARM335 old287/288 opens Chromium window but startup faults. Emulator VOID audio avoids absent physical HDMI MMIO; directory/IPC faults unresolved. No ARM browser readiness claim.",
+    "packaging": "312 x64 inventory PASS30 files, hashes/ELF architecture/native icon magic/notices. No RC archive or upload yet.",
+    "source_reproducibility": "Current329 complete21-repository replay PASS; both330 native engine links PASS.334 isolation and337 x64 profile/UI regression PASS. Source338 Skia directory candidate rebuilding, not this published snapshot.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification.",
+    "native_credentials": "Native305 ARM/306 x64 keyring API checks PASS; x64 browser312 close/reopen and313 cold boot synthetic profile persistence PASS. Real account login and ARM browser integration remain unqualified."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification",
+    "arm_qemu_usb": "301 QEMU-only DTB enabled controller and assigned device addresses, but transfers time out; USB input/network not qualified. Main294 uses known desktop DTB and native input.device diagnostic."
+  }
+}
