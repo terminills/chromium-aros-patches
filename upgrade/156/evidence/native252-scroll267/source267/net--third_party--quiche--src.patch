@@ -1,0 +1,122 @@
+diff --git a/quiche/common/quiche_ip_address.cc b/quiche/common/quiche_ip_address.cc
+index 342597bfab31b17551e5e0c4b4cfecc42eadf432..3e36651dd1f20f7023159a3f969ecdb5eb004419 100644
+--- a/quiche/common/quiche_ip_address.cc
++++ b/quiche/common/quiche_ip_address.cc
+@@ -14,6 +14,10 @@
+ #include "quiche/common/platform/api/quiche_logging.h"
+ #include "quiche/common/quiche_ip_address_family.h"
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
++
+ namespace quiche {
+ 
+ QuicheIpAddress QuicheIpAddress::Loopback4() {
+@@ -114,7 +118,12 @@ std::string QuicheIpAddress::ToString() const {
+ 
+   char buffer[INET6_ADDRSTRLEN] = {0};
+   const char* result =
+-      inet_ntop(AddressFamilyToInt(), address_.bytes, buffer, sizeof(buffer));
++      #if defined(__AROS__)
++      base::aros::SocketInetNtop(
++#else
++      inet_ntop(
++#endif
++      AddressFamilyToInt(), address_.bytes, buffer, sizeof(buffer));
+   QUICHE_BUG_IF(quiche_bug_10126_4, result == nullptr)
+       << "Failed to convert an IP address to string";
+   return buffer;
+@@ -170,7 +179,12 @@ bool QuicheIpAddress::FromString(std::string str) {
+   for (IpAddressFamily family :
+        {IpAddressFamily::IP_V6, IpAddressFamily::IP_V4}) {
+     int result =
+-        inet_pton(ToPlatformAddressFamily(family), str.c_str(), address_.bytes);
++        #if defined(__AROS__)
++      base::aros::SocketInetPton(
++#else
++      inet_pton(
++#endif
++      ToPlatformAddressFamily(family), str.c_str(), address_.bytes);
+     if (result > 0) {
+       family_ = family;
+       return true;
+diff --git a/quiche/common/quiche_socket_address.cc b/quiche/common/quiche_socket_address.cc
+index b615007cf76147d25c46175e76f44e41a95b2570..7b3f698be71ca402bbf7e530e791c1aad1c5e2ee 100644
+--- a/quiche/common/quiche_socket_address.cc
++++ b/quiche/common/quiche_socket_address.cc
+@@ -13,6 +13,10 @@
+ #include "quiche/common/quiche_ip_address.h"
+ #include "quiche/common/quiche_ip_address_family.h"
+ 
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
++
+ namespace quiche {
+ 
+ namespace {
+@@ -102,7 +106,13 @@ std::string QuicheSocketAddress::ToString() const {
+ int QuicheSocketAddress::FromSocket(int fd) {
+   sockaddr_storage addr;
+   socklen_t addr_len = sizeof(addr);
+-  int result = getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
++  int result =
++#if defined(__AROS__)
++      base::aros::GetSocketName(
++#else
++      getsockname(
++#endif
++      fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+ 
+   bool success = result == 0 && addr_len > 0 &&
+                  static_cast<size_t>(addr_len) <= sizeof(addr);
+diff --git a/quiche/quic/tools/quic_name_lookup.cc b/quiche/quic/tools/quic_name_lookup.cc
+index 8bf2b96ea409af6aceeb25f7b22d3eb4a6b4eb6a..40a02b33354d6880a2effd32164731cea5541923 100644
+--- a/quiche/quic/tools/quic_name_lookup.cc
++++ b/quiche/quic/tools/quic_name_lookup.cc
+@@ -9,6 +9,9 @@
+ #include <string>
+ 
+ #include "absl/strings/str_cat.h"
++#if defined(__AROS__)
++#include "base/aros/socket_library.h"
++#endif
+ #include "quiche/quic/core/quic_server_id.h"
+ #include "quiche/quic/platform/api/quic_logging.h"
+ #include "quiche/quic/platform/api/quic_socket_address.h"
+@@ -32,16 +35,32 @@ QuicSocketAddress LookupAddress(int address_family_for_lookup, std::string host,
+   hint.ai_protocol = IPPROTO_UDP;
+ 
+   addrinfo* info_list = nullptr;
+-  int result = getaddrinfo(host.c_str(), port.c_str(), &hint, &info_list);
++  int result =
++#if defined(__AROS__)
++      base::aros::GetAddressInfo(host.c_str(), port.c_str(), &hint,
++                                 &info_list);
++#else
++      getaddrinfo(host.c_str(), port.c_str(), &hint, &info_list);
++#endif
+   if (result != 0) {
+     QUIC_LOG(ERROR) << "Failed to look up " << host << ": "
++#if defined(__AROS__)
++                    << base::aros::AddressInfoErrorString(result);
++#else
+                     << gai_strerror(result);
++#endif
+     return QuicSocketAddress();
+   }
+ 
+   QUICHE_CHECK(info_list != nullptr);
+   std::unique_ptr<addrinfo, void (*)(addrinfo*)> info_list_owned(
+-      info_list, [](addrinfo* ai) { freeaddrinfo(ai); });
++      info_list, [](addrinfo* ai) {
++#if defined(__AROS__)
++        base::aros::FreeAddressInfo(ai);
++#else
++        freeaddrinfo(ai);
++#endif
++      });
+   return QuicSocketAddress(info_list->ai_addr, info_list->ai_addrlen);
+ }
+ 

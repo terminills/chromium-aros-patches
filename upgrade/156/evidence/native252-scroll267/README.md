@@ -1,0 +1,9 @@
+# Native252 lifecycle result and scroll ownership candidate267
+
+Native x64 compact252 passes ten repeated browser sessions and complete host shutdown. The independent native DOS ledger confirms23 child entry/exit pairs, all zero results,20 completed renderer retirements and none deferred. Its post-exit mapping inspection contains no retained RendererMetrics allocations. Whole-guest usage is1056.6MiB after host exit, compared with1102.33MiB in the earlier237 run. This is not per-app RSS; per-cycle growth remains and a longer control is underway.
+
+The separate diskless264 full-browser run uses the exact same252 engine. It passes the installed native icon, New Tab, four tabs and chrome://version156.0.8078.96 on AROS. Closing multiple tabs then triggers `SyncScrollAttemptHeuristic::~SyncScrollAttemptHeuristic` CHECK failure: its image-global pointer belongs to a different renderer. The failure screenshot and result are retained; full guest memory is retained privately with exact symbols. Close/reopen and subsequent stress acceptance are not claimed.
+
+Candidate266 makes this stack-scope pointer task-local on AROS. The actual class/methods, with mocked frame/metrics dependencies, reproduce the assertion before the fix and pass two interleaved renderer threads afterward, including nested disabled scopes and animation-frame observation. Both architecture objects compile. Full native integration remains pending.
+
+The replay-checked21-repository source267 includes both266 and the native-tested Chromium-local SQLite259 adapter. The fresh-master x64/ARM engine builds are active. ARM V8 already built and linked against that SDK and is reused because neither change affects V8. No RC is released. See the current gates for remaining memory, profile, sibling-app, ARM and feature qualification.

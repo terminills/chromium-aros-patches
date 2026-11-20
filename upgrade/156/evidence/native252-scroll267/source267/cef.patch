@@ -1,0 +1,1647 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 2018b0dc0401765f44d94a61a8947072519ad413..23d407373e441a4e5f4fa8b0f23b18fdc32429ec 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -926,6 +926,23 @@ source_set("libcef_static") {
+     "//chrome/app/chrome_main_delegate.h",
+   ]
+ 
++  if (is_aros) {
++    # CEF compiles ChromeMainDelegate directly instead of consuming the
++    # chrome/app target, so include its AROS profile bootstrap alongside it.
++    sources += [
++      "//chrome/app/aros_user_data_dir.cc",
++      "//chrome/app/aros_user_data_dir.h",
++    ]
++
++    # Crashpad is not available on AROS. crash_reporting.cc keeps the public
++    # CEF hooks as no-ops, so do not pull the Crashpad client implementation
++    # (and its unsupported platform base) into the resident archive.
++    sources -= [
++      "libcef/common/crash_reporter_client.cc",
++      "libcef/browser/crashpad_runner.cc",
++    ]
++  }
++
+   configs += [
+     "libcef/features:config",
+     "//build/config:precompiled_headers",
+@@ -1017,7 +1034,6 @@ source_set("libcef_static") {
+     "//third_party/blink/public:blink",
+     "//third_party/brotli:dec",
+     "//third_party/cld_3/src/src:cld_3",
+-    "//third_party/crashpad/crashpad/handler",
+     "//third_party/hunspell",
+     "//third_party/leveldatabase",
+     "//third_party/libxml:libxml",
+@@ -1041,6 +1057,10 @@ source_set("libcef_static") {
+     "//v8",
+   ]
+ 
++  if (!is_aros) {
++    deps += [ "//third_party/crashpad/crashpad/handler" ]
++  }
++
+   if (is_win) {
+     sources += includes_win + [
+       "libcef/browser/native/browser_platform_delegate_native_win.cc",
+@@ -1098,6 +1118,24 @@ source_set("libcef_static") {
+     }
+   }
+ 
++  if (is_aros) {
++    # The non-X11 path in these Aura delegates is platform-neutral. Reuse it
++    # until CEF needs an Alloy-owned native host window on AROS; Chrome runtime
++    # and CEF Views already create their windows through Ozone.
++    sources += [
++      "libcef/browser/native/browser_platform_delegate_native_linux.cc",
++      "libcef/browser/native/browser_platform_delegate_native_linux.h",
++      "libcef/browser/osr/browser_platform_delegate_osr_linux.cc",
++      "libcef/browser/osr/browser_platform_delegate_osr_linux.h",
++      "libcef/common/util_linux.cc",
++      "libcef/common/util_linux.h",
++    ]
++
++    # CefWindowInfo::window is the Intuition window on AROS; the Ozone
++    # platform resolves it from the Aura host's AcceleratedWidget.
++    deps += [ "//ui/ozone/platform/aros" ]
++  }
++
+   if (is_mac) {
+     sources += includes_mac + [
+       "libcef/browser/chrome/chrome_content_browser_client_cef_mac.mm",
+@@ -1720,6 +1758,11 @@ action("make_config_header") {
+   outputs = [ "$root_gen_dir/cef/include/cef_config.h" ]
+ 
+   args = rebase_path(outputs + inputs, root_build_dir)
++  if (ozone_platform_x11) {
++    args += [ "true" ]
++  } else {
++    args += [ "false" ]
++  }
+ }
+ 
+ # Generate cef_color_ids.h.
+@@ -1942,10 +1985,21 @@ if (is_mac) {
+     info_plist_target = ":cef_framework_plist"
+   }
+ } else {
+-  shared_library("libcef") {
++  # AROS resident libraries are linked from the complete engine archive.
++  if (is_aros) {
++    libcef_target_type = "static_library"
++  } else {
++    libcef_target_type = "shared_library"
++  }
++
++  target(libcef_target_type, "libcef") {
+     # Necessary because the libcef_test_support target is testonly.
+     testonly = true
+ 
++    if (is_aros) {
++      complete_static_lib = true
++    }
++
+     sources = libcef_sources_common
+ 
+     deps = libcef_deps_common
+diff --git a/cef_api_versions.json b/cef_api_versions.json
+index 97e4596b79bd9fc917a62bd8d606e43143feb065..30694e010ac2a6c922dddd34c8002107c9efd971 100644
+--- a/cef_api_versions.json
++++ b/cef_api_versions.json
+@@ -1,184 +1,232 @@
+ {
+   "hashes": {
+     "13300": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "35be893435295fea7c787e4c09ce3bd9c4583742",
++      "comment": "Added November 17, 2026.",
+       "linux": "2508f3f0b0e5dfa191036fa6c04f8dcfa18c94b9",
+       "mac": "80c0b59ba9dd783aa71fae0aa5f7dad64620e8c9",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "45d39c3669ba75467e3e609f626c31506c0eae22"
+     },
+     "13301": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "6de0a6ee025f773b6da4c5842ea77a3e7b2602eb",
++      "comment": "Added November 17, 2026.",
+       "linux": "aa073dd1c586812503ca293c718358460d8c2dd6",
+       "mac": "fda40a5df44628cac50a589ff979c0746011591e",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "7109702038d51512d35dd2ed77231f9100e38214"
+     },
+     "13302": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "349a48e6b63a6803b1c7fc29c2670239277f10e0",
++      "comment": "Added November 17, 2026.",
+       "linux": "d5597ebfa30081953425e897209a8387b9584205",
+       "mac": "4aa24470ba3a4bd9c06bc0e4a201b896394a86b5",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "18799961f4461a9cbae2aed89ac04b73ab7c37f3"
+     },
+     "13303": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "6cae5dc6b4a0821af1f3812753b94426cd7f1c5b",
++      "comment": "Added November 17, 2026.",
+       "linux": "f3a696ee30ce1e00490a58df017393c126c89709",
+       "mac": "f2cdce2b9a4b635c28b5b92c42c35625a937380c",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "20016fd6a9b87ef4c539cd1f42bf1ca09b6903ca"
+     },
+     "13304": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "4b2003ba372652b5b2a8cd0f37e75554a094653c",
++      "comment": "Added November 17, 2026.",
+       "linux": "f1ababb4ff51ecbf77c481cee3721ef0eca9c8ca",
+       "mac": "98964c37b8917d83da4b173e22905503d38ad08f",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "19c014af0082aa901398e006381b6980e4f806e9"
+     },
+     "13400": {
+-      "comment": "Added February 21, 2025.",
++      "aros": "eeb80aa9a2164de1c2a8e2b0446848e0c91fa10b",
++      "comment": "Added November 17, 2026.",
+       "linux": "ea2106b5bc012c25d735521e0c7fb719d433ea4a",
+       "mac": "ba5ab71db4f9447f19eb7b1943024981c88064dd",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "6ab74b90e88b7397aab9911baac5484f12466eef"
+     },
+     "13401": {
+-      "comment": "Added March 10, 2025.",
++      "aros": "c7fe6ba63b2e2a1610d2f8f68cf9d4ccefa14af6",
++      "comment": "Added November 17, 2026.",
+       "linux": "b14bee2c0fd250da67faea421f620b58e5dea9a2",
+       "mac": "b54732b528bc2669481ec0cf17c7b97b033720b9",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "751255204f006b8b883a8baf552a2da792f8aa44"
+     },
+     "13500": {
+-      "comment": "Added March 12, 2025.",
++      "aros": "305d2a3695f6cfa56e6cfc8a5f1a743d9f8189e1",
++      "comment": "Added November 17, 2026.",
+       "linux": "5b7c2284ed2542cf6212981d62ca9122fb2a4e88",
+       "mac": "9862177631e8059a497d6086058168dd47477ab7",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "3e78b6fe5fd31d69049499450849ada17a720a53"
+     },
+     "13600": {
+-      "comment": "Added April 07, 2025.",
++      "aros": "60786e7d67a99e768f1b795be9ea36177f065a91",
++      "comment": "Added November 17, 2026.",
+       "linux": "eb353ba7b8b9bcbef890217971cd8ec41efeaa75",
+       "mac": "22c77d1f2305de8a6147f14e52f074b4a4e5222c",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "a8832519b4eb058567d68b65be1e1c9e80aae566"
+     },
+     "13601": {
+-      "comment": "Added April 22, 2025.",
++      "aros": "90853d1e339ca63f84c76521083cec8d80e1d848",
++      "comment": "Added November 17, 2026.",
+       "linux": "40b224f295a20694241c5db49721bc90a3796f30",
+       "mac": "ff885fe921f9eae1a5ce6a71b30b0c37b306bf56",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "116a4153047ee1ee67f17fc938f084ee72b24e54"
+     },
+     "13700": {
+-      "comment": "Added May 07, 2025.",
++      "aros": "d2254c5ef1975f45780a5033f397da39a5769a9b",
++      "comment": "Added November 17, 2026.",
+       "linux": "e5ac12b1bd88b9ece6ceaa57848aaba61ab85242",
+       "mac": "9e84009c92c25aa80935727b5e4526b23439a575",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "65c7157dd3e8eba9bcc38db2bd7f26508c717f3e"
+     },
+     "13800": {
+-      "comment": "Added June 02, 2025.",
++      "aros": "a5fc952e15d43525e2d705cdfe083033a211f317",
++      "comment": "Added November 17, 2026.",
+       "linux": "72c83a1455706c0f964505a6edcbf00c4a00575d",
+       "mac": "09110c1f3bbe0e8a8c26ddf6df3388d73a6593d1",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "1cde3ec27f93747ba42c0f2aa00467a5a16adfd4"
+     },
+     "13900": {
+-      "comment": "Added July 09, 2025.",
++      "aros": "6cb8ca9f94a377f6bdfcb249e82bb807c907be56",
++      "comment": "Added November 17, 2026.",
+       "linux": "fd0b7f8ab5869224972340454690a42e91939488",
+       "mac": "9b3ef316d9a3f554899c36139cfccb17767ca254",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "707508ab72072116ce0500e3d2bdd9f34b2d5cd8"
+     },
+     "14000": {
+-      "comment": "Added August 25, 2025.",
++      "aros": "d90ef1dfeb248feb75156c3a7bbc59e310265ece",
++      "comment": "Added November 17, 2026.",
+       "linux": "a9f5630f5a4fd8f43e003aff6f8a2cba7bcff18f",
+       "mac": "a280e368310e8ea75a21dc7ba8f192657b7c8455",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "a77810510fbf0ff5ee9768cf572941a9311c316c"
+     },
+     "14100": {
+-      "comment": "Added October 06, 2025.",
++      "aros": "2bee2c874afae0eb7343c44f10e7a90a7c778cc4",
++      "comment": "Added November 17, 2026.",
+       "linux": "f0f231efab94eb818114490804b13fce61ab7f4e",
+       "mac": "9537beb8d28175dca77510c03f5bea55617a9f22",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "2948bec685a469a829d99eb1e6b08ede0ff9b197"
+     },
+     "14200": {
+-      "comment": "Added October 15, 2025.",
++      "aros": "51c50ac26972d79b2d7b008b2b28036d4d6ce275",
++      "comment": "Added November 17, 2026.",
+       "linux": "18761cd4725392883e0d77a1db53b08a4cae7ac6",
+       "mac": "4ef1c19a09a8ca2e523fea4f79215a6934de1071",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "1ce1d0945fb904ca48c16e2c2bdbbf25bfb7b12e"
+     },
+     "14300": {
+-      "comment": "Added November 10, 2025.",
++      "aros": "e2c150da5c3dac7d753a629f2070102a57405cd5",
++      "comment": "Added November 17, 2026.",
+       "linux": "ad459cb758e4783c779771ed36185e8c9fd41132",
+       "mac": "5d611f7396aaf2dedd0c1e80c680360d998f971f",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "122bae6ae9a9961fb2fc27bd10aede159858f870"
+     },
+     "14400": {
+-      "comment": "Added December 16, 2025.",
++      "aros": "6448e1937f890acdf3dc8d3e3ee71244b146fcc4",
++      "comment": "Added November 17, 2026.",
+       "linux": "c64b3f0e5ddf11f2e7d296c4067cd887aa50878c",
+       "mac": "fe0dbf4a2ce3b5acb0acc06aac4d7ac3010c2477",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "430d1c4e4c958b53a8e383db3a5a38037ca9f51e"
+     },
+     "14500": {
+-      "comment": "Added January 20, 2026.",
++      "aros": "71d9f2a4c39c1600d1a1636305660d518337fbdb",
++      "comment": "Added November 17, 2026.",
+       "linux": "f57e722cb70b5ba2567aaaabfda35ab24d1bdf10",
+       "mac": "b2511b07e182653ba558bf1873cc45738ba598da",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "fd311ad9c02d2063d20e6fa3601d66229089b69f"
+     },
+     "14600": {
+-      "comment": "Added February 17, 2026.",
++      "aros": "f6b0465734ff2e2cac7bedd02c4758741e476edf",
++      "comment": "Added November 17, 2026.",
+       "linux": "7cec742972d6735aa8a955fc2e098a1f6669c3d5",
+       "mac": "8ba92d4f63306cea46b5992ce65bf2cd2c7740ff",
+-      "sandbox_compat": "06ced0d54abb1a72",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "99676a8d58951ffb0a24f6cbae6aa01f3249b29e"
+     },
+     "14700": {
+-      "comment": "Added March 24, 2026.",
++      "aros": "b1b54c0be40beee92e6f831e2a92e4cd63eeb29e",
++      "comment": "Added November 17, 2026.",
+       "linux": "ca03ee7aa4d9a766d43302c03689684de0b78966",
+       "mac": "4b5130ce2abe48970a3edf9b3d2e541c007f6938",
+-      "sandbox_compat": "2c7f1000da15f67f",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "1cf33dbf355efffcd993ab4d2ea391e6631f95f2"
+     },
+     "14800": {
+-      "comment": "Added April 22, 2026.",
++      "aros": "c60d3e0d4a24c18ce99bbb7ae2a5db33296fc84f",
++      "comment": "Added November 17, 2026.",
+       "linux": "aa2de54c143e9ffffd183177f14c325820b5916a",
+       "mac": "c4a25b0e7f0beb51b9f5db9fb75904d11dd856a1",
+-      "sandbox_compat": "2c7f1000da15f67f",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "a9fddb1f86f1fc427a6eee19a370dbedb14468cb"
+     },
+     "14900": {
+-      "comment": "Added May 22, 2026.",
++      "aros": "e3297dd7d1238654ea93ac5c40ad00757ef6bc87",
++      "comment": "Added November 17, 2026.",
+       "linux": "778f64e58ff024840e29fb49bb7b9c3819f12191",
+       "mac": "22fd845554eb5e3f5516965213efca951a3f8256",
+-      "sandbox_compat": "6c5b35ad81055c14",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "de5114c34e4c0c3d725313c38f4ed5b18cbfdeb4"
+     },
+     "15000": {
+-      "comment": "Added June 04, 2026.",
++      "aros": "d8751d91399439d7da6d0e4539e7b9adc410b5a6",
++      "comment": "Added November 17, 2026.",
+       "linux": "210767725a6feb2e4becd3956b648cab6a006712",
+       "mac": "e85c868aa8a947e1e7c9904c0745c60ae490fa05",
+-      "sandbox_compat": "6c5b35ad81055c14",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "71146b4350a01d3805e7ea990eb034e6ef4d53db"
+     },
+     "15100": {
+-      "comment": "Added July 10, 2026.",
++      "aros": "1651042a36aa53b05bece99cb68baedbda16220d",
++      "comment": "Added November 17, 2026.",
+       "linux": "c1421cb32d35fc3837f9996ede08e224de9db4eb",
+       "mac": "de1b0fb37f18f9ff7ee1d7b1e323247c559a3bf8",
+-      "sandbox_compat": "1671cc913eeb4ecf",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "9bfd64bd0b92481d1cc978d57180bee2c6bd4606"
+     },
+     "15101": {
+-      "comment": "Added July 15, 2026.",
++      "aros": "6c51e2cc0744abbd7bf316256b1fdc58b6013c2e",
++      "comment": "Added November 17, 2026.",
+       "linux": "5a32041cf2d7c50c5faad893cadda6c0cb7aecfc",
+       "mac": "2e13595a0971262679bcdc01c5d1391b12b5cf0d",
+-      "sandbox_compat": "1671cc913eeb4ecf",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "5933e18e1d2879e23205c70c637bf817c3f32454"
+     },
+     "15200": {
+-      "comment": "Added August 15, 2026.",
++      "aros": "0804918baffc092da05d9bf063565ae6c98e53f9",
++      "comment": "Added November 17, 2026.",
+       "linux": "9dd75967c3694b8755dc1730a0097a63a2ebfe44",
+       "mac": "1e4981499ff0bace8da030a21a16a6613f46703c",
+-      "sandbox_compat": "1671cc913eeb4ecf",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "1dde3bb571a5ee5aedd646ed4694d4bc8d9a2d96"
+     },
+     "15400": {
+-      "comment": "Added September 04, 2026.",
++      "aros": "f8e0d5adc0af322de88bcf1be3a0493b14e1aeaf",
++      "comment": "Added November 17, 2026.",
+       "linux": "5c8344ae7d7f6421bc801401e35d4dbf6d38e101",
+       "mac": "e5cd28047fc1f8bbb972e54692fc665040c7f034",
+-      "sandbox_compat": "265fca9293e6b6ef",
++      "sandbox_compat": "3b66cadf26145637",
+       "windows": "726dc73763db22edb289e41af2421a232617f7f4"
+     },
+     "15600": {
+-      "comment": "Added October 07, 2026.",
++      "aros": "92163f8e13ce1f2a09d5567563d56a25aef27a64",
++      "comment": "Added November 17, 2026.",
+       "linux": "6dc09eb2834fe5b61d7d8c42bbb8d8c27a2bb1b6",
+       "mac": "e01e9208f887490aa249d57f56761ab9c0c3f7ac",
+       "sandbox_compat": "3b66cadf26145637",
+diff --git a/include/base/cef_build.h b/include/base/cef_build.h
+index 7f156f3c4aba8f9dfe73e1cf22712eb9115b03f5..4f56837bcda89432e3cf4aa83499957174ad52a6 100644
+--- a/include/base/cef_build.h
++++ b/include/base/cef_build.h
+@@ -34,13 +34,13 @@
+ /// <pre>
+ ///  Operating System:
+ ///    OS_AIX / OS_ANDROID / OS_ASMJS / OS_FREEBSD / OS_FUCHSIA / OS_IOS /
+-///    OS_LINUX / OS_MAC / OS_NACL (SFI or NONSFI) / OS_NETBSD / OS_OPENBSD /
+-///    OS_QNX / OS_SOLARIS / OS_WIN
++///    OS_AROS / OS_LINUX / OS_MAC / OS_NACL (SFI or NONSFI) / OS_NETBSD /
++///    OS_OPENBSD / OS_QNX / OS_SOLARIS / OS_WIN
+ ///  Operating System family:
+ ///    OS_APPLE: IOS or MAC
+ ///    OS_BSD: FREEBSD or NETBSD or OPENBSD
+-///    OS_POSIX: AIX or ANDROID or ASMJS or CHROMEOS or FREEBSD or IOS or LINUX
+-///              or MAC or NACL or NETBSD or OPENBSD or QNX or SOLARIS
++///    OS_POSIX: AIX or ANDROID or AROS or ASMJS or CHROMEOS or FREEBSD or IOS
++///              or LINUX or MAC or NACL or NETBSD or OPENBSD or QNX or SOLARIS
+ ///
+ ///  /!\ Note: OS_CHROMEOS is set by the build system, not this file
+ ///
+@@ -96,7 +96,9 @@
+ // updated to match.
+ 
+ // A set of macros to use for platform detection.
+-#if defined(ANDROID)
++#if defined(__AROS__)
++#define OS_AROS 1
++#elif defined(ANDROID)
+ #define OS_ANDROID 1
+ #elif defined(__APPLE__)
+ // Only include TargetConditionals after testing ANDROID as some Android builds
+@@ -158,11 +160,11 @@
+ 
+ // For access to standard POSIXish features, use OS_POSIX instead of a
+ // more specific macro.
+-#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_ASMJS) ||  \
+-    defined(OS_FREEBSD) || defined(OS_IOS) || defined(OS_LINUX) ||  \
+-    defined(OS_CHROMEOS) || defined(OS_MAC) || defined(OS_NACL) ||  \
+-    defined(OS_NETBSD) || defined(OS_OPENBSD) || defined(OS_QNX) || \
+-    defined(OS_SOLARIS)
++#if defined(OS_AIX) || defined(OS_ANDROID) || defined(OS_AROS) || \
++    defined(OS_ASMJS) || defined(OS_FREEBSD) || defined(OS_IOS) || \
++    defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC) || \
++    defined(OS_NACL) || defined(OS_NETBSD) || defined(OS_OPENBSD) || \
++    defined(OS_QNX) || defined(OS_SOLARIS)
+ #define OS_POSIX 1
+ #endif
+ 
+diff --git a/include/cef_base.h b/include/cef_base.h
+index 729150085bc0344598216c13465c953d1454b34b..b453024e8c5e0fc8ec54b53e8676c66822c9e520 100644
+--- a/include/cef_base.h
++++ b/include/cef_base.h
+@@ -46,10 +46,16 @@
+ #include "include/internal/cef_win.h"
+ #elif defined(OS_MAC)
+ #include "include/internal/cef_mac.h"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #include "include/internal/cef_linux.h"
+ #endif
+ 
++#if defined(OS_AROS) && defined(GetHead)
++// exec/lists.h exposes GetHead as a function-like macro. CEF owns the public
++// header namespace from this point and declares CefDOMDocument::GetHead().
++#undef GetHead
++#endif
++
+ ///
+ /// All ref-counted framework classes must extend this class.
+ ///
+diff --git a/include/internal/cef_thread_internal.h b/include/internal/cef_thread_internal.h
+index 3e9ac53812020fc125d2209680c4375857b984bc..12fa9e248ee25d1252534a2ea81ce02f2a0c4be6 100644
+--- a/include/internal/cef_thread_internal.h
++++ b/include/internal/cef_thread_internal.h
+@@ -62,6 +62,10 @@ CEF_EXPORT cef_platform_thread_id_t cef_get_current_platform_thread_id(void);
+ #if defined(OS_WIN)
+ typedef DWORD cef_platform_thread_handle_t;
+ #define kInvalidPlatformThreadHandle 0U
++#elif defined(OS_AROS)
++// Matches base::PlatformThreadHandle's opaque native Exec task handle.
++typedef void* cef_platform_thread_handle_t;
++#define kInvalidPlatformThreadHandle 0
+ #elif defined(OS_POSIX)
+ typedef pthread_t cef_platform_thread_handle_t;
+ #define kInvalidPlatformThreadHandle 0
+diff --git a/include/internal/cef_types.h b/include/internal/cef_types.h
+index 8c2c81fac3206952b1030ab03b86a936a16e8750..7d55fbe81cabf73f78632d98fa5e2e664327a1e1 100644
+--- a/include/internal/cef_types.h
++++ b/include/internal/cef_types.h
+@@ -47,7 +47,7 @@
+ #include "include/internal/cef_types_win.h"
+ #elif defined(OS_MAC)
+ #include "include/internal/cef_types_mac.h"
+-#elif defined(OS_LINUX)
++#elif defined(OS_LINUX) || defined(OS_AROS)
+ #include "include/internal/cef_types_linux.h"
+ #endif
+ 
+@@ -3380,6 +3380,17 @@ typedef enum {
+   /// requests.
+   ///
+   CEF_SCHEME_OPTION_FETCH_ENABLED = 1 << 6,
++
++#if defined(OS_AROS)
++  ///
++  /// If CEF_SCHEME_OPTION_SERVICE_WORKER is set pages of the scheme can
++  /// register service workers (the scheme is registered with content and
++  /// Blink as allowing service workers). Requires CEF_SCHEME_OPTION_STANDARD
++  /// and CEF_SCHEME_OPTION_SECURE; the equivalent of Electron's
++  /// allowServiceWorkers privilege.
++  ///
++  CEF_SCHEME_OPTION_SERVICE_WORKER = 1 << 7,
++#endif
+ } cef_scheme_options_t;
+ 
+ ///
+diff --git a/include/internal/cef_types_linux.h b/include/internal/cef_types_linux.h
+index 16b5c2f585ab85b02384505ca7b213e4508fd2be..01e775eb263236cf0b5988a8c686fd16c03d4299 100644
+--- a/include/internal/cef_types_linux.h
++++ b/include/internal/cef_types_linux.h
+@@ -35,7 +35,7 @@
+ #include "include/base/cef_build.h"
+ #endif
+ 
+-#if defined(OS_LINUX)
++#if defined(OS_LINUX) || defined(OS_AROS)
+ 
+ #include "include/internal/cef_export.h"
+ #include "include/internal/cef_string.h"
+@@ -215,6 +215,6 @@ typedef struct _cef_accelerated_paint_info_t {
+ }
+ #endif
+ 
+-#endif  // OS_LINUX
++#endif  // defined(OS_LINUX) || defined(OS_AROS)
+ 
+ #endif  // CEF_INCLUDE_INTERNAL_CEF_TYPES_LINUX_H_
+diff --git a/libcef/browser/browser_platform_delegate.cc b/libcef/browser/browser_platform_delegate.cc
+index 167b2af621dae069d49b76c9734100d60f95d331..f3b4718fcd74dfaf0dd3afa3cd8231b8ce615880 100644
+--- a/libcef/browser/browser_platform_delegate.cc
++++ b/libcef/browser/browser_platform_delegate.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "cef/libcef/browser/browser_platform_delegate.h"
++#include "cef/libcef/browser/menu_runner.h"
+ 
+ #include "base/command_line.h"
+ #include "base/logging.h"
+diff --git a/libcef/browser/browser_platform_delegate_create.cc b/libcef/browser/browser_platform_delegate_create.cc
+index b2f30ae0a0a23593f035ab5029bec530831553fc..8a9c81fe5b3470635a356849a32b3d2adff432a1 100644
+--- a/libcef/browser/browser_platform_delegate_create.cc
++++ b/libcef/browser/browser_platform_delegate_create.cc
+@@ -21,7 +21,7 @@
+ #elif BUILDFLAG(IS_MAC)
+ #include "cef/libcef/browser/native/browser_platform_delegate_native_mac.h"
+ #include "cef/libcef/browser/osr/browser_platform_delegate_osr_mac.h"
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ #include "cef/libcef/browser/native/browser_platform_delegate_native_linux.h"
+ #include "cef/libcef/browser/osr/browser_platform_delegate_osr_linux.h"
+ #else
+@@ -39,7 +39,7 @@ std::unique_ptr<CefBrowserPlatformDelegateNative> CreateNativeDelegate(
+ #elif BUILDFLAG(IS_MAC)
+   return std::make_unique<CefBrowserPlatformDelegateNativeMac>(
+       window_info, background_color);
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   return std::make_unique<CefBrowserPlatformDelegateNativeLinux>(
+       window_info, background_color);
+ #endif
+@@ -55,7 +55,7 @@ std::unique_ptr<CefBrowserPlatformDelegateOsr> CreateOSRDelegate(
+ #elif BUILDFLAG(IS_MAC)
+   return std::make_unique<CefBrowserPlatformDelegateOsrMac>(
+       std::move(native_delegate), use_shared_texture, use_external_begin_frame);
+-#elif BUILDFLAG(IS_LINUX)
++#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+   return std::make_unique<CefBrowserPlatformDelegateOsrLinux>(
+       std::move(native_delegate), use_shared_texture, use_external_begin_frame);
+ #endif
+diff --git a/libcef/browser/main_runner.cc b/libcef/browser/main_runner.cc
+index 367b389745a19674736df255ed967175e5c58006..d42d933e9c2548b1a8a48d17ef08edad53a481f9 100644
+--- a/libcef/browser/main_runner.cc
++++ b/libcef/browser/main_runner.cc
+@@ -6,6 +6,7 @@
+ #include "cef/libcef/browser/main_runner.h"
+ 
+ #include "base/base_switches.h"
++#include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/debug/debugger.h"
+ #include "base/memory/raw_ptr.h"
+@@ -22,7 +23,9 @@
+ #include "chrome/chrome_elf/chrome_elf_main.h"
+ #include "chrome/common/chrome_result_codes.h"
+ #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
++#if !BUILDFLAG(IS_AROS)
+ #include "components/crash/core/app/crash_switches.h"
++#endif
+ #include "components/keep_alive_registry/keep_alive_types.h"
+ #include "components/metrics/persistent_system_profile.h"
+ #include "content/app/content_main_runner_impl.h"
+@@ -42,6 +45,12 @@
+ #include "sandbox/win/src/sandbox_types.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++extern "C" void aros_base_drain_child_tls();
++extern "C" void aros_blink_retire_child_histograms();
++extern "C" void aros_base_retire_child_histograms();
++#endif
++
+ CefMainRunner::CefMainRunner(bool multi_threaded_message_loop,
+                              bool external_message_pump)
+     : multi_threaded_message_loop_(multi_threaded_message_loop),
+@@ -208,15 +217,34 @@ int CefMainRunner::RunAsHelperProcess(const CefMainArgs& args,
+     return CEF_RESULT_CODE_BAD_PROCESS_TYPE;
+   }
+ 
++#if !BUILDFLAG(IS_AROS)
+   if (process_type == crash_reporter::switches::kCrashpadHandler) {
+     return crashpad_runner::RunAsCrashpadHandler(command_line);
+   }
++#endif
+ 
+   // Initialize the global command line before the delegate constructor calls
+   // TimeTicks::Now(). On Windows, clock selection must read
+   // --force-high-res-timeticks on the first call to match the browser process.
+   BeforeMainInitialize(args);
+ 
++#if BUILDFLAG(IS_AROS)
++  // The engine remains resident after this helper returns. Retire its command
++  // line only after ContentMain and the delegate have finished all cleanup,
++  // so a later native task reusing this Exec address gets a new owner identity.
++  struct NativeCommandLineLifetime {
++    ~NativeCommandLineLifetime() {
++      // ContentMain, its workers and the delegate have unwound. Keep the
++      // logical owner identity alive until every owner-scoped metric is gone.
++      aros_base_drain_child_tls();
++      aros_blink_retire_child_histograms();
++      aros_base_retire_child_histograms();
++      base::CommandLine::Reset();
++      CHECK(!base::CommandLine::InitializedForCurrentProcess());
++    }
++  } command_line_lifetime;
++#endif
++
+   auto main_delegate = std::make_unique<ChromeMainDelegateCef>(
+       /*runner=*/nullptr, /*settings=*/nullptr, application);
+ 
+diff --git a/libcef/browser/native/browser_platform_delegate_native_aura.cc b/libcef/browser/native/browser_platform_delegate_native_aura.cc
+index a9637b8d795b8bc87ce125faaa4e6a4e8b6948f8..36743a54fa8649131c2568df5bea7f92e193c0ce 100644
+--- a/libcef/browser/native/browser_platform_delegate_native_aura.cc
++++ b/libcef/browser/native/browser_platform_delegate_native_aura.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "cef/libcef/browser/native/browser_platform_delegate_native_aura.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "cef/libcef/browser/alloy/alloy_browser_host_impl.h"
++#endif
++
+ #include "base/notimplemented.h"
+ #include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/native/menu_runner_views_aura.h"
+@@ -341,6 +345,16 @@ int CefBrowserPlatformDelegateNativeAura::TranslateUiChangedButtonFlags(
+ void CefBrowserPlatformDelegateNativeAura::WidgetDeleted() {
+   DCHECK(window_widget_);
+   window_widget_ = nullptr;
++
++#if BUILDFLAG(IS_AROS)
++  // X11 and Win32 have an outer native-window wrapper that forwards native
++  // destruction to AlloyBrowserHostImpl::WindowDestroyed(). AROS hosts the
++  // browser directly in this Aura widget, so its deletion is that lifecycle
++  // boundary.
++  if (browser_) {
++    static_cast<AlloyBrowserHostImpl*>(browser_)->WindowDestroyed();
++  }
++#endif
+ }
+ 
+ content::RenderWidgetHostViewAura*
+diff --git a/libcef/browser/native/browser_platform_delegate_native_linux.cc b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+index 44f230277c6e2fa2ea96af8e059475565ed3be25..0f594e38fffd0c6a1a083dc95699c38ae06a8c07 100644
+--- a/libcef/browser/native/browser_platform_delegate_native_linux.cc
++++ b/libcef/browser/native/browser_platform_delegate_native_linux.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "cef/libcef/browser/native/browser_platform_delegate_native_linux.h"
+ 
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/context.h"
+@@ -26,6 +27,12 @@
+ #include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "ui/aura/window.h"
++#include "ui/aura/window_tree_host.h"
++#include "ui/ozone/platform/aros/aros_native_window.h"
++#endif
++
+ CefBrowserPlatformDelegateNativeLinux::CefBrowserPlatformDelegateNativeLinux(
+     const CefWindowInfo& window_info,
+     SkColor background_color)
+@@ -89,6 +96,36 @@ bool CefBrowserPlatformDelegateNativeLinux::CreateHostWindow() {
+   window_x11_->Show();
+ #endif  // BUILDFLAG(SUPPORTS_OZONE_X11)
+ 
++#if BUILDFLAG(IS_AROS)
++  // AROS is an Ozone platform, but not Ozone/X11.  Let Aura create the
++  // top-level PlatformWindow so the AROS Ozone backend can open the native
++  // Intuition window.
++  host_window_created_ = true;
++  browser_->AddRef();
++
++  CefNativeWidgetDelegate* delegate_view = new CefNativeWidgetDelegate(
++      GetBackgroundColor(), false, GetBoundsChangedCallback(),
++      GetWidgetDeleteCallback());
++  delegate_view->SetTitle(
++      CefString(&window_info_.window_name).ToString16());
++  delegate_view->Init(gfx::kNullAcceleratedWidget, web_contents_, rect);
++
++  window_widget_ = delegate_view->GetWidget();
++  window_widget_->Show();
++
++  // Hand the Intuition window back the way the X11 path hands back its
++  // ::Window: CefBrowserHost::GetWindowHandle() is how a client that does not
++  // own the host window drives it through the window system.
++  aura::WindowTreeHost* const host = window_widget_->GetNativeWindow()->GetHost();
++  struct Window* const native_window =
++      host ? ui::GetArosNativeWindow(host->GetAcceleratedWidget()) : nullptr;
++  window_info_.window = reinterpret_cast<cef_window_handle_t>(native_window);
++  if (!native_window) {
++    LOG(WARNING) << "[CEF:AROS] host window created without an Intuition "
++                    "window handle";
++  }
++#endif  // BUILDFLAG(IS_AROS)
++
+   // As an additional requirement on Linux, we must set the colors for the
+   // render widgets in webkit.
+   auto prefs = web_contents_->GetMutableRendererPrefs();
+@@ -120,6 +157,11 @@ void CefBrowserPlatformDelegateNativeLinux::CloseHostWindow() {
+     window_x11_->Close();
+   }
+ #endif
++#if BUILDFLAG(IS_AROS)
++  if (window_widget_) {
++    window_widget_->Close();
++  }
++#endif
+ }
+ 
+ CefWindowHandle CefBrowserPlatformDelegateNativeLinux::GetHostWindowHandle()
+@@ -193,6 +235,11 @@ void CefBrowserPlatformDelegateNativeLinux::SizeTo(int width, int height) {
+         gfx::Rect(window_x11_->bounds().origin(), gfx::Size(width, height)));
+   }
+ #endif  // BUILDFLAG(SUPPORTS_OZONE_X11)
++#if BUILDFLAG(IS_AROS)
++  if (window_widget_) {
++    window_widget_->SetSize(gfx::Size(width, height));
++  }
++#endif  // BUILDFLAG(IS_AROS)
+ }
+ 
+ void CefBrowserPlatformDelegateNativeLinux::ViewText(const std::string& text) {
+diff --git a/libcef/browser/native/cursor_util_aura.cc b/libcef/browser/native/cursor_util_aura.cc
+index e83109874b7ed8daecc34fbe1088d6788f490e2c..40160733fbd7f09cccb4887f5cd27a6ca923c88b 100644
+--- a/libcef/browser/native/cursor_util_aura.cc
++++ b/libcef/browser/native/cursor_util_aura.cc
+@@ -14,14 +14,14 @@
+ #include "ui/display/screen.h"
+ #include "ui/wm/core/cursor_loader.h"
+ 
+-#if BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ #include "ui/base/ozone_buildflags.h"
+ #if BUILDFLAG(SUPPORTS_OZONE_X11)
+ #include "ui/base/x/x11_cursor.h"
+ #elif BUILDFLAG(IS_OZONE)
+ #include "ui/ozone/common/bitmap_cursor.h"
+ #endif
+-#endif  // BUILDFLAG(IS_LINUX)
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_AROS)
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "ui/base/win/win_cursor.h"
+diff --git a/libcef/common/app_manager.cc b/libcef/common/app_manager.cc
+index 0a0d6d65ca86c08dbc473e38732afb442a47671e..1ff45df1ef0b058fe339ad6bc1dfdcf6feedb192 100644
+--- a/libcef/common/app_manager.cc
++++ b/libcef/common/app_manager.cc
+@@ -4,11 +4,21 @@
+ 
+ #include "cef/libcef/common/app_manager.h"
+ 
++#include <map>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "base/logging.h"
+ #include "cef/libcef/common/net/scheme_info.h"
+ #include "cef/libcef/common/scheme_registrar_impl.h"
+ #include "content/public/browser/child_process_security_policy.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <exec/tasks.h>
++#include <proto/exec.h>
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include <windows.h>
+ 
+@@ -17,23 +27,91 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++// AROS processes share one address space, so a C++ process-global singleton is
++// shared by the browser and every native child process. Chromium/CEF expects a
++// distinct CefAppManager in each process. Managers are registered against the
++// task that constructs them. Descendant worker tasks inherit the first manager
++// found in their ETask parent chain, while a newly launched native process
++// constructs and registers its own manager before any lookup can inherit the
++// creator's state.
++struct CefAppManagerRegistry {
++  base::Lock lock;
++  std::map<struct Task*, CefAppManager*> managers;
++};
++
++CefAppManagerRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefAppManagerRegistry> registry;
++  return *registry;
++}
++
++struct Task* FindManagerOwner(const CefAppManagerRegistry& registry) {
++  struct Task* task = FindTask(nullptr);
++
++  // Parent chains are normally only one or two entries deep. Keep the walk
++  // bounded so corrupt task metadata cannot hang process startup.
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (registry.managers.find(task) != registry.managers.end()) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return nullptr;
++}
++
++#else
++
+ CefAppManager* g_manager = nullptr;
+ 
++#endif
++
+ }  // namespace
+ 
+ // static
+ CefAppManager* CefAppManager::Get() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ CefAppManager::CefAppManager() {
+   // Only a single instance should exist.
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] = registry.managers.emplace(FindTask(nullptr), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefAppManager::~CefAppManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }
+ 
+ void CefAppManager::AddCustomScheme(const CefSchemeInfo* scheme_info) {
+diff --git a/libcef/common/chrome/chrome_content_client_cef.cc b/libcef/common/chrome/chrome_content_client_cef.cc
+index 2b0b561fcd5354f001b9eb365607529b373471e1..f97ea256198b88df31079bfc82d4b6e7c519b4e8 100644
+--- a/libcef/common/chrome/chrome_content_client_cef.cc
++++ b/libcef/common/chrome/chrome_content_client_cef.cc
+@@ -7,10 +7,13 @@
+ 
+ #include "cef/libcef/common/app_manager.h"
+ #include "chrome/common/media/cdm_registration.h"
++#include "media/media_buildflags.h"
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+ #include "cef/libcef/common/cdm_host_file_path.h"
+ #endif
++#endif
+ 
+ ChromeContentClientCef::ChromeContentClientCef() = default;
+ ChromeContentClientCef::~ChromeContentClientCef() = default;
+@@ -22,11 +25,13 @@ void ChromeContentClientCef::AddContentDecryptionModules(
+     RegisterCdmInfo(cdms);
+   }
+ 
++#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+ #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
+   if (cdm_host_file_paths) {
+     cef::AddCdmHostFilePaths(cdm_host_file_paths);
+   }
+ #endif
++#endif
+ }
+ 
+ void ChromeContentClientCef::AddAdditionalSchemes(Schemes* schemes) {
+diff --git a/libcef/common/chrome/chrome_main_delegate_cef.cc b/libcef/common/chrome/chrome_main_delegate_cef.cc
+index 9e3838f8dfd4a699608d627864ef9f446ff25ce0..3b2e0a40c35980f06ecd1d8e3402f4b61218757c 100644
+--- a/libcef/common/chrome/chrome_main_delegate_cef.cc
++++ b/libcef/common/chrome/chrome_main_delegate_cef.cc
+@@ -11,6 +11,10 @@
+ #include "base/base_switches.h"
+ #include "base/command_line.h"
+ #include "base/lazy_instance.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ #include "base/path_service.h"
+ #include "base/strings/string_split.h"
+ #include "base/threading/threading_features.h"
+@@ -49,10 +53,31 @@
+ #include "cef/libcef/common/util_linux.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/initial_command_line.h"
++// CEF does not link chrome_main.cc. Preserve each embedding application's
++// original arguments before CEF or Chrome modifies its working command line.
++const base::CommandLine& GetInitialBrowserCommandLine() {
++  return base::aros::InitialCommandLineForCurrentProcess();
++}
++#endif
++
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++namespace {
++struct CefRendererClientOwner {};
++using RendererClientInstance =
++    base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit;
++}
++// Native renderers share the resident engine, but own their thread-bound
++// observers and Mojo receivers. Retain normal owner AtExit destruction.
++#define g_chrome_content_renderer_client \
++  (base::aros::ProcessLocalValue<RendererClientInstance, CefRendererClientOwner>())
++#else
+ base::LazyInstance<ChromeContentRendererClientCef>::DestructorAtExit
+     g_chrome_content_renderer_client = LAZY_INSTANCE_INITIALIZER;
++#endif
+ 
+ template <typename FeatureType>
+ bool IsFeatureEnabledByDefault(const FeatureType& feature) {
+@@ -467,6 +492,13 @@ void ChromeMainDelegateCef::PreSandboxStartup() {
+   }
+   if (!resources_dir.empty()) {
+     base::PathService::Override(chrome::DIR_RESOURCES, resources_dir);
++#if BUILDFLAG(IS_AROS)
++    // Native clients live separately from cef-blink.library and its packs.
++    // ResourceBundle loads scaled image packs through DIR_ASSETS, while the
++    // unscaled resources.pak uses chrome::DIR_RESOURCES. Keep both aligned
++    // with the CEF resources_dir_path selected above.
++    base::PathService::Override(base::DIR_ASSETS, resources_dir);
++#endif
+   }
+ 
+   if (command_line->HasSwitch(switches::kLocalesDirPath)) {
+diff --git a/libcef/common/crash_reporter_client.h b/libcef/common/crash_reporter_client.h
+index 97f2cfe3b742868cbf109ab5997babd424edaa3c..8e76a6fcc0286f925b8baf7df86448daf57332f2 100644
+--- a/libcef/common/crash_reporter_client.h
++++ b/libcef/common/crash_reporter_client.h
+@@ -5,6 +5,7 @@
+ #ifndef CEF_LIBCEF_COMMON_CRASH_REPORTER_CLIENT_H_
+ #define CEF_LIBCEF_COMMON_CRASH_REPORTER_CLIENT_H_
+ 
++#include <map>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+diff --git a/libcef/common/crash_reporting.cc b/libcef/common/crash_reporting.cc
+index 04c129cfd368f7e3d7b0ebc19a6d3d21752f680b..3ae332223ae40a17b8b5ad4f24e4701f5a545178 100644
+--- a/libcef/common/crash_reporting.cc
++++ b/libcef/common/crash_reporting.cc
+@@ -25,7 +25,7 @@
+ #include "content/public/common/content_paths.h"
+ #endif
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ #include "base/lazy_instance.h"
+ #include "cef/libcef/common/crash_reporter_client.h"
+ #include "components/crash/core/app/crashpad.h"
+@@ -82,7 +82,7 @@ bool IsCrashReportingEnabledTrampoline() {
+ 
+ bool g_crash_reporting_enabled = false;
+ 
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+ base::LazyInstance<CefCrashReporterClient>::Leaky g_crash_reporter_client =
+     LAZY_INSTANCE_INITIALIZER;
+ 
+@@ -183,6 +183,8 @@ bool SetCrashKeyValue(const std::string_view& key,
+ 
+ #if BUILDFLAG(IS_WIN)
+   return SetCrashKeyValueTrampoline(key, value);
++#elif BUILDFLAG(IS_AROS)
++  return false;
+ #else
+   return g_crash_reporter_client.Pointer()->SetCrashKeyValue(key, value);
+ #endif
+@@ -191,13 +193,15 @@ bool SetCrashKeyValue(const std::string_view& key,
+ #if BUILDFLAG(IS_POSIX)
+ // Be aware that logging is not initialized at the time this method is called.
+ void BasicStartupComplete(base::CommandLine* command_line) {
++#if !BUILDFLAG(IS_AROS)
+   g_crash_reporter_client.Pointer()->ReadCrashConfigFile();
++#endif
+ }
+ #endif
+ 
+ void PreSandboxStartup(const base::CommandLine& command_line,
+                        const std::string& process_type) {
+-#if BUILDFLAG(IS_POSIX)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_AROS)
+   // Initialize crash reporting here on macOS and Linux. Crash reporting on
+   // Windows is initialized from context.cc.
+   InitCrashReporter(command_line, process_type);
+@@ -220,6 +224,7 @@ void PreSandboxStartup(const base::CommandLine& command_line,
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
+ void ZygoteForked(base::CommandLine* command_line,
+                   const std::string& process_type) {
++#if !BUILDFLAG(IS_AROS)
+   InitCrashReporter(*command_line, process_type);
+ 
+   if (g_crash_reporting_enabled) {
+@@ -228,6 +233,7 @@ void ZygoteForked(base::CommandLine* command_line,
+ 
+   // Reset the command line for the newly spawned process.
+   crash_keys::SetSwitchesFromCommandLine(*command_line, &IsBoringCEFSwitch);
++#endif
+ }
+ #endif
+ 
+diff --git a/libcef/common/net/scheme_info.h b/libcef/common/net/scheme_info.h
+index 4730d00e60ae17f549bd53b4842025b1977156c8..efa703a30eb6d3b881c2210709901a6c7220d47b 100644
+--- a/libcef/common/net/scheme_info.h
++++ b/libcef/common/net/scheme_info.h
+@@ -48,6 +48,9 @@ struct CefSchemeInfo {
+ 
+   // A scheme that can perform fetch request.
+   bool is_fetch_enabled;
++
++  // A scheme whose pages can register service workers.
++  bool is_service_worker_enabled;
+ };
+ 
+ #endif  // CEF_LIBCEF_COMMON_NET_SCHEME_INFO_H_
+diff --git a/libcef/common/resource_bundle_delegate.cc b/libcef/common/resource_bundle_delegate.cc
+index cb28da58e58fd7cdf71e83595cf6fbaae0ad9406..41a6265df56a708907951346ef4d1a972fe28c9a 100644
+--- a/libcef/common/resource_bundle_delegate.cc
++++ b/libcef/common/resource_bundle_delegate.cc
+@@ -1,5 +1,7 @@
+ #include "cef/libcef/common/resource_bundle_delegate.h"
+ 
++#include "base/memory/ref_counted_memory.h"
++
+ #include "cef/libcef/common/app_manager.h"
+ 
+ CefResourceBundleDelegate::CefResourceBundleDelegate() = default;
+diff --git a/libcef/common/resource_util.cc b/libcef/common/resource_util.cc
+index 22e667262a5d1a335f799437fde3d0a9787ed626..a7eb2081c4060ab6ec849ed4bb0abcef95e90b36 100644
+--- a/libcef/common/resource_util.cc
++++ b/libcef/common/resource_util.cc
+@@ -14,6 +14,7 @@
+ #include "base/logging.h"
+ #include "base/path_service.h"
+ #include "chrome/common/chrome_paths.h"
++#include "chrome/common/chrome_paths_internal.h"
+ #include "chrome/common/chrome_switches.h"
+ 
+ #if BUILDFLAG(IS_LINUX)
+@@ -43,6 +44,12 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+   return true;
+ }
+ 
++#elif BUILDFLAG(IS_AROS)
++
++bool GetDefaultUserDataDirectory(base::FilePath* result) {
++  return chrome::GetDefaultUserDataDirectory(result);
++}
++
+ #elif BUILDFLAG(IS_MAC)
+ 
+ // Based on chrome/common/chrome_paths_mac.mm.
+@@ -127,6 +134,24 @@ void OverrideUserDataDir(CefSettings* settings,
+                          const base::CommandLine* command_line) {
+   const base::FilePath& user_data_path =
+       GetUserDataPath(settings, command_line);
++#if BUILDFLAG(IS_AROS)
++  // AROS assigns such as ENVARC: are already absolute in DOS semantics but
++  // are intentionally not POSIX-canonicalizable.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_USER_DATA, user_data_path, /*is_absolute=*/true,
++      /*create=*/true);
++
++  // Path used for crash dumps.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_CRASH_DUMPS, user_data_path, /*is_absolute=*/true,
++      /*create=*/true);
++
++  // Path used for spell checking dictionary files.
++  base::PathService::OverrideAndCreateIfNeeded(
++      chrome::DIR_APP_DICTIONARIES,
++      user_data_path.Append(FILE_PATH_LITERAL("Dictionaries")),
++      /*is_absolute=*/true, /*create=*/true);
++#else
+   base::PathService::Override(chrome::DIR_USER_DATA, user_data_path);
+ 
+   // Path used for crash dumps.
+@@ -138,6 +163,7 @@ void OverrideUserDataDir(CefSettings* settings,
+       user_data_path.Append(FILE_PATH_LITERAL("Dictionaries")),
+       false,  // May not be an absolute path.
+       true);  // Create if necessary.
++#endif
+ }
+ 
+ #if BUILDFLAG(IS_LINUX)
+diff --git a/libcef/common/scheme_registrar_impl.cc b/libcef/common/scheme_registrar_impl.cc
+index 9e274c1b6813a3b063c002433157c8d33b0d1295..3603f7d2665c1dbe3b777fce1f7b4bdc91e69d80 100644
+--- a/libcef/common/scheme_registrar_impl.cc
++++ b/libcef/common/scheme_registrar_impl.cc
+@@ -43,6 +43,12 @@ bool CefSchemeRegistrarImpl::AddCustomScheme(const CefString& scheme_name,
+   const bool is_cors_enabled = options & CEF_SCHEME_OPTION_CORS_ENABLED;
+   const bool is_csp_bypassing = options & CEF_SCHEME_OPTION_CSP_BYPASSING;
+   const bool is_fetch_enabled = options & CEF_SCHEME_OPTION_FETCH_ENABLED;
++#if BUILDFLAG(IS_AROS)
++  const bool is_service_worker_enabled =
++      options & CEF_SCHEME_OPTION_SERVICE_WORKER;
++#else
++  const bool is_service_worker_enabled = false;
++#endif
+ 
+   // The |is_display_isolated| value is excluded here because it's registered
+   // with Blink only.
+@@ -64,10 +70,14 @@ bool CefSchemeRegistrarImpl::AddCustomScheme(const CefString& scheme_name,
+   if (is_csp_bypassing) {
+     schemes_.csp_bypassing_schemes.push_back(scheme);
+   }
++  if (is_service_worker_enabled) {
++    schemes_.service_worker_schemes.push_back(scheme);
++  }
+ 
+   CefSchemeInfo scheme_info = {
+       scheme,    is_standard,     is_local,         is_display_isolated,
+-      is_secure, is_cors_enabled, is_csp_bypassing, is_fetch_enabled};
++      is_secure, is_cors_enabled, is_csp_bypassing, is_fetch_enabled,
++      is_service_worker_enabled};
+   CefAppManager::Get()->AddCustomScheme(&scheme_info);
+ 
+   return true;
+@@ -81,4 +91,6 @@ void CefSchemeRegistrarImpl::GetSchemes(
+   AppendArray(schemes_.secure_schemes, &schemes->secure_schemes);
+   AppendArray(schemes_.cors_enabled_schemes, &schemes->cors_enabled_schemes);
+   AppendArray(schemes_.csp_bypassing_schemes, &schemes->csp_bypassing_schemes);
++  AppendArray(schemes_.service_worker_schemes,
++              &schemes->service_worker_schemes);
+ }
+diff --git a/libcef/common/task_runner_manager.cc b/libcef/common/task_runner_manager.cc
+index 3df3a6d6367cfa146dba23626c8bdd120ca01b09..1272f003d184d0e8c2d2d75927957673a0d78b06 100644
+--- a/libcef/common/task_runner_manager.cc
++++ b/libcef/common/task_runner_manager.cc
+@@ -4,25 +4,98 @@
+ 
+ #include "cef/libcef/common/task_runner_manager.h"
+ 
++#include "build/build_config.h"
+ #include "base/logging.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include <map>
++
++#include <exec/tasks.h>
++#include <proto/exec.h>
++
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#endif
++
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++
++struct CefTaskRunnerManagerRegistry {
++  base::Lock lock;
++  std::map<struct Task*, CefTaskRunnerManager*> managers;
++};
++
++CefTaskRunnerManagerRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefTaskRunnerManagerRegistry> registry;
++  return *registry;
++}
++
++// Construction registers an exact native process owner. Worker tasks inherit
++// its manager through the ETask parent chain; a launched child process creates
++// a distinct owner before it performs normal lookups.
++struct Task* FindManagerOwner(const CefTaskRunnerManagerRegistry& registry) {
++  struct Task* task = FindTask(nullptr);
++
++  for (size_t depth = 0; task && depth < 64; ++depth) {
++    if (registry.managers.find(task) != registry.managers.end()) {
++      return task;
++    }
++
++    struct ETask* etask = GetETask(task);
++    task = etask ? static_cast<struct Task*>(etask->et_Parent) : nullptr;
++  }
++
++  return nullptr;
++}
++
++#else
++
+ CefTaskRunnerManager* g_manager = nullptr;
+ 
++#endif
++
+ }  // namespace
+ 
+ // static
+ CefTaskRunnerManager* CefTaskRunnerManager::Get() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ CefTaskRunnerManager::CefTaskRunnerManager() {
+   // Only a single instance should exist.
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] = registry.managers.emplace(FindTask(nullptr), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefTaskRunnerManager::~CefTaskRunnerManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  struct Task* const owner = FindManagerOwner(registry);
++  const auto it = owner ? registry.managers.find(owner) : registry.managers.end();
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }
+diff --git a/libcef/renderer/blink_glue.h b/libcef/renderer/blink_glue.h
+index 048402909952dc594b0ac36e1c55fe2d709c4901..80eaea882f2aa37abd0d57f0703ccee3e6d00425 100644
+--- a/libcef/renderer/blink_glue.h
++++ b/libcef/renderer/blink_glue.h
+@@ -12,6 +12,10 @@
+ #include <string>
+ 
+ #include "cef/include/internal/cef_types.h"
++
++#if defined(OS_AROS) && defined(GetNodeName)
++#undef GetNodeName
++#endif
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink-forward.h"
+ #include "third_party/blink/public/platform/web_common.h"
+ #include "v8/include/v8.h"
+diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
+index 1cb197c3da33fd521adc8f8b48a39fcf80f8c12e..1e40df3c209d36db9ba10d5bdff9cf7554e85605 100644
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
+@@ -5,6 +5,9 @@
+ 
+ #include "cef/libcef/renderer/chrome/chrome_content_renderer_client_cef.h"
+ 
++#include "cef/libcef/common/app_manager.h"
++#include "cef/libcef/common/net/scheme_info.h"
++
+ #include "cef/libcef/renderer/render_frame_observer.h"
+ #include "cef/libcef/renderer/render_manager.h"
+ #include "cef/libcef/renderer/thread_util.h"
+@@ -12,6 +15,8 @@
+ #include "content/public/renderer/render_frame.h"
+ #include "content/public/renderer/render_thread.h"
+ #include "third_party/blink/public/web/web_view.h"
++#include "third_party/blink/public/platform/web_string.h"
++#include "third_party/blink/public/web/web_security_policy.h"
+ 
+ ChromeContentRendererClientCef::ChromeContentRendererClientCef()
+     : render_manager_(new CefRenderManager) {}
+@@ -31,12 +36,34 @@ void ChromeContentRendererClientCef::RenderThreadStarted() {
+   ChromeContentRendererClient::RenderThreadStarted();
+ 
+   render_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
++#if BUILDFLAG(IS_AROS)
++  base::CurrentThread::Get()->AddDestructionObserver(this);
++#endif
++}
++
++#if BUILDFLAG(IS_AROS)
++void ChromeContentRendererClientCef::WillDestroyCurrentMessageLoop() {
++  // The resident engine outlives its renderer task. Release sequence-bound
++  // Mojo endpoints here, while that task's execution environment still exists,
++  // rather than from the browser task's later AtExitManager callbacks.
++  base::CurrentThread::Get()->RemoveDestructionObserver(this);
++  render_manager_.reset();
+ }
++#endif
+ 
+ void ChromeContentRendererClientCef::RenderThreadConnected() {
+   ChromeContentRendererClient::RenderThreadConnected();
+ 
+   render_manager_->RenderThreadConnected();
++
++  // content registers its own service-worker schemes with Blink
++  // (RenderThreadImpl); custom ones are the embedder's to register.
++  for (const CefSchemeInfo& info : *CefAppManager::Get()->GetCustomSchemes()) {
++    if (info.is_service_worker_enabled) {
++      blink::WebSecurityPolicy::RegisterURLSchemeAsAllowingServiceWorkers(
++          blink::WebString::FromUtf8(info.scheme_name));
++    }
++  }
+ }
+ 
+ void ChromeContentRendererClientCef::RenderFrameCreated(
+diff --git a/libcef/renderer/chrome/chrome_content_renderer_client_cef.h b/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
+index 7275eae999949c050866dc8596898b2f353d0120..c7c3a3bf3f076d3c25eb18672d4a5dc299a7323c 100644
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
+@@ -10,6 +10,10 @@
+ 
+ #include "base/memory/scoped_refptr.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/task/current_thread.h"
++#endif
+ #include "chrome/renderer/chrome_content_renderer_client.h"
+ 
+ namespace cef {
+@@ -19,7 +23,11 @@ struct BrowserConfig;
+ class CefRenderManager;
+ 
+ // CEF override of ChromeContentRendererClient.
+-class ChromeContentRendererClientCef : public ChromeContentRendererClient {
++class ChromeContentRendererClientCef : public ChromeContentRendererClient
++#if BUILDFLAG(IS_AROS)
++    , public base::CurrentThread::DestructionObserver
++#endif
++{
+  public:
+   ChromeContentRendererClientCef();
+ 
+@@ -51,6 +59,9 @@ class ChromeContentRendererClientCef : public ChromeContentRendererClient {
+   void ExposeInterfacesToBrowser(mojo::BinderMap* binders) override;
+ 
+  private:
++#if BUILDFLAG(IS_AROS)
++  void WillDestroyCurrentMessageLoop() override;
++#endif
+   void OnBrowserCreated(blink::WebView* web_view,
+                         const cef::BrowserConfig& config);
+ 
+diff --git a/libcef/renderer/render_manager.cc b/libcef/renderer/render_manager.cc
+index 5012d60e6652794e1f5a8134325839e3f4156af2..5cb6970b31e5f5dc64a5422428d17370e720e63a 100644
+--- a/libcef/renderer/render_manager.cc
++++ b/libcef/renderer/render_manager.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "cef/libcef/renderer/render_manager.h"
+ 
++#include <map>
+ #include <tuple>
+ 
+ #include "build/build_config.h"
+@@ -20,9 +21,11 @@
+ #endif
+ 
+ #include "base/command_line.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "cef/libcef/common/app_manager.h"
+ #include "cef/libcef/common/cef_switches.h"
++#include "base/synchronization/lock.h"
+ #include "cef/libcef/common/mojom/cef.mojom.h"
+ #include "cef/libcef/common/net/scheme_info.h"
+ #include "cef/libcef/common/values_impl.h"
+@@ -47,7 +50,25 @@
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct CefRenderManagerProcessRegistry {
++  base::Lock lock;
++  std::map<const base::CommandLine*, CefRenderManager*> managers;
++};
++
++CefRenderManagerProcessRegistry& GetManagerRegistry() {
++  static base::NoDestructor<CefRenderManagerProcessRegistry> registry;
++  return *registry;
++}
++
++const base::CommandLine* GetCurrentProcessIdentity() {
++  return base::CommandLine::InitializedForCurrentProcess()
++             ? base::CommandLine::ForCurrentProcess()
++             : nullptr;
++}
++#else
+ CefRenderManager* g_manager = nullptr;
++#endif
+ 
+ }  // namespace
+ 
+@@ -70,18 +91,45 @@ class CefExcludedView : public blink::WebViewObserver {
+ };
+ 
+ CefRenderManager::CefRenderManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  auto [it, inserted] =
++      registry.managers.emplace(GetCurrentProcessIdentity(), this);
++  DCHECK(inserted);
++  if (!inserted) {
++    it->second = this;
++  }
++#else
+   DCHECK(!g_manager);
+   g_manager = this;
++#endif
+ }
+ 
+ CefRenderManager::~CefRenderManager() {
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessIdentity());
++  if (it != registry.managers.end() && it->second == this) {
++    registry.managers.erase(it);
++  }
++#else
+   g_manager = nullptr;
++#endif
+ }
+ 
+ // static
+ CefRenderManager* CefRenderManager::Get() {
+   CEF_REQUIRE_RT_RETURN(nullptr);
++#if BUILDFLAG(IS_AROS)
++  auto& registry = GetManagerRegistry();
++  base::AutoLock lock(registry.lock);
++  const auto it = registry.managers.find(GetCurrentProcessIdentity());
++  return it == registry.managers.end() ? nullptr : it->second;
++#else
+   return g_manager;
++#endif
+ }
+ 
+ void CefRenderManager::RenderThreadConnected() {
+diff --git a/tools/cef_api_hash.py b/tools/cef_api_hash.py
+index 8f271ee6e96a175c20f1e4154419e57734b41d05..24bd21a6035abce4c68eb3de0e1ed83c96f03ed9 100644
+--- a/tools/cef_api_hash.py
++++ b/tools/cef_api_hash.py
+@@ -24,6 +24,7 @@ PLATFORM_DEFINES = {
+     'windows': ['OS_WIN', 'ARCH_CPU_X86_64'],
+     'mac': ['OS_MAC', 'OS_POSIX', 'ARCH_CPU_ARM64'],
+     'linux': ['OS_LINUX', 'OS_POSIX', 'CEF_X11', 'ARCH_CPU_X86_64'],
++    'aros': ['OS_AROS', 'OS_POSIX', 'ARCH_CPU_X86_64'],
+ }
+ 
+ SYSTEM_INCLUDES_PATTERN = re.compile(r'(#include <[^>]+>)')
+diff --git a/tools/make_api_versions_header.py b/tools/make_api_versions_header.py
+index 0a8b21c66e47588e52a8e049fa6bc4c95215e2aa..9357500caf2381128775995d97dba59a2ca75e0c 100644
+--- a/tools/make_api_versions_header.py
++++ b/tools/make_api_versions_header.py
+@@ -39,6 +39,11 @@ def make_api_versions_header(json):
+ #endif
+ """
+ 
++    if 'aros' in hashes:
++      version_part = version_part.replace(
++          '#endif', f'#elif defined(OS_AROS)\n'
++          f'#define CEF_API_HASH_{version} "$AROS$"\n#endif')
++
+     # Substitute hash values for placeholders.
+     for key, value in hashes.items():
+       version_part = version_part.replace(f"${key.upper()}$", value)
+diff --git a/tools/make_api_versions_header_test.py b/tools/make_api_versions_header_test.py
+index a30726ad4d8262b325ca7fdb19d872061108f46b..2af70eddee3fc4dcdb30fe8a088fc5adcb93b884 100644
+--- a/tools/make_api_versions_header_test.py
++++ b/tools/make_api_versions_header_test.py
+@@ -40,6 +40,18 @@ class MakeApiVersionsHeaderTest(unittest.TestCase):
+     self.assertIn('CEF_API_VERSION_MIN CEF_API_VERSION_13300', header)
+     self.assertIn('CEF_API_VERSION_LAST CEF_API_VERSION_13302', header)
+ 
++  def test_aros_hashes_are_distinct_and_optional_for_legacy_inputs(self):
++    legacy = make_api_versions_header(self.data)
++    self.assertNotIn('OS_AROS', legacy)
++    for version, hashes in self.data['hashes'].items():
++      hashes['aros'] = 'aros-test-hash-' + version
++    header = make_api_versions_header(self.data)
++    self.assertNotIn('$AROS$', header)
++    for version in self.data['hashes']:
++      self.assertIn(
++          '#elif defined(OS_AROS)\n#define CEF_API_HASH_%s "aros-test-hash-%s"'
++          % (version, version), header)
++
+   def test_writer_first_write_and_unchanged_contract_and_mtime(self):
+     with tempfile.TemporaryDirectory() as temporary_directory:
+       header = os.path.join(temporary_directory, 'versions.h')
+diff --git a/tools/make_config_header.py b/tools/make_config_header.py
+index 71b9705535d9babab04ded0f042a8762869ed364..6224d15a0051184c4e5c7e13078d415997e63f8d 100644
+--- a/tools/make_config_header.py
++++ b/tools/make_config_header.py
+@@ -8,7 +8,7 @@ from file_util import *
+ import sys
+ 
+ 
+-def make_config_header(gn_config):
++def make_config_header(gn_config, ozone_platform_x11=None):
+   """ Creates the header file contents for the cef build configuration. """
+ 
+   if not path_exists(gn_config):
+@@ -24,8 +24,9 @@ def make_config_header(gn_config):
+ 
+   # All Linux builds use Ozone, and the X11 platform is enabled by default.
+   # Check if the config is explicitly disabling it.
+-  if sys.platform.startswith('linux') and \
+-      not 'ozone_platform_x11=false' in lines:
++  if ozone_platform_x11 is None:
++    ozone_platform_x11 = 'ozone_platform_x11=false' not in lines
++  if sys.platform.startswith('linux') and ozone_platform_x11:
+     defines.append('#define CEF_X11 1')
+ 
+   # If the V8 sandbox is not disabled explicitly and
+@@ -54,9 +55,9 @@ $DEFINES$
+   return result
+ 
+ 
+-def write_config_header(output, gn_config):
++def write_config_header(output, gn_config, ozone_platform_x11=None):
+   output = os.path.abspath(output)
+-  result = make_config_header(gn_config)
++  result = make_config_header(gn_config, ozone_platform_x11)
+   return write_file_if_changed(output, result)
+ 
+ 
+@@ -64,7 +65,14 @@ def main(argv):
+   if len(argv) < 3:
+     print(("Usage:\n  %s <output_header_file> <input_args_gn_file>" % argv[0]))
+     sys.exit(-1)
+-  write_config_header(argv[1], argv[2])
++
++  ozone_platform_x11 = None
++  if len(argv) >= 4:
++    if argv[3] not in ('true', 'false'):
++      raise ValueError('Expected true or false for ozone_platform_x11')
++    ozone_platform_x11 = argv[3] == 'true'
++
++  write_config_header(argv[1], argv[2], ozone_platform_x11)
+ 
+ 
+ if '__main__' == __name__:
+diff --git a/tools/make_config_header_test.py b/tools/make_config_header_test.py
+index eef4c70835a8c062847bb92b1a8b4b97fe8b0579..f3884555c50c61901a93ab30e8f460eea7fd6da1 100644
+--- a/tools/make_config_header_test.py
++++ b/tools/make_config_header_test.py
+@@ -40,6 +40,31 @@ class MakeConfigHeaderTest(unittest.TestCase):
+       with mock.patch('make_config_header.sys.platform', 'darwin'):
+         self.assertNotIn('#define CEF_X11 1', make_config_header(x64))
+ 
++  def test_explicit_x11_override_for_cross_build_and_cli_errors(self):
++    with tempfile.TemporaryDirectory() as directory:
++      args = self._input(
++          directory, 'target_os="aros"\ntarget_cpu="x64"\n'
++          'v8_enable_sandbox=false\n')
++      with mock.patch('make_config_header.sys.platform', 'linux'):
++        output = make_config_header(args, ozone_platform_x11=False)
++        self.assertNotIn('#define CEF_X11 1', output)
++        self.assertNotIn('#define CEF_V8_ENABLE_SANDBOX 1', output)
++        self.assertIn('#define CEF_X11 1',
++                      make_config_header(args, ozone_platform_x11=True))
++      target = os.path.join(directory, 'config.h')
++      result = run_generator_script('make_config_header.py', target, args,
++                                    'false')
++      self.assertEqual(result.returncode, 0, result.stderr)
++      with open(target, encoding='utf-8') as source:
++        self.assertNotIn('#define CEF_X11 1', source.read())
++      invalid_target = os.path.join(directory, 'invalid.h')
++      result = run_generator_script('make_config_header.py', invalid_target,
++                                    args, 'invalid')
++      self.assertNotEqual(result.returncode, 0)
++      self.assertIn('Expected true or false', result.stderr)
++      self.assertFalse(os.path.exists(invalid_target))
++
++  @mock.patch('make_config_header.sys.platform', 'darwin')
+   def test_golden_writer_idempotence_missing_input_and_cli(self):
+     fixture = testdata_dir('args.gn')
+     self.assertEqual(make_config_header(fixture),
+diff --git a/tools/version_manager.py b/tools/version_manager.py
+index 5017556642c833b9974cfc24e1aaebe95b066d71..4c25c03c25992bd15e14df5a97b3a53e55c31742 100644
+--- a/tools/version_manager.py
++++ b/tools/version_manager.py
+@@ -85,7 +85,7 @@ def compute_api_hashes(api_version: str,
+ 
+ def same_api_hashes(hashes1, hashes2, compare_sandbox=True):
+   # Compare platform hashes (always required).
+-  for key in ['linux', 'mac', 'windows']:
++  for key in ['linux', 'mac', 'windows', 'aros']:
+     if hashes1.get(key) != hashes2.get(key):
+       return False
+   # Compare sandbox_compat only when requested.

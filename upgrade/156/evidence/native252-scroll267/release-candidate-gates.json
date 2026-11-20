@@ -1,0 +1,25 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "252 native ten-cycle/full-host PASS; independent ledger23 zero-exit pairs,20 complete/0 deferred renderer retirements. Full-browser264 multitab closure fails separate scrolling-global assertion.",
+    "sibling_app_isolation": "183 both apps and surviving sibling page passed, but serial accounting incomplete and two deferred heap retirements; worker isolation184/ARM70 candidate awaiting sibling replay.",
+    "persistent_profiles": "SQLite257 reproducer exact778/1219 FAT journal failure; production259 adapter native260 passes RAM/FAT writes, backup, reopen. Integrated265/267 master builds pending browser profile acceptance.",
+    "memory": "252 removes retained renderer-metrics mappings; post-host whole guest1056.6MiB versus2371102.33MiB. Per-cycle growth persists. Thirty-cycle268 retained252 memory control running; no plateau claim.",
+    "native_browser_ui": "264 exact252 engine passes installed icon, NewTab, four tabs, version. Closing tabs triggers SyncScrollAttemptHeuristic image-global pointer assertion.266 task-local candidate host regression and x64/ARM objects pass, integrated267 native acceptance pending.",
+    "production_launcher": "x64 installed native icon/full browser pass on226/232. ARM74 window/About rendered, then IPC::ChannelProxy null startup fault;242 fix host/cross PASS, native pending.",
+    "packaging": "29-file preparatory inventory includes native icons and verbatim AROS/GCC runtime notices. Final candidate archive and source-provenance review pending.",
+    "source_reproducibility": "267 complete21-repository replay passes. Fresh-master267 x64/ARM builds active. ARM254 V8 archive/library passed and reused; source changes since254 only in CEF. Earlier265/254 partial outputs retained after exact-reader stops.263 never started due overbroad output-path guard, corrected267.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification"
+  }
+}

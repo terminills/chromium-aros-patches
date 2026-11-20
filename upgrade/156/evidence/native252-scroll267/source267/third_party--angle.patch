@@ -1,0 +1,984 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index d6969b427ed614ec861c338cdd127ba4717dad1d..08c61c6d3c2fc3d108080478e6cf122b6c0faf5c 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -97,6 +97,9 @@ declare_args() {
+   install_prefix = ""
+ 
+   angle_use_crypto_hasher = build_with_chromium
++
++  angle_commit_id = ""
++  angle_commit_position = "0"
+ }
+ 
+ declare_args() {
+@@ -592,6 +595,10 @@ template("angle_common_lib") {
+       libs = [ "dl" ]
+     }
+ 
++    if (is_aros) {
++      libs = [ "debug" ]
++    }
++
+     if (is_android && (angle_enable_gl || angle_enable_vulkan)) {
+       # In API level 26 ANativeWindow APIs were moved from libandroid.so
+       # into a separate library, libnativewindow.so
+@@ -769,6 +776,11 @@ angle_static_library("angle_gpu_info_util") {
+     }
+   }
+ 
++  if (is_aros) {
++    sources += libangle_gpu_info_util_aros_sources
++    libs += [ "oop", "vulkan" ]
++  }
++
+   if (use_libpci) {
+     sources += libangle_gpu_info_util_libpci_sources
+     defines += [ "GPU_INFO_USE_LIBPCI" ]
+@@ -956,6 +968,8 @@ action("angle_commit_id") {
+     "gen",
+     rebase_path(_commit_id_header, root_build_dir),
+     rebase_path(depfile, root_build_dir),
++    angle_commit_position,
++    angle_commit_id,
+   ]
+ 
+   public_configs = [ ":angle_commit_id_config" ]
+diff --git a/src/commit_id.py b/src/commit_id.py
+index 5c28fe8184cbe5430f9253d1b2d6f59e787c1e6b..3a6f89f749fc2da3310ddc0806a486f9a8495864 100755
+--- a/src/commit_id.py
++++ b/src/commit_id.py
+@@ -13,7 +13,7 @@ import os
+ 
+ usage = """\
+ Usage: commit_id.py position               - print commit position
+-       commit_id.py gen <output> [depfile] - generate commit.h"""
++       commit_id.py gen <output> [depfile] [commit_position] [commit_id] - generate commit.h"""
+ 
+ 
+ def grab_output(command, cwd):
+@@ -128,15 +128,24 @@ def main():
+         sys.exit(usage)
+ 
+     output_file = sys.argv[2]
+-    depfile = sys.argv[3] if len(sys.argv) == 4 else None
++    depfile = sys.argv[3] if len(sys.argv) >= 4 else None
+     commit_id_size = 12
+     commit_date = 'unknown date'
+     commit_position = '0'
+ 
++    if len(sys.argv) >= 5:
++      commit_position = sys.argv[4]
++      assert commit_position.isnumeric(), commit_position
++
++    commit_id = None
++    if len(sys.argv) >= 6 and len(sys.argv[5]) > 0:
++      commit_id = sys.argv[5]
++      assert len(commit_id) == commit_id_size, commit_id
++
+     # If the ANGLE_UPSTREAM_HASH environment variable is set, use it as
+     # commit_id. commit_date will be 'unknown date' and commit_position will be 0
+     # in this case. See details in roll_aosp.sh where commit_id.py is invoked.
+-    commit_id = os.environ.get('ANGLE_UPSTREAM_HASH')
++    commit_id = os.environ.get('ANGLE_UPSTREAM_HASH', commit_id)
+     # If ANGLE_UPSTREAM_HASH environment variable is not set, use the git command
+     # to get the git hash, when .git is available
+     if git_dir_exists and not commit_id:
+diff --git a/src/common/platform.h b/src/common/platform.h
+index cae59a1940d044dc4957605820127a7fe1ec36cf..2cf7660172ca6b0aebc53d0d0d162de2d4bb189d 100644
+--- a/src/common/platform.h
++++ b/src/common/platform.h
+@@ -20,6 +20,9 @@
+ #elif defined(ANDROID) && !defined(ANGLE_ANDROID_DMA_BUF)
+ #    define ANGLE_PLATFORM_ANDROID 1
+ #    define ANGLE_PLATFORM_POSIX 1
++#elif defined(__AROS__)
++#    define ANGLE_PLATFORM_AROS 1
++#    define ANGLE_PLATFORM_POSIX 1
+ #elif defined(__linux__) || defined(EMSCRIPTEN)
+ #    define ANGLE_PLATFORM_LINUX 1
+ #    define ANGLE_PLATFORM_POSIX 1
+diff --git a/src/common/system_utils_aros.cpp b/src/common/system_utils_aros.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7706b83deea17016d59bc6db863b719e51cd4eb
+--- /dev/null
++++ b/src/common/system_utils_aros.cpp
+@@ -0,0 +1,331 @@
++//
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++
++// system_utils_aros.cpp: Native AROS implementations of system utilities.
++
++#include "common/system_utils.h"
++
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <array>
++#include <string>
++
++#include <exec/libraries.h>
++#include <proto/debug.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++
++extern "C" void ArosKPutStr(const char *) asm("KPutStr");
++
++namespace
++{
++using ArosLibrary = struct Library;
++
++void ArosLogUnsupported(const char *operation)
++{
++    ArosLibrary *debugBase = OpenLibrary("debug.library", 0);
++    if (!debugBase)
++    {
++        return;
++    }
++
++    ArosKPutStr("[ANGLE:AROS] unsupported operation: ");
++    ArosKPutStr(operation);
++    ArosKPutStr("\n");
++    CloseLibrary(debugBase);
++}
++
++std::string JoinDirectoryAndLeaf(const std::string &directory, const char *leaf)
++{
++    if (directory.empty() || directory.back() == '/' || directory.back() == ':')
++    {
++        return directory + leaf;
++    }
++    return directory + "/" + leaf;
++}
++}  // namespace
++
++namespace angle
++{
++
++std::string GetExecutablePath()
++{
++    std::array<char, 1024> path = {};
++    return GetProgramName(path.data(), path.size()) ? std::string(path.data()) : std::string();
++}
++
++std::string GetExecutableDirectory()
++{
++    return StripFilenameFromPath(GetExecutablePath());
++}
++
++std::string GetModuleDirectory()
++{
++    return GetExecutableDirectory();
++}
++
++const char *GetSharedLibraryExtension()
++{
++    return "library";
++}
++
++const char *GetExecutableExtension()
++{
++    return "";
++}
++
++char GetPathSeparator()
++{
++    return '/';
++}
++
++Optional<std::string> GetCWD()
++{
++    std::array<char, 4096> path = {};
++    return getcwd(path.data(), path.size()) ? Optional<std::string>(path.data())
++                                            : Optional<std::string>::Invalid();
++}
++
++bool SetCWD(const char *dirName)
++{
++    return chdir(dirName) == 0;
++}
++
++bool SetEnvironmentVar(const char *variableName, const char *value)
++{
++    return setenv(variableName, value, 1) == 0;
++}
++
++bool UnsetEnvironmentVar(const char *variableName)
++{
++    return unsetenv(variableName) == 0;
++}
++
++std::string GetEnvironmentVar(const char *variableName)
++{
++    const char *value = getenv(variableName);
++    return value ? std::string(value) : std::string();
++}
++
++const char *GetPathSeparatorForEnvironmentVar()
++{
++    return ":";
++}
++
++bool IsDirectory(const char *filename)
++{
++    struct stat status = {};
++    return stat(filename, &status) == 0 && S_ISDIR(status.st_mode);
++}
++
++bool CreateDirectories(const std::string &path)
++{
++    std::string normalized(path);
++    MakeForwardSlashThePathSeparator(normalized);
++
++    size_t separator = 0;
++    while ((separator = normalized.find('/', separator)) != std::string::npos)
++    {
++        const std::string parent = normalized.substr(0, separator++);
++        if (!parent.empty() && !IsDirectory(parent.c_str()) &&
++            mkdir(parent.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) != 0)
++        {
++            return false;
++        }
++    }
++
++    return normalized.empty() || IsDirectory(normalized.c_str()) ||
++           mkdir(normalized.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == 0;
++}
++
++void MakeForwardSlashThePathSeparator(std::string &path)
++{
++    for (char &character : path)
++    {
++        if (character == '\\')
++        {
++            character = '/';
++        }
++    }
++}
++
++std::string GetRootDirectory()
++{
++    return "/";
++}
++
++Optional<std::string> GetTempDirectory()
++{
++    const char *directory = getenv("TMPDIR");
++    return std::string(directory ? directory : "T:");
++}
++
++Optional<std::string> CreateTemporaryFileInDirectory(const std::string &directory)
++{
++    return CreateTemporaryFileInDirectoryWithExtension(directory, std::string());
++}
++
++Optional<std::string> CreateTemporaryFileInDirectoryWithExtension(const std::string &directory,
++                                                                  const std::string &extension)
++{
++    std::string filename = JoinDirectoryAndLeaf(directory, ".angle.XXXXXX");
++    int descriptor       = mkstemp(filename.data());
++    if (descriptor < 0)
++    {
++        return Optional<std::string>::Invalid();
++    }
++    close(descriptor);
++
++    if (!extension.empty())
++    {
++        const std::string renamed = filename + extension;
++        if (rename(filename.c_str(), renamed.c_str()) != 0)
++        {
++            remove(filename.c_str());
++            return Optional<std::string>::Invalid();
++        }
++        filename = renamed;
++    }
++
++    return filename;
++}
++
++double GetCurrentSystemTime()
++{
++    struct timespec now = {};
++    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
++    {
++        return 0.0;
++    }
++    return static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
++}
++
++double GetCurrentProcessCpuTime()
++{
++    struct timespec now = {};
++    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) != 0)
++    {
++        return 0.0;
++    }
++    return static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
++}
++
++bool RunApp(const std::vector<const char *> &,
++            std::string *,
++            std::string *,
++            int *)
++{
++    ArosLogUnsupported("RunApp");
++    return false;
++}
++
++void *OpenSystemLibraryWithExtensionAndGetError(const char *libraryName,
++                                                SearchType searchType,
++                                                std::string *errorOut)
++{
++    if (searchType == SearchType::AlreadyLoaded)
++    {
++        if (errorOut)
++        {
++            *errorOut = "AROS cannot safely acquire an already-loaded library by name";
++        }
++        return nullptr;
++    }
++
++    ArosLibrary *library = OpenLibrary(libraryName, 0);
++    if (!library && errorOut)
++    {
++        *errorOut = std::string("OpenLibrary failed: ") + libraryName;
++    }
++    return library;
++}
++
++void *GetLibrarySymbol(void *, const char *)
++{
++    ArosLogUnsupported("GetLibrarySymbol");
++    return nullptr;
++}
++
++std::string GetLibraryPath(void *libraryHandle)
++{
++    ArosLibrary *library = static_cast<ArosLibrary *>(libraryHandle);
++    return library && library->lib_Node.ln_Name ? library->lib_Node.ln_Name : "";
++}
++
++void CloseSystemLibrary(void *libraryHandle)
++{
++    if (libraryHandle)
++    {
++        CloseLibrary(static_cast<ArosLibrary *>(libraryHandle));
++    }
++}
++
++bool IsDebuggerAttached()
++{
++    return false;
++}
++
++void BreakDebugger()
++{
++    ArosLogUnsupported("BreakDebugger");
++    abort();
++}
++
++uint64_t GetProcessMemoryUsageKB()
++{
++    return 0;
++}
++
++bool ProtectMemory(uintptr_t, size_t)
++{
++    ArosLogUnsupported("ProtectMemory");
++    return false;
++}
++
++bool UnprotectMemory(uintptr_t, size_t)
++{
++    ArosLogUnsupported("UnprotectMemory");
++    return false;
++}
++
++size_t GetPageSize()
++{
++    return 4096;
++}
++
++namespace
++{
++class ArosPageFaultHandler final : public PageFaultHandler
++{
++  public:
++    explicit ArosPageFaultHandler(PageFaultCallback callback) : PageFaultHandler(callback) {}
++
++    bool enable() override
++    {
++        ArosLogUnsupported("PageFaultHandler::enable");
++        return false;
++    }
++
++    bool disable() override { return true; }
++};
++}  // namespace
++
++PageFaultHandler *CreatePageFaultHandler(PageFaultCallback callback)
++{
++    return new ArosPageFaultHandler(callback);
++}
++
++void SetCurrentThreadName(const char *name)
++{
++    pthread_setname_np(pthread_self(), name);
++}
++
++}  // namespace angle
+diff --git a/src/compiler/translator/IntermNode.cpp b/src/compiler/translator/IntermNode.cpp
+index 5189d334c75c45cf461d05c8465dbc506948e69a..60375246e26ae32a5495a14f50798681bd89b607 100644
+--- a/src/compiler/translator/IntermNode.cpp
++++ b/src/compiler/translator/IntermNode.cpp
+@@ -881,7 +881,7 @@ const TConstantUnion *TIntermAggregate::getConstantValue() const
+         // http://crbug.com/498400132
+         angle::base::CheckedNumeric<size_t> checkedArraySize = elementSize;
+         checkedArraySize *= getOutermostArraySize();
+-        constArray = new TConstantUnion[checkedArraySize.ValueOrDie()];
++        constArray = new TConstantUnion[static_cast<size_t>(checkedArraySize.ValueOrDie())];
+ 
+         size_t elementOffset = 0u;
+         for (TIntermNode *constructorArg : mArguments)
+diff --git a/src/compiler/translator/glslang.y b/src/compiler/translator/glslang.y
+index 8bba5d48701a5c3d52d1f4f44a884a9abf57f0ed..ef2316350033fbedb526fdada7119006f2e2e5d6 100644
+--- a/src/compiler/translator/glslang.y
++++ b/src/compiler/translator/glslang.y
+@@ -60,6 +60,14 @@ using namespace sh;
+ %locations
+ 
+ %code requires {
++#if defined(__AROS__)
++#ifdef RESTRICT
++#undef RESTRICT
++#endif
++#ifdef VOLATILE
++#undef VOLATILE
++#endif
++#endif
+ #define YYLTYPE TSourceLoc
+ #define YYLTYPE_IS_DECLARED 1
+ #define YYLTYPE_IS_TRIVIAL 1
+diff --git a/src/compiler/translator/glslang_tab_autogen.h b/src/compiler/translator/glslang_tab_autogen.h
+index d436436a837c8e2f061ab3eb4cbba8c3f3b08171..7abb08bb747b433eb8ce18cda8420f4f4beceb42 100644
+--- a/src/compiler/translator/glslang_tab_autogen.h
++++ b/src/compiler/translator/glslang_tab_autogen.h
+@@ -46,6 +46,14 @@ extern int yydebug;
+ #endif
+ /* "%code requires" blocks.  */
+ 
++#if defined(__AROS__)
++#    ifdef RESTRICT
++#        undef RESTRICT
++#    endif
++#    ifdef VOLATILE
++#        undef VOLATILE
++#    endif
++#endif
+ #define YYLTYPE TSourceLoc
+ #define YYLTYPE_IS_DECLARED 1
+ #define YYLTYPE_IS_TRIVIAL 1
+diff --git a/src/compiler/translator/wgsl/RewritePipelineVariables.cpp b/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
+index f9611f2088470c09d366a36a7e16ef6d3d08dd0a..203e68e8f4ebbfe2410e213a018e45acae6836fd 100644
+--- a/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
++++ b/src/compiler/translator/wgsl/RewritePipelineVariables.cpp
+@@ -27,6 +27,7 @@
+ #include "compiler/translator/tree_util/FindMain.h"
+ #include "compiler/translator/tree_util/ReplaceVariable.h"
+ #include "compiler/translator/util.h"
++#include <iostream>
+ #include "compiler/translator/wgsl/Utils.h"
+ 
+ namespace sh
+diff --git a/src/gpu_info_util/SystemInfo_aros.cpp b/src/gpu_info_util/SystemInfo_aros.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb2580382e6b37591f2acd932d4a2c4cfd310136
+--- /dev/null
++++ b/src/gpu_info_util/SystemInfo_aros.cpp
+@@ -0,0 +1,256 @@
++//
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++
++// SystemInfo_aros.cpp: native GPU inventory through AROS HIDD registries.
++
++#include "gpu_info_util/SystemInfo_internal.h"
++
++#include <aros/asmcall.h>
++#include <hidd/pci.h>
++#define VK_NO_PROTOTYPES
++#include <vulkan/vulkan.h>
++#include <vector>
++
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ArosGetInstanceProcAddr(
++    VkInstance, const char *) __asm__("vkGetInstanceProcAddr");
++#include <proto/oop.h>
++
++OOP_AttrBase HiddPCIDeviceAttrBase = 0;
++
++namespace angle
++{
++namespace
++{
++
++struct EnumerationContext
++{
++    SystemInfo *info;
++    int firstClaimedIndex;
++};
++
++uint64_t MakeSystemDeviceId(uint32_t bus, uint32_t device, uint32_t function)
++{
++    const uint32_t busDeviceFunction = (bus << 8) | (device << 3) | function;
++    return GetSystemDeviceIdFromParts(0, busDeviceFunction);
++}
++
++int EnumerateVulkanGPUs(SystemInfo *info)
++{
++    const auto create = reinterpret_cast<PFN_vkCreateInstance>(
++        ArosGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
++    if (!create) return -1;
++    VkApplicationInfo application = {};
++    application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
++    application.pApplicationName = "ANGLE AROS inventory";
++    application.apiVersion = VK_API_VERSION_1_0;
++    VkInstanceCreateInfo settings = {};
++    settings.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
++    settings.pApplicationInfo = &application;
++    VkInstance instance = VK_NULL_HANDLE;
++    if (create(&settings, nullptr, &instance) != VK_SUCCESS) return -1;
++    const auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(
++        ArosGetInstanceProcAddr(instance, "vkDestroyInstance"));
++    const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
++        ArosGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices"));
++    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
++        ArosGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"));
++    int activeIndex = -1;
++    bool selectedHardware = false;
++    if (destroy && enumerate && properties)
++    {
++        uint32_t count = 0;
++        if (enumerate(instance, &count, nullptr) == VK_SUCCESS && count)
++        {
++            std::vector<VkPhysicalDevice> devices(count);
++            VkResult result = enumerate(instance, &count, devices.data());
++            if (result == VK_SUCCESS || result == VK_INCOMPLETE)
++            {
++                for (uint32_t i = 0; i < count; ++i)
++                {
++                    VkPhysicalDeviceProperties props = {};
++                    properties(devices[i], &props);
++                    GPUDeviceInfo gpu;
++                    gpu.vendorId = props.vendorID;
++                    gpu.deviceId = props.deviceID;
++                    gpu.driverVendor = props.deviceName;
++                    // Do not invent a PCI address for software or non-PCI GPUs.
++                    gpu.systemDeviceId = 0;
++                    info->gpus.push_back(std::move(gpu));
++                    if (activeIndex < 0 ||
++                        (props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU &&
++                         !selectedHardware))
++                    {
++                        activeIndex = static_cast<int>(info->gpus.size() - 1);
++                        selectedHardware = props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
++                    }
++                }
++            }
++        }
++    }
++    if (destroy) destroy(instance, nullptr);
++    return activeIndex;
++}
++
++AROS_UFH3(void, EnumerateGPU,
++          AROS_UFHA(struct Hook *, hook, A0),
++          AROS_UFHA(OOP_Object *, pciDevice, A2),
++          AROS_UFHA(APTR, message, A1))
++{
++    AROS_USERFUNC_INIT
++
++    (void)message;
++
++    auto *context = static_cast<EnumerationContext *>(hook->h_Data);
++    IPTR vendorId = 0;
++    IPTR deviceId = 0;
++    IPTR revisionId = 0;
++    IPTR bus = 0;
++    IPTR device = 0;
++    IPTR function = 0;
++    IPTR ownerValue = 0;
++
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_VendorID, &vendorId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_ProductID, &deviceId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_RevisionID, &revisionId);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Bus, &bus);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Dev, &device);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Sub, &function);
++    OOP_GetAttr(pciDevice, aHidd_PCIDevice_Owner, &ownerValue);
++
++    const uint64_t systemDeviceId =
++        MakeSystemDeviceId(static_cast<uint32_t>(bus), static_cast<uint32_t>(device),
++                           static_cast<uint32_t>(function));
++    const char *owner = reinterpret_cast<const char *>(ownerValue);
++
++    size_t index = 0;
++    for (; index < context->info->gpus.size(); ++index)
++    {
++        GPUDeviceInfo &gpu = context->info->gpus[index];
++        if (gpu.vendorId == static_cast<VendorID>(vendorId) &&
++            gpu.deviceId == static_cast<DeviceID>(deviceId) &&
++            gpu.systemDeviceId == systemDeviceId)
++        {
++            gpu.revisionId = static_cast<RevisionID>(revisionId);
++            if (gpu.driverVendor.empty() && owner && owner[0])
++            {
++                gpu.driverVendor = owner;
++            }
++            break;
++        }
++    }
++
++    if (index == context->info->gpus.size())
++    {
++        GPUDeviceInfo gpu;
++        gpu.vendorId = static_cast<VendorID>(vendorId);
++        gpu.deviceId = static_cast<DeviceID>(deviceId);
++        gpu.revisionId = static_cast<RevisionID>(revisionId);
++        gpu.systemDeviceId = systemDeviceId;
++        if (owner && owner[0])
++        {
++            gpu.driverVendor = owner;
++        }
++        context->info->gpus.push_back(std::move(gpu));
++    }
++
++    if (context->firstClaimedIndex < 0 && owner && owner[0])
++    {
++        context->firstClaimedIndex = static_cast<int>(index);
++    }
++
++    AROS_USERFUNC_EXIT
++}
++
++int EnumeratePCIGPUs(SystemInfo *info)
++{
++    if (!OOPBase) return -1;
++    HiddPCIDeviceAttrBase = OOP_ObtainAttrBase(IID_Hidd_PCIDevice);
++    if (!HiddPCIDeviceAttrBase)
++    {
++        return -1;
++    }
++
++    OOP_Object *pci =
++        static_cast<OOP_Object *>(OOP_NewObject(nullptr, CLID_Hidd_PCI, nullptr));
++    if (!pci)
++    {
++        OOP_ReleaseAttrBase(IID_Hidd_PCIDevice);
++        HiddPCIDeviceAttrBase = 0;
++        return -1;
++    }
++
++    EnumerationContext context = {info, -1};
++    struct Hook hook = {};
++    hook.h_Entry = reinterpret_cast<APTR>(EnumerateGPU);
++    hook.h_Data = &context;
++
++    struct TagItem requirements[] = {
++        {tHidd_PCI_Class, 0x03},
++        {TAG_DONE, 0},
++    };
++    struct pHidd_PCI_EnumDevices message = {
++        OOP_GetMethodID(IID_Hidd_PCI, moHidd_PCI_EnumDevices),
++        &hook,
++        requirements,
++    };
++
++    OOP_DoMethod(pci, reinterpret_cast<OOP_Msg>(&message));
++
++    OOP_DisposeObject(pci);
++    OOP_ReleaseAttrBase(IID_Hidd_PCIDevice);
++    HiddPCIDeviceAttrBase = 0;
++    return context.firstClaimedIndex;
++}
++
++void SetActiveGPU(SystemInfo *info, int activeIndex)
++{
++    GetDualGPUInfo(info);
++    if (activeIndex < 0 || static_cast<size_t>(activeIndex) >= info->gpus.size())
++    {
++        return;
++    }
++
++    bool hasIntel = false;
++    for (const GPUDeviceInfo &gpu : info->gpus)
++    {
++        hasIntel |= IsIntel(gpu.vendorId);
++    }
++
++    info->activeGPUIndex = activeIndex;
++    info->isOptimus = hasIntel && IsNVIDIA(info->gpus[activeIndex].vendorId);
++    info->isAMDSwitchable = hasIntel && IsAMD(info->gpus[activeIndex].vendorId);
++}
++
++}  // anonymous namespace
++
++bool GetSystemInfo(SystemInfo *info)
++{
++    if (!info)
++    {
++        return false;
++    }
++
++    info->gpus.clear();
++
++    // Query Vulkan drivers directly, including software implementations.
++    // PCI inventory remains a fallback when the loader finds no device.
++    int activeIndex = EnumerateVulkanGPUs(info);
++    const int claimedDisplayIndex = info->gpus.empty() ? EnumeratePCIGPUs(info) : -1;
++
++    if (info->gpus.empty())
++    {
++        return false;
++    }
++
++    if (activeIndex < 0)
++    {
++        activeIndex = claimedDisplayIndex;
++    }
++    SetActiveGPU(info, activeIndex);
++    return true;
++}
++
++}  // namespace angle
+diff --git a/src/libANGLE/Display.cpp b/src/libANGLE/Display.cpp
+index 02e0c549452499ec716af105dc8e7b363142e749..819271d62143f4bd31e9f4a9e1827ef988963668 100644
+--- a/src/libANGLE/Display.cpp
++++ b/src/libANGLE/Display.cpp
+@@ -79,6 +79,8 @@
+ #        endif
+ #    elif defined(ANGLE_PLATFORM_ANDROID)
+ #        include "libANGLE/renderer/gl/egl/android/DisplayAndroid.h"
++#    elif defined(ANGLE_PLATFORM_AROS)
++#        include "libANGLE/renderer/gl/egl/DisplayEGL.h"
+ #    else
+ #        error Unsupported OpenGL platform.
+ #    endif
+@@ -659,6 +661,11 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
+             impl = nullptr;
+             break;
+ 
++#    elif defined(ANGLE_PLATFORM_AROS)
++            // egl.library over Mesa is the only native EGL.
++            impl = new rx::DisplayEGL(state);
++            break;
++
+ #    else
+ #        error Unsupported OpenGL platform.
+ #    endif
+@@ -715,6 +722,8 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
+             }
+ #    elif defined(ANGLE_PLATFORM_ANDROID)
+             impl = new rx::DisplayAndroid(state);
++#    elif defined(ANGLE_PLATFORM_AROS)
++            impl = new rx::DisplayEGL(state);
+ #    else
+             // No GLES support on this platform, fail display creation.
+             impl = nullptr;
+diff --git a/src/libANGLE/renderer/gl/BUILD.gn b/src/libANGLE/renderer/gl/BUILD.gn
+index 6be94901ed9bbc7a6b594198e5c3ec9e0352c8f1..680a23a42cf3ac583ec0d20e0b9677fa261bf2bb 100644
+--- a/src/libANGLE/renderer/gl/BUILD.gn
++++ b/src/libANGLE/renderer/gl/BUILD.gn
+@@ -61,7 +61,7 @@ angle_source_set("angle_gl_backend") {
+       "Xext",
+     ]
+   }
+-  if (is_android || is_linux || is_chromeos) {
++  if (is_android || is_linux || is_chromeos || is_aros) {
+     deps += [ "$angle_root/src/common/linux:angle_dma_buf" ]
+   }
+   if (is_apple) {
+diff --git a/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp b/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
+index ddf845523a280daaaf029fe4838c703c398894b3..5d3dc205ceb900d2f07a0881967cbc91ce52a0c7 100644
+--- a/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
++++ b/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
+@@ -8,10 +8,26 @@
+ 
+ #include "libANGLE/renderer/gl/egl/FunctionsEGLDL.h"
+ 
+-#include <dlfcn.h>
++#if defined(ANGLE_PLATFORM_AROS)
++namespace
++{
++// AROS has no dlopen: its native EGL is egl.library over Mesa, reached
++// through stubs the embedder links. The embedder (Chromium's AROS ozone
++// platform) installs the resolver before it asks for an ANGLE GL display.
++void *(*gArosNativeEGLResolver)(const char *name);
++}  // anonymous namespace
++
++extern "C" void ANGLEArosSetNativeEGLResolver(void *(*resolver)(const char *name))
++{
++    gArosNativeEGLResolver = resolver;
++}
++#else
++#    include <dlfcn.h>
++#endif
+ 
+ namespace rx
+ {
++#if !defined(ANGLE_PLATFORM_AROS)
+ namespace
+ {
+ // In ideal world, we would want this to be a member of FunctionsEGLDL,
+@@ -23,6 +39,7 @@ namespace
+ // referencing crbug.com/250813 and http://www.xfree86.org/4.3.0/DRI11.html
+ void *nativeEGLHandle;
+ }  // anonymous namespace
++#endif
+ 
+ FunctionsEGLDL::FunctionsEGLDL() : mGetProcAddressPtr(nullptr) {}
+ 
+@@ -33,7 +50,19 @@ egl::Error FunctionsEGLDL::initialize(EGLAttrib platformType,
+                                       const char *libName,
+                                       void *eglHandle)
+ {
+-
++#if defined(ANGLE_PLATFORM_AROS)
++    if (!gArosNativeEGLResolver)
++    {
++        return egl::EglNotInitialized() << "No native EGL resolver installed";
++    }
++    mGetProcAddressPtr = reinterpret_cast<PFNEGLGETPROCADDRESSPROC>(
++        gArosNativeEGLResolver("eglGetProcAddress"));
++    if (!mGetProcAddressPtr)
++    {
++        return egl::EglNotInitialized() << "Could not find eglGetProcAddress";
++    }
++    return FunctionsEGL::initialize(platformType, nativeDisplay);
++#else
+     if (eglHandle)
+     {
+         // If the handle is provided, use it.
+@@ -60,16 +89,23 @@ egl::Error FunctionsEGLDL::initialize(EGLAttrib platformType,
+     }
+ 
+     return FunctionsEGL::initialize(platformType, nativeDisplay);
++#endif
+ }
+ 
+ void *FunctionsEGLDL::getProcAddress(const char *name) const
+ {
++#if defined(ANGLE_PLATFORM_AROS)
++    // The resolver covers the core EGL entry points (which eglGetProcAddress
++    // need not return), extensions and the gl* functions.
++    return gArosNativeEGLResolver(name);
++#else
+     void *f = reinterpret_cast<void *>(mGetProcAddressPtr(name));
+     if (f)
+     {
+         return f;
+     }
+     return dlsym(nativeEGLHandle, name);
++#endif
+ }
+ 
+ }  // namespace rx
+diff --git a/src/libANGLE/renderer/gl/gl_backend.gni b/src/libANGLE/renderer/gl/gl_backend.gni
+index 1d89bf7b0b31a8de81e2b7446ccd03d419788b89..69f968e70ac7056a6afdbcda1cd30a3e1a1a375e 100644
+--- a/src/libANGLE/renderer/gl/gl_backend.gni
++++ b/src/libANGLE/renderer/gl/gl_backend.gni
+@@ -118,7 +118,8 @@ if (angle_use_x11) {
+   ]
+ }
+ 
+-if (is_android || is_linux || is_chromeos) {
++# AROS reaches its native EGL (egl.library over Mesa) through DisplayEGL too.
++if (is_android || is_linux || is_chromeos || is_aros) {
+   gl_backend_sources += [
+     "egl/ContextEGL.cpp",
+     "egl/ContextEGL.h",
+diff --git a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+index a0cb7f93ecc2592c51b2673f1648b45ab68a4eb1..95f0a4a44a8ea50970dd2afa00160d6b74b15776 100644
+--- a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
+@@ -29,7 +29,9 @@
+ // unavailable (e.g. the ChromeOS wgpu build) CreateWgpuWindowSurface is stubbed out below and no
+ // EGL_WINDOW_BIT config is advertised. Unlike the rest of the backend, X11 vs Wayland is chosen at
+ // runtime (see DisplayWgpu::initialize) because a single Linux build commonly enables both.
+-#if defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)
++// AROS has no Dawn window-surface adapter yet; do not advertise EGL_WINDOW_BIT.
++#if (defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)) || \
++    defined(ANGLE_PLATFORM_AROS)
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 0
+ #else
+ #    define ANGLE_WEBGPU_HAS_WINDOW_SURFACE_TYPE 1
+diff --git a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp b/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
+index bd7c8a9cd1e255da88020418db78f3c95d75041c..df4e59889e3fdfdcdbc681c723e45550bb032eb4 100644
+--- a/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp
+@@ -10,7 +10,6 @@
+ #include "libANGLE/renderer/wgpu/FramebufferWgpu.h"
+ #include "common/unsafe_buffers.h"
+ 
+-#include <__config>
+ 
+ #include "common/Color.h"
+ #include "common/debug.h"
+diff --git a/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp b/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
+index 71a43325a8e8f0b749b4851fe6fab286c7c185aa..7c8e4d95dc0a869f927492f1c40a366930232021 100644
+--- a/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
++++ b/src/libANGLE/renderer/wgpu/ProgramWgpu.cpp
+@@ -7,6 +7,7 @@
+ //    Implements the class methods for ProgramWgpu.
+ //
+ 
++#include <iostream>
+ #include "libANGLE/renderer/wgpu/ProgramWgpu.h"
+ #include "common/unsafe_buffers.h"
+ 
+diff --git a/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp b/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
+index 1a9be1cb7e3cbf52b6a59fc85f69a2c5b64a637f..8c956cf3afa0f1d688c15c6a479f782134c59396 100644
+--- a/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
++++ b/src/libANGLE/renderer/wgpu/wgpu_wgsl_util.cpp
+@@ -4,6 +4,7 @@
+ // found in the LICENSE file.
+ //
+ 
++#include <iostream>
+ #include "libANGLE/renderer/wgpu/wgpu_wgsl_util.h"
+ 
+ #include <sstream>
+diff --git a/src/libGLESv2.gni b/src/libGLESv2.gni
+index 2360cc03a993546d4ce4124e9854f242cbe252f7..3c0c40c95bf9e9ea06f37b43b348c8ba7df51fd2 100644
+--- a/src/libGLESv2.gni
++++ b/src/libGLESv2.gni
+@@ -140,6 +140,10 @@ if (is_linux || is_chromeos) {
+   ]
+ }
+ 
++if (is_aros) {
++  libangle_common_sources += [ "src/common/system_utils_aros.cpp" ]
++}
++
+ if (is_apple) {
+   libangle_common_sources += [
+     "src/common/apple/ObjCPtr.h",
+@@ -211,6 +215,9 @@ libangle_gpu_info_util_android_sources =
+ libangle_gpu_info_util_linux_sources =
+     [ "src/gpu_info_util/SystemInfo_linux.cpp" ]
+ 
++libangle_gpu_info_util_aros_sources =
++    [ "src/gpu_info_util/SystemInfo_aros.cpp" ]
++
+ libangle_gpu_info_util_fuchsia_sources =
+     [ "src/gpu_info_util/SystemInfo_fuchsia.cpp" ]
+ 

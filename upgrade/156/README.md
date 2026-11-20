@@ -7,12 +7,13 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-20 UTC
 
-The latest [lifecycle252 and SQLite259 development evidence](evidence/lifecycle252-storage259/README.md)
-contains a replayable source snapshot, retained native regression and a native-tested
-Chromium-local fix for the FAT SQLite journal error. Full candidate252 native
-acceptance and browser integration of259 remain pending; the results below belong
-to the explicitly named earlier builds. The companion production compact linker
-is published at aros-web77a301c.
+The latest [native252 lifecycle result and source267](evidence/native252-scroll267/README.md)
+confirm ten sessions,23 successful child exits and complete host shutdown, with
+renderer metrics backing reclaimed. The separate full-browser264 test exposes
+a scroll-global assertion on multitab closure; the task-local fix passes host
+and cross-object tests and is integrated in267. Fresh-master builds and native
+acceptance remain underway. No RC is released. The older results below retain
+their original build identities.
 
 Native x64 candidate226 launches through the installed AROS icon, paints New Tab,
 opens four tabs and chrome://version, closes, and reopens through the same
@@ -43,7 +44,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/lifecycle252-storage259/release-candidate-gates.json).
+[current RC gates](evidence/native252-scroll267/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched
