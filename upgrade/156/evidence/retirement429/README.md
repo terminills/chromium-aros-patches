@@ -13,3 +13,9 @@ The lifecycle log enters fast shutdown before every deferred page retirement. A 
 ARM417 was paused before boot because its inspector helper was missing. The helper and guarded RAM-map setup were restored, the original failed observer result retained, and the VM resumed. The current screenshot shows the ARM desktop and About AROS while Chromium loads. Historical production379 full New Tab evidence remains in production415.
 
 [Current release gates](release-candidate-gates.json)
+
+## ARM417 visual follow-up
+
+The resumed414 ARM run now visibly renders Chromium New Tab with About AROS. Read-only Exec memory counters report1543.06MiB used and434.87MiB free of1977.93MiB for the whole QEMU guest. This is visual startup evidence, not full browser acceptance or a physical Pi result. Both422 cross archives now pass; native links are running.
+
+![ARM Chromium and About AROS](master417-rendering429.png)
