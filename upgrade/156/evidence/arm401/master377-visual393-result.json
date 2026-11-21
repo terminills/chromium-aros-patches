@@ -1,0 +1,38 @@
+{
+  "visual_startup_pass": true,
+  "source": "native-scopes357-all-snapshot/manifest.json",
+  "engine": "master358-arm-cef-link-result.json",
+  "control_host": "fieldtrial376-result.json",
+  "inputs": "master377-inputs.json",
+  "baseline": "master359-fault-analysis.json",
+  "screenshots": [
+    "master377-browser392.png",
+    "master377-settled393.png"
+  ],
+  "observations": [
+    "Native Chromium window, toolbar and New Tab logo/search/shortcut content visually verified in retained settled393 screenshot.",
+    "No native trap or UserAlert in serial through capture.",
+    "Same source357/native358 engine as failing359; private CEFHost376 adds standard --disable-field-trial-config. Fresh profile and scheduling differ.",
+    "Host disk wait interrupted startup; QMP pause/resume retained. No startup-time or performance comparison."
+  ],
+  "memory_samples": [
+    {
+      "file": "arm381-377-browser.json",
+      "mib": {
+        "total": 1977.9332580566406,
+        "free": 462.0526428222656,
+        "used": 1515.880615234375
+      }
+    },
+    {
+      "file": "arm381-377-settled.json",
+      "mib": {
+        "total": 1977.9332580566406,
+        "free": 397.0445251464844,
+        "used": 1580.8887329101562
+      }
+    }
+  ],
+  "serial_sha256": "83170f5c433c6a62883bf5b85fe670c6e14ffcc4884a46c8aaa0747f3e9114d9",
+  "scope": "Native AROS ARM QEMU visual startup control only. Does not qualify physical Pi, USB input, network browsing, profile persistence, stability, memory plateau or RC. Screenshot observation, not a CEF offscreen first-paint log marker."
+}

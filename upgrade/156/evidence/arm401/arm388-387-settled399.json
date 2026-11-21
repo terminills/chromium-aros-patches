@@ -1,0 +1,199 @@
+{
+  "utc": "2026-11-21T03:36:36.168034+00:00",
+  "pid": 189315,
+  "start_ticks": "198759113",
+  "rows": [
+    {
+      "header": "0xd000",
+      "attributes": 38149,
+      "lower": 53248,
+      "upper": 1000341504,
+      "total": 1000279888,
+      "free": 112192,
+      "tlsf": true
+    },
+    {
+      "header": "0x40000000",
+      "attributes": 38149,
+      "lower": 1073741824,
+      "upper": 2147483648,
+      "total": 1073733456,
+      "free": 411974768,
+      "tlsf": true
+    }
+  ],
+  "bytes": {
+    "total": 2074013344,
+    "free": 412086960,
+    "used": 1661926384
+  },
+  "mib": {
+    "total": 1977.9332580566406,
+    "free": 392.9967498779297,
+    "used": 1584.936508178711
+  },
+  "method": "Read-only paused-QEMU Exec MemHeader counters using offsets cross-compiled from frozen ARM SDK. Matches nommu_AvailMem and current-master tlsf_avail total/free formulas; expected total checked against native297 AvailMem. This is whole guest usage, not browser-only allocation.",
+  "qmp": [
+    {
+      "request": {
+        "execute": "qmp_capabilities"
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "query-status"
+      },
+      "reply": {
+        "return": {
+          "status": "running",
+          "running": true
+        }
+      }
+    },
+    {
+      "request": {
+        "execute": "stop"
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "human-monitor-command",
+        "arguments": {
+          "command-line": "info registers"
+        }
+      },
+      "reply": {
+        "return": "\r\nCPU#0\r\n PC=00000000f8072e30 X00=0000000027bb2a76 X01=0000000027bb2a31\r\nX02=00000000f84acc40 X03=0000000000000010 X04=00000000f81b23c0\r\nX05=00000000f8079068 X06=000000000000003a X07=0000000000000009\r\nX08=0000000000215f10 X09=00000000001d9fe0 X10=00000000001d9f90\r\nX11=0000000000800000 X12=00000000001d9f90 X13=0000000000000030\r\nX14=00000000001d9fd0 X15=000000000000001b X16=00000000f80136a4\r\nX17=0000000000000000 X18=0000000000000000 X19=00000000001ca8e0\r\nX20=00000000001ca740 X21=000000000000002c X22=00000000000e0107\r\nX23=0000000000000019 X24=00000000f84acc60 X25=0000000000000015\r\nX26=00000000001ca460 X27=00000000001ca740 X28=0000000000000000\r\nX29=00000000001d93e0 X30=00000000f8071e74  SP=00000000001d93e0\r\nPSTATE=0000000060000004 -ZC- NS EL1t     FPCR=00000000 FPSR=00000000\r\nQ00=000000000000000a:00000000003fffff Q01=0000000000200000:0000000000001001\r\nQ02=0000000000000000:000000007ffffffe Q03=00000000f8077d88:0000000000000000\r\nQ04=0000000000200000:0000000000001001 Q05=0000000000000000:000000007ffffffe\r\nQ06=00000000f8077d88:0000000000000000 Q07=0000000000000002:0000000000000000\r\nQ08=0000000000000000:0000000000000000 Q09=0000000000000000:0000000000000000\r\nQ10=0000000000000000:0000000000000000 Q11=0000000000000000:0000000000000000\r\nQ12=0000000000000000:0000000000000000 Q13=0000000000000000:0000000000000000\r\nQ14=0000000000000000:0000000000000000 Q15=0000000000000000:0000000000000000\r\nQ16=0000000000000100:0000000000000013 Q17=0000000000000000:0000000000000000\r\nQ18=0000000000000000:0000000000000000 Q19=0000000000000000:0000000000000000\r\nQ20=0000000000000000:0000000000000000 Q21=0000000000000000:0000000000000000\r\nQ22=0000000000000000:0000000000000000 Q23=0000000000000000:0000000000000000\r\nQ24=0000000000000000:0000000000000000 Q25=0000000000000000:0000000000000000\r\nQ26=0000000000000000:0000000000000000 Q27=0000000000000000:0000000080534402\r\nQ28=0000000000000000:0000000080534401 Q29=0000000000000000:0000000080534404\r\nQ30=00000000001d94a0:00000000001d94a0 Q31=0000000000000000:0000001800000000\r\n"
+      }
+    },
+    {
+      "request": {
+        "execute": "human-monitor-command",
+        "arguments": {
+          "command-line": "info cpus"
+        }
+      },
+      "reply": {
+        "return": "* CPU #0: thread_id=189318 model=cortex-a72\r\n  CPU #1: thread_id=189319 model=cortex-a72\r\n  CPU #2: thread_id=189320 model=cortex-a72\r\n  CPU #3: thread_id=189321 model=cortex-a72\r\n"
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 64384,
+          "size": 8,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-fb80.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 53248,
+          "size": 88,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-d000.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 53248,
+          "size": 200,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-d000.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 53456,
+          "size": 40,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-d0d0.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 1073741824,
+          "size": 88,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-40000000.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 1073741824,
+          "size": 200,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-40000000.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 1073742032,
+          "size": 40,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-400000d0.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "memsave",
+        "arguments": {
+          "val": 64392,
+          "size": 88,
+          "filename": "/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/arm388-387-settled399-fb88.bin"
+        }
+      },
+      "reply": {
+        "return": {}
+      }
+    },
+    {
+      "request": {
+        "execute": "cont"
+      },
+      "reply": {
+        "return": {}
+      }
+    }
+  ]
+}

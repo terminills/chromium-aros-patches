@@ -60,7 +60,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/retirement389/release-candidate-gates.json).
+[current RC gates](evidence/arm401/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched
@@ -551,3 +551,7 @@ are under native integration testing; the ISO63/64 evidence above predates
 the integrated bridge and does not qualify this candidate.
 
 Native browser replays 65 and 66 (x86_64, one CPU) both painted, closed, and returned from full CEFShutdown. This closes the earlier renderer sequence-check failure for these fixtures. Replay 66 includes the final native MsgPort/Ozone watch changes, but its Web Notification permission/delivery path was not exercised. ARM module 10 passed link and ELF validation (SHA256 c25e60bb98033e7901b61f01420f681f9217845b0245f80b61e4aff8c3479341); ARM runtime remains pending. The private GCC 16 ARM kernel build requires KERNEL_ISA_CFLAGS="$(KERNEL_ISA_FLAGS) -mno-outline-atomics" to avoid unresolved out-of-line atomic helpers in the freestanding core.
+
+## ARM startup follow-up
+
+[Two ARM visual startup controls and current RC gaps](evidence/arm401/README.md) include screenshots, whole-guest memory measurements, completed x64 lifecycle365 results, and the outstanding retirement navigation fault.
