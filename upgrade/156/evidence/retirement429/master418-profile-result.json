@@ -1,0 +1,14 @@
+{
+  "functional_pass": false,
+  "failure": "Traceback (most recent call last):\n  File \"/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/test-profile418.py\", line 18, in <module>\n    run('interact-master418.py','profilewrite');wait('AROS_PROFILE_WRITE_PASS token=MASTER418');gates['write']=True;capture('master418-profilewrite')\n                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/run/media/terminills/Amiwest/job0254-01a1e62b/evidence/test-profile418.py\", line 9, in wait\n    if any(x in s for x in ['[Chromium:FATAL]','[UserAlert] Program failed','Software Failure!']):raise RuntimeError('native failure during '+marker)\n                                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: native failure during AROS_PROFILE_WRITE_PASS token=MASTER418\n",
+  "gates": {},
+  "source": "source414-applied.json",
+  "engine": "master414-x64-cef-link-result.json",
+  "inputs": "master418-inputs.json",
+  "screenshots": [
+    "master418-startup.png",
+    "master418-failure.png"
+  ],
+  "serial_sha256": "2d3fbef00b5e0a699d37485f1301bb3d261371c5f42cf8431a92b09462afe13c",
+  "scope": "Native x64 QEMU controlled cookie/localStorage close/reopen, PROFILE absent. No real account or coldboot qualification."
+}

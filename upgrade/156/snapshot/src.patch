@@ -43133,7 +43133,7 @@ index 410948963a049c056bc605867a9fa5866347c435..e80365c1b3cff6de0cd5dd0dd788b5f8
            GetProcess()->GetDeprecatedID(),
            browser_calc_origin_to_commit.value(),
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221cbc8c3f7 100644
+index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbed9803601 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -59,6 +59,8 @@
@@ -43366,7 +43366,22 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
    return is_initialized_ && !is_dead_;
  }
  
-@@ -4801,6 +4925,13 @@ RenderProcessHostImpl::StartRtpDump(bool incoming,
+@@ -4649,7 +4773,14 @@ void RenderProcessHostImpl::Cleanup() {
+   // notify all observers that the process has exited cleanly, even though it
+   // will be destroyed a bit later. Observers shouldn't rely on this process
+   // anymore.
++#if BUILDFLAG(IS_AROS)
++  // A retiring renderer is unavailable for navigation, but its observers still
++  // require an exit notification before host destruction. ProcessDied sets
++  // is_dead_ when it delivers that notification, avoiding a duplicate here.
++  if (is_initialized_ && !is_dead_) {
++#else
+   if (IsInitializedAndNotDead()) {
++#endif
+     // Populates Android-only fields and closes the underlying base::Process.
+     ChildProcessTerminationInfo info = GetChildTerminationInfo(false);
+     info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+@@ -4801,6 +4932,13 @@ RenderProcessHostImpl::StartRtpDump(bool incoming,
  }
  
  IPC::ChannelProxy* RenderProcessHostImpl::GetChannel() {
@@ -43380,7 +43395,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
    return channel_.get();
  }
  
-@@ -5695,6 +5826,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
+@@ -5695,6 +5833,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
    return info;
  }
  
@@ -43510,7 +43525,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
  void RenderProcessHostImpl::ProcessDied(
      const ChildProcessTerminationInfo& termination_info) {
    TRACE_EVENT0("content", "RenderProcessHostImpl::ProcessDied");
-@@ -5728,6 +5982,13 @@ void RenderProcessHostImpl::ProcessDied(
+@@ -5728,6 +5989,13 @@ void RenderProcessHostImpl::ProcessDied(
    // when the process is respawned after a crash.
    did_update_renderer_locked_state_ = false;
  
@@ -43524,7 +43539,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
    UpdateProcessPriority();
  
    // RenderProcessExited relies on the exit code set during shutdown.
-@@ -5775,6 +6036,36 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5775,6 +6043,36 @@ void RenderProcessHostImpl::FastShutdown() {
    // to fast shutdown.
    fast_shutdown_started_ = true;
  
@@ -43561,7 +43576,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
    // Tell observers that the process exited cleanly, even though it will be
    // destroyed a little bit later. Observers shouldn't rely on this process
    // anymore.
-@@ -5783,6 +6074,7 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5783,6 +6081,7 @@ void RenderProcessHostImpl::FastShutdown() {
    termination_info.exit_code = 0;
  
    ProcessDied(termination_info);
@@ -43569,7 +43584,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..a8ce2c18f93b07edb03f0a9cd5a13221
  }
  
  void RenderProcessHostImpl::ResetIPC() {
-@@ -6116,6 +6408,16 @@ void RenderProcessHostImpl::SendProcessStateToRenderer() {
+@@ -6116,6 +6415,16 @@ void RenderProcessHostImpl::SendProcessStateToRenderer() {
  }
  
  void RenderProcessHostImpl::OnProcessLaunched() {
@@ -44343,7 +44358,7 @@ index 654fb9d77d1678dd5bd31692a94c14d644d0775a..f3fadcb127f5ad5380196426da1ceb8b
    virtual ~WebContentsView() = default;
  
 diff --git a/content/child/child_process.cc b/content/child/child_process.cc
-index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0beb868496 100644
+index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..d492993a50b8667006f639c7a4cc923bfb6f82fd 100644
 --- a/content/child/child_process.cc
 +++ b/content/child/child_process.cc
 @@ -6,8 +6,11 @@
@@ -44358,18 +44373,22 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
  #include "base/message_loop/message_pump_type.h"
  #include "base/process/process_handle.h"
  #include "base/synchronization/waitable_event.h"
-@@ -33,6 +36,10 @@
+@@ -33,6 +36,14 @@
  #include "base/test/clang_profiling.h"
  #endif
  
 +#if BUILDFLAG(IS_AROS)
 +#include "base/aros/process_local.h"
++#include "base/command_line.h"
++#include "content/public/common/content_switches.h"
++#include "mojo/core/embedder/embedder.h"
++#include "mojo/core/ipcz_api.h"
 +#endif
 +
  #if BUILDFLAG(IS_ANDROID)
  #include "content/common/android/cpu_time_metrics.h"
  #endif
-@@ -47,6 +54,15 @@ namespace {
+@@ -47,6 +58,15 @@ namespace {
  
  constinit thread_local ChildProcess* child_process = nullptr;
  
@@ -44385,7 +44404,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
  class ChildIOThread : public base::Thread {
   public:
    ChildIOThread() : base::Thread("Chrome_ChildIOThread") {}
-@@ -80,6 +96,9 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
+@@ -80,6 +100,9 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
      : resetter_(&child_process, this, nullptr),
        io_thread_(std::make_unique<ChildIOThread>()),
        is_renderer_(is_renderer) {
@@ -44395,7 +44414,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
    // Start ThreadPoolInstance if not already done. A ThreadPoolInstance
    // should already exist, and may already be running when ChildProcess is
    // instantiated in the browser process or in a test process.
-@@ -161,6 +180,11 @@ ChildProcess::ChildProcess(
+@@ -161,6 +184,11 @@ ChildProcess::ChildProcess(
  ChildProcess::~ChildProcess() {
    DCHECK_EQ(child_process, this);
  
@@ -44407,7 +44426,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
    // Signal this event before destroying the child process.  That way all
    // background threads can cleanup.
    // For example, in the renderer the RenderThread instances will be able to
-@@ -168,9 +192,21 @@ ChildProcess::~ChildProcess() {
+@@ -168,9 +196,21 @@ ChildProcess::~ChildProcess() {
    shutdown_event_.Signal();
  
    if (main_thread_) {  // null in unittests.
@@ -44429,7 +44448,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
      } else {
        // Leak the main_thread_. See a comment in
        // RenderThreadImpl::ShouldBeDestroyed.
-@@ -178,15 +214,40 @@ ChildProcess::~ChildProcess() {
+@@ -178,15 +218,51 @@ ChildProcess::~ChildProcess() {
      }
    }
  
@@ -44443,6 +44462,17 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
 +    LOG(INFO) << "[Chromium:AROS:ChildTeardown] draining workers before I/O stop";
 +    base::ThreadPoolInstance::Get()->Shutdown();
 +    LOG(INFO) << "[Chromium:AROS:ChildTeardown] worker drain completed";
++  }
++  // A native child returns into the resident engine instead of terminating an
++  // OS address space. Release its IPC node while I/O can still service link
++  // shutdown, but only after workers finish their synchronous IPC requests.
++  // In-process renderers share the browser owner and must leave its node alone.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kProcessType) &&
++      mojo::core::GetIpczNode() != IPCZ_INVALID_HANDLE &&
++      !mojo::core::GetIpczNodeOptions().is_broker) {
++    LOG(INFO) << "[Chromium:AROS:ChildTeardown] closing child IPC node";
++    mojo::core::ShutDown();
++    LOG(INFO) << "[Chromium:AROS:ChildTeardown] child IPC node closed";
 +  }
 +#endif
 +
@@ -44470,7 +44500,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
  
  #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
    // Flush the profiling data to disk. Doing this manually (vs relying on this
-@@ -225,13 +286,22 @@ void ChildProcess::AddRefProcess() {
+@@ -225,13 +301,22 @@ void ChildProcess::AddRefProcess() {
    DCHECK(!main_thread_.get() ||  // null in unittests.
           main_thread_->main_thread_runner()->BelongsToCurrentThread());
    ref_count_++;
@@ -44494,7 +44524,7 @@ index 59488b648eafc9ce4eb3c25ad00e20e599ea29ee..c9bfa3fb819d30093249768861baac0b
      return;
  
    if (main_thread_)  // null in unittests.
-@@ -242,6 +312,14 @@ ChildProcess* ChildProcess::current() {
+@@ -242,6 +327,14 @@ ChildProcess* ChildProcess::current() {
    return child_process;
  }
  
@@ -45264,6 +45294,66 @@ index ee1ba2eeb47f936cf1b7cb7634a9f1f91f0a5246..95fdb68064280d96b62e4be36a8758bf
    // Allows subclasses to enable some runtime features before Blink has
    // started.
    virtual void SetRuntimeFeaturesDefaultsBeforeBlinkInitialization() {}
+diff --git a/content/public/renderer/render_frame_observer_tracker.h b/content/public/renderer/render_frame_observer_tracker.h
+index c4f98ea49c708a1ac14451a7829e5d08cab83861..176aebb66abdfbe77d6fe01f8ae030863454e8e2 100644
+--- a/content/public/renderer/render_frame_observer_tracker.h
++++ b/content/public/renderer/render_frame_observer_tracker.h
+@@ -30,6 +30,10 @@
+ 
+ #include "base/lazy_instance.h"
+ #include "base/memory/raw_ptr.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
+ 
+ namespace content {
+ 
+@@ -39,12 +43,12 @@ template <class T>
+ class RenderFrameObserverTracker {
+  public:
+   static T* Get(const RenderFrame* render_frame) {
+-    return static_cast<T*>(render_frame_map_.Get()[render_frame]);
++    return static_cast<T*>(FrameMap().Get()[render_frame]);
+   }
+ 
+   explicit RenderFrameObserverTracker(const RenderFrame* render_frame)
+       : render_frame_(render_frame) {
+-    render_frame_map_.Get()[render_frame] = this;
++    FrameMap().Get()[render_frame] = this;
+   }
+ 
+   RenderFrameObserverTracker(const RenderFrameObserverTracker<T>&) = delete;
+@@ -52,12 +56,28 @@ class RenderFrameObserverTracker {
+       const RenderFrameObserverTracker<T>&) = delete;
+ 
+   ~RenderFrameObserverTracker() {
+-    render_frame_map_.Get().erase(render_frame_);
++    FrameMap().Get().erase(render_frame_);
+   }
+ 
+  private:
+   raw_ptr<const RenderFrame, DanglingUntriaged> render_frame_;
+ 
++  using FrameMapInstance = typename base::LazyInstance<
++      std::map<const RenderFrame*, RenderFrameObserverTracker<T>*>>::
++      DestructorAtExit;
++
++  static FrameMapInstance& FrameMap() {
++#if BUILDFLAG(IS_AROS)
++    // Renderer tasks share the resident image, but neither their observer maps
++    // nor their AtExit destruction may affect another renderer. The template
++    // specialization supplies a distinct tag for each observer type.
++    return base::aros::ProcessLocalValue<FrameMapInstance,
++                                         RenderFrameObserverTracker<T>>();
++#else
++    return render_frame_map_;
++#endif
++  }
++
+   static typename base::LazyInstance<
+       std::map<const RenderFrame*, RenderFrameObserverTracker<T>*>>::
+       DestructorAtExit render_frame_map_;
 diff --git a/content/public/renderer/render_thread.cc b/content/public/renderer/render_thread.cc
 index ab18f9011287b84f3461a9bb41e50038a78c6b1a..6a9354c95c4beedf0d9a0922288bb3a85f219474 100644
 --- a/content/public/renderer/render_thread.cc

@@ -12,7 +12,7 @@ installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
 storage/DOM/worker isolation, and profile close/reopen persistence. Source287
 and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
 cycles10 and30; memory plateau remains open. [Cold-boot profile persistence](evidence/cold317-profile/README.md) now passes for synthetic cookies and localStorage.
-The current snapshot is398. [Renderer retirement and production configuration](evidence/retirement389/README.md) pass both native engine links, x64 two-app isolation and browser profile close/reopen. Production profiles now exclude Chromium developer field-trial experiments; rebuilt ARM acceptance remains pending. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
+The current snapshot is421. [Renderer retirement and production configuration](evidence/retirement389/README.md) pass both native engine links, x64 two-app isolation and browser profile close/reopen. Production profiles now exclude Chromium developer field-trial experiments; rebuilt ARM acceptance remains pending. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
 pass on x64 and ARM. Both SDKs include the generated prerequisites.
@@ -60,7 +60,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/production415/release-candidate-gates.json).
+[current RC gates](evidence/retirement429/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched
@@ -559,3 +559,5 @@ Native browser replays 65 and 66 (x86_64, one CPU) both painted, closed, and ret
 ## Production startup and shutdown follow-up
 
 [Production results and current RC gaps](evidence/production415/README.md) include ARM Chromium with About AROS, x64 startup and profile-write evidence, and the remaining shutdown and memory work.
+
+[Renderer isolation and retirement follow-up](evidence/retirement429/README.md) records the414 failures, verified child IPC cleanup, and421 candidate. No RC is claimed.
