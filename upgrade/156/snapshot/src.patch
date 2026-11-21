@@ -42904,7 +42904,7 @@ index 6a04197434daf35d022a9d340e3b8b334c85ce87..d3725ebae8ef47939e98ed9e0d09e00e
    //    effect, so a direct call to SetCapturedDisplaySurfaceFocus()
    //    before the scheduled task is executed would render the scheduled
 diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
-index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f77327170bde744 100644
+index f1b757c021fe47c65a185b578827faa28f774b16..614a71b08c0564cc0eb14a5198af0bc87bcae45f 100644
 --- a/content/browser/renderer_host/navigation_request.cc
 +++ b/content/browser/renderer_host/navigation_request.cc
 @@ -397,8 +397,13 @@ void AddAdditionalRequestHeaders(
@@ -42923,7 +42923,73 @@ index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f773271
  
    bool is_reload = NavigationTypeUtils::IsReload(navigation_type);
    bool is_history = NavigationTypeUtils::IsHistory(navigation_type);
-@@ -9959,7 +9964,8 @@ std::optional<url::Origin> NavigationRequest::GetOriginToCommit() {
+@@ -3191,10 +3196,21 @@ void NavigationRequest::
+   } else {
+     switch (result.error()) {
+       case GetFrameHostForNavigationFailed::kCouldNotReinitializeMainFrame:
++#if BUILDFLAG(IS_AROS)
++        // Native AROS renderer retirement can reject reinitialization.
++        // Cancel before dereferencing the absent frame host; retrying an
++        // error page here would re-enter the same failed selection path.
++        net_error_ = net::ERR_ABORTED;
++        frame_tree_node_->ResetNavigationRequest(
++            NavigationDiscardReason::kInternalCancellation);
++        // ResetNavigationRequest destroys this request.
++        return;
++#else
+         // TODO(crbug.com/40250311): This was unhandled before and
+         // remains explicitly unhandled. This branch may be removed in the
+         // future.
+         break;
++#endif
+       case GetFrameHostForNavigationFailed::kBlockedByPendingCommit:
+         resume_commit_closure_ = base::BindOnce(
+             &NavigationRequest::
+@@ -5349,10 +5365,21 @@ void NavigationRequest::SelectFrameHostForOnResponseStarted(
+     } else {
+       switch (result.error()) {
+         case GetFrameHostForNavigationFailed::kCouldNotReinitializeMainFrame:
++#if BUILDFLAG(IS_AROS)
++          // Native AROS renderer retirement can reject reinitialization.
++          // Cancel before dereferencing the absent frame host; retrying an
++          // error page here would re-enter the same failed selection path.
++          net_error_ = net::ERR_ABORTED;
++          frame_tree_node_->ResetNavigationRequest(
++              NavigationDiscardReason::kInternalCancellation);
++          // ResetNavigationRequest destroys this request.
++          return;
++#else
+           // TODO(crbug.com/40250311): This was unhandled before and
+           // remains explicitly unhandled. This branch may be removed in the
+           // future.
+           break;
++#endif
+         case GetFrameHostForNavigationFailed::kBlockedByPendingCommit:
+           CHECK(ShouldQueueDueToExistingPendingCommitRFH());
+           // This closure is posted to the event loop, so it must use WeakPtr.
+@@ -5872,10 +5899,21 @@ void NavigationRequest::SelectFrameHostForOnRequestFailedInternal(
+   } else {
+     switch (result.error()) {
+       case GetFrameHostForNavigationFailed::kCouldNotReinitializeMainFrame:
++#if BUILDFLAG(IS_AROS)
++        // Native AROS renderer retirement can reject reinitialization.
++        // Cancel before dereferencing the absent frame host; retrying an
++        // error page here would re-enter the same failed selection path.
++        net_error_ = net::ERR_ABORTED;
++        frame_tree_node_->ResetNavigationRequest(
++            NavigationDiscardReason::kInternalCancellation);
++        // ResetNavigationRequest destroys this request.
++        return;
++#else
+         // TODO(crbug.com/40250311): This was unhandled
+         // before and remains explicitly unhandled. This branch may be
+         // removed in the future.
+         break;
++#endif
+       case GetFrameHostForNavigationFailed::kBlockedByPendingCommit:
+         resume_commit_closure_ = base::BindOnce(
+             &NavigationRequest::SelectFrameHostForOnRequestFailedInternal,
+@@ -9959,7 +9997,8 @@ std::optional<url::Origin> NavigationRequest::GetOriginToCommit() {
  }
  
  url::Origin NavigationRequest::GetOriginForURLLoaderFactoryBeforeResponse(
@@ -42933,7 +42999,7 @@ index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f773271
    // Calculate an approximation of the origin. The sandbox/csp are ignored.
    url::Origin origin = GetOriginForURLLoaderFactoryUnchecked();
  
-@@ -9976,6 +9982,19 @@ url::Origin NavigationRequest::GetOriginForURLLoaderFactoryBeforeResponse(
+@@ -9976,6 +10015,19 @@ url::Origin NavigationRequest::GetOriginForURLLoaderFactoryBeforeResponse(
    bool use_opaque_origin =
        (sandbox_flags & network::mojom::WebSandboxFlags::kOrigin) ==
        network::mojom::WebSandboxFlags::kOrigin;
@@ -42953,7 +43019,7 @@ index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f773271
    if (use_opaque_origin) {
      origin = origin.DeriveNewOpaqueOrigin();
    }
-@@ -10036,8 +10055,9 @@ NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse() {
+@@ -10036,8 +10088,9 @@ NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse() {
      return GetRenderFrameHost()->GetLastCommittedOrigin();
    }
  
@@ -42965,7 +43031,7 @@ index f1b757c021fe47c65a185b578827faa28f774b16..4690472473d5823b665e24ed3f773271
  
    SCOPED_CRASH_KEY_BOOL("Bug1454273", "is_in_main_frame", IsInMainFrame());
    SCOPED_CRASH_KEY_STRING256(
-@@ -10072,10 +10092,17 @@ NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse() {
+@@ -10072,10 +10125,17 @@ NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse() {
        DetermineInitiatorRelationship(initiator_rfh,
                                       frame_tree_node_->current_frame_host()));
  
