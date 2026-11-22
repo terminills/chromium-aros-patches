@@ -9,7 +9,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 The published snapshot is **468**, replay-checked across all21 modified repositories. Both native469 x86_64 and AArch64 libraries link. [Renderer resource teardown](evidence/renderer481/README.md) now releases thread-bound objects before scheduler/isolate retirement. X64 sibling473 passes two-app storage/DOM/worker isolation, app B survival, all four child exit pairs and both retirements. Profile475 passes synthetic cookie/localStorage close/reopen persistence.
 
-Thirty-cycle474 and ARM479 browser rendering remain pending. Early474 samples still grow; no memory plateau or savings are claimed. Native484 adds a further private raster-pool cleanup and is under build/test.
+**Thirty-cycle474 failed at cycle16** in memory-instrumentation startup after15 completed retirements. The crash is retained in the renderer evidence. ARM479 browser rendering remains pending. No memory plateau or savings are claimed. Native484 adds a further private raster-pool cleanup and is under build/test.
 
 The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles30 and100. Those are not measurements of469.
 
