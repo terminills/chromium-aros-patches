@@ -14,13 +14,17 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Snapshot442 includes explicit owner-local Blink view closure before renderer
-scheduler shutdown and weak deferred-close callbacks. Both native443 AROS engine
-links pass. Fresh x64 profile440 cookie/localStorage close/reopen passes. The
-sibling439 test passes storage/DOM/worker independence and app B survival after
-app A closes, but both renderer retirements defer on an outstanding worker.
-The callback-drain follow-up source444 is under test and is not in this snapshot.
-See ../evidence/retirement447 for the exact build identities and limitations.
+Snapshot444 closes owner-local Blink views, then drains their asynchronous
+worker cleanup callbacks through the native renderer task pump before scheduler
+shutdown. The wait is bounded; the existing isolate-retirement safety guard
+remains if a worker cannot finish. Both native445 links pass. Sibling446 passes
+independent app state, app B survival after app A closes, all four child exit
+records, and both isolate retirements with none deferred.
+
+The preceding source442/native443 passed thirty-cycle438 and profile440. Its
+memory still grew36.71MiB between cycles10 and30. The current hundred-cycle450
+memory test and ARM448 browser visual test are running. See ../evidence/workers451
+and ../evidence/retirement447 for exact identities and limits. No RC is released.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM

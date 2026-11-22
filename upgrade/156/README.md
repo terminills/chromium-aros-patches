@@ -7,20 +7,23 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-22 UTC
 
-The published source snapshot is **442**, replay-checked across all 21 modified
-repositories. Both native443 x86_64 and AArch64 engine libraries link successfully.
-[Current runtime evidence](evidence/retirement447/README.md) includes a fresh x64
-browser profile write, close, reopen and read pass, plus two-app storage/DOM/worker
-independence and app B surviving app A's closure. These are native AROS QEMU tests.
+The published snapshot is **444**, replay-checked across all 21 modified
+repositories. Both native445 x86_64 and AArch64 engine libraries link successfully.
+[Worker-shutdown validation](evidence/workers451/README.md) passes two-app
+storage/DOM/worker independence, app B surviving app A's closure, all four native
+child exit pairs, and two completed isolate retirements with none deferred.
+The fix drains owner-local cleanup callbacks before stopping the renderer scheduler.
 
-Explicit view teardown now removes the retained Blink page before isolate
-retirement. All 30 page cycles now pass with 30 completed retirements and none
-deferred, backed by all 32 child entry/exit pairs. Whole-guest memory still grows
-36.71 MiB between cycles10 and30 (ending at 1,095.47 MiB).
-The two-app test still defers retirement on an outstanding worker;
-source444 is a separate callback-drain candidate under test, outside this snapshot.
-Memory acceptance and the full release gates remain open. No RC binary is released.
-Earlier observations below retain their own source and engine identities.
+The preceding source442/native443 [passed all thirty page cycles and the fresh
+browser profile close/reopen test](evidence/retirement447/README.md). It completed
+30 retirements with none deferred, backed by all 32 child entry/exit pairs.
+Whole-guest memory still grew36.71MiB between cycles10 and30, ending at1,095.47MiB.
+Those earlier measurements are not attributed to the new444 candidate.
+
+Current hundred-cycle450 memory and ARM448 browser visual tests are running.
+Memory stability and full release gates remain open; no RC binary is released.
+These are native AROS QEMU results. Earlier observations below retain their own
+source and engine identities.
 
 ## Earlier validation status — 2026-11-20 UTC
 

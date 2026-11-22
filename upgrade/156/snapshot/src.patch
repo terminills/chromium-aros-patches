@@ -59403,15 +59403,17 @@ index 0a8db62080e2e8a182467c60d1174bb40c198ec5..7c3cc3818f7b34a810247dd7a7a20185
      sources += [
        "memory_usage_monitor_posix.cc",
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
-index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..2e23cfb7a27e2626bf811facf555a81bfbe07129 100644
+index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..79a1ba348eced5ee3111199341ddae640e21f324 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc
 +++ b/third_party/blink/renderer/controller/blink_initializer.cc
-@@ -35,6 +35,16 @@
+@@ -35,6 +35,18 @@
  #include <utility>
  
  #include "base/command_line.h"
 +#if BUILDFLAG(IS_AROS)
 +#include "base/logging.h"
++#include "base/run_loop.h"
++#include "base/time/time.h"
 +#include "v8/include/v8-statistics.h"
 +#include "third_party/blink/renderer/core/page/page.h"
 +#include "third_party/blink/renderer/core/exported/web_view_impl.h"
@@ -59423,7 +59425,7 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..2e23cfb7a27e2626bf811facf555a81b
  #include "base/task/single_thread_task_runner.h"
  #include "build/build_config.h"
  #include "mojo/public/cpp/bindings/binder_map.h"
-@@ -155,9 +165,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
+@@ -155,9 +167,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
  
    GetBlinkInitializer().RegisterInterfaces(*binders);
  
@@ -59440,7 +59442,7 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..2e23cfb7a27e2626bf811facf555a81b
  
    GetBlinkInitializer().RegisterMemoryWatchers(platform);
  
-@@ -215,6 +232,57 @@ v8::Isolate* CreateMainThreadIsolate() {
+@@ -215,6 +234,71 @@ v8::Isolate* CreateMainThreadIsolate() {
    return V8Initializer::InitializeMainThread();
  }
  
@@ -59455,6 +59457,20 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..2e23cfb7a27e2626bf811facf555a81b
 +    (*views.begin())->Close();
 +  LOG(INFO) << "[Chromium:AROS:ViewTeardown] remaining pages="
 +            << Page::OrdinaryPages().size();
++  // Closing pages requests asynchronous worker termination. The worker posts
++  // its final proxy cleanup back to this renderer; keep its native task pump
++  // and scheduler alive until those callbacks have destroyed the workers.
++  // Never force isolate destruction if a worker fails to finish in time.
++  const auto deadline = base::TimeTicks::Now() + base::Seconds(10);
++  while (WorkerThread::WorkerThreadCount() &&
++         base::TimeTicks::Now() < deadline) {
++    base::RunLoop drain;
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, drain.QuitClosure(), base::Milliseconds(20));
++    drain.Run();
++  }
++  LOG(INFO) << "[Chromium:AROS:ViewTeardown] workers after drain="
++            << WorkerThread::WorkerThreadCount();
 +}
 +
 +bool RetireMainThreadIsolateForAros() {
