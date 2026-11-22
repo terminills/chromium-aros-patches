@@ -1,0 +1,43 @@
+{
+  "recorded_utc": "2026-11-22T03:39:18.031759+00:00",
+  "target": "Chromium156.0.8078.96 / CEF8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "status": "Not RC; no binary release published",
+  "published_source": "snapshot468 / native469; source publication0131817, later evidence3fb8c20",
+  "private_candidate": "source489 / native490 includes raster-pool shutdown and14 monotonic-owner registry conversions. Both cross archives pass; native links/runtime pending.",
+  "gates": {
+    "source_reproducibility": "Published468 replay-checked across21 repositories; private489 likewise21. Match runtime binaries to their exact export before packaging.",
+    "native_links": "469 x86_64 andAArch64 pass.490 links in progress.",
+    "shared_engine_lifecycle": "469 thirty-cycle474 FAIL at renderer startup cycle16 after15 completed retirements. Exact fault496 shows owner19 address colliding with existing legacy ClientProcessImpl. Older445 hundred-cycle450 completes100 retirements and102 child pairs after bounded serial deinterleaving; not current490 proof.",
+    "sibling_app_isolation": "469 sibling473 passes two-app storage/DOM/worker independence, B survival afterA closes, four child entry/exit pairs and two completed retirements.491 queued for490.",
+    "persistent_profiles": "469 full-browser475 synthetic cookies/localStorage write-close-drain-reopen-read PASS.493 queued for490. Old313 coldboot evidence retains its older build identity; no real-account login claim.",
+    "memory": "No plateau.445 hundred-cycle450 grows161.315MiB fromcycle30 to100;463 thirty-cycle465 grows36.705MiB fromcycle10 to30.469 stops atcycle16; no cycle30 measurement exists.492 thirty-cycle and conditional497 hundred-cycle queued for490.",
+    "native_browser_ui": "469 x64 profile475 visibly renders and reopens.469 ARM479 visibly renders Chromium NewTab/About AROS; whole guest1572.678MiBused/405.255MiBfree. Full current four-tab/version exercise remains to repeat.",
+    "native_icons": "Native AROS icons and launch paths retained. Earlier metadata checks and current full-browser launch evidence are distinct from physical USB qualification.",
+    "native_credentials": "Earlier native305ARM/306x64 keyring API checks pass. No deliberate sign-in/profile restriction added. Real-account login and freshARM browser credential integration unqualified.",
+    "packaging": "Earlier312 inventory verifies30 files and icons, but current candidate must be repackaged with exact matching libraries, notices and checksums. No RC archive yet.",
+    "release_upload": "Authorized once matching candidate acceptance and archives are complete."
+  },
+  "known_limits": {
+    "security": "Shared address space with separate application state is not a security sandbox.",
+    "smp": "Strict x64 results use one core. Corrected two-core477 timed out afterGPU/utility startup without diagnosed fault;498 retries490 separately. Earlier456/464/470/471 invalidMBR harness attempts are not OS failures.",
+    "vulkan_cdm": "Native browser Vulkan andWidevine end-to-end qualification pending; do not advertise as verified.",
+    "arm": "Native AROS QEMU only. Private upperRAM DTB workaround/two-core kernel limit/null audio. PhysicalPi,USB andnetwork unqualified.",
+    "consumers": "SharedCEF/Blink work does not establish Node,Electron orZune integration acceptance."
+  },
+  "evidence": [
+    "../renderer481",
+    "../permissions478",
+    "../longrun480",
+    "../arm495"
+  ],
+  "next_tests": {
+    "491": "490 one-core two-app isolation",
+    "492": "490 thirty-cycle lifecycle andmemory",
+    "493": "490 full-browser synthetic profile close/reopen",
+    "494": "490 ARMdesktop/browser",
+    "497": "490 hundred cycles only after492 independentledger PASS",
+    "498": "490 two-core comparison"
+  }
+}
