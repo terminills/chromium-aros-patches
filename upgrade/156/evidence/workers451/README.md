@@ -19,6 +19,14 @@ memory growth is36.71MiB, so no plateau is claimed. The retained post-host alloc
 comparison449 shows Exec-backed page allocations falling from440.5MiB on426 to
 129MiB on443. Those snapshots cannot be treated as445 measurements.
 
-Hundred-cycle450 and fresh ARM448 visual/memory validation are pending. Browser
+Fresh profile452 on the same source444/native445 also passes synthetic cookie
+and localStorage write, close, callbacks drained, reopen and read with no native
+fault. This does not qualify real account sign-in or a cold guest restart.
+
+![Current profile read](master452-profileread.png)
+
+Hundred-cycle450 remains running. ARM448 reached Wanderer but stopped progressing
+before browser startup; its registers and screenshot are retained privately.
+One fresh identical-engine boot454 is running. ARM445 runtime is not yet qualified. Browser
 Vulkan, Widevine, physical hardware, and Node/Electron/Zune consumers retain their
 separate qualification requirements. No RC binary is published.

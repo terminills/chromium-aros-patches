@@ -13,6 +13,8 @@ repositories. Both native445 x86_64 and AArch64 engine libraries link successful
 storage/DOM/worker independence, app B surviving app A's closure, all four native
 child exit pairs, and two completed isolate retirements with none deferred.
 The fix drains owner-local cleanup callbacks before stopping the renderer scheduler.
+Fresh full-browser profile452 on the same build also passes cookie/localStorage
+write, close, reopen and read without a native fault.
 
 The preceding source442/native443 [passed all thirty page cycles and the fresh
 browser profile close/reopen test](evidence/retirement447/README.md). It completed
@@ -20,7 +22,8 @@ browser profile close/reopen test](evidence/retirement447/README.md). It complet
 Whole-guest memory still grew36.71MiB between cycles10 and30, ending at1,095.47MiB.
 Those earlier measurements are not attributed to the new444 candidate.
 
-Current hundred-cycle450 memory and ARM448 browser visual tests are running.
+Current hundred-cycle450 memory testing is running. ARM448 stopped progressing
+before browser startup; a fresh identical-engine boot454 is under observation.
 Memory stability and full release gates remain open; no RC binary is released.
 These are native AROS QEMU results. Earlier observations below retain their own
 source and engine identities.
