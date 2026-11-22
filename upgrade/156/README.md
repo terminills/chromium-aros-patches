@@ -60,7 +60,7 @@ painting remains incomplete. This does not qualify USB input or physical Pi hard
 The complete21-repository226 source is replay-checked in
 [native-shutdown226/source](evidence/native-shutdown226/source).
 No RC binary release has been published. See the
-[current RC gates](evidence/retirement429/release-candidate-gates.json).
+[current RC gates](evidence/profile435/release-candidate-gates.json).
 
 The earlier matched191 bare-engine comparison reduced whole-guest cold-load
 use from871.59 to646.89MiB. That separate experiment is not a matched
@@ -561,3 +561,5 @@ Native browser replays 65 and 66 (x86_64, one CPU) both painted, closed, and ret
 [Production results and current RC gaps](evidence/production415/README.md) include ARM Chromium with About AROS, x64 startup and profile-write evidence, and the remaining shutdown and memory work.
 
 [Renderer isolation and retirement follow-up](evidence/retirement429/README.md) records the414 failures, verified child IPC cleanup, and421 candidate. No RC is claimed.
+
+[Profile close/reopen recovery435](evidence/profile435/README.md) passes with the actual stored token; renderer cleanup remains incomplete.

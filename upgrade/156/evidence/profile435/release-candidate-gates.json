@@ -1,0 +1,42 @@
+{
+  "target": "Chromium 156.0.8078.96 / CEF 8078 native AROS x86_64 and aarch64",
+  "authorization": "User: get us to RC and then push releases",
+  "release_repository": "terminills/chromium-aros-patches",
+  "publication": "Prerelease RC binaries only after matching source snapshot replay, artifact checksums and native acceptance. Do not label untested features complete.",
+  "gates": {
+    "shared_engine_lifecycle": "346 source344/native345 PASS30 pages,62 complete/0 deferred retirements and independent ledger.",
+    "sibling_app_isolation": "366 source360/native361 PASS independent app state and survivor after A close, 8 ledger-backed successful child exits; serial alone is incomplete.",
+    "persistent_profiles": "Source421/native422 recovered435 PASS: actual stored MSTER425 token survives close, callbacks drain, reopen and read.425 timeout expected MASTER425 after dropped synthetic keystroke. No real account or coldboot qualification.",
+    "memory": "346 growth cycle10 to30 99.72MiB, fitted slope5.07MiB/cycle;331 baseline86.95MiB/5.02. Feature-provider vptr candidates252 to0 and generic heap allocated bytes36,499,728 to35,399,936 support cleanup, but memory plateau remains unresolved. Whole-guest results, not per-app RSS.",
+    "native_browser_ui": "371 source360/native361 New Tab and profile test render, close and reopen PASS. Earlier four-tab/version evidence retains its original source identity.",
+    "production_launcher": "Both379 native engine artifacts verified. ARM384 renders New Tab and native About AROS; x64 browser385 renders. x64 publication recovered after EXDEV with tested helper404, aros-web ba224a3. Startup is not full acceptance.",
+    "packaging": "312 x64 inventory PASS30 files, hashes/ELF architecture/native icon magic/notices. No RC archive or upload yet.",
+    "source_reproducibility": "Source421 full21repository replay PASS; both422 cross archives PASS; both native links running. Runtime pending.",
+    "release_upload": "Authorized, pending acceptance and archives",
+    "native_icons": "Five exact native icon metadata checks pass x64 andARM. x64 actual icon launch/full browser UI pass. ARM73 input.device diagnostic activates installed icon and opens window, but full painting remains incomplete; not USB qualification.",
+    "native_credentials": "Native305 ARM/306 x64 keyring API checks PASS; x64 browser312 close/reopen and313 cold boot synthetic profile persistence PASS. Real account login and ARM browser integration remain unqualified.",
+    "arm_visual_startup": "Native414 ARM417 visibly renders NewTab and About AROS after prelaunch setup recovery. WholeQEMUguest1543.06MiB used/434.87MiB free. Fullbrowser/physicalPi unqualified.",
+    "memory_plateau": "416 whole guest1484.27MiB cycle10 to1732.14MiB cycle30. IPC cleanup verified:32child handles zero, onlybroker retained. No plateau.",
+    "renderer_retirement": "Native426 source424 disables FastShutdownIfPossible, but428 still0complete/30deferred with30pages and32child exits. Normal browserCleanup closesIPC before deferred BlinkView Close executes.436 owner-local view teardown candidate under build, outside current source421 snapshot."
+  },
+  "known_limits": {
+    "security": "Shared address space is not a sandbox security boundary",
+    "hardware": "QEMU native AROS evidence, not physical Raspberry Pi or broad hardware qualification",
+    "smp": "Controlled x64 one-core lane, deferred OS SMP issue",
+    "vulkan_cdm": "Browser Vulkan and Widevine end-to-end qualification pending, not advertised as verified",
+    "consumers": "CEF engine does not establish Node/Electron/Zune application qualification",
+    "arm_qemu_usb": "301 QEMU-only DTB enabled controller and assigned device addresses, but transfers time out; USB input/network not qualified. Main294 uses known desktop DTB and native input.device diagnostic."
+  },
+  "arm341_followup": {
+    "result": "FAIL before first paint",
+    "diagnosis": "Retained host4 is top-chrome-webui with retirement_started=1, initialized=1, dead=0, channel=null and RESULT_CODE_KILLED. Actual shared trial data enables WebUIReloadButtonStudy, whose developer config includes a 5s unresponsive restart timeout and 100000ms renderer commit delay. Source360 fixes retirement liveness and reuse/callback guards; native links and x64 regressions pass, ARM runtime remains pending.",
+    "source": "source338",
+    "native": "native339",
+    "evidence": [
+      "arm341-host-retirement-fields.json",
+      "arm341-shutdown-reason374.json",
+      "arm341-process-args375.json",
+      "arm341-field-trials375.json"
+    ]
+  }
+}
