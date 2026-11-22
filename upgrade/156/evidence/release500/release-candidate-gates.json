@@ -1,23 +1,24 @@
 {
-  "recorded_utc": "2026-11-22T03:39:18.031759+00:00",
+  "recorded_utc": "2026-11-22T04:05:04.967754+00:00",
   "target": "Chromium156.0.8078.96 / CEF8078 native AROS x86_64 and aarch64",
   "authorization": "User: get us to RC and then push releases",
   "release_repository": "terminills/chromium-aros-patches",
   "status": "Not RC; no binary release published",
-  "published_source": "snapshot468 / native469; source publication0131817, later evidence3fb8c20",
-  "private_candidate": "source489 / native490 includes raster-pool shutdown and14 monotonic-owner registry conversions. Both cross archives pass; native links/runtime pending.",
+  "published_source": "snapshot489 / native490; see candidate508 source-matched evidence",
+  "private_candidate": "Same489/490 runtime tests continuing. New504 OS/SDK refresh separate and incomplete.",
   "gates": {
-    "source_reproducibility": "Published468 replay-checked across21 repositories; private489 likewise21. Match runtime binaries to their exact export before packaging.",
-    "native_links": "469 x86_64 andAArch64 pass.490 links in progress.",
-    "shared_engine_lifecycle": "469 thirty-cycle474 FAIL at renderer startup cycle16 after15 completed retirements. Exact fault496 shows owner19 address colliding with existing legacy ClientProcessImpl. Older445 hundred-cycle450 completes100 retirements and102 child pairs after bounded serial deinterleaving; not current490 proof.",
-    "sibling_app_isolation": "469 sibling473 passes two-app storage/DOM/worker independence, B survival afterA closes, four child entry/exit pairs and two completed retirements.491 queued for490.",
-    "persistent_profiles": "469 full-browser475 synthetic cookies/localStorage write-close-drain-reopen-read PASS.493 queued for490. Old313 coldboot evidence retains its older build identity; no real-account login claim.",
-    "memory": "No plateau.445 hundred-cycle450 grows161.315MiB fromcycle30 to100;463 thirty-cycle465 grows36.705MiB fromcycle10 to30.469 stops atcycle16; no cycle30 measurement exists.492 thirty-cycle and conditional497 hundred-cycle queued for490.",
-    "native_browser_ui": "469 x64 profile475 visibly renders and reopens.469 ARM479 visibly renders Chromium NewTab/About AROS; whole guest1572.678MiBused/405.255MiBfree. Full current four-tab/version exercise remains to repeat.",
+    "source_reproducibility": "Published489 replay-checked across21 repositories; patch hashes reverified.",
+    "native_links": "490 x86_64 and AArch64 pass.",
+    "shared_engine_lifecycle": "490 thirty-cycle492:30 pages,32 native child return pairs,30 retirements after exact serial fragment reconstruction; originals retained.100cycle497 running.",
+    "sibling_app_isolation": "490 sibling491 page isolation and B survival pass, but host shutdown stalls waiting unfinished system resolver worker63. Full gate FAIL.",
+    "persistent_profiles": "490 profile493 synthetic cookie/localStorage close/reopen PASS after repairing missing harness helpers. No real-account or current coldboot qualification.",
+    "memory": "490 cycle10\u219230 growth36.756MiB. No plateau. Hundred497 pending. Old445 growth161.315MiB cycle30\u2192100 remains separate.",
+    "native_browser_ui": "490 x64 profile493 visibly renders/reopens; ARM494 renders NewTab/AboutAROS. ARM whole guest1574.597MiBused/403.336free. Current four-tab/version exercise remains.",
     "native_icons": "Native AROS icons and launch paths retained. Earlier metadata checks and current full-browser launch evidence are distinct from physical USB qualification.",
     "native_credentials": "Earlier native305ARM/306x64 keyring API checks pass. No deliberate sign-in/profile restriction added. Real-account login and freshARM browser credential integration unqualified.",
     "packaging": "Earlier312 inventory verifies30 files and icons, but current candidate must be repackaged with exact matching libraries, notices and checksums. No RC archive yet.",
-    "release_upload": "Authorized once matching candidate acceptance and archives are complete."
+    "release_upload": "Authorized once matching candidate acceptance and archives are complete.",
+    "master_rebuild": "Upstream742f4d74 plus private prerequisites: both504 SDKs pass. ARM506 kernel/workbench/external pass; boot broad target hit optional GCC ICE. X64 kernel blocked by m68kemu SMP layout compilation; workbench507 ongoing.490 still229 OS/SDK."
   },
   "known_limits": {
     "security": "Shared address space with separate application state is not a security sandbox.",
@@ -30,14 +31,13 @@
     "../renderer481",
     "../permissions478",
     "../longrun480",
-    "../arm495"
+    "../arm495",
+    "../candidate508"
   ],
   "next_tests": {
-    "491": "490 one-core two-app isolation",
-    "492": "490 thirty-cycle lifecycle andmemory",
-    "493": "490 full-browser synthetic profile close/reopen",
-    "494": "490 ARMdesktop/browser",
-    "497": "490 hundred cycles only after492 independentledger PASS",
-    "498": "490 two-core comparison"
+    "497": "490 hundred-cycle lifecycle/memory running",
+    "501": "490 ARM five-cycle lifecycle running",
+    "498": "490 two-core comparison",
+    "master504": "Complete OS and Chromium rebuild against newSDK; boot and runtime validation"
   }
 }

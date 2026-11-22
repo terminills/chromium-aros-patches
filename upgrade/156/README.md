@@ -7,9 +7,13 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-22 UTC
 
-The published snapshot is **468**, replay-checked across all21 modified repositories. Both native469 x86_64 and AArch64 libraries link. [Renderer resource teardown](evidence/renderer481/README.md) now releases thread-bound objects before scheduler/isolate retirement. X64 sibling473 passes two-app storage/DOM/worker isolation, app B survival, all four child exit pairs and both retirements. Profile475 passes synthetic cookie/localStorage close/reopen persistence.
+The published snapshot is **489**, replay-checked across all 21 modified repositories. Both native490 x86_64 and AArch64 libraries link. This adds raster-pool shutdown and monotonic owner IDs for 14 legacy registries, preventing reused command-line addresses from selecting retired owners. [Current evidence and limits](evidence/candidate508/status.json) includes all results below.
 
-**Thirty-cycle474 failed at cycle16** in memory-instrumentation startup after15 completed retirements. The crash is retained in the renderer evidence. [ARM479 now renders Chromium New Tab and About AROS](evidence/arm495/README.md), using1572.678MiB for the whole guest with405.255MiB free. No memory plateau or savings are claimed. Native484 was cancelled after the lifecycle failure. Source489/native490 combines raster-pool shutdown with monotonic owner IDs for14 remaining legacy registries and is under build/test.
+X64 thirty-cycle492 completes 30 pages, 32 child entry/zero-exit pairs and 30 renderer retirements with no deferrals. One interleaved serial marker required exact reconstruction; the original failed strict audit is retained. Profile493 passes synthetic cookie/localStorage close/reopen persistence. Sibling491 passes page isolation and app B survival, but **host shutdown stalls** waiting for a system resolver worker. Whole-guest memory grows **36.756 MiB** between cycles 10 and 30; the hundred-cycle497 run is pending.
+
+[ARM494 renders Chromium New Tab and About AROS](evidence/candidate508/master494-progress-later.png), using **1574.597 MiB** for the whole guest with **403.336 MiB** free. These runtime results use the retained229 OS/SDK. The newer upstream742f4d74 SDK builds pass for both architectures, but OS rebuilding is incomplete. No current-master runtime, memory plateau, physical Pi qualification or RC release is claimed.
+
+The prior source468/native469 thirty-cycle474 crash at cycle16 and its exact owner-registry diagnosis remain in [renderer evidence](evidence/renderer481/README.md).
 
 The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles30 and100. Those are not measurements of469.
 

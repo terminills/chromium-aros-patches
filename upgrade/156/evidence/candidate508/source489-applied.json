@@ -1,0 +1,64 @@
+{
+  "predecessor": "source483-applied.json",
+  "failure": "compact474 cycle16 native ClientProcessImpl::CreateInstance assertion",
+  "change": "Replace legacy command-line pointer registry keys/cache identities with existing monotonic CurrentProcessIdentity in14 AROS registries. Preserve current locks, object lifetimes, setters and explicit teardown. Includes source483 raster-pool cleanup. No SDK change.",
+  "files": {
+    "services/tracing/public/cpp/traced_process_impl.cc": {
+      "sha256": "244cfa719432023c70d38a647afecbf3c4ec07ed1855137975acbadd81fd4420",
+      "identity_queries_replaced": 1
+    },
+    "base/metrics/field_trial.cc": {
+      "sha256": "b7d945cf171f51ff80b027dd61bc5a676f3a3894d5392df05a3f5c92a843e8db",
+      "identity_queries_replaced": 1
+    },
+    "services/resource_coordinator/public/cpp/memory_instrumentation/client_process_impl.cc": {
+      "sha256": "6655c27ec8526c6d0cf117af5ed4ec4c6aacb5495156a552dbc1fa280d0631e0",
+      "identity_queries_replaced": 1
+    },
+    "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.cc": {
+      "sha256": "d1a69ed374d9500ebb4509facfcfcf3bb8770d4a77b19d75750cbff6d7251b97",
+      "identity_queries_replaced": 1
+    },
+    "base/message_loop/work_id_provider.cc": {
+      "sha256": "dfccad252094219ebe8057270724fb0696f079162f60b83b510f1215ec823b72",
+      "identity_queries_replaced": 1
+    },
+    "base/memory/discardable_memory_allocator.cc": {
+      "sha256": "6e301a31a46b6c2d998cce08bd061f068fb344f03a95062a87410c217068d8ce",
+      "identity_queries_replaced": 1
+    },
+    "base/feature_list.cc": {
+      "sha256": "ce03c1030875533dcc814373cd1dd54096976bc6d9a506206e5be950a9898e86",
+      "identity_queries_replaced": 1
+    },
+    "base/task/thread_pool/thread_pool_instance.cc": {
+      "sha256": "07925cec3f1b669f4995bd6f23f078e4abfb8d1322274810796a9293129e9092",
+      "identity_queries_replaced": 2
+    },
+    "base/task/thread_pool/pooled_task_runner_delegate.cc": {
+      "sha256": "393be295b1ccb58fe94a65f489a473385a3d4cef54bd98770968a33363b5e3c9",
+      "identity_queries_replaced": 2
+    },
+    "base/task/thread_pool/pooled_single_thread_task_runner_manager.cc": {
+      "sha256": "8c461ca7b42b2fbcd9c9031e5ad77820c015a9f610584fda5b8f58920dd86a1c",
+      "identity_queries_replaced": 1
+    },
+    "base/trace_event/memory_dump_manager.cc": {
+      "sha256": "97ed7a40b2c79cd424ea86a130b29a8751755f5d56a7ae8c4b42dafb8b19d55c",
+      "identity_queries_replaced": 1
+    },
+    "components/variations/child_process_field_trial_syncer.cc": {
+      "sha256": "ee8dc12d6b1fcfa7b4c7cefa263eb67f483fedcd8af3d882e1b0917cbba69b2f",
+      "identity_queries_replaced": 1
+    },
+    "components/variations/variations_crash_keys.cc": {
+      "sha256": "b27981e1f138178c8dbe466f0074d04aa3a82816f72dd1afdbe7b247b1345d1c",
+      "identity_queries_replaced": 1
+    },
+    "content/public/common/content_client.cc": {
+      "sha256": "764549010daf5e4fe68d0bd4f8946057cd296e9ae3d10d96c10d09e650a33dd2",
+      "identity_queries_replaced": 1
+    }
+  },
+  "validation": "Native490 pending"
+}

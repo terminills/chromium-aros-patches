@@ -5045,7 +5045,7 @@ index 0000000000000000000000000000000000000000..e39877c604521046c35f83c7d92efcb0
 +}  // namespace internal
 +}  // namespace base::debug
 diff --git a/base/feature_list.cc b/base/feature_list.cc
-index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..2f2024b0aaa2af2467772f0bf060802898b913a4 100644
+index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..3aafa3709cdbfeac51baf9094103297e22203a52 100644
 --- a/base/feature_list.cc
 +++ b/base/feature_list.cc
 @@ -5,9 +5,9 @@
@@ -5059,30 +5059,33 @@ index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..2f2024b0aaa2af2467772f0bf0608028
  #include <string>
  #include <string_view>
  #include <tuple>
-@@ -42,6 +42,7 @@
+@@ -42,8 +42,13 @@
  #include "base/strings/string_split.h"
  #include "base/strings/string_util.h"
  #include "base/strings/stringprintf.h"
 +#include "base/synchronization/lock.h"
  #include "build/build_config.h"
  
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace base {
-@@ -51,7 +52,34 @@ namespace {
+ 
+ namespace {
+@@ -51,7 +56,31 @@ namespace {
  // Pointer to the FeatureList instance singleton that was set via
  // FeatureList::SetInstance(). Does not use base/memory/singleton.h in order to
  // have more control over initialization timing. Leaky.
 +#if BUILDFLAG(IS_AROS)
 +struct FeatureListProcessRegistry {
 +  Lock lock;
-+  std::map<const CommandLine*, FeatureList*> instances;
++  std::map<uint64_t, FeatureList*> instances;
 +};
 +
 +FeatureList*& GetFeatureListForCurrentProcess() {
-+  const CommandLine* const process_identity =
-+      CommandLine::InitializedForCurrentProcess()
-+          ? CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local FeatureList** cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity) {
 +    return *cached_instance;
@@ -5102,7 +5105,7 @@ index e8f9091d2a1c1126a6b01abb70535ac5bce94aff..2f2024b0aaa2af2467772f0bf0608028
  
  using FeatureStateCache = base::Feature::FeatureStateCache;
  using base::internal::RuntimeMutabilityResult;
-@@ -400,6 +428,16 @@ FeatureList::FeatureList() : caching_context_(g_current_caching_context++) {}
+@@ -400,6 +429,16 @@ FeatureList::FeatureList() : caching_context_(g_current_caching_context++) {}
  
  FeatureList::~FeatureList() = default;
  
@@ -6804,10 +6807,10 @@ index 2d72f112e9b9f4612e96d9ec26040f8230932c18..0274e4addbada7875138f5e8bbef7aa5
    // Gets file:line: message in a format suitable for crash reporting.
    std::string BuildCrashString() const;
 diff --git a/base/memory/discardable_memory_allocator.cc b/base/memory/discardable_memory_allocator.cc
-index d27eafd63e915e1418a3c659e9e36dd4d7178c22..a722a4c7a7759c6355a0ef6ea26568bb8a5c881f 100644
+index d27eafd63e915e1418a3c659e9e36dd4d7178c22..1963b7685371f1d26f61d0862bf4b83a1e10dab0 100644
 --- a/base/memory/discardable_memory_allocator.cc
 +++ b/base/memory/discardable_memory_allocator.cc
-@@ -4,33 +4,79 @@
+@@ -4,33 +4,80 @@
  
  #include "base/memory/discardable_memory_allocator.h"
  
@@ -6820,6 +6823,10 @@ index d27eafd63e915e1418a3c659e9e36dd4d7178c22..a722a4c7a7759c6355a0ef6ea26568bb
  #include "base/process/memory.h"
 +#include "base/synchronization/lock.h"
 +#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  
  namespace base {
  namespace {
@@ -6827,15 +6834,12 @@ index d27eafd63e915e1418a3c659e9e36dd4d7178c22..a722a4c7a7759c6355a0ef6ea26568bb
 +#if BUILDFLAG(IS_AROS)
 +struct DiscardableMemoryAllocatorRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, DiscardableMemoryAllocator*> instances;
++  std::map<uint64_t, DiscardableMemoryAllocator*> instances;
 +};
 +
 +DiscardableMemoryAllocator*& GetAllocatorForCurrentProcess() {
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local DiscardableMemoryAllocator** cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity)
 +    return *cached_instance;
@@ -8775,10 +8779,10 @@ index 908f0cdf45682781160b9937f015aa9af628b451..fe5a8000171bd3eecf12aab1b290e0c2
          native_event_observer_->DidRunNativeEvent(
              next_peek_message_event_id_++);
 diff --git a/base/message_loop/work_id_provider.cc b/base/message_loop/work_id_provider.cc
-index dc4158ffdf656780aa8538246646555c067970e9..8525588448e208511d75319a2b79b48426ead6d0 100644
+index dc4158ffdf656780aa8538246646555c067970e9..20a16b8355932076bd11c2f6060fa3e8e1aa823a 100644
 --- a/base/message_loop/work_id_provider.cc
 +++ b/base/message_loop/work_id_provider.cc
-@@ -4,17 +4,62 @@
+@@ -4,17 +4,63 @@
  
  #include "base/message_loop/work_id_provider.h"
  
@@ -8791,6 +8795,10 @@ index dc4158ffdf656780aa8538246646555c067970e9..8525588448e208511d75319a2b79b484
 +#include "base/synchronization/lock.h"
  #include "base/threading/thread_local.h"
 +#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  
  namespace base {
  
@@ -8799,18 +8807,15 @@ index dc4158ffdf656780aa8538246646555c067970e9..8525588448e208511d75319a2b79b484
 +#if BUILDFLAG(IS_AROS)
 +struct WorkIdProviderTLSRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*,
++  std::map<uint64_t,
 +           base::ThreadLocalOwnedPointer<WorkIdProvider>*>
 +      instances;
 +};
 +
 +base::ThreadLocalOwnedPointer<WorkIdProvider>*
 +GetWorkIdProviderTLSForCurrentProcess() {
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local base::ThreadLocalOwnedPointer<WorkIdProvider>* cached_instance =
 +      nullptr;
 +  if (cached_instance && cached_identity == process_identity)
@@ -8842,7 +8847,7 @@ index dc4158ffdf656780aa8538246646555c067970e9..8525588448e208511d75319a2b79b484
      instance->Set(WrapUnique(new WorkIdProvider));
    }
 diff --git a/base/metrics/field_trial.cc b/base/metrics/field_trial.cc
-index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..0f98d8e7d4f083428cd13851e102af5bd4671454 100644
+index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..612024e155c1c3e29f007dd985ad6176fea09c26 100644
 --- a/base/metrics/field_trial.cc
 +++ b/base/metrics/field_trial.cc
 @@ -5,6 +5,7 @@
@@ -8853,7 +8858,18 @@ index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..0f98d8e7d4f083428cd13851e102af5b
  #include <string_view>
  #include <utility>
  
-@@ -430,6 +431,45 @@ void FieldTrial::GetStateWhileLocked(PickleState* field_trial_state) {
+@@ -54,6 +55,10 @@
+ #include "base/fuchsia/fuchsia_logging.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace base {
+ 
+ namespace {
+@@ -430,6 +435,42 @@ void FieldTrial::GetStateWhileLocked(PickleState* field_trial_state) {
  // static
  FieldTrialList* FieldTrialList::global_ = nullptr;
  
@@ -8862,15 +8878,12 @@ index cb0b28832503c9fa9d12f150f13916c5aee3c9d2..0f98d8e7d4f083428cd13851e102af5b
 +
 +struct FieldTrialListProcessRegistry {
 +  Lock lock;
-+  std::map<const CommandLine*, FieldTrialList*> lists;
++  std::map<uint64_t, FieldTrialList*> lists;
 +};
 +
 +FieldTrialList*& GetFieldTrialListForCurrentProcess() {
-+  const CommandLine* const process_identity =
-+      CommandLine::InitializedForCurrentProcess()
-+          ? CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local FieldTrialList** cached_list = nullptr;
 +  if (cached_list && cached_identity == process_identity) {
 +    return *cached_list;
@@ -12032,7 +12045,7 @@ index 9c438b2dd0cabd46befa5a8eda32d684d170bbf9..784efe3320ae3e13f2073ef90eba66b6
  // This function can be removed, and the calls below replaced with direct
  // variable accesses, once the MSAN workaround is not necessary.
 diff --git a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc b/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
-index 797febff372eda1b2d83401c19759aa2e426b61a..a3a75429a70e6c5be9a2392e13f4b01d3dc24a72 100644
+index 797febff372eda1b2d83401c19759aa2e426b61a..6cf13e143cc17976dc961d3059e44fb3576dfea9 100644
 --- a/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
 +++ b/base/task/thread_pool/pooled_single_thread_task_runner_manager.cc
 @@ -5,20 +5,24 @@
@@ -12060,7 +12073,18 @@ index 797febff372eda1b2d83401c19759aa2e426b61a..a3a75429a70e6c5be9a2392e13f4b01d
  #include "base/task/default_delayed_task_handle_delegate.h"
  #include "base/task/single_thread_task_runner.h"
  #include "base/task/task_features.h"
-@@ -59,9 +63,42 @@ namespace {
+@@ -41,6 +45,10 @@
+ #include "base/win/scoped_com_initializer.h"
+ #endif  // BUILDFLAG(IS_WIN)
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace base::internal {
+ 
+ namespace {
+@@ -59,9 +67,39 @@ namespace {
  // equivalent to |!ThreadPoolInstance::Get()| but has the advantage of being
  // valid in thread_pool unit tests that don't instantiate a full
  // thread pool.
@@ -12073,15 +12097,12 @@ index 797febff372eda1b2d83401c19759aa2e426b61a..a3a75429a70e6c5be9a2392e13f4b01d
 +
 +struct PooledSingleThreadManagerProcessRegistry {
 +  Lock lock;
-+  std::map<const CommandLine*, PooledSingleThreadManagerProcessState> states;
++  std::map<uint64_t, PooledSingleThreadManagerProcessState> states;
 +};
  
 +PooledSingleThreadManagerProcessState& GetManagerProcessState() {
-+  const CommandLine* const process_identity =
-+      CommandLine::InitializedForCurrentProcess()
-+          ? CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local PooledSingleThreadManagerProcessState* cached_state = nullptr;
 +  if (cached_state && cached_identity == process_identity) {
 +    return *cached_state;
@@ -12105,10 +12126,10 @@ index 797febff372eda1b2d83401c19759aa2e426b61a..a3a75429a70e6c5be9a2392e13f4b01d
  size_t GetEnvironmentIndexForTraits(const TaskTraits& traits,
                                      ThreadType originating_thread_type,
 diff --git a/base/task/thread_pool/pooled_task_runner_delegate.cc b/base/task/thread_pool/pooled_task_runner_delegate.cc
-index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac3b3aa0db 100644
+index c42cab221ece61194fe076f216c45faf467e9f1f..500b0520e6ca357904f46cae64597eb398acb300 100644
 --- a/base/task/thread_pool/pooled_task_runner_delegate.cc
 +++ b/base/task/thread_pool/pooled_task_runner_delegate.cc
-@@ -4,8 +4,14 @@
+@@ -4,8 +4,18 @@
  
  #include "base/task/thread_pool/pooled_task_runner_delegate.h"
  
@@ -12120,10 +12141,14 @@ index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac
 +#include "base/no_destructor.h"
 +#include "base/synchronization/lock.h"
 +#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  
  namespace base::internal {
  
-@@ -23,24 +29,80 @@ namespace {
+@@ -23,24 +33,78 @@ namespace {
  // task runner's delegate is no longer the current delegate, i.e., a task runner
  // is created in one unit test and posted to in a subsequent test, due to global
  // state leaking between tests.
@@ -12131,7 +12156,7 @@ index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac
 +
 +struct PooledTaskRunnerDelegateProcessRegistry {
 +  Lock lock;
-+  std::map<const CommandLine*, PooledTaskRunnerDelegate*> delegates;
++  std::map<uint64_t, PooledTaskRunnerDelegate*> delegates;
 +};
 +
 +PooledTaskRunnerDelegateProcessRegistry&
@@ -12145,8 +12170,7 @@ index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac
 +    return nullptr;
 +  }
 +
-+  const CommandLine* const process_identity =
-+      CommandLine::ForCurrentProcess();
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
 +  auto& registry = GetPooledTaskRunnerDelegateProcessRegistry();
 +  AutoLock lock(registry.lock);
 +  const auto it = registry.delegates.find(process_identity);
@@ -12155,8 +12179,7 @@ index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac
 +
 +void SetCurrentDelegate(PooledTaskRunnerDelegate* delegate) {
 +  DCHECK(CommandLine::InitializedForCurrentProcess());
-+  const CommandLine* const process_identity =
-+      CommandLine::ForCurrentProcess();
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
 +  auto& registry = GetPooledTaskRunnerDelegateProcessRegistry();
 +  AutoLock lock(registry.lock);
 +
@@ -12209,7 +12232,7 @@ index c42cab221ece61194fe076f216c45faf467e9f1f..ffb66055571876ffae62be3e658095ac
      LOG(ERROR)
          << "Stale pooled_task_runner_delegate_ - task not posted. This is\n"
             "almost certainly caused by a previous test leaving a stale task\n"
-@@ -48,7 +110,7 @@ bool PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+@@ -48,7 +112,7 @@ bool PooledTaskRunnerDelegate::MatchesCurrentDelegate(
             "global object to post a task to the stale task runner.\n"
          << base::debug::StackTrace();
    }
@@ -12418,10 +12441,10 @@ index 5595dc92ec6d0420feb0a5c9161531e3eccd1f6e..56a04d7f05bb9a1f4e2196baf4250a55
          histogram_label_.empty()
              ? std::string()
 diff --git a/base/task/thread_pool/thread_pool_instance.cc b/base/task/thread_pool/thread_pool_instance.cc
-index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4a81dbdb8 100644
+index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..b6ad2e643849c1bfeb79de885f0407bf1f566e9c 100644
 --- a/base/task/thread_pool/thread_pool_instance.cc
 +++ b/base/task/thread_pool/thread_pool_instance.cc
-@@ -5,23 +5,121 @@
+@@ -5,23 +5,123 @@
  #include "base/task/thread_pool/thread_pool_instance.h"
  
  #include <algorithm>
@@ -12450,6 +12473,10 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
 +extern "C" void ArosKPutStr(const char*) asm("KPutStr");
 +#endif
 +
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace base {
  
  namespace {
@@ -12458,13 +12485,13 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
 +
 +// Native AROS processes share an address space but retain independent Chromium
 +// process identities. CommandLine already maps worker tasks to the command line
-+// registered by their owning native process, so use that stable identity here
-+// as well. Walking the raw Exec parent chain is insufficient: a spawned child
++// registered by their owning native process. Use its monotonic owner ID here;
++// the CommandLine allocation address can be reused after a renderer exits. Walking the raw Exec parent chain is insufficient: a spawned child
 +// process is itself a descendant of the browser task and must not inherit the
 +// browser's pool.
 +struct ThreadPoolProcessRegistry {
 +  Lock lock;
-+  std::map<const CommandLine*, ThreadPoolInstance*> pools;
++  std::map<uint64_t, ThreadPoolInstance*> pools;
 +};
 +
 +ThreadPoolProcessRegistry& GetThreadPoolProcessRegistry() {
@@ -12477,8 +12504,7 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
 +    return nullptr;
 +  }
 +
-+  const CommandLine* const process_identity =
-+      CommandLine::ForCurrentProcess();
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
 +  auto& registry = GetThreadPoolProcessRegistry();
 +  AutoLock lock(registry.lock);
 +  const auto it = registry.pools.find(process_identity);
@@ -12502,8 +12528,7 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
 +  auto& registry = GetThreadPoolProcessRegistry();
 +  ThreadPoolInstance* old_thread_pool = nullptr;
 +  DCHECK(CommandLine::InitializedForCurrentProcess());
-+  const CommandLine* const process_identity =
-+      CommandLine::ForCurrentProcess();
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
 +  {
 +    AutoLock lock(registry.lock);
 +
@@ -12543,7 +12568,7 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
  size_t GetDefaultMaxNumUtilityThreads(size_t max_num_foreground_threads_in) {
    int num_of_efficient_processors = SysInfo::NumberOfEfficientProcessors();
    if (num_of_efficient_processors != 0) {
-@@ -51,28 +149,30 @@ ThreadPoolInstance::InitParams::InitParams(size_t max_num_foreground_threads_in,
+@@ -51,28 +151,30 @@ ThreadPoolInstance::InitParams::InitParams(size_t max_num_foreground_threads_in,
  ThreadPoolInstance::InitParams::~InitParams() = default;
  
  ThreadPoolInstance::ScopedRestrictedTasks::ScopedRestrictedTasks() {
@@ -12582,7 +12607,7 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
    }
  }
  
-@@ -80,7 +180,7 @@ ThreadPoolInstance::ScopedFizzleBlockShutdownTasks::
+@@ -80,7 +182,7 @@ ThreadPoolInstance::ScopedFizzleBlockShutdownTasks::
  void ThreadPoolInstance::CreateAndStartWithDefaultParams(
      std::string_view name) {
    Create(name);
@@ -12591,7 +12616,7 @@ index de3e8f3068dc7ef6a07eb900751f0e172e9f7209..a1202828a68352595ff6ac11c891a5b4
  }
  
  void ThreadPoolInstance::StartWithDefaultParams() {
-@@ -105,13 +205,12 @@ void ThreadPoolInstance::Create(std::string_view name,
+@@ -105,13 +207,12 @@ void ThreadPoolInstance::Create(std::string_view name,
  
  // static
  void ThreadPoolInstance::Set(std::unique_ptr<ThreadPoolInstance> thread_pool) {
@@ -14403,7 +14428,7 @@ index f16359f078ede5ebe1511edc283ff7d64e7ba2d3..cd635b675dedf0d1c3fca13de7b5c740
    ReportMallinfoStats(/*pmd=*/nullptr, &total_virtual_size, &resident_size,
                        &allocated_objects_size, &allocated_objects_count);
 diff --git a/base/trace_event/memory_dump_manager.cc b/base/trace_event/memory_dump_manager.cc
-index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..c088d008d8e83648e5b618e00fe842efefa876e2 100644
+index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..42c69ddc40fff994d52dc89a5694c4e3dcfa3d6e 100644
 --- a/base/trace_event/memory_dump_manager.cc
 +++ b/base/trace_event/memory_dump_manager.cc
 @@ -9,6 +9,7 @@
@@ -14422,22 +14447,29 @@ index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..c088d008d8e83648e5b618e00fe842ef
  #include "base/task/sequenced_task_runner.h"
  #include "base/task/single_thread_task_runner.h"
  #include "base/threading/thread.h"
-@@ -59,6 +61,30 @@ namespace {
+@@ -53,12 +55,37 @@
+ #include "base/trace_event/address_space_dump_provider.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace base::trace_event {
+ 
+ namespace {
  
  MemoryDumpManager* g_memory_dump_manager_for_testing = nullptr;
  
 +#if BUILDFLAG(IS_AROS)
 +struct MemoryDumpManagerRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, MemoryDumpManager*> instances;
++  std::map<uint64_t, MemoryDumpManager*> instances;
 +};
 +
 +MemoryDumpManager*& GetMemoryDumpManagerForCurrentProcess() {
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local MemoryDumpManager** cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity)
 +    return *cached_instance;
@@ -14453,7 +14485,7 @@ index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..c088d008d8e83648e5b618e00fe842ef
  // Temporary (until scheduler is moved outside of here)
  // trampoline function to match the |request_dump_function| passed to Initialize
  // to the callback expected by MemoryDumpScheduler.
-@@ -95,8 +121,15 @@ MemoryDumpManager* MemoryDumpManager::GetInstance() {
+@@ -95,8 +122,15 @@ MemoryDumpManager* MemoryDumpManager::GetInstance() {
      return g_memory_dump_manager_for_testing;
    }
  
@@ -14469,7 +14501,7 @@ index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..c088d008d8e83648e5b618e00fe842ef
  }
  
  // static
-@@ -111,6 +144,11 @@ MemoryDumpManager::CreateInstanceForTesting() {
+@@ -111,6 +145,11 @@ MemoryDumpManager::CreateInstanceForTesting() {
  MemoryDumpManager::MemoryDumpManager() = default;
  
  MemoryDumpManager::~MemoryDumpManager() {
@@ -14481,7 +14513,7 @@ index d9498e830615f3ce36b88dd2a1cdeac04c1e793d..c088d008d8e83648e5b618e00fe842ef
    Thread* dump_thread = nullptr;
    {
      AutoLock lock(lock_);
-@@ -123,7 +161,6 @@ MemoryDumpManager::~MemoryDumpManager() {
+@@ -123,7 +162,6 @@ MemoryDumpManager::~MemoryDumpManager() {
    }
    AutoLock lock(lock_);
    dump_thread_.reset();
@@ -19428,10 +19460,18 @@ index a01579c4776046c17b3c0e7059d19c99b35168df..d63446ffc2cf2ca2b944fac691b27980
      wire.general_properties = std::move(general);
    }
 diff --git a/cc/raster/categorized_worker_pool.cc b/cc/raster/categorized_worker_pool.cc
-index 2a51a8183422d93094ad22f0dc94d31f742db61e..0015b193776c8520f0e1f2b33433862a959c9f8c 100644
+index 2a51a8183422d93094ad22f0dc94d31f742db61e..dd10dda4202a3eee3b429c771e83d292d851b0af 100644
 --- a/cc/raster/categorized_worker_pool.cc
 +++ b/cc/raster/categorized_worker_pool.cc
-@@ -21,6 +21,9 @@
+@@ -12,6 +12,7 @@
+ #include "base/command_line.h"
+ #include "base/containers/span.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/task/sequence_manager/task_time_observer.h"
+@@ -21,6 +22,9 @@
  #include "base/threading/thread_restrictions.h"
  #include "base/trace_event/typed_macros.h"
  #include "build/build_config.h"
@@ -19441,7 +19481,7 @@ index 2a51a8183422d93094ad22f0dc94d31f742db61e..0015b193776c8520f0e1f2b33433862a
  #include "cc/base/math_util.h"
  #include "cc/base/switches.h"
  #include "cc/raster/task_category.h"
-@@ -49,8 +52,16 @@ constexpr TaskCategory kBackgroundCategories[] = {
+@@ -49,8 +53,16 @@ constexpr TaskCategory kBackgroundCategories[] = {
      TASK_CATEGORY_BACKGROUND_WITH_NORMAL_THREAD_PRIORITY};
  
  scoped_refptr<CategorizedWorkerPool>& GetWorkerPool() {
@@ -19458,6 +19498,51 @@ index 2a51a8183422d93094ad22f0dc94d31f742db61e..0015b193776c8520f0e1f2b33433862a
  }
  
  }  // namespace
+@@ -440,6 +452,20 @@ CategorizedWorkerPool* CategorizedWorkerPool::GetOrCreate(Delegate* delegate) {
+   return GetWorkerPool().get();
+ }
+ 
++#if BUILDFLAG(IS_AROS)
++void CategorizedWorkerPool::ShutdownForAros() {
++  auto& pool = GetWorkerPool();
++  if (!pool)
++    return;
++  // Cancel both job handles while their owning native ThreadPool still exists.
++  // Upstream's process-lifetime singleton would otherwise retain each retired
++  // renderer's pool in this shared engine.
++  pool->Shutdown();
++  pool = nullptr;
++  LOG(INFO) << "[Chromium:AROS:RasterPool] owner jobs stopped and pool released";
++}
++#endif
++
+ CategorizedWorkerPool::CategorizedWorkerPool()
+     : namespace_token_(GenerateNamespaceToken()),
+       has_namespaces_with_finished_running_tasks_cv_(&lock_),
+diff --git a/cc/raster/categorized_worker_pool.h b/cc/raster/categorized_worker_pool.h
+index c221a465655a21a2343a54c16da54e618f9ea1c2..d428acb7e5c2bcd53c8da66f7290775f3498a9ec 100644
+--- a/cc/raster/categorized_worker_pool.h
++++ b/cc/raster/categorized_worker_pool.h
+@@ -17,6 +17,7 @@
+ #include "base/task/task_runner.h"
+ #include "base/thread_annotations.h"
+ #include "base/threading/platform_thread.h"
++#include "build/build_config.h"
+ #include "cc/cc_export.h"
+ #include "cc/raster/task_category.h"
+ #include "cc/raster/task_graph_runner.h"
+@@ -50,6 +51,11 @@ class CC_EXPORT CategorizedWorkerPool : public base::TaskRunner,
+   // `delegate` is non-null, it must also live forever.
+   static CategorizedWorkerPool* GetOrCreate(Delegate* delegate = nullptr);
+ 
++#if BUILDFLAG(IS_AROS)
++  // After owner widgets/compositor stop, before its native ThreadPool stops.
++  static void ShutdownForAros();
++#endif
++
+   // Overridden from TaskGraphRunner:
+   NamespaceToken GenerateNamespaceToken() override;
+   void WaitForTasksToFinishRunning(NamespaceToken token) override;
 diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
 index 25b03b8bdec8d36dcce9a7c36111b859f373b8e3..7eef7b632208d3fb3ca97e07132310bad9a7e1c7 100644
 --- a/cc/scheduler/scheduler_state_machine.cc
@@ -40213,10 +40298,10 @@ index a7acb2b272a3352e3a30471bf10b7e91a6ef61f9..79e3f7aa95da69826af9786997e31561
      "//components/crash/core/common:crash_key",
      "//components/prefs",
 diff --git a/components/variations/child_process_field_trial_syncer.cc b/components/variations/child_process_field_trial_syncer.cc
-index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140ad0c15e3 100644
+index c66236851d9ac26461c30bc578d7e21243ef59f9..4713ca911565029a0cff89f0ddc1627dd0ed059c 100644
 --- a/components/variations/child_process_field_trial_syncer.cc
 +++ b/components/variations/child_process_field_trial_syncer.cc
-@@ -4,19 +4,67 @@
+@@ -4,19 +4,69 @@
  
  #include "components/variations/child_process_field_trial_syncer.h"
  
@@ -40232,6 +40317,10 @@ index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140
 +#include "build/build_config.h"
  #include "components/variations/variations_crash_keys.h"
  
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace variations {
  
  namespace {
@@ -40239,7 +40328,7 @@ index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140
 +#if BUILDFLAG(IS_AROS)
 +struct ChildProcessFieldTrialSyncerRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, ChildProcessFieldTrialSyncer*> instances;
++  std::map<uint64_t, ChildProcessFieldTrialSyncer*> instances;
 +};
 +
 +ChildProcessFieldTrialSyncerRegistry& GetSyncerRegistry() {
@@ -40247,10 +40336,8 @@ index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140
 +  return *registry;
 +}
 +
-+const base::CommandLine* GetCurrentProcessIdentity() {
-+  return base::CommandLine::InitializedForCurrentProcess()
-+             ? base::CommandLine::ForCurrentProcess()
-+             : nullptr;
++uint64_t GetCurrentProcessIdentity() {
++  return base::aros::CurrentProcessIdentity();
 +}
 +
 +ChildProcessFieldTrialSyncer* GetCurrentProcessInstance() {
@@ -40284,7 +40371,7 @@ index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140
  constinit thread_local bool in_set_field_trial_group_from_browser = false;
  
  }  // namespace
-@@ -24,10 +72,12 @@ constinit thread_local bool in_set_field_trial_group_from_browser = false;
+@@ -24,10 +74,12 @@ constinit thread_local bool in_set_field_trial_group_from_browser = false;
  // static
  ChildProcessFieldTrialSyncer* ChildProcessFieldTrialSyncer::CreateInstance(
      FieldTrialActivatedCallback activated_callback) {
@@ -40301,7 +40388,7 @@ index c66236851d9ac26461c30bc578d7e21243ef59f9..3d2506bd4dfd5e323bbcd1b1be35a140
  }
  
  // static
-@@ -35,17 +85,20 @@ ChildProcessFieldTrialSyncer*
+@@ -35,17 +87,20 @@ ChildProcessFieldTrialSyncer*
  ChildProcessFieldTrialSyncer::CreateInstanceForTesting(
      const std::set<std::string>& initially_active_trials,
      FieldTrialActivatedCallback activated_callback) {
@@ -40441,7 +40528,7 @@ index b4a999731d9969b2ebd74ea2b7b4b8340dee92d7..0bbac173fddf17b3e752ac77cb37b0b7
    // in chrome://version.
    std::vector<SyntheticTrialGroup> groups_;  // GUARDED_BY(lock_);
 diff --git a/components/variations/variations_crash_keys.cc b/components/variations/variations_crash_keys.cc
-index 692d1924140c35f89f75e313dca68548af64c66f..08b0c4d04c3b13a2436f570d2510eedc9d574be8 100644
+index 692d1924140c35f89f75e313dca68548af64c66f..cd615ad0886219c02f8c0d0a1e0055db03c1e865 100644
 --- a/components/variations/variations_crash_keys.cc
 +++ b/components/variations/variations_crash_keys.cc
 @@ -4,6 +4,7 @@
@@ -40465,14 +40552,25 @@ index 692d1924140c35f89f75e313dca68548af64c66f..08b0c4d04c3b13a2436f570d2510eedc
  #include "base/task/sequenced_task_runner.h"
  #include "build/buildflag.h"
  #include "components/crash/core/common/crash_key.h"
-@@ -400,8 +404,52 @@ void VariationsCrashKeys::OnSyntheticTrialsChanged(
+@@ -38,6 +42,10 @@
+ #include "components/variations/variations_crash_keys_chromeos.h"
+ #endif
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
+ namespace variations {
+ 
+ namespace {
+@@ -400,8 +408,50 @@ void VariationsCrashKeys::OnSyntheticTrialsChanged(
  // Singletone crash key manager. Allocated once at process start up and
  // intentionally leaked since it needs to live for the duration of the process
  // there's no benefit in cleaning it up at exit.
 +#if BUILDFLAG(IS_AROS)
 +struct VariationsCrashKeysRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, VariationsCrashKeys*> instances;
++  std::map<uint64_t, VariationsCrashKeys*> instances;
 +};
 +
 +VariationsCrashKeysRegistry& GetCrashKeysRegistry() {
@@ -40480,10 +40578,8 @@ index 692d1924140c35f89f75e313dca68548af64c66f..08b0c4d04c3b13a2436f570d2510eedc
 +  return *registry;
 +}
 +
-+const base::CommandLine* GetCurrentProcessIdentity() {
-+  return base::CommandLine::InitializedForCurrentProcess()
-+             ? base::CommandLine::ForCurrentProcess()
-+             : nullptr;
++uint64_t GetCurrentProcessIdentity() {
++  return base::aros::CurrentProcessIdentity();
 +}
 +
 +VariationsCrashKeys* GetCurrentCrashKeysInstance() {
@@ -40518,7 +40614,7 @@ index 692d1924140c35f89f75e313dca68548af64c66f..08b0c4d04c3b13a2436f570d2510eedc
  const char kNumExperimentsKey[] = "num-experiments";
  const char kExperimentListKey[] = "variations";
  const char kVariationsSeedVersionKey[] = "variations-seed-version";
-@@ -410,22 +458,25 @@ const char kNumRuntimeFieldTrialOverridesKey[] =
+@@ -410,22 +460,25 @@ const char kNumRuntimeFieldTrialOverridesKey[] =
      "num-variations-runtime-overrides";
  
  void InitCrashKeys() {
@@ -40552,7 +40648,7 @@ index 692d1924140c35f89f75e313dca68548af64c66f..08b0c4d04c3b13a2436f570d2510eedc
  }
  
  void SetVariationsSeedVersionCrashKey(std::string_view seed_version) {
-@@ -439,14 +490,16 @@ base::ScopedClosureRunner InitCrashKeysForTesting() {
+@@ -439,14 +492,16 @@ base::ScopedClosureRunner InitCrashKeysForTesting() {
  }
  
  void ClearCrashKeysInstanceForTesting() {
@@ -45146,7 +45242,7 @@ index 3858624ba9a618e1c6bb9801bda91170de878e57..49fbe97432e191f637d2e1a00294af83
    std::string id;
    // E.g. email or phone number
 diff --git a/content/public/common/content_client.cc b/content/public/common/content_client.cc
-index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf3b6cfc04 100644
+index fbb5f53ab24206e3de336f0960415a472538d39c..1521e7d36f6df0ea9636b48e9362dd2f331dac71 100644
 --- a/content/public/common/content_client.cc
 +++ b/content/public/common/content_client.cc
 @@ -4,10 +4,15 @@
@@ -45165,7 +45261,7 @@ index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf
  #include "base/memory/ref_counted_memory.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/no_destructor.h"
-@@ -15,68 +20,141 @@
+@@ -15,68 +20,143 @@
  #include "base/strings/string_split.h"
  #include "base/strings/string_view_util.h"
  #include "base/strings/utf_string_conversions.h"
@@ -45179,6 +45275,10 @@ index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf
  #include "content/public/common/origin_util.h"
  #include "ui/gfx/image/image.h"
  
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace content {
  
 +#if BUILDFLAG(IS_AROS)
@@ -45191,7 +45291,7 @@ index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf
 +
 +struct ContentClientProcessRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, ContentClientProcessState> states;
++  std::map<uint64_t, ContentClientProcessState> states;
 +};
 +
 +ContentClientProcessRegistry& GetContentClientProcessRegistry() {
@@ -45199,10 +45299,8 @@ index fbb5f53ab24206e3de336f0960415a472538d39c..d76cd28ee522e1f800a5556b43e6fdcf
 +  return *registry;
 +}
 +
-+const base::CommandLine* GetCurrentProcessIdentity() {
-+  return base::CommandLine::InitializedForCurrentProcess()
-+             ? base::CommandLine::ForCurrentProcess()
-+             : nullptr;
++uint64_t GetCurrentProcessIdentity() {
++  return base::aros::CurrentProcessIdentity();
 +}
 +
 +bool CanChangeBrowserClient() {
@@ -45778,10 +45876,20 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188b1428f11 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..46394c3a4b52464a669080f1da48f2d0666c5b34 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
-@@ -57,6 +57,9 @@
+@@ -23,6 +23,9 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/lazy_instance.h"
+ #include "base/logging.h"
++#if BUILDFLAG(IS_AROS)
++#include "cc/raster/categorized_worker_pool.h"
++#endif
+ #include "base/memory/discardable_memory_allocator.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/structured_shared_memory.h"
+@@ -57,6 +60,9 @@
  #include "base/trace_event/trace_event.h"
  #include "base/values.h"
  #include "build/build_config.h"
@@ -45791,7 +45899,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  #include "cc/base/histograms.h"
  #include "cc/base/switches.h"
  #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
-@@ -146,6 +149,7 @@
+@@ -146,6 +152,7 @@
  #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
  #include "third_party/blink/public/mojom/cpu_performance.mojom.h"
  #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom.h"
@@ -45799,7 +45907,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  #include "third_party/blink/public/platform/modules/video_capture/web_video_capture_impl_manager.h"
  #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
  #include "third_party/blink/public/platform/web_cache.h"
-@@ -206,7 +210,7 @@
+@@ -206,7 +213,7 @@
  
  #if BUILDFLAG(IS_APPLE)
  #include <malloc/malloc.h>
@@ -45808,7 +45916,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  #include <malloc.h>
  #endif
  
-@@ -241,8 +245,19 @@ using ::blink::WebView;
+@@ -241,8 +248,19 @@ using ::blink::WebView;
  // incorrectly from the wrong thread.
  constinit thread_local RenderThreadImpl* render_thread = nullptr;
  
@@ -45828,7 +45936,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  
  // v8::MemoryPressureLevel should correspond to base::MemoryPressureLevel.
  static_assert(
-@@ -568,6 +583,8 @@ void RenderThreadImpl::Init() {
+@@ -568,6 +586,8 @@ void RenderThreadImpl::Init() {
        GetContentClient()->renderer()->CreateURLLoaderThrottleProvider(
            blink::URLLoaderThrottleProviderType::kFrame);
  
@@ -45837,7 +45945,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
    GetAssociatedInterfaceRegistry()->AddInterface<mojom::Renderer>(
        base::BindRepeating(&RenderThreadImpl::OnRendererInterfaceReceiver,
                            base::Unretained(this)));
-@@ -625,8 +642,14 @@ void RenderThreadImpl::Init() {
+@@ -625,8 +645,14 @@ void RenderThreadImpl::Init() {
    // TODO(boliu): In single process, browser main loop should set up the
    // discardable memory manager, and should skip this if kSingleProcess.
    // See crbug.com/503724.
@@ -45854,7 +45962,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
    ChildProcess::current()->SetIOThreadType(base::ThreadType::kPresentation);
-@@ -657,8 +680,13 @@ void RenderThreadImpl::Init() {
+@@ -657,8 +683,13 @@ void RenderThreadImpl::Init() {
  RenderThreadImpl::~RenderThreadImpl() {
    // The destructor should not run in multi-process mode because Shutdown()
    // terminates the process. The destructor only needs to clean up for tests.
@@ -45868,7 +45976,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
    g_main_task_runner.Get() = nullptr;
  
    // Need to make sure this reference is removed on the correct task runner;
-@@ -667,6 +695,9 @@ RenderThreadImpl::~RenderThreadImpl() {
+@@ -667,6 +698,9 @@ RenderThreadImpl::~RenderThreadImpl() {
      video_frame_compositor_thread_->task_runner()->ReleaseSoon(
          FROM_HERE, std::move(video_frame_compositor_context_provider_));
    }
@@ -45878,14 +45986,15 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +714,59 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +717,62 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
 +#if BUILDFLAG(IS_AROS)
 +  // IPC disconnect can quit the main loop before Blink's non-nestable Close
 +  // tasks run. Finish owner-local frame teardown with scheduler/GPU alive.
-+  if (blink::CloseRendererViewsForArosShutdown())
++  const bool owner_views_closed = blink::CloseRendererViewsForArosShutdown();
++  if (owner_views_closed)
 +    GetContentClient()->renderer()->RenderThreadWillShutdownForAros();
 +  // viz::Gpu destruction reports channel loss through the current renderer
 +  // task runner.  Release it before shutting that runner down.
@@ -45911,6 +46020,8 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
 +    blink::ShutdownCompositorThread();
 +    LOG(INFO) << "[Chromium:shutdown] AROS compositor thread stopped";
 +  }
++  if (owner_views_closed)
++    cc::CategorizedWorkerPool::ShutdownForAros();
 +#endif
    // In a single-process mode, we cannot call _exit(0) in Shutdown() because
    // it will exit the process before the browser side is ready to exit.
@@ -45939,7 +46050,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +777,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +783,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
@@ -57348,7 +57459,7 @@ index c1a52503b78c725578d1c13e9282aa7450fad0c8..5d88517fd25492feda06ae2f39808a6e
  
    deps = []
 diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/client_process_impl.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/client_process_impl.cc
-index 5d70677adb76c762dc450571d16a0605debfed5d..98922b60e02e8071bad0001765b6a029ff6750cd 100644
+index 5d70677adb76c762dc450571d16a0605debfed5d..9aea585061f820787d1a3049b0ee1e6a663ff6dd 100644
 --- a/services/resource_coordinator/public/cpp/memory_instrumentation/client_process_impl.cc
 +++ b/services/resource_coordinator/public/cpp/memory_instrumentation/client_process_impl.cc
 @@ -5,9 +5,12 @@
@@ -57364,24 +57475,26 @@ index 5d70677adb76c762dc450571d16a0605debfed5d..98922b60e02e8071bad0001765b6a029
  #include "base/logging.h"
  #include "base/not_fatal_until.h"
  #include "base/notreached.h"
-@@ -22,6 +25,33 @@
+@@ -21,7 +24,35 @@
+ #include "services/resource_coordinator/public/cpp/memory_instrumentation/tracing_observer_proto.h"
  #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
  
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace memory_instrumentation {
 +namespace {
 +
 +#if BUILDFLAG(IS_AROS)
 +struct ClientProcessRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, ClientProcessImpl*> instances;
++  std::map<uint64_t, ClientProcessImpl*> instances;
 +};
 +
 +ClientProcessImpl*& GetClientProcessForCurrentProcess() {
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local ClientProcessImpl** cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity)
 +    return *cached_instance;
@@ -57398,7 +57511,7 @@ index 5d70677adb76c762dc450571d16a0605debfed5d..98922b60e02e8071bad0001765b6a029
  
  struct ClientProcessImpl::OSMemoryDumpArgs {
    OSMemoryDumpArgs();
-@@ -43,7 +73,11 @@ void ClientProcessImpl::CreateInstance(
+@@ -43,7 +74,11 @@ void ClientProcessImpl::CreateInstance(
    if (!is_browser_process)
      coordinator.reset();
  
@@ -57411,10 +57524,10 @@ index 5d70677adb76c762dc450571d16a0605debfed5d..98922b60e02e8071bad0001765b6a029
      instance = new ClientProcessImpl(
          std::move(receiver), std::move(coordinator), is_browser_process,
 diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.cc
-index 806b5433cd4bcf2ffff4a3d17105678ca7bcc6d9..a334b723c4de4c5f4a09f86665e52a7dac8f5193 100644
+index 806b5433cd4bcf2ffff4a3d17105678ca7bcc6d9..7f63f2cb3df5adcc6d09b860ddb6382087071c7d 100644
 --- a/services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.cc
 +++ b/services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.cc
-@@ -5,14 +5,44 @@
+@@ -5,14 +5,45 @@
  #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
  
  #include <atomic>
@@ -57426,6 +57539,10 @@ index 806b5433cd4bcf2ffff4a3d17105678ca7bcc6d9..a334b723c4de4c5f4a09f86665e52a7d
 +#include "base/no_destructor.h"
 +#include "base/synchronization/lock.h"
 +#include "build/build_config.h"
++
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
  
  namespace memory_instrumentation {
  namespace {
@@ -57433,15 +57550,12 @@ index 806b5433cd4bcf2ffff4a3d17105678ca7bcc6d9..a334b723c4de4c5f4a09f86665e52a7d
 +#if BUILDFLAG(IS_AROS)
 +struct MemoryInstrumentationRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, std::atomic<MemoryInstrumentation*>> instances;
++  std::map<uint64_t, std::atomic<MemoryInstrumentation*>> instances;
 +};
 +
 +std::atomic<MemoryInstrumentation*>& GetMemoryInstrumentationForCurrentProcess() {
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local std::atomic<MemoryInstrumentation*>* cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity)
 +    return *cached_instance;
@@ -57987,10 +58101,10 @@ index 7d5ccb0e8d68f114dbfca6ffddf1f098331de734..44401e84840a04488a1eb4fc55f4e740
  
  // static
 diff --git a/services/tracing/public/cpp/traced_process_impl.cc b/services/tracing/public/cpp/traced_process_impl.cc
-index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983a9ca96ce 100644
+index 615b60641c7c6b06ffdc3d44463619ef9b316491..d399ba6c8dd0ca7d44755328c5f4a9e6f939d001 100644
 --- a/services/tracing/public/cpp/traced_process_impl.cc
 +++ b/services/tracing/public/cpp/traced_process_impl.cc
-@@ -4,21 +4,56 @@
+@@ -4,21 +4,57 @@
  
  #include "services/tracing/public/cpp/traced_process_impl.h"
  
@@ -58007,6 +58121,10 @@ index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983
  #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
  #include "services/tracing/public/mojom/constants.mojom.h"
  
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#endif
++
  namespace tracing {
  
 +namespace {
@@ -58014,7 +58132,7 @@ index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983
 +#if BUILDFLAG(IS_AROS)
 +struct TracedProcessRegistry {
 +  base::Lock lock;
-+  std::map<const base::CommandLine*, TracedProcessImpl*> instances;
++  std::map<uint64_t, TracedProcessImpl*> instances;
 +};
 +#endif
 +
@@ -58023,11 +58141,8 @@ index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983
  // static
  TracedProcessImpl* TracedProcessImpl::GetInstance() {
 +#if BUILDFLAG(IS_AROS)
-+  const base::CommandLine* const process_identity =
-+      base::CommandLine::InitializedForCurrentProcess()
-+          ? base::CommandLine::ForCurrentProcess()
-+          : nullptr;
-+  thread_local const base::CommandLine* cached_identity = nullptr;
++  const uint64_t process_identity = base::aros::CurrentProcessIdentity();
++  thread_local uint64_t cached_identity = 0;
 +  thread_local TracedProcessImpl* cached_instance = nullptr;
 +  if (cached_instance && cached_identity == process_identity)
 +    return cached_instance;
@@ -58047,7 +58162,7 @@ index 615b60641c7c6b06ffdc3d44463619ef9b316491..fa39aee71c014edde5a2d4d6fea9c983
  }
  
  TracedProcessImpl::TracedProcessImpl() {
-@@ -66,6 +101,13 @@ void TracedProcessImpl::EnableSystemTracingService(
+@@ -66,6 +102,13 @@ void TracedProcessImpl::EnableSystemTracingService(
      return;
    }
  
