@@ -43133,7 +43133,7 @@ index 410948963a049c056bc605867a9fa5866347c435..e80365c1b3cff6de0cd5dd0dd788b5f8
            GetProcess()->GetDeprecatedID(),
            browser_calc_origin_to_commit.value(),
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbed9803601 100644
+index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..64eb83f57ba89f6e5f9323b8c0e4bbc2b440fe26 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -59,6 +59,8 @@
@@ -43314,7 +43314,21 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
  }
  
  bool RenderProcessHostImpl::ShutdownRequested() {
-@@ -4340,6 +4433,10 @@ void RenderProcessHostImpl::OnAssociatedInterfaceRequest(
+@@ -4231,6 +4324,13 @@ bool RenderProcessHostImpl::FastShutdownIfPossible(
+     bool ignore_keep_alive,
+     bool ignore_pending_reuse,
+     bool use_outermost_main_frame_check) {
++#if BUILDFLAG(IS_AROS)
++  // Fast shutdown assumes the OS discards the renderer address space. AROS
++  // renderer tasks share a resident engine: closing IPC here would abandon
++  // live Blink pages before their normal frame/view teardown. Let the caller
++  // send ordinary deletion messages and retire after the last frame is gone.
++  return false;
++#endif
+   base::UmaHistogramBoolean(
+       "BrowserRenderProcessHost.FastShutdownIfPossible.Total", true);
+ 
+@@ -4340,6 +4440,10 @@ void RenderProcessHostImpl::OnAssociatedInterfaceRequest(
  }
  
  void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
@@ -43325,7 +43339,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    channel_connected_ = true;
  
  #if BUILDFLAG(IS_MAC)
-@@ -4369,6 +4466,26 @@ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
+@@ -4369,6 +4473,26 @@ void RenderProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
  }
  
  void RenderProcessHostImpl::OnChannelError() {
@@ -43352,7 +43366,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    ChildProcessTerminationInfo info =
        GetChildTerminationInfo(true /* already_dead */);
    ProcessDied(info);
-@@ -4397,6 +4514,13 @@ base::SafeRef<RenderProcessHost> RenderProcessHostImpl::GetSafeRef() const {
+@@ -4397,6 +4521,13 @@ base::SafeRef<RenderProcessHost> RenderProcessHostImpl::GetSafeRef() const {
  }
  
  bool RenderProcessHostImpl::IsInitializedAndNotDead() {
@@ -43366,7 +43380,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    return is_initialized_ && !is_dead_;
  }
  
-@@ -4649,7 +4773,14 @@ void RenderProcessHostImpl::Cleanup() {
+@@ -4649,7 +4780,14 @@ void RenderProcessHostImpl::Cleanup() {
    // notify all observers that the process has exited cleanly, even though it
    // will be destroyed a bit later. Observers shouldn't rely on this process
    // anymore.
@@ -43381,7 +43395,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
      // Populates Android-only fields and closes the underlying base::Process.
      ChildProcessTerminationInfo info = GetChildTerminationInfo(false);
      info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
-@@ -4801,6 +4932,13 @@ RenderProcessHostImpl::StartRtpDump(bool incoming,
+@@ -4801,6 +4939,13 @@ RenderProcessHostImpl::StartRtpDump(bool incoming,
  }
  
  IPC::ChannelProxy* RenderProcessHostImpl::GetChannel() {
@@ -43395,7 +43409,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    return channel_.get();
  }
  
-@@ -5695,6 +5833,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
+@@ -5695,6 +5840,129 @@ ChildProcessTerminationInfo RenderProcessHostImpl::GetChildTerminationInfo(
    return info;
  }
  
@@ -43525,7 +43539,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
  void RenderProcessHostImpl::ProcessDied(
      const ChildProcessTerminationInfo& termination_info) {
    TRACE_EVENT0("content", "RenderProcessHostImpl::ProcessDied");
-@@ -5728,6 +5989,13 @@ void RenderProcessHostImpl::ProcessDied(
+@@ -5728,6 +5996,13 @@ void RenderProcessHostImpl::ProcessDied(
    // when the process is respawned after a crash.
    did_update_renderer_locked_state_ = false;
  
@@ -43539,7 +43553,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    UpdateProcessPriority();
  
    // RenderProcessExited relies on the exit code set during shutdown.
-@@ -5775,6 +6043,36 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5775,6 +6050,36 @@ void RenderProcessHostImpl::FastShutdown() {
    // to fast shutdown.
    fast_shutdown_started_ = true;
  
@@ -43576,7 +43590,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
    // Tell observers that the process exited cleanly, even though it will be
    // destroyed a little bit later. Observers shouldn't rely on this process
    // anymore.
-@@ -5783,6 +6081,7 @@ void RenderProcessHostImpl::FastShutdown() {
+@@ -5783,6 +6088,7 @@ void RenderProcessHostImpl::FastShutdown() {
    termination_info.exit_code = 0;
  
    ProcessDied(termination_info);
@@ -43584,7 +43598,7 @@ index 22bf8ff11537d76fe5777f7a74c5fdb7b7d89a42..690da1843a75ec93982bcf4a42532bbe
  }
  
  void RenderProcessHostImpl::ResetIPC() {
-@@ -6116,6 +6415,16 @@ void RenderProcessHostImpl::SendProcessStateToRenderer() {
+@@ -6116,6 +6422,16 @@ void RenderProcessHostImpl::SendProcessStateToRenderer() {
  }
  
  void RenderProcessHostImpl::OnProcessLaunched() {
@@ -45653,7 +45667,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0fef152a507c2fe1ffd12bf3b065fe41f6b66c39 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0168c95b3529598692fe2695906214b88d5e8a7f 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
 @@ -57,6 +57,9 @@
@@ -45753,11 +45767,14 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0fef152a507c2fe1ffd12bf3b065fe41
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +714,55 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +714,58 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
 +#if BUILDFLAG(IS_AROS)
++  // IPC disconnect can quit the main loop before Blink's non-nestable Close
++  // tasks run. Finish owner-local frame teardown with scheduler/GPU alive.
++  blink::CloseRendererViewsForArosShutdown();
 +  // viz::Gpu destruction reports channel loss through the current renderer
 +  // task runner.  Release it before shutting that runner down.
 +  if (gpu_) {
@@ -45810,7 +45827,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0fef152a507c2fe1ffd12bf3b065fe41
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +773,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +776,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
@@ -59020,7 +59037,7 @@ index a737cf06f53a570a41b5cc9cd2af7e7a72cbb372..ff5a4c91a7d59d83c4975565d20e5f09
    static std::unique_ptr<WebThreadScheduler> CreateMainThreadScheduler(
        std::unique_ptr<base::MessagePump> message_pump);
 diff --git a/third_party/blink/public/web/blink.h b/third_party/blink/public/web/blink.h
-index eed893864a344767a9d9df6fab71866065d19a9a..87e7e7705bc6469b4906859117bdd188473fe0fb 100644
+index eed893864a344767a9d9df6fab71866065d19a9a..286a841618d341bf8f1a1f96c7e3e7b4003a7ec0 100644
 --- a/third_party/blink/public/web/blink.h
 +++ b/third_party/blink/public/web/blink.h
 @@ -33,6 +33,8 @@
@@ -59032,7 +59049,7 @@ index eed893864a344767a9d9df6fab71866065d19a9a..87e7e7705bc6469b4906859117bdd188
  #include "third_party/blink/public/platform/web_common.h"
  #include "third_party/blink/public/platform/web_string.h"
  #include "v8/include/v8-isolate.h"
-@@ -84,6 +86,12 @@ BLINK_EXPORT void InitializeWithoutIsolateForTesting(
+@@ -84,6 +86,15 @@ BLINK_EXPORT void InitializeWithoutIsolateForTesting(
  // must be called before this.
  BLINK_EXPORT v8::Isolate* CreateMainThreadIsolate();
  
@@ -59040,6 +59057,9 @@ index eed893864a344767a9d9df6fab71866065d19a9a..87e7e7705bc6469b4906859117bdd188
 +// Called on the native renderer owner before its scheduler is stopped. Returns
 +// false if live pages or workers still prevent retiring the main isolate.
 +BLINK_EXPORT bool RetireMainThreadIsolateForAros();
++// Called after the native renderer main loop returns, while its scheduler and
++// compositor are still available. Closes only this logical renderer's views.
++BLINK_EXPORT void CloseRendererViewsForArosShutdown();
 +#endif
 +
  // Alters the rendering of content to conform to a fixed set of rules.
@@ -59383,10 +59403,10 @@ index 0a8db62080e2e8a182467c60d1174bb40c198ec5..7c3cc3818f7b34a810247dd7a7a20185
      sources += [
        "memory_usage_monitor_posix.cc",
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
-index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..8c5b29282edba1edcc382f3c465d5daaddbe0318 100644
+index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..2e23cfb7a27e2626bf811facf555a81bfbe07129 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc
 +++ b/third_party/blink/renderer/controller/blink_initializer.cc
-@@ -35,6 +35,15 @@
+@@ -35,6 +35,16 @@
  #include <utility>
  
  #include "base/command_line.h"
@@ -59394,6 +59414,7 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..8c5b29282edba1edcc382f3c465d5daa
 +#include "base/logging.h"
 +#include "v8/include/v8-statistics.h"
 +#include "third_party/blink/renderer/core/page/page.h"
++#include "third_party/blink/renderer/core/exported/web_view_impl.h"
 +#include "third_party/blink/renderer/core/workers/worker_thread.h"
 +#include "third_party/blink/renderer/platform/heap/thread_state.h"
 +#include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
@@ -59402,7 +59423,7 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..8c5b29282edba1edcc382f3c465d5daa
  #include "base/task/single_thread_task_runner.h"
  #include "build/build_config.h"
  #include "mojo/public/cpp/bindings/binder_map.h"
-@@ -155,9 +164,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
+@@ -155,9 +165,16 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
  
    GetBlinkInitializer().RegisterInterfaces(*binders);
  
@@ -59419,11 +59440,23 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..8c5b29282edba1edcc382f3c465d5daa
  
    GetBlinkInitializer().RegisterMemoryWatchers(platform);
  
-@@ -215,6 +231,45 @@ v8::Isolate* CreateMainThreadIsolate() {
+@@ -215,6 +232,57 @@ v8::Isolate* CreateMainThreadIsolate() {
    return V8Initializer::InitializeMainThread();
  }
  
 +#if BUILDFLAG(IS_AROS)
++void CloseRendererViewsForArosShutdown() {
++  CHECK(IsMainThread());
++  auto& views = WebViewImpl::AllInstances();
++  LOG(INFO) << "[Chromium:AROS:ViewTeardown] closing views=" << views.size();
++  // AllInstances is owner-local on AROS. Close detaches frames and erases the
++  // view; reacquire begin each time because callbacks may close other views.
++  while (!views.empty())
++    (*views.begin())->Close();
++  LOG(INFO) << "[Chromium:AROS:ViewTeardown] remaining pages="
++            << Page::OrdinaryPages().size();
++}
++
 +bool RetireMainThreadIsolateForAros() {
 +  CHECK(IsMainThread());
 +  v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
@@ -60393,7 +60426,7 @@ index 3d8839154bb872db567119aae19df1cb51424de6..d5c36966d0320e927fae66046c6e70eb
    void SetTextTrackKindUserPreference(TextTrackKindUserPreference) override;
    void SetTextTrackBackgroundColor(const WebString&) override;
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
-index 210e182a80343b67302a2ed347c1ab984cdc3b09..500a23660b725e9b2efd13e97b3de9b77a76fd7e 100644
+index 210e182a80343b67302a2ed347c1ab984cdc3b09..0bf0ab658aaed519ec209f06295df41dd3c8dbf5 100644
 --- a/third_party/blink/renderer/core/exported/web_view_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
 @@ -242,6 +242,10 @@ static const float minScaleChangeToTriggerZoom = 1.5f;
@@ -60422,7 +60455,17 @@ index 210e182a80343b67302a2ed347c1ab984cdc3b09..500a23660b725e9b2efd13e97b3de9b7
  }
  
  namespace {
-@@ -1885,6 +1895,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
+@@ -1211,6 +1221,9 @@ void WebViewImpl::Close() {
+   // Closership is a single relationship, so only 1 call to Close() should
+   // occur.
+   CHECK(page_);
++#if BUILDFLAG(IS_AROS)
++  aros_close_factory_.InvalidateWeakPtrs();
++#endif
+   DCHECK(AllInstances().Contains(this));
+   AllInstances().erase(this);
+ 
+@@ -1885,6 +1898,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
    settings->SetForceDarkModeEnabled(prefs.force_dark_mode_enabled);
  
    settings->SetAccessibilityAlwaysShowFocus(prefs.always_show_focus);
@@ -60431,7 +60474,7 @@ index 210e182a80343b67302a2ed347c1ab984cdc3b09..500a23660b725e9b2efd13e97b3de9b7
    settings->SetAutoplayPolicy(prefs.autoplay_policy);
    settings->SetRequireTransientActivationForGetDisplayMedia(
        prefs.require_transient_activation_for_get_display_media);
-@@ -3721,12 +3733,12 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
+@@ -3721,12 +3736,12 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
        gfx::FontRenderParams::SUBPIXEL_RENDERING_NONE);
    WebFontRenderStyle::SetSubpixelPositioning(
        renderer_preferences_.use_subpixel_positioning);
@@ -60446,11 +60489,34 @@ index 210e182a80343b67302a2ed347c1ab984cdc3b09..500a23660b725e9b2efd13e97b3de9b7
  #endif  // BUILDFLAG(IS_WIN)
  #endif  // !BUILDFLAG(IS_MAC)
  }
+@@ -4467,7 +4482,12 @@ void WebViewImpl::MojoDisconnected() {
+   // process, and is used to release ownership of the corresponding
+   // RenderViewImpl instance. https://crbug.com/1000035.
+   GetPage()->GetAgentGroupScheduler().DefaultTaskRunner()->PostNonNestableTask(
++#if BUILDFLAG(IS_AROS)
++      FROM_HERE, base::BindOnce(&WebViewImpl::Close,
++                               aros_close_factory_.GetWeakPtr()));
++#else
+       FROM_HERE, BindOnce(&WebViewImpl::Close, Unretained(this)));
++#endif
+ }
+ 
+ void WebViewImpl::CreateRemoteMainFrame(
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.h b/third_party/blink/renderer/core/exported/web_view_impl.h
-index 1c4e22e2d79fe68a49fbbc660c6de1b1bb41545d..865f727e4aa54fb47ac0fd0fc479b455dd97f0ac 100644
+index 1c4e22e2d79fe68a49fbbc660c6de1b1bb41545d..d163ab5b447d7208dada35ef797fc69b73fa37f1 100644
 --- a/third_party/blink/renderer/core/exported/web_view_impl.h
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.h
-@@ -323,6 +323,20 @@ class CORE_EXPORT WebViewImpl final : public WebView,
+@@ -63,6 +63,9 @@
+ #include "third_party/blink/public/web/web_navigation_policy.h"
+ #include "third_party/blink/public/web/web_view.h"
+ #include "third_party/blink/public/web/web_view_observer.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/memory/weak_ptr.h"
++#endif
+ #include "third_party/blink/renderer/core/core_export.h"
+ #include "third_party/blink/renderer/core/exported/web_page_popup_impl.h"
+ #include "third_party/blink/renderer/core/frame/resize_viewport_anchor.h"
+@@ -323,6 +326,20 @@ class CORE_EXPORT WebViewImpl final : public WebView,
        const ColorProviderColorMaps& color_provider_colors) override;
    void SetSupportsDraggableRegions(bool supports_draggable_regions) override;
  
@@ -60471,7 +60537,7 @@ index 1c4e22e2d79fe68a49fbbc660c6de1b1bb41545d..865f727e4aa54fb47ac0fd0fc479b455
    void DispatchPersistedPageshow(base::TimeTicks navigation_start);
    void DispatchPagehide(mojom::blink::PagehideDispatch pagehide_dispatch);
    void HookBackForwardCacheEviction(bool hook);
-@@ -1029,6 +1043,9 @@ class CORE_EXPORT WebViewImpl final : public WebView,
+@@ -1029,8 +1046,15 @@ class CORE_EXPORT WebViewImpl final : public WebView,
    // native restoration. Reset on each lifecycle update.
    bool last_page_lifecycle_state_update_restored_from_bfcache_ = false;
  
@@ -60480,7 +60546,13 @@ index 1c4e22e2d79fe68a49fbbc660c6de1b1bb41545d..865f727e4aa54fb47ac0fd0fc479b455
 +
    // All the registered observers.
    base::ObserverList<WebViewObserver> observers_;
++#if BUILDFLAG(IS_AROS)
++  // Native renderer shutdown can close views before deferred IPC cleanup.
++  base::WeakPtrFactory<WebViewImpl> aros_close_factory_{this};
++#endif
  };
+ 
+ // WebView is always implemented by WebViewImpl, so explicitly allow the
 diff --git a/third_party/blink/renderer/core/frame/frame.cc b/third_party/blink/renderer/core/frame/frame.cc
 index ee74e0a9d50d0718815d346a420bdc5f4dcb0c18..61ec9ba26238fd0a5d14eb1d46787572148b23af 100644
 --- a/third_party/blink/renderer/core/frame/frame.cc

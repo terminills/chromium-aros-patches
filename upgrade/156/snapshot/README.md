@@ -14,13 +14,13 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Current candidate includes the native SQLite lock adapter, worker draining before
-child I/O teardown, and directory creation through open(O_DIRECTORY)+fdopendir.
-Temporary storage diagnostics have been removed. The prior diagnostics-free
-build completes native x64 saved cookie and localStorage tests across a clean guest restart with case-distinct app
-and profile isolation; all helper IDs and host returns are accounted for. The
-new directory path passes standalone 4,000-operation native x64 and ARM controls.
-Full engine validation of the latest directory change is still running.
+Snapshot442 includes explicit owner-local Blink view closure before renderer
+scheduler shutdown and weak deferred-close callbacks. Both native443 AROS engine
+links pass. Fresh x64 profile440 cookie/localStorage close/reopen passes. The
+sibling439 test passes storage/DOM/worker independence and app B survival after
+app A closes, but both renderer retirements defer on an outstanding worker.
+The callback-drain follow-up source444 is under test and is not in this snapshot.
+See ../evidence/retirement447 for the exact build identities and limitations.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM
