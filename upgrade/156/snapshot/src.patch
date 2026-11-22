@@ -64943,6 +64943,68 @@ index f4e51bfcfc4dbad4b70a39e7db0f22c3b32cc399..e27c4bec9598581062713a123d80abfc
  
    configs -= [ "//build/config/compiler:chromium_code" ]
    configs += [ "//build/config/compiler:no_chromium_code" ]
+diff --git a/third_party/compiler-rt/BUILD.gn b/third_party/compiler-rt/BUILD.gn
+index 9862f6454e85b0bc3b4a2a77d96e07cc7f1e26a8..c4a9e326d215e2faa9eca0971b6b8888bcfe623f 100644
+--- a/third_party/compiler-rt/BUILD.gn
++++ b/third_party/compiler-rt/BUILD.gn
+@@ -23,6 +23,12 @@ target(_target_type, "atomic") {
+     "src/lib/builtins/int_endianness.h",
+   ]
+ 
++  # GCC AROS builds use native GCC atomics without an SDK pthread fallback.
++  if (is_aros && !is_clang) {
++    sources -= [ "src/lib/builtins/atomic.c" ]
++    sources += [ "atomic_aros.c" ]
++  }
++
+   if (_target_type == "shared_library") {
+     no_default_deps = true
+     if (is_win) {
+diff --git a/third_party/compiler-rt/atomic_aros.c b/third_party/compiler-rt/atomic_aros.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..0af4049d6b844191c1321a98382c166b934fab6e
+--- /dev/null
++++ b/third_party/compiler-rt/atomic_aros.c
+@@ -0,0 +1,39 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// compiler-rt uses Clang's C11 spelling of these operations. Keep its shared
++// fallback lock table and lock-free checks, using GCC's native equivalents on
++// AROS. This does not add a pthread dependency or change the SDK.
++#if !defined(__AROS__) || defined(__clang__)
++#error This adapter is only for native AROS GCC builds.
++#endif
++#define __c11_atomic_load(p, order) __atomic_load_n(p, order)
++#define __c11_atomic_store(p, value, order) __atomic_store_n(p, value, order)
++#define __c11_atomic_exchange(p, value, order) __atomic_exchange_n(p, value, order)
++#define __c11_atomic_compare_exchange_weak(p, expected, desired, success, failure) \
++  __atomic_compare_exchange_n(p, expected, desired, 1, success, failure)
++#define __c11_atomic_compare_exchange_strong(p, expected, desired, success, failure) \
++  __atomic_compare_exchange_n(p, expected, desired, 0, success, failure)
++#define __c11_atomic_thread_fence(order) __atomic_thread_fence(order)
++#define __c11_atomic_fetch_add(p, value, order) __atomic_fetch_add(p, value, order)
++#define __c11_atomic_fetch_sub(p, value, order) __atomic_fetch_sub(p, value, order)
++#define __c11_atomic_fetch_and(p, value, order) __atomic_fetch_and(p, value, order)
++#define __c11_atomic_fetch_or(p, value, order) __atomic_fetch_or(p, value, order)
++#define __c11_atomic_fetch_xor(p, value, order) __atomic_fetch_xor(p, value, order)
++#define __c11_atomic_fetch_nand(p, value, order) __atomic_fetch_nand(p, value, order)
++
++#include "src/lib/builtins/atomic.c"
++
++// GCC does not expand SYMBOL_NAME in compiler-rt redefine_extname pragmas.
++// Publish the generic entry points using explicit assembler names instead.
++extern __typeof__(__atomic_load_c) aros_atomic_load
++    __asm__("__atomic_load") __attribute__((alias("__atomic_load_c")));
++extern __typeof__(__atomic_store_c) aros_atomic_store
++    __asm__("__atomic_store") __attribute__((alias("__atomic_store_c")));
++extern __typeof__(__atomic_exchange_c) aros_atomic_exchange
++    __asm__("__atomic_exchange") __attribute__((alias("__atomic_exchange_c")));
++extern __typeof__(__atomic_compare_exchange_c) aros_atomic_compare_exchange
++    __asm__("__atomic_compare_exchange") __attribute__((alias("__atomic_compare_exchange_c")));
++extern __typeof__(__atomic_is_lock_free_c) aros_atomic_is_lock_free
++    __asm__("__atomic_is_lock_free") __attribute__((alias("__atomic_is_lock_free_c")));
 diff --git a/third_party/cpuinfo/BUILD.gn b/third_party/cpuinfo/BUILD.gn
 index 1fd7f0fa7bb6adbf98f702a869e2c9a4355ae088..c0e1121f80df4aa1b528ecb05af97f06356fb96c 100644
 --- a/third_party/cpuinfo/BUILD.gn
@@ -68848,10 +68910,10 @@ index 587830ce427d835442c78fa6eb20e7edd2828da4..fa444c0283d88f7e337fb56ffe9bc6c4
  OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperHeadless();
 diff --git a/ui/ozone/platform/aros/BUILD.gn b/ui/ozone/platform/aros/BUILD.gn
 new file mode 100644
-index 0000000000000000000000000000000000000000..aacda62b680c2f9b3d2ffd58ba510994d0e685b6
+index 0000000000000000000000000000000000000000..954dca337ef7d8c66ca42e4128a90f07b8cf767d
 --- /dev/null
 +++ b/ui/ozone/platform/aros/BUILD.gn
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,79 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -68887,6 +68949,12 @@ index 0000000000000000000000000000000000000000..aacda62b680c2f9b3d2ffd58ba510994
 +  ]
 +
 +  defines = [ "OZONE_IMPLEMENTATION" ]
++  if (angle_enable_gl || angle_enable_vulkan) {
++    defines += [ "AROS_OZONE_ANGLE" ]
++  }
++  if (angle_enable_vulkan) {
++    defines += [ "AROS_OZONE_ANGLE_VULKAN" ]
++  }
 +  if (angle_enable_gl) {
 +    defines += [ "AROS_OZONE_ANGLE_GL" ]
 +  }
@@ -69338,10 +69406,10 @@ index 0000000000000000000000000000000000000000..dfbd77eac904052f1d81f070dbd3cd30
 +#endif  // UI_OZONE_PLATFORM_AROS_AROS_SCREEN_H_
 diff --git a/ui/ozone/platform/aros/aros_surface_factory.cc b/ui/ozone/platform/aros/aros_surface_factory.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..813d1231a43b4f4a95f57522b546c783d6668287
+index 0000000000000000000000000000000000000000..187075501812629bff6b864941d16c3e2a947931
 --- /dev/null
 +++ b/ui/ozone/platform/aros/aros_surface_factory.cc
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,135 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -69444,11 +69512,16 @@ index 0000000000000000000000000000000000000000..813d1231a43b4f4a95f57522b546c783
 +
 +std::vector<gl::GLImplementationParts>
 +ArosSurfaceFactory::GetAllowedGLImplementations() {
-+  // egl.library/gl.library directly first (the default), then ANGLE over the
-+  // same drivers, selected with --use-gl=angle --use-angle=gles|gl.
-+  return {gl::GLImplementationParts(gl::kGLImplementationEGLGLES2),
-+          gl::GLImplementationParts(gl::ANGLEImplementation::kOpenGLES),
-+          gl::GLImplementationParts(gl::ANGLEImplementation::kOpenGL)};
++  std::vector<gl::GLImplementationParts> implementations;
++#if defined(AROS_OZONE_ANGLE_VULKAN)
++  implementations.emplace_back(gl::ANGLEImplementation::kVulkan);
++#endif
++  implementations.emplace_back(gl::kGLImplementationEGLGLES2);
++#if defined(AROS_OZONE_ANGLE_GL)
++  implementations.emplace_back(gl::ANGLEImplementation::kOpenGLES);
++  implementations.emplace_back(gl::ANGLEImplementation::kOpenGL);
++#endif
++  return implementations;
 +}
 +
 +GLOzone* ArosSurfaceFactory::GetGLOzone(
@@ -71841,10 +71914,10 @@ index 0000000000000000000000000000000000000000..d52eef49ab2ecc6bc9727f0481927279
 +#endif  // UI_OZONE_PLATFORM_AROS_CLIENT_NATIVE_PIXMAP_FACTORY_AROS_H_
 diff --git a/ui/ozone/platform/aros/gl_ozone_egl_aros.cc b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..33b339d49b92588ba2d34b4dbfaa438cf0faf0a0
+index 0000000000000000000000000000000000000000..062dcfa814881f11bda4a59388ddce8c52f5e1fa
 --- /dev/null
 +++ b/ui/ozone/platform/aros/gl_ozone_egl_aros.cc
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,187 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -71868,12 +71941,14 @@ index 0000000000000000000000000000000000000000..33b339d49b92588ba2d34b4dbfaa438c
 +#include "ui/ozone/platform/aros/aros_egl_library.h"
 +#include "ui/ozone/platform/aros/aros_window_manager.h"
 +
-+#if defined(AROS_OZONE_ANGLE_GL)
++#if defined(AROS_OZONE_ANGLE)
 +// ANGLE (statically linked) takes the native egl.library entry points from
 +// the resolver installed here, and exposes its own through EGL_GetProcAddress.
 +// The ANGLE-prefixed name, because the plain egl* names also exist in the
 +// egl.library link library.
++#if defined(AROS_OZONE_ANGLE_GL)
 +extern "C" void ANGLEArosSetNativeEGLResolver(void* (*resolver)(const char*));
++#endif
 +extern "C" __eglMustCastToProperFunctionPointerType EGLAPIENTRY
 +EGL_GetProcAddress(const char* procname);
 +#endif
@@ -71881,10 +71956,12 @@ index 0000000000000000000000000000000000000000..33b339d49b92588ba2d34b4dbfaa438c
 +namespace ui {
 +namespace {
 +
++#if defined(AROS_OZONE_ANGLE)
 +#if defined(AROS_OZONE_ANGLE_GL)
 +void* ArosNativeEGLResolverForANGLE(const char* name) {
 +  return reinterpret_cast<void*>(GetArosEGLProcAddress(name));
 +}
++#endif
 +
 +gl::GLFunctionPointerType GL_BINDING_CALL
 +ArosANGLEGetProcAddress(const char* name) {
@@ -71983,6 +72060,14 @@ index 0000000000000000000000000000000000000000..33b339d49b92588ba2d34b4dbfaa438c
 +bool GLOzoneEGLAros::LoadGLES2Bindings(
 +    const gl::GLImplementationParts& implementation) {
 +  if (implementation.gl == gl::kGLImplementationEGLANGLE) {
++#if defined(AROS_OZONE_ANGLE)
++#if defined(AROS_OZONE_ANGLE_VULKAN)
++    if (implementation.angle == gl::ANGLEImplementation::kVulkan) {
++      gl::SetGLGetProcAddressProc(&ArosANGLEGetProcAddress);
++      LOG(INFO) << "[Chromium:Ozone:AROS:EGL] using ANGLE Vulkan via vulkan.library";
++      return true;
++    }
++#endif
 +#if defined(AROS_OZONE_ANGLE_GL)
 +    if (!InitializeArosEGLLibrary() || !GetArosEGLProcAddress("eglGetDisplay")) {
 +      LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] egl.library bindings unavailable"
@@ -71995,6 +72080,10 @@ index 0000000000000000000000000000000000000000..33b339d49b92588ba2d34b4dbfaa438c
 +              << implementation.ToString()
 +              << ") over egl.library/gl.library";
 +    return true;
++#else
++    LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] requested ANGLE backend is not built";
++    return false;
++#endif
 +#else
 +    LOG(ERROR) << "[Chromium:Ozone:AROS:EGL] ANGLE requested but this build"
 +               << " has no ANGLE GL backend (angle_enable_gl=false)";

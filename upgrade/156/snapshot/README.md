@@ -14,7 +14,7 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Source489/native490: both native links pass; x64 thirty-cycle492 corrected serial audit and profile493 pass. Sibling491 page isolation passes but host shutdown stalls in system resolver worker. ARM494 visually renders. Memory plateau and RC gates remain open. See ../evidence/candidate508/status.json for source-matched results and retained failures.
+Snapshot523 includes source519 native ANGLE Vulkan integration. Targeted backend/Ozone compilation passes on x64 and ARM for source511, and the source519 x64 native ANGLE pbuffer probe links. Both full CEF522 archives are building; GPU runtime is unverified. See ../evidence/vulkan523/README.md. Prior source489/native490 software-rendering results remain in candidate508; run497 now passes 100 retirements and independent child accounting, but memory grows.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM

@@ -1,0 +1,52 @@
+diff --git a/rom/m68kemu/m68k_offsets.txt b/rom/m68kemu/m68k_offsets.txt
+index 3c8d5592..20af04ca 100644
+--- a/rom/m68kemu/m68k_offsets.txt
++++ b/rom/m68kemu/m68k_offsets.txt
+@@ -1066,14 +1066,14 @@ OFF|ExecBase|AlertData|74|4|AlertData|
+ OFF|ExecBase|MaxExtMem|78|4|MaxExtMem|
+ OFF|ExecBase|ChkSum|82|2|ChkSum|
+ OFF|ExecBase|IntVects|84|192|
+-OFF|ExecBase|ThisTask|276|4|ThisTask|
++OFF|ExecBase|ThisTask|276|4||
+ OFF|ExecBase|IdleCount|280|4|IdleCount|
+ OFF|ExecBase|DispCount|284|4|DispCount|
+-OFF|ExecBase|Quantum|288|2|Quantum|
+-OFF|ExecBase|Elapsed|290|2|Elapsed|
++OFF|ExecBase|Quantum|288|2||
++OFF|ExecBase|Elapsed|290|2||
+ OFF|ExecBase|SysFlags|292|2|SysFlags|
+-OFF|ExecBase|IDNestCnt|294|1|IDNestCnt|
+-OFF|ExecBase|TDNestCnt|295|1|TDNestCnt|
++OFF|ExecBase|IDNestCnt|294|1||
++OFF|ExecBase|TDNestCnt|295|1||
+ OFF|ExecBase|AttnFlags|296|2|AttnFlags|
+ OFF|ExecBase|AttnResched|298|2|AttnResched|
+ OFF|ExecBase|ResModules|300|4|ResModules|
+diff --git a/rom/m68kemu/m68kemu_shadow_layouts.h b/rom/m68kemu/m68kemu_shadow_layouts.h
+index 1dafdb5d..787f8c15 100644
+--- a/rom/m68kemu/m68kemu_shadow_layouts.h
++++ b/rom/m68kemu/m68kemu_shadow_layouts.h
+@@ -1489,7 +1489,7 @@ static const struct M68KFieldMap shadow_fields_ExAllData[] = {
+     {    0,    0, SF_END  , 0, 0, NULL }
+ };
+ 
+-/* ExecBase: m68k=632B, 65 fields */
++/* ExecBase: m68k=632B, 60 fields */
+ static const struct M68KFieldMap shadow_fields_ExecBase[] = {
+     SHADOW_FIELD(   0, 4, ExecBase, LibNode.lib_Node.ln_Succ),
+     SHADOW_FIELD(   4, 4, ExecBase, LibNode.lib_Node.ln_Pred),
+@@ -1519,14 +1519,9 @@ static const struct M68KFieldMap shadow_fields_ExecBase[] = {
+     SHADOW_FIELD(  74, 4, ExecBase, AlertData),
+     SHADOW_FIELD(  78, 4, ExecBase, MaxExtMem),
+     SHADOW_FIELD(  82, 2, ExecBase, ChkSum),
+-    SHADOW_FIELD( 276, 4, ExecBase, ThisTask),
+     SHADOW_FIELD( 280, 4, ExecBase, IdleCount),
+     SHADOW_FIELD( 284, 4, ExecBase, DispCount),
+-    SHADOW_FIELD( 288, 2, ExecBase, Quantum),
+-    SHADOW_FIELD( 290, 2, ExecBase, Elapsed),
+     SHADOW_FIELD( 292, 2, ExecBase, SysFlags),
+-    SHADOW_FIELD( 294, 1, ExecBase, IDNestCnt),
+-    SHADOW_FIELD( 295, 1, ExecBase, TDNestCnt),
+     SHADOW_FIELD( 296, 2, ExecBase, AttnFlags),
+     SHADOW_FIELD( 298, 2, ExecBase, AttnResched),
+     SHADOW_FIELD( 300, 4, ExecBase, ResModules),

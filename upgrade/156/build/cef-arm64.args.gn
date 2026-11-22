@@ -54,8 +54,8 @@ use_perfetto_client_library = true
 enable_perfetto_ipc = false
 enable_perfetto_trace_processor_httpd = false
 use_perfetto_trace_processor = false
-angle_enable_vulkan = false
-angle_build_vulkan_system_info = false
+angle_enable_vulkan = true
+angle_build_vulkan_system_info = true
 angle_shared_libvulkan = false
 angle_enable_gl = false
 angle_enable_null = true
@@ -73,3 +73,12 @@ dcheck_always_on = false
 
 # Release builds must not inherit Chromium developer field-trial experiments.
 disable_fieldtrial_testing_config = true
+
+# AROS uses the native vulkan.library import library.
+angle_use_custom_libvulkan = false
+angle_enable_vulkan_validation_layers = false
+
+# Renderer driver-version parsing is built; legacy dynamic system probing is disabled.
+angle_enable_vulkan_system_info = false
+
+use_dummy_lastchange = false

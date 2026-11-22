@@ -1,0 +1,109 @@
+{
+  "functional_pass": false,
+  "gates": {
+    "five_pages": false,
+    "markers": false,
+    "no_native_fault": true,
+    "not_timed_out": false,
+    "native_files_well_formed": true,
+    "native_child_pairs": false,
+    "observed_children_covered": true,
+    "five_renderers": false,
+    "retirement": false,
+    "no_ledger_io_failure": true
+  },
+  "source": "source489-applied.json",
+  "engine": "master490-arm-cef-link-result.json",
+  "missing_markers": [
+    "MEM501-cycle-3-returned:0",
+    "MEM501-cycle-4-returned:0",
+    "MEM501-cycle-5-returned:0",
+    "MEM501-host-returned:0",
+    "MEM501-stop-returned:0",
+    "MEM501-finished"
+  ],
+  "children": {
+    "119": "renderer",
+    "143": "renderer",
+    "59": "gpu-process",
+    "76": "utility"
+  },
+  "serial_accounting": {
+    "all_started_children_returned": false,
+    "observed_child_ids": [
+      "119",
+      "143",
+      "59",
+      "76"
+    ],
+    "entry_events": [
+      [
+        "59",
+        "gpu-process"
+      ],
+      [
+        "76",
+        "utility"
+      ],
+      [
+        "119",
+        "renderer"
+      ],
+      [
+        "143",
+        "renderer"
+      ]
+    ],
+    "entry_details": [
+      [
+        "59",
+        "gpu-process"
+      ],
+      [
+        "76",
+        "utility"
+      ],
+      [
+        "119",
+        "renderer"
+      ],
+      [
+        "143",
+        "renderer"
+      ]
+    ],
+    "entries": {
+      "59": "gpu-process",
+      "76": "utility",
+      "119": "renderer",
+      "143": "renderer"
+    },
+    "exits": [
+      [
+        "119",
+        "renderer",
+        "0"
+      ]
+    ],
+    "errors": [
+      "entry and successful exit IDs/types differ"
+    ],
+    "method": "Only complete line-terminated E/DETAIL/X records are accepted. Every observed ID, including partial E records, has child-emitted E or complete DETAIL entry and matching unique zero exit. Launch alone cannot supply entry. Conflicting types, duplicates, unknown exits, missing exits and additional verbose entries fail."
+  },
+  "ledger_errors": [],
+  "ledger_files": {
+    "Ledger501/119.exit": "6a67e45494e850390ae3591be4efe0da43f678c13ff2a595c1bce783f0d7ab18",
+    "Ledger501/119.enter": "a0e0fd33579c60752ce66e11093f2f120a241923c216ce1269e715bcc5b2a8d1",
+    "Ledger501/143.enter": "74fed195b0a79da545ab133da453a571b78ce25b152bc6da19a91212d44ede1d",
+    "Ledger501/59.enter": "2387145790fba351a01dfde3709d69a4e3b117448b4d25c9443866ae3a5ce010",
+    "Ledger501/76.enter": "9017c4c6aedf12dae5e88cd8f1d08815390525c1b16415ab0496797d8eccc6c5"
+  },
+  "disk_sha256": "6b02cf47a94a85944b02b023ee941a957bca10bd8ccf29fbcebb4284ea4bfd25",
+  "disk_read_after_exact_vm_exit": true,
+  "used_guest_mib": {
+    "before-host": 21.8822021484375,
+    "host-ready": 688.7742462158203,
+    "cycle-01": 878.1178436279297
+  },
+  "scope": "Five native AROS AArch64 QEMU shared-engine cycles; independent native child files. No long-run memory, network,USB,physicalPi or broad release acceptance."
+}

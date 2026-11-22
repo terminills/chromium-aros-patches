@@ -435,6 +435,41 @@ index 0000000000000000000000000000000000000000..a7706b83deea17016d59bc6db863b719
 +}
 +
 +}  // namespace angle
+diff --git a/src/common/vulkan/BUILD.gn b/src/common/vulkan/BUILD.gn
+index aaf43796a44302744954eebae99dfa30bf254cc5..7892c429cfa9a3dc4837a48c72be53717090ae1f 100644
+--- a/src/common/vulkan/BUILD.gn
++++ b/src/common/vulkan/BUILD.gn
+@@ -10,7 +10,7 @@ if (angle_use_wayland) {
+ }
+ 
+ declare_args() {
+-  angle_use_custom_libvulkan = !is_android && !is_fuchsia
++  angle_use_custom_libvulkan = !is_android && !is_fuchsia && !is_aros
+ 
+   # On real CrOS devices, we should use the system Vulkan loader. On the
+   # ChromeOS-for-Linux build, we should use the built libvulkan because the
+@@ -21,6 +21,10 @@ declare_args() {
+   }
+ }
+ 
++config("aros_vulkan_link") {
++  libs = [ "vulkan" ]
++}
++
+ config("angle_libvulkan_config") {
+   if (angle_use_custom_libvulkan) {
+     defines = [ "ANGLE_USE_CUSTOM_LIBVULKAN" ]
+@@ -115,7 +119,9 @@ if (angle_enable_vulkan) {
+ 
+   group("angle_vulkan_entry_points") {
+     public_deps = [ ":angle_vulkan_headers" ]
+-    if (is_fuchsia) {
++    if (is_aros) {
++      public_configs = [ ":aros_vulkan_link" ]
++    } else if (is_fuchsia) {
+       public_deps += [
+         "$angle_root/src/common/fuchsia_egl",
+         "//third_party/fuchsia-sdk/sdk/pkg/vulkan",
 diff --git a/src/compiler/translator/IntermNode.cpp b/src/compiler/translator/IntermNode.cpp
 index 5189d334c75c45cf461d05c8465dbc506948e69a..60375246e26ae32a5495a14f50798681bd89b607 100644
 --- a/src/compiler/translator/IntermNode.cpp
@@ -761,7 +796,7 @@ index 0000000000000000000000000000000000000000..eb2580382e6b37591f2acd932d4a2c4c
 +
 +}  // namespace angle
 diff --git a/src/libANGLE/Display.cpp b/src/libANGLE/Display.cpp
-index 02e0c549452499ec716af105dc8e7b363142e749..819271d62143f4bd31e9f4a9e1827ef988963668 100644
+index 02e0c549452499ec716af105dc8e7b363142e749..0fca1dbf45862b43523adeb9b712d697336e457b 100644
 --- a/src/libANGLE/Display.cpp
 +++ b/src/libANGLE/Display.cpp
 @@ -79,6 +79,8 @@
@@ -794,6 +829,16 @@ index 02e0c549452499ec716af105dc8e7b363142e749..819271d62143f4bd31e9f4a9e1827ef9
  #    else
              // No GLES support on this platform, fail display creation.
              impl = nullptr;
+@@ -730,6 +739,9 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
+                 impl = rx::CreateVulkanNullDisplay(state);
+             }
+             break;
++#    elif defined(ANGLE_PLATFORM_AROS)
++            impl = rx::CreateVulkanArosDisplay(state);
++            break;
+ #    elif defined(ANGLE_PLATFORM_WINDOWS)
+             if (rx::IsVulkanWin32DisplayAvailable())
+             {
 diff --git a/src/libANGLE/renderer/gl/BUILD.gn b/src/libANGLE/renderer/gl/BUILD.gn
 index 6be94901ed9bbc7a6b594198e5c3ec9e0352c8f1..680a23a42cf3ac583ec0d20e0b9677fa261bf2bb 100644
 --- a/src/libANGLE/renderer/gl/BUILD.gn
@@ -906,6 +951,233 @@ index 1d89bf7b0b31a8de81e2b7446ccd03d419788b89..69f968e70ac7056a6afdbcda1cd30a3e
    gl_backend_sources += [
      "egl/ContextEGL.cpp",
      "egl/ContextEGL.h",
+diff --git a/src/libANGLE/renderer/vulkan/DisplayVk.cpp b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+index 072ab0b20f88f7b7858a9352a00c53b98b5c0cdb..f48432bab7b35a45e29e838389cb81eda1148c96 100644
+--- a/src/libANGLE/renderer/vulkan/DisplayVk.cpp
++++ b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+@@ -32,7 +32,8 @@ namespace rx
+ namespace
+ {
+ // Query surface format and colorspace support.
+-void GetSupportedFormatColorspaces(VkPhysicalDevice physicalDevice,
++void GetSupportedFormatColorspaces(VkInstance instance,
++                                   VkPhysicalDevice physicalDevice,
+                                    const angle::FeaturesVk &featuresVk,
+                                    VkSurfaceKHR surface,
+                                    std::vector<VkSurfaceFormat2KHR> *surfaceFormatsOut)
+@@ -47,6 +48,18 @@ void GetSupportedFormatColorspaces(VkPhysicalDevice physicalDevice,
+ 
+     if (featuresVk.supportsSurfaceCapabilities2Extension.enabled)
+     {
++#if defined(ANGLE_PLATFORM_AROS)
++        // Optional AROS extension entry points belong to this Vulkan instance.
++        auto vkGetPhysicalDeviceSurfaceFormats2KHR =
++            reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceFormats2KHR>(
++                vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceFormats2KHR"));
++        if (!vkGetPhysicalDeviceSurfaceFormats2KHR)
++        {
++            ERR() << "AROS Vulkan surface-formats extension entry point is unavailable";
++            return;
++        }
++#endif
++
+         VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo2 = {};
+         surfaceInfo2.sType          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+         surfaceInfo2.surface        = surface;
+@@ -351,7 +364,7 @@ bool DisplayVk::isSurfaceFormatColorspacePairSupported(VkSurfaceKHR surface,
+     {
+         const angle::FeaturesVk &featuresVk = mRenderer->getFeatures();
+         std::vector<VkSurfaceFormat2KHR> surfaceFormats;
+-        GetSupportedFormatColorspaces(mRenderer->getPhysicalDevice(), featuresVk, surface,
++        GetSupportedFormatColorspaces(mRenderer->getInstance(), mRenderer->getPhysicalDevice(), featuresVk, surface,
+                                       &surfaceFormats);
+ 
+         if (!featuresVk.supportsSurfaceCapabilities2Extension.enabled)
+@@ -390,7 +403,7 @@ void DisplayVk::initSupportedSurfaceFormatColorspaces()
+         // Use the VK_GOOGLE_surfaceless_query extension to query supported surface formats and
+         // colorspaces by using a VK_NULL_HANDLE for the VkSurfaceKHR handle.
+         std::vector<VkSurfaceFormat2KHR> surfaceFormats;
+-        GetSupportedFormatColorspaces(mRenderer->getPhysicalDevice(), featuresVk, VK_NULL_HANDLE,
++        GetSupportedFormatColorspaces(mRenderer->getInstance(), mRenderer->getPhysicalDevice(), featuresVk, VK_NULL_HANDLE,
+                                       &surfaceFormats);
+         for (const VkSurfaceFormat2KHR &surfaceFormat : surfaceFormats)
+         {
+diff --git a/src/libANGLE/renderer/vulkan/DisplayVk_api.h b/src/libANGLE/renderer/vulkan/DisplayVk_api.h
+index 56a818c8ee624b6ca35902c8e26927d1e091b1e2..0ac65b7321cdaf09973fb4a4c417f7354812c489 100644
+--- a/src/libANGLE/renderer/vulkan/DisplayVk_api.h
++++ b/src/libANGLE/renderer/vulkan/DisplayVk_api.h
+@@ -15,6 +15,8 @@
+ namespace rx
+ {
+ 
++DisplayImpl *CreateVulkanArosDisplay(const egl::DisplayState &state);
++
+ bool IsVulkanNullDisplayAvailable();
+ DisplayImpl *CreateVulkanNullDisplay(const egl::DisplayState &state);
+ 
+diff --git a/src/libANGLE/renderer/vulkan/SurfaceVk.cpp b/src/libANGLE/renderer/vulkan/SurfaceVk.cpp
+index 44ef0ad3806cf9aaf2dcc2f2b3ade82a2edf4ac1..02817a40eeb2da2f5b301c37ff6bf670bcb7f8c3 100644
+--- a/src/libANGLE/renderer/vulkan/SurfaceVk.cpp
++++ b/src/libANGLE/renderer/vulkan/SurfaceVk.cpp
+@@ -1311,6 +1311,14 @@ angle::Result WindowSurfaceVk::initializeImpl(DisplayVk *displayVk, bool *anyMat
+             vk::AddToPNextChain(&surfaceCaps2, &surfaceProtectedCaps);
+         }
+ 
++#if defined(ANGLE_PLATFORM_AROS)
++        auto vkGetPhysicalDeviceSurfaceCapabilities2KHR =
++            reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(
++                vkGetInstanceProcAddr(mRenderer->getInstance(),
++                                      "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
++        ANGLE_VK_CHECK(displayVk, vkGetPhysicalDeviceSurfaceCapabilities2KHR != nullptr,
++                       VK_ERROR_EXTENSION_NOT_PRESENT);
++#endif
+         ANGLE_VK_TRY(displayVk, VK_CALL(vkGetPhysicalDeviceSurfaceCapabilities2KHR, physicalDevice,
+                                         &surfaceInfo2, &surfaceCaps2));
+ 
+@@ -2018,6 +2026,14 @@ angle::Result WindowSurfaceVk::queryAndAdjustSurfaceCaps(
+             }
+         }
+ 
++#if defined(ANGLE_PLATFORM_AROS)
++        auto vkGetPhysicalDeviceSurfaceCapabilities2KHR =
++            reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(
++                vkGetInstanceProcAddr(mRenderer->getInstance(),
++                                      "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
++        ANGLE_VK_CHECK(context, vkGetPhysicalDeviceSurfaceCapabilities2KHR != nullptr,
++                       VK_ERROR_EXTENSION_NOT_PRESENT);
++#endif
+         ANGLE_VK_TRY(context, VK_CALL(vkGetPhysicalDeviceSurfaceCapabilities2KHR, physicalDevice,
+                                       &surfaceInfo2, &surfaceCaps2));
+ 
+diff --git a/src/libANGLE/renderer/vulkan/SyncVk.cpp b/src/libANGLE/renderer/vulkan/SyncVk.cpp
+index f3a8c4c843c1aa73e508ef929a4a8717d59faf63..75866afffa8a2516a48ff7aa52171b1c5f55b295 100644
+--- a/src/libANGLE/renderer/vulkan/SyncVk.cpp
++++ b/src/libANGLE/renderer/vulkan/SyncVk.cpp
+@@ -16,7 +16,9 @@
+ #include "libANGLE/renderer/vulkan/DisplayVk.h"
+ 
+ #if !defined(ANGLE_PLATFORM_WINDOWS)
+-#    include <poll.h>
++#    if !defined(ANGLE_PLATFORM_AROS)
++#        include <poll.h>
++#    endif
+ #    include <unistd.h>
+ #else
+ #    include <io.h>
+@@ -27,7 +29,9 @@ namespace
+ // Wait for file descriptor to be signaled
+ VkResult SyncWaitFd(int fd, uint64_t timeoutNs, VkResult timeoutResult = VK_TIMEOUT)
+ {
+-#if !defined(ANGLE_PLATFORM_WINDOWS)
++// AROS uses Vulkan fences directly; Android/Linux sync-file descriptors are
++    // unavailable and EGL_ANDROID_native_fence_sync is not advertised.
++#if !defined(ANGLE_PLATFORM_WINDOWS) && !defined(ANGLE_PLATFORM_AROS)
+     struct pollfd fds;
+     int ret;
+ 
+diff --git a/src/libANGLE/renderer/vulkan/aros/DisplayVkAros.cpp b/src/libANGLE/renderer/vulkan/aros/DisplayVkAros.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5e77d3123209ab0264098be0551fb2771fc1fd8
+--- /dev/null
++++ b/src/libANGLE/renderer/vulkan/aros/DisplayVkAros.cpp
+@@ -0,0 +1,82 @@
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#include "libANGLE/renderer/vulkan/DisplayVk.h"
++#include "libANGLE/renderer/vulkan/SurfaceVk.h"
++#include "libANGLE/renderer/vulkan/vk_caps_utils.h"
++#include "libANGLE/renderer/vulkan/vk_renderer.h"
++#include <vulkan/vulkan_aros.h>
++
++namespace rx
++{
++namespace
++{
++class WindowSurfaceVkAros final : public WindowSurfaceVk
++{
++  public:
++    WindowSurfaceVkAros(const egl::SurfaceState &state, EGLNativeWindowType window)
++        : WindowSurfaceVk(state, window) {}
++
++  private:
++    angle::Result createSurfaceVk(vk::ErrorContext *context) override
++    {
++        VkInstance instance = context->getRenderer()->getInstance();
++        auto create = reinterpret_cast<PFN_vkCreateAROSSurfaceAROS>(
++            vkGetInstanceProcAddr(instance, "vkCreateAROSSurfaceAROS"));
++        ANGLE_VK_CHECK(context, create != nullptr, VK_ERROR_EXTENSION_NOT_PRESENT);
++        VkAROSSurfaceCreateInfoAROS info = {};
++        info.sType = VK_STRUCTURE_TYPE_AROS_SURFACE_CREATE_INFO_AROS;
++        info.window = reinterpret_cast<struct Window *>(mNativeWindowType);
++        ANGLE_VK_TRY(context, create(instance, &info, nullptr, &mSurface));
++        return angle::Result::Continue;
++    }
++
++    angle::Result getCurrentWindowSize(vk::ErrorContext *context,
++                                       gl::Extents *out) const override
++    {
++        VkSurfaceCapabilitiesKHR capabilities = {};
++        ANGLE_VK_TRY(context, vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
++            context->getRenderer()->getPhysicalDevice(), mSurface, &capabilities));
++        ANGLE_VK_CHECK(context, capabilities.currentExtent.width != UINT32_MAX &&
++                                  capabilities.currentExtent.height != UINT32_MAX,
++                       VK_ERROR_SURFACE_LOST_KHR);
++        *out = gl::Extents(capabilities.currentExtent.width, capabilities.currentExtent.height, 1);
++        return angle::Result::Continue;
++    }
++};
++
++class DisplayVkAros final : public DisplayVk
++{
++  public:
++    explicit DisplayVkAros(const egl::DisplayState &state) : DisplayVk(state) {}
++    bool isValidNativeWindow(EGLNativeWindowType window) const override { return window != 0; }
++    SurfaceImpl *createWindowSurfaceVk(const egl::SurfaceState &state,
++                                       EGLNativeWindowType window) override
++    {
++        return new WindowSurfaceVkAros(state, window);
++    }
++    const char *getWSIExtension() const override { return VK_AROS_SURFACE_EXTENSION_NAME; }
++    void checkConfigSupport(egl::Config *) override {}
++    egl::ConfigSet generateConfigs() override
++    {
++        // Image format support is queried from the selected device. Window swapchain
++        // formats and presentation support are checked against the actual surface.
++        std::vector<GLenum> colors;
++        for (GLenum format : {GL_RGBA8, GL_BGRA8_EXT, GL_RGB565, GL_RGB8, GL_RGB10_A2, GL_RGBA16F})
++        {
++            VkFormat vkFormat = mRenderer->getFormat(format).getActualRenderableImageVkFormat(mRenderer);
++            if (vkFormat != VK_FORMAT_UNDEFINED && mRenderer->hasImageFormatFeatureBits(
++                    vk::GetFormatIDFromVkFormat(vkFormat),
++                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
++                colors.push_back(format);
++        }
++        return egl_vk::GenerateConfigs(colors.data(), colors.size(),
++            egl_vk::kConfigDepthStencilFormats, ArraySize(egl_vk::kConfigDepthStencilFormats), this);
++    }
++};
++}  // namespace
++
++DisplayImpl *CreateVulkanArosDisplay(const egl::DisplayState &state)
++{
++    return new DisplayVkAros(state);
++}
++}  // namespace rx
+diff --git a/src/libANGLE/renderer/vulkan/vulkan_backend.gni b/src/libANGLE/renderer/vulkan/vulkan_backend.gni
+index f29c8084862f9ed73c9c4d87397d0f8c83590e31..1452a4be713c6eeb9cbc0ab1ea1590a34437250a 100644
+--- a/src/libANGLE/renderer/vulkan/vulkan_backend.gni
++++ b/src/libANGLE/renderer/vulkan/vulkan_backend.gni
+@@ -168,6 +168,10 @@ if (is_linux || is_chromeos) {
+   vulkan_backend_sources += vulkan_backend_dma_buf_sources
+ }
+ 
++if (is_aros) {
++  vulkan_backend_sources += [ "aros/DisplayVkAros.cpp" ]
++}
++
+ if (is_android) {
+   vulkan_backend_sources += [
+     "android/AHBFunctions.cpp",
 diff --git a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp b/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp
 index a0cb7f93ecc2592c51b2673f1648b45ab68a4eb1..95f0a4a44a8ea50970dd2afa00160d6b74b15776 100644
 --- a/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp

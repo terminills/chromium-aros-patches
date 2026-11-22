@@ -1,0 +1,12 @@
+{
+  "scope": "Private latest-master x64 kernel build unblock",
+  "removed_native_mappings": [
+    "ThisTask",
+    "Quantum",
+    "Elapsed",
+    "IDNestCnt",
+    "TDNestCnt"
+  ],
+  "reason": "Emulator-owned fields are synthesized in m68kemu_shadow.c; these native ExecBase members do not exist in SMP builds.",
+  "runtime_verified": false
+}
