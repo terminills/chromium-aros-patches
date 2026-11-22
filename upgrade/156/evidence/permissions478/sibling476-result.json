@@ -1,0 +1,134 @@
+{
+  "page_checks_pass": true,
+  "isolated_app_checks": true,
+  "survivor_after_A_closed": true,
+  "missing_markers": [
+    "SIB473-client-A-returned:0",
+    "SIB473-client-B-returned:0",
+    "SIB473-stop-returned:0",
+    "SIB473-host-returned:0"
+  ],
+  "native_fault": false,
+  "timed_out": false,
+  "retire_complete": 2,
+  "retire_deferred": 0,
+  "native_child_accounting": {
+    "all_started_children_returned": true,
+    "observed_child_ids": [
+      "120",
+      "155",
+      "76",
+      "90"
+    ],
+    "entry_events": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "90",
+        "utility"
+      ],
+      [
+        "120",
+        "renderer"
+      ],
+      [
+        "155",
+        "renderer"
+      ]
+    ],
+    "entry_details": [
+      [
+        "76",
+        "gpu-process"
+      ],
+      [
+        "90",
+        "utility"
+      ],
+      [
+        "120",
+        "renderer"
+      ],
+      [
+        "155",
+        "renderer"
+      ]
+    ],
+    "entries": {
+      "76": "gpu-process",
+      "90": "utility",
+      "120": "renderer",
+      "155": "renderer"
+    },
+    "exits": [
+      [
+        "120",
+        "renderer",
+        "0"
+      ],
+      [
+        "155",
+        "renderer",
+        "0"
+      ],
+      [
+        "76",
+        "gpu-process",
+        "0"
+      ],
+      [
+        "90",
+        "utility",
+        "0"
+      ]
+    ],
+    "errors": [],
+    "method": "Only complete line-terminated E/DETAIL/X records are accepted. Every observed ID, including partial E records, has child-emitted E or complete DETAIL entry and matching unique zero exit. Launch alone cannot supply entry. Conflicting types, duplicates, unknown exits, missing exits and additional verbose entries fail."
+  },
+  "captures": [
+    "appB-survives",
+    "two-apps"
+  ],
+  "scope": "Native QEMU shared-engine application isolation; no security sandbox or general memory plateau claim.",
+  "functional_pass": false,
+  "gates": {
+    "page_checks": true,
+    "terminal_markers": false,
+    "no_fault": true,
+    "not_timed_out": true,
+    "native_ledger": true,
+    "serial_ids_covered": true,
+    "two_renderer_children": true,
+    "retirement": true,
+    "no_ledger_io_failure": true
+  },
+  "children": {
+    "90": "utility",
+    "120": "renderer",
+    "155": "renderer",
+    "76": "gpu-process"
+  },
+  "ledger_files": {
+    "Ledger476/90.exit": "7cf09c56ab0fa3c5163750b99c27ecf2162faa3864556968dff41ccb26e9aa7d",
+    "Ledger476/90.enter": "007b55fcc9527687a549e1cedf34be28b67b0bc27292278baa7618799f0b21d1",
+    "Ledger476/120.enter": "5f823334373e0da34a8174790bd3163b29efc8a4f06edc4ab9e9db61b8826eea",
+    "Ledger476/120.exit": "dd97402ce53983709030f770e954a0a212d51ac25710896ff787a96403319778",
+    "Ledger476/155.exit": "c0d7f5cc0baf953ff530377aa60a30413daf30e5d2989c68c5a686ad170eff8d",
+    "Ledger476/76.exit": "637b9eedb5c43c1661c5f339f0dd01e0363176ec730a696995e169a9f52ce3c5",
+    "Ledger476/155.enter": "38946c6a18808d68ad262d411b4ce86b51cc0c2225375efd86973351d9c34d07",
+    "Ledger476/76.enter": "1d7ab4ff6e30fdea0c431f2337f758e85c754c97c8685be5582f83874e0014a9"
+  },
+  "disk_sha256": "8170fec1a5509b76225864ac14bf8f78614da50a2f65c07836025c06ecc6745a",
+  "disk_read_after_exact_vm_exit": true,
+  "pid_exited": 3286506,
+  "qmp_quit": [
+    {
+      "return": {}
+    },
+    {
+      "return": {}
+    }
+  ]
+}

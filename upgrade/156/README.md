@@ -7,28 +7,13 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-22 UTC
 
-The published snapshot is **444**, replay-checked across all 21 modified
-repositories. Both native445 x86_64 and AArch64 engine libraries link successfully.
-[Worker-shutdown validation](evidence/workers451/README.md) passes two-app
-storage/DOM/worker independence, app B surviving app A's closure, all four native
-child exit pairs, and two completed isolate retirements with none deferred.
-The fix drains owner-local cleanup callbacks before stopping the renderer scheduler.
-Fresh full-browser profile452 on the same build also passes cookie/localStorage
-write, close, reopen and read without a native fault.
+The published snapshot is **462**, replay-checked across all 21 modified repositories. Both native463 x86_64 and AArch64 libraries link. [Permission-registry lifetime validation](evidence/permissions478/README.md) passes x64 single-core two-app isolation, profile466 close/reopen persistence, and thirty-cycle465 with 30 completed retirements and none deferred. The owner-local registry is released on shutdown.
 
-The preceding source442/native443 [passed all thirty page cycles and the fresh
-browser profile close/reopen test](evidence/retirement447/README.md). It completed
-30 retirements with none deferred, backed by all 32 child entry/exit pairs.
-Whole-guest memory still grew36.71MiB between cycles10 and30, ending at1,095.47MiB.
-Those earlier measurements are not attributed to the new444 candidate.
+Memory stability remains open: whole-guest use still grows36.705MiB between cycles10 and30, reaching1095.608MiB. The corrected isolation audit and original harness failures are retained with their precise limits. Two-core477 acceptance remains pending.
 
-Current hundred-cycle450 memory testing is running. [ARM448 now visibly renders
-Chromium New Tab and About AROS](evidence/arm460/README.md), using1,574.64MiB for
-the whole guest with403.29MiB free. Its earlier pause later progressed; a second
-fresh boot454 remains separate evidence. Full ARM acceptance remains open.
-Memory stability and full release gates remain open; no RC binary is released.
-These are native AROS QEMU results. Earlier observations below retain their own
-source and engine identities.
+The preceding source444/native445 [passes worker isolation](evidence/workers451/README.md), profile452 and [ARM448 New Tab/About AROS rendering](evidence/arm460/README.md). ARM448 used1574.64MiB for the whole guest with403.29MiB free. Hundred-cycle450 tests that older445 build; its results are not measurements of463. Newer source468/native469 renderer cleanup is still private and under test.
+
+These are native AROS QEMU results. Memory stability and full release gates remain open; no RC binary is released. Earlier observations below retain their own source and engine identities.
 
 ## Earlier validation status — 2026-11-20 UTC
 

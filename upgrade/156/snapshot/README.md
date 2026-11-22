@@ -14,17 +14,9 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Snapshot444 closes owner-local Blink views, then drains their asynchronous
-worker cleanup callbacks through the native renderer task pump before scheduler
-shutdown. The wait is bounded; the existing isolate-retirement safety guard
-remains if a worker cannot finish. Both native445 links pass. Sibling446 passes
-independent app state, app B survival after app A closes, all four child exit
-records, and both isolate retirements with none deferred.
+Snapshot462 additionally releases each owner's extension permission registry through native AtExit. Both native463 links pass. X64 single-core two-app isolation476, synthetic profile466 close/reopen and thirty-cycle465 pass; all30 retirements complete. Memory still grows36.705MiB between cycles10 and30. See ../evidence/permissions478 for exact identities, the corrected harness audit and remaining limits.
 
-The preceding source442/native443 passed thirty-cycle438 and profile440. Its
-memory still grew36.71MiB between cycles10 and30. The current hundred-cycle450
-memory test and ARM448 browser visual test are running. See ../evidence/workers451
-and ../evidence/retirement447 for exact identities and limits. No RC is released.
+Prior ARM448 rendering belongs to source444/native445. ARM463 runtime acceptance remains open. No RC is released.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM

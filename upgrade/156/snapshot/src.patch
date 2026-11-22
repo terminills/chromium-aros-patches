@@ -46685,16 +46685,17 @@ index 8ae35d0a1a01048abc6e35f6cd099a3a7f5ee005..2afad942a6a2488b0b237192792b435d
  }  // namespace
  
 diff --git a/extensions/common/permissions/permissions_info.cc b/extensions/common/permissions/permissions_info.cc
-index 7682bc5d1d6222510afd86ad1c348adb627afa6b..634e9e98e1da7ec2b687fcbb8b00c902b256d707 100644
+index 7682bc5d1d6222510afd86ad1c348adb627afa6b..86dfea92007f76554d1e4fd62c9827f4975c77ab 100644
 --- a/extensions/common/permissions/permissions_info.cc
 +++ b/extensions/common/permissions/permissions_info.cc
-@@ -9,12 +9,22 @@
+@@ -9,12 +9,28 @@
  #include "base/strings/string_util.h"
  #include "extensions/common/alias.h"
  
 +#include "build/build_config.h"
 +#if BUILDFLAG(IS_AROS)
 +#include "base/aros/process_local.h"
++#include "base/logging.h"
 +#endif
 +
  namespace extensions {
@@ -46703,7 +46704,12 @@ index 7682bc5d1d6222510afd86ad1c348adb627afa6b..634e9e98e1da7ec2b687fcbb8b00c902
  PermissionsInfo* PermissionsInfo::GetInstance() {
 +#if BUILDFLAG(IS_AROS)
 +  struct PermissionsProcessTag {};
-+  return base::aros::ProcessLocalValue<base::NoDestructor<PermissionsInfo>, PermissionsProcessTag>().get();
++  // Permission objects belong to this logical process, not the resident
++  // engine. Their registry is initialized before consumers and destroyed
++  // after those consumers at the same owner-local AtExit boundary.
++  using OwnerPermissions = base::LazyInstance<PermissionsInfo>::DestructorAtExit;
++  return base::aros::ProcessLocalValue<OwnerPermissions,
++                                     PermissionsProcessTag>().Pointer();
 +#else
    static base::NoDestructor<PermissionsInfo> instance;
    return instance.get();
@@ -46711,6 +46717,42 @@ index 7682bc5d1d6222510afd86ad1c348adb627afa6b..634e9e98e1da7ec2b687fcbb8b00c902
  }
  
  void PermissionsInfo::RegisterPermissions(
+@@ -69,6 +85,10 @@ PermissionsInfo::PermissionsInfo()
+ }
+ 
+ PermissionsInfo::~PermissionsInfo() {
++#if BUILDFLAG(IS_AROS)
++  LOG(INFO) << "[Chromium:AROS:PermissionRegistry] release permissions="
++            << permission_count_;
++#endif
+ }
+ 
+ void PermissionsInfo::RegisterAlias(const Alias& alias) {
+diff --git a/extensions/common/permissions/permissions_info.h b/extensions/common/permissions/permissions_info.h
+index 5c9066c360e13a2ec2b4daf2fa82ef6860d2cce0..4b059dbbb1641c5c574c56f05b912f7d0baa456b 100644
+--- a/extensions/common/permissions/permissions_info.h
++++ b/extensions/common/permissions/permissions_info.h
+@@ -18,6 +18,10 @@
+ #include "base/containers/span.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/lazy_instance.h"
++#endif
+ #include "extensions/common/mojom/api_permission_id.mojom-shared.h"
+ #include "extensions/common/permissions/api_permission.h"
+ #include "extensions/common/permissions/api_permission_set.h"
+@@ -63,6 +67,9 @@ class PermissionsInfo {
+ 
+  private:
+   friend class base::NoDestructor<PermissionsInfo>;
++#if BUILDFLAG(IS_AROS)
++  friend struct base::LazyInstanceTraitsBase<PermissionsInfo>;
++#endif
+ 
+   PermissionsInfo();
+ 
 diff --git a/extensions/renderer/dispatcher.cc b/extensions/renderer/dispatcher.cc
 index b4fd769cc2ea5da737b5a5bd7763f6da6050cbbb..76161ef1aedd4f88f0a7e6613f2277ede1e8b7dd 100644
 --- a/extensions/renderer/dispatcher.cc
