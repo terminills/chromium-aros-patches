@@ -34996,7 +34996,7 @@ index df80dfe84aed61bfffe3e6571efe914650fe3926..267719dc2d89c7650ea7a6544cd15a02
        "media/chrome_key_systems.cc",
        "media/chrome_key_systems.h",
 diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
-index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..10cbc1a37cce171e9f1221060fe9a7605236755b 100644
+index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..98391acf61761dced67c940370b8c8e5f37780f5 100644
 --- a/chrome/renderer/chrome_content_renderer_client.cc
 +++ b/chrome/renderer/chrome_content_renderer_client.cc
 @@ -18,6 +18,7 @@
@@ -35007,7 +35007,7 @@ index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..10cbc1a37cce171e9f1221060fe9a760
  #include "base/metrics/histogram_functions.h"
  #include "base/metrics/user_metrics_action.h"
  #include "base/no_destructor.h"
-@@ -400,7 +401,28 @@ ChromeContentRendererClient::ChromeContentRendererClient(
+@@ -400,7 +401,58 @@ ChromeContentRendererClient::ChromeContentRendererClient(
  #endif
  }
  
@@ -35034,10 +35034,40 @@ index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..10cbc1a37cce171e9f1221060fe9a760
 +  }
 +#endif
 +}
++
++#if BUILDFLAG(IS_AROS)
++void ChromeContentRendererClient::RenderThreadWillShutdownForAros() {
++  RenderThread* thread = RenderThread::Get();
++  CHECK(thread);
++  // These objects cannot wait for AtExit: their Mojo sequences and V8
++  // handles need this renderer's scheduler and isolate to remain alive.
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  ChromeExtensionsRendererClient::ShutdownForAros();
++#endif
++  if (chrome_observer_)
++    thread->RemoveObserver(chrome_observer_.get());
++  if (subresource_filter_ruleset_dealer_)
++    thread->RemoveObserver(subresource_filter_ruleset_dealer_.get());
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
++  if (phishing_model_setter_)
++    thread->RemoveObserver(phishing_model_setter_.get());
++  phishing_model_setter_.reset();
++#endif
++  subresource_filter_ruleset_dealer_.reset();
++  web_cache_impl_.reset();
++  webrtc_logging_agent_impl_.reset();
++#if BUILDFLAG(ENABLE_SPELLCHECK)
++  spellcheck_.reset();
++#endif
++  chrome_observer_.reset();
++  LOG(INFO) << "[Chromium:AROS:RendererClient] render-thread resources released "
++               "before isolate retirement";
++}
++#endif
  
  void ChromeContentRendererClient::RenderThreadStarted() {
    RenderThread* thread = RenderThread::Get();
-@@ -627,10 +649,12 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+@@ -627,10 +679,12 @@ void ChromeContentRendererClient::RenderThreadStarted() {
          heap_profiling::HeapProfilerController::GetInstance();
      // The HeapProfilerController should have been created in
      // ChromeMainDelegate::PostEarlyInitialization.
@@ -35051,17 +35081,32 @@ index d460c0fb699d6a3e5ebf930ff9a8c7ea073a9b5f..10cbc1a37cce171e9f1221060fe9a760
        sampling_profiler::ThreadProfiler::SetMainThreadTaskRunner(
            base::SingleThreadTaskRunner::GetCurrentDefault());
        mojo::PendingRemote<metrics::mojom::CallStackProfileCollector> collector;
+diff --git a/chrome/renderer/chrome_content_renderer_client.h b/chrome/renderer/chrome_content_renderer_client.h
+index ccfa4ee3bd8466a9477230b07144a9a0857f440a..dfe3d6c62df8bc62dca1ce8074c7046327b07e95 100644
+--- a/chrome/renderer/chrome_content_renderer_client.h
++++ b/chrome/renderer/chrome_content_renderer_client.h
+@@ -96,6 +96,9 @@ class ChromeContentRendererClient
+   ~ChromeContentRendererClient() override;
+ 
+   void RenderThreadStarted() override;
++#if BUILDFLAG(IS_AROS)
++  void RenderThreadWillShutdownForAros() override;
++#endif
+   void ExposeInterfacesToBrowser(mojo::BinderMap* binders) override;
+   void RenderFrameCreated(content::RenderFrame* render_frame) override;
+   void WebViewCreated(blink::WebView* web_view,
 diff --git a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
-index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..6ff7704a07756fc7cefb5624b62fc7e2bee0cd0c 100644
+index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..71b8e82ca7f5997c972e3c83150581c9762279ba 100644
 --- a/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
 +++ b/chrome/renderer/extensions/chrome_extensions_renderer_client.cc
-@@ -4,11 +4,17 @@
+@@ -4,11 +4,18 @@
  
  #include "chrome/renderer/extensions/chrome_extensions_renderer_client.h"
  
 +#include "build/build_config.h"
 +#if BUILDFLAG(IS_AROS)
 +#include "base/aros/process_local.h"
++#include "base/logging.h"
 +#endif
 +
  #include <utility>
@@ -35073,21 +35118,75 @@ index 0d792dc3e18d4fd408c94a7fa369c71a739aea41..6ff7704a07756fc7cefb5624b62fc7e2
  #include "chrome/common/chrome_isolated_world_ids.h"
  #include "chrome/renderer/extensions/chrome_policy_activity_log_filter_delegate.h"
  #include "chrome/renderer/extensions/chrome_resource_request_policy_delegate.h"
-@@ -62,7 +68,14 @@ ChromeExtensionsRendererClient::~ChromeExtensionsRendererClient() {
+@@ -40,6 +47,16 @@ using extensions::Extension;
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++std::unique_ptr<ChromeExtensionsRendererClient>& ArosRendererClient() {
++  struct ArosRendererClientOwner {};
++  return base::aros::ProcessLocalValue<
++      std::unique_ptr<ChromeExtensionsRendererClient>,
++      ArosRendererClientOwner>();
++}
++#endif
++
++
+ // These values are persisted to logs. Entries should not be renumbered and
+ // numeric values should never be reused.
+ enum class GoogleDocsExtensionAvailablity {
+@@ -62,9 +79,28 @@ ChromeExtensionsRendererClient::~ChromeExtensionsRendererClient() {
  
  // static
  void ChromeExtensionsRendererClient::Create() {
 +#if BUILDFLAG(IS_AROS)
-+  struct ChromeExtensionsRendererOwner {};
-+  (void)base::aros::ProcessLocalValue<
-+      base::NoDestructor<ChromeExtensionsRendererClient>,
-+      ChromeExtensionsRendererOwner>();
++  auto& client = ArosRendererClient();
++  if (!client)
++    client = std::make_unique<ChromeExtensionsRendererClient>();
 +#else
    static base::NoDestructor<ChromeExtensionsRendererClient> client;
 +#endif
  }
  
++#if BUILDFLAG(IS_AROS)
++void ChromeExtensionsRendererClient::ShutdownForAros() {
++  auto& client = ArosRendererClient();
++  if (!client)
++    return;
++  if (client->dispatcher())
++    content::RenderThread::Get()->RemoveObserver(client->dispatcher());
++  client.reset();
++  LOG(INFO) << "[Chromium:AROS:ExtensionsRenderer] owner client and dispatcher "
++               "released before isolate retirement";
++}
++#endif
++
  bool ChromeExtensionsRendererClient::IsIncognitoProcess() const {
+   return process_state::IsIncognitoProcess();
+ }
+diff --git a/chrome/renderer/extensions/chrome_extensions_renderer_client.h b/chrome/renderer/extensions/chrome_extensions_renderer_client.h
+index b0e632f0c3041972c8fe59b8adec299abcd571fd..5421d9f8c46c70b5e3a6a5a6ef7ff17fd7df7105 100644
+--- a/chrome/renderer/extensions/chrome_extensions_renderer_client.h
++++ b/chrome/renderer/extensions/chrome_extensions_renderer_client.h
+@@ -8,6 +8,7 @@
+ #include <memory>
+ #include <string>
+ 
++#include "build/build_config.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
+ 
+ class GURL;
+@@ -48,6 +49,10 @@ class ChromeExtensionsRendererClient
+   // There's an exception for the static methods below, which just live here
+   // for want of a better home.
+   static void Create();
++#if BUILDFLAG(IS_AROS)
++  // Called on the owner renderer after views/workers close, before V8 disposal.
++  static void ShutdownForAros();
++#endif
+ 
+   // extensions::ExtensionsRendererClient implementation.
+   bool IsIncognitoProcess() const override;
 diff --git a/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc b/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc
 index 8dd724e489aeacafd1eb7cc902cfa5dc90deec60..e0d1887373cd813962ebb76feb3c021c1fff05d4 100644
 --- a/chrome/renderer/printing/chrome_print_render_frame_helper_delegate.cc
@@ -45284,10 +45383,22 @@ index 5f8775d57801014a38ec6e0be376fea27ff5ab6b..aaec68849240f9e7a9bdeda70b19cc12
 -use_zygote = is_posix && !is_android && !is_apple
 +use_zygote = is_posix && !is_android && !is_apple && !is_aros
 diff --git a/content/public/renderer/content_renderer_client.h b/content/public/renderer/content_renderer_client.h
-index ee1ba2eeb47f936cf1b7cb7634a9f1f91f0a5246..95fdb68064280d96b62e4be36a8758bfc31a9c73 100644
+index ee1ba2eeb47f936cf1b7cb7634a9f1f91f0a5246..405d6080ff83d3978a9ce2e9dcd0730b47d18e96 100644
 --- a/content/public/renderer/content_renderer_client.h
 +++ b/content/public/renderer/content_renderer_client.h
-@@ -110,6 +110,9 @@ class CONTENT_EXPORT ContentRendererClient {
+@@ -100,6 +100,11 @@ class CONTENT_EXPORT ContentRendererClient {
+ 
+   // Notifies us that the RenderThread has been created.
+   virtual void RenderThreadStarted() {}
++#if BUILDFLAG(IS_AROS)
++  // Views and workers have closed; the owner renderer scheduler and isolate
++  // are still alive. Release thread-bound embedder resources here.
++  virtual void RenderThreadWillShutdownForAros() {}
++#endif
+ 
+   // Allows the embedder to make Mojo interfaces available to the browser
+   // process. Binders can be added to |*binders| to service incoming interface
+@@ -110,6 +115,9 @@ class CONTENT_EXPORT ContentRendererClient {
    // a crash handler (such as crashpad) is already in use.
    virtual void SetUpWebAssemblyTrapHandler();
  
@@ -45297,7 +45408,7 @@ index ee1ba2eeb47f936cf1b7cb7634a9f1f91f0a5246..95fdb68064280d96b62e4be36a8758bf
    // Notifies that a new RenderFrame has been created.
    virtual void RenderFrameCreated(RenderFrame* render_frame) {}
  
-@@ -358,6 +361,10 @@ class CONTENT_EXPORT ContentRendererClient {
+@@ -358,6 +366,10 @@ class CONTENT_EXPORT ContentRendererClient {
    // This method may invalidate the frame.
    virtual void RunScriptsAtDocumentIdle(RenderFrame* render_frame) {}
  
@@ -45667,7 +45778,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0168c95b3529598692fe2695906214b88d5e8a7f 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..aeb56005c00828505fc0a2cfb0e98188b1428f11 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
 @@ -57,6 +57,9 @@
@@ -45767,14 +45878,15 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0168c95b3529598692fe2695906214b8
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +714,58 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +714,59 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
 +#if BUILDFLAG(IS_AROS)
 +  // IPC disconnect can quit the main loop before Blink's non-nestable Close
 +  // tasks run. Finish owner-local frame teardown with scheduler/GPU alive.
-+  blink::CloseRendererViewsForArosShutdown();
++  if (blink::CloseRendererViewsForArosShutdown())
++    GetContentClient()->renderer()->RenderThreadWillShutdownForAros();
 +  // viz::Gpu destruction reports channel loss through the current renderer
 +  // task runner.  Release it before shutting that runner down.
 +  if (gpu_) {
@@ -45827,7 +45939,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..0168c95b3529598692fe2695906214b8
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +776,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +777,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
@@ -59079,7 +59191,7 @@ index a737cf06f53a570a41b5cc9cd2af7e7a72cbb372..ff5a4c91a7d59d83c4975565d20e5f09
    static std::unique_ptr<WebThreadScheduler> CreateMainThreadScheduler(
        std::unique_ptr<base::MessagePump> message_pump);
 diff --git a/third_party/blink/public/web/blink.h b/third_party/blink/public/web/blink.h
-index eed893864a344767a9d9df6fab71866065d19a9a..286a841618d341bf8f1a1f96c7e3e7b4003a7ec0 100644
+index eed893864a344767a9d9df6fab71866065d19a9a..9ab8f65e351bad266e68632cebe3638ea0490dc8 100644
 --- a/third_party/blink/public/web/blink.h
 +++ b/third_party/blink/public/web/blink.h
 @@ -33,6 +33,8 @@
@@ -59091,7 +59203,7 @@ index eed893864a344767a9d9df6fab71866065d19a9a..286a841618d341bf8f1a1f96c7e3e7b4
  #include "third_party/blink/public/platform/web_common.h"
  #include "third_party/blink/public/platform/web_string.h"
  #include "v8/include/v8-isolate.h"
-@@ -84,6 +86,15 @@ BLINK_EXPORT void InitializeWithoutIsolateForTesting(
+@@ -84,6 +86,16 @@ BLINK_EXPORT void InitializeWithoutIsolateForTesting(
  // must be called before this.
  BLINK_EXPORT v8::Isolate* CreateMainThreadIsolate();
  
@@ -59101,7 +59213,8 @@ index eed893864a344767a9d9df6fab71866065d19a9a..286a841618d341bf8f1a1f96c7e3e7b4
 +BLINK_EXPORT bool RetireMainThreadIsolateForAros();
 +// Called after the native renderer main loop returns, while its scheduler and
 +// compositor are still available. Closes only this logical renderer's views.
-+BLINK_EXPORT void CloseRendererViewsForArosShutdown();
++// Returns false if live pages/workers prevent owner-resource teardown.
++BLINK_EXPORT bool CloseRendererViewsForArosShutdown();
 +#endif
 +
  // Alters the rendering of content to conform to a fixed set of rules.
@@ -59445,7 +59558,7 @@ index 0a8db62080e2e8a182467c60d1174bb40c198ec5..7c3cc3818f7b34a810247dd7a7a20185
      sources += [
        "memory_usage_monitor_posix.cc",
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
-index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..79a1ba348eced5ee3111199341ddae640e21f324 100644
+index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..4dde9e56464821dcd9f73b549477125272ea107e 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc
 +++ b/third_party/blink/renderer/controller/blink_initializer.cc
 @@ -35,6 +35,18 @@
@@ -59484,12 +59597,12 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..79a1ba348eced5ee3111199341ddae64
  
    GetBlinkInitializer().RegisterMemoryWatchers(platform);
  
-@@ -215,6 +234,71 @@ v8::Isolate* CreateMainThreadIsolate() {
+@@ -215,6 +234,72 @@ v8::Isolate* CreateMainThreadIsolate() {
    return V8Initializer::InitializeMainThread();
  }
  
 +#if BUILDFLAG(IS_AROS)
-+void CloseRendererViewsForArosShutdown() {
++bool CloseRendererViewsForArosShutdown() {
 +  CHECK(IsMainThread());
 +  auto& views = WebViewImpl::AllInstances();
 +  LOG(INFO) << "[Chromium:AROS:ViewTeardown] closing views=" << views.size();
@@ -59513,6 +59626,7 @@ index cfced2ae753c8f78b0c3ae1bf9b1b8a65999f894..79a1ba348eced5ee3111199341ddae64
 +  }
 +  LOG(INFO) << "[Chromium:AROS:ViewTeardown] workers after drain="
 +            << WorkerThread::WorkerThreadCount();
++  return Page::OrdinaryPages().empty() && !WorkerThread::WorkerThreadCount();
 +}
 +
 +bool RetireMainThreadIsolateForAros() {

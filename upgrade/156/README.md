@@ -7,13 +7,13 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-22 UTC
 
-The published snapshot is **462**, replay-checked across all 21 modified repositories. Both native463 x86_64 and AArch64 libraries link. [Permission-registry lifetime validation](evidence/permissions478/README.md) passes x64 single-core two-app isolation, profile466 close/reopen persistence, and thirty-cycle465 with 30 completed retirements and none deferred. The owner-local registry is released on shutdown.
+The published snapshot is **468**, replay-checked across all21 modified repositories. Both native469 x86_64 and AArch64 libraries link. [Renderer resource teardown](evidence/renderer481/README.md) now releases thread-bound objects before scheduler/isolate retirement. X64 sibling473 passes two-app storage/DOM/worker isolation, app B survival, all four child exit pairs and both retirements. Profile475 passes synthetic cookie/localStorage close/reopen persistence.
 
-Memory stability remains open: whole-guest use still grows36.705MiB between cycles10 and30, reaching1095.608MiB. The corrected isolation audit and original harness failures are retained with their precise limits. Two-core477 acceptance remains pending.
+Thirty-cycle474 and ARM479 browser rendering remain pending. Early474 samples still grow; no memory plateau or savings are claimed. Native484 adds a further private raster-pool cleanup and is under build/test.
 
-The preceding source444/native445 [passes worker isolation](evidence/workers451/README.md), profile452 and [ARM448 New Tab/About AROS rendering](evidence/arm460/README.md). ARM448 used1574.64MiB for the whole guest with403.29MiB free. [Hundred-cycle450](evidence/longrun480/README.md) completed100 pages and retirements on that older445 build, but guest memory grew161.315MiB between cycles30 and100. Its corrected native accounting and original serial-interleaving failure are retained. These are not measurements of463. Newer source468/native469 renderer cleanup is still private and under test.
+The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles30 and100. Those are not measurements of469.
 
-These are native AROS QEMU results. Memory stability and full release gates remain open; no RC binary is released. Earlier observations below retain their own source and engine identities.
+[ARM448 New Tab/About AROS rendering](evidence/arm460/README.md) belongs to source444/native445 and used1574.64MiB for the whole guest with403.29MiB free. These are native AROS QEMU results. Memory stability and full release gates remain open; no RC binary is released. Earlier observations below retain their own source and engine identities.
 
 ## Earlier validation status — 2026-11-20 UTC
 

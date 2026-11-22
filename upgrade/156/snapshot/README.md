@@ -14,9 +14,7 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Snapshot462 additionally releases each owner's extension permission registry through native AtExit. Both native463 links pass. X64 single-core two-app isolation476, synthetic profile466 close/reopen and thirty-cycle465 pass; all30 retirements complete. Memory still grows36.705MiB between cycles10 and30. See ../evidence/permissions478 for exact identities, the corrected harness audit and remaining limits.
-
-Prior ARM448 rendering belongs to source444/native445. ARM463 runtime acceptance remains open. No RC is released.
+Snapshot468 closes renderer-owned extension/Chrome resources while their native scheduler and V8 isolate are still alive, after owner views/workers drain. Both native469 links pass. X64 sibling473 isolation and profile475 synthetic close/reopen pass. Thirty-cycle474 and fresh ARM479 browser rendering remain pending; early memory still grows. See ../evidence/renderer481. No RC is released.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM

@@ -1,0 +1,46 @@
+{
+  "base": "source462-applied.json",
+  "files": [
+    {
+      "file": "third_party/blink/public/web/blink.h",
+      "before": "bd60e638427a692edb8ec526fe84df62a33ae39fab72fe37cb6c7c6acd079e62",
+      "after": "23ee024bf213694b27443ac764fa59e52a96ba01f57f2860c45c70599fd505a8"
+    },
+    {
+      "file": "third_party/blink/renderer/controller/blink_initializer.cc",
+      "before": "37d2d823d5f973364d56bb1338eb46835cca92e510ad027546b7491025a080d7",
+      "after": "61436534260727a4b8b1129563ec2c70d63e1f1ab04f4a8dbfc8c3b568f5732f"
+    },
+    {
+      "file": "content/public/renderer/content_renderer_client.h",
+      "before": "1ebe025ebdd7ee21a07a93d60f0abb2f9b8a151eed04be4178d58e49926f9d36",
+      "after": "2bf3033aa8bbbab760dd4429fc8b31ff2d8e2213bba1480f2a75a6e3aa8c9ef6"
+    },
+    {
+      "file": "content/renderer/render_thread_impl.cc",
+      "before": "d190f029dff9b4149f7576e7ea924354f87f9b595c0e6b1cb75d7ee1721c81f6",
+      "after": "57d1d599ebe57744c4b5cb0933db6e1e1d39395756a2c38a8fd9da547c249452"
+    },
+    {
+      "file": "chrome/renderer/chrome_content_renderer_client.h",
+      "before": "e11c4717ca3167495c180b51dfe708e008ebb1a9ca0b22c21f7288d5ba54d280",
+      "after": "ccf5694251b9a4dace35955f011383e18eff32fa9861fcda7d4c910ab6527eb0"
+    },
+    {
+      "file": "chrome/renderer/chrome_content_renderer_client.cc",
+      "before": "6fc9f00b338b29a1e090de92802269241642876c41017cccbb3cec026f9e96fc",
+      "after": "c661b7d702c15196e78838ce30de7dee00e4711f9f5007b53fbb3cc54ff38750"
+    },
+    {
+      "file": "chrome/renderer/extensions/chrome_extensions_renderer_client.h",
+      "before": "ea8edb374376c0becf47196faaea245f1f26aa3f5d280970766cb31c47e63606",
+      "after": "822b0a4a550203485444e9cf7d544fe2bcf34d15dae32284c7faa6858b862772"
+    },
+    {
+      "file": "chrome/renderer/extensions/chrome_extensions_renderer_client.cc",
+      "before": "dfa0d07b99996a6f4d474fa440e4fcfec7f4db951e5efd364b5dc45f55102912",
+      "after": "ae1f28236523d01e64eeac53a462ba85dd0f825afb5697be87684f155f3c1abf"
+    }
+  ],
+  "change": "Owner renderer cleanup hook after views/workers close and before scheduler/isolate retirement. Detach observer registrations; release ChromeExtensionsRendererClient/Dispatcher and formerly retained Chrome thread-bound members on their live owner sequence. Preserve original AtExit retention fallback when views/workers remain. Evidence467 proves30 retained dispatchers;438 logs30 explicit late retentions. Runtime pending."
+}
