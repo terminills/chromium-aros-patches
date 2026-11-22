@@ -22,8 +22,10 @@ browser profile close/reopen test](evidence/retirement447/README.md). It complet
 Whole-guest memory still grew36.71MiB between cycles10 and30, ending at1,095.47MiB.
 Those earlier measurements are not attributed to the new444 candidate.
 
-Current hundred-cycle450 memory testing is running. ARM448 stopped progressing
-before browser startup; a fresh identical-engine boot454 is under observation.
+Current hundred-cycle450 memory testing is running. [ARM448 now visibly renders
+Chromium New Tab and About AROS](evidence/arm460/README.md), using1,574.64MiB for
+the whole guest with403.29MiB free. Its earlier pause later progressed; a second
+fresh boot454 remains separate evidence. Full ARM acceptance remains open.
 Memory stability and full release gates remain open; no RC binary is released.
 These are native AROS QEMU results. Earlier observations below retain their own
 source and engine identities.

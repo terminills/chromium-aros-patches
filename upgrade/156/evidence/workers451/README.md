@@ -27,6 +27,8 @@ fault. This does not qualify real account sign-in or a cold guest restart.
 
 Hundred-cycle450 remains running. ARM448 reached Wanderer but stopped progressing
 before browser startup; its registers and screenshot are retained privately.
-One fresh identical-engine boot454 is running. ARM445 runtime is not yet qualified. Browser
+ARM448 subsequently progressed and now visibly renders Chromium and About AROS;
+see ../arm460 for exact current-build screenshots and whole-guest memory. The
+second fresh boot454 remains separate. Full ARM acceptance is not established. Browser
 Vulkan, Widevine, physical hardware, and Node/Electron/Zune consumers retain their
 separate qualification requirements. No RC binary is published.
