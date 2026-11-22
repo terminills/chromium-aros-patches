@@ -6,7 +6,7 @@ Both x86_64 and AArch64 native libraries link. On x64 QEMU, profile466 passes sy
 
 Single-core sibling476 passes two-app storage/DOM/worker independence, B surviving A closure, four child entry/exit pairs and both retirements. Its original result mistakenly expected predecessor473 terminal markers inside an f-string. The separate corrected audit verifies actual476 markers against the retained serial hash; the original failure remains here.
 
-Earlier sibling456/464/470/471 are invalid harness attempts: numeric script substitution changed the fixed MBR partition-table offset446. They do not establish an AROS, SMP or Chromium failure. Fresh476/477 preserve numeric constants and verify partition geometry before boot. The two-core477 result remains pending.
+Earlier sibling456/464/470/471 are invalid harness attempts: numeric script substitution changed the fixed MBR partition-table offset446. They do not establish an AROS, SMP or Chromium failure. Fresh476/477 preserve numeric constants and verify partition geometry before boot. The corrected two-core477 attempt timed out after GPU/utility startup without rendering or an explicit native fault. Its cause remains undiagnosed; it is separate from the earlier invalid-MBR attempts.
 
 ![Application B survives A closure](sibling476-appB-survives.png)
 

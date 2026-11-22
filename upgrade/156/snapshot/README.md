@@ -14,7 +14,7 @@ Obtain the recorded sources, then apply each manifest patch in its corresponding
 repository. Do not layer the Chromium 124 root queues or the explanatory patches
 in ../aros on top: this snapshot already includes their current changes.
 
-Snapshot468 closes renderer-owned extension/Chrome resources while their native scheduler and V8 isolate are still alive, after owner views/workers drain. Both native469 links pass. X64 sibling473 isolation and profile475 synthetic close/reopen pass. Thirty-cycle474 failed at cycle16 in memory-instrumentation startup. Fresh ARM479 browser rendering remains pending; memory acceptance fails. See ../evidence/renderer481. No RC is released.
+Snapshot468 closes renderer-owned extension/Chrome resources while their native scheduler and V8 isolate are still alive, after owner views/workers drain. Both native469 links pass. X64 sibling473 isolation and profile475 synthetic close/reopen pass. Thirty-cycle474 failed at cycle16 in memory-instrumentation startup. ARM479 visibly renders New Tab/About AROS (../evidence/arm495); full lifecycle and memory acceptance fail. See ../evidence/renderer481. No RC is released.
 
 The engine retains one shared code image and 2 MiB PartitionAlloc superpages.
 Bounded QEMU results do not establish release readiness, full browser/media/DRM
