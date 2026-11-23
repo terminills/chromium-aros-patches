@@ -1,0 +1,31 @@
+{
+  "exit_code": 0,
+  "args": [
+    "make",
+    "-C",
+    "/home/terminills/job0254-release-staging/master504/x64-build",
+    "-j1",
+    "CHROMIUM_SRC=/mnt/short-term/job0254-01a1e62b/src",
+    "V8_OUTPUT=/mnt/short-term/job0254-01a1e62b/src/out/aros-v8-527-x64",
+    "workbench-libs-v8-quick"
+  ],
+  "archive": {
+    "commands": [
+      [
+        "/mnt/short-term/job0254-01a1e62b/src/buildtools/linux64/gn",
+        "gen",
+        "/mnt/short-term/job0254-01a1e62b/src/out/aros-v8-527-x64"
+      ],
+      [
+        "ninja",
+        "-C",
+        "/mnt/short-term/job0254-01a1e62b/src/out/aros-v8-527-x64",
+        "-j8",
+        "obj/v8/libv8_monolith.a"
+      ]
+    ],
+    "exit_code": 0,
+    "sha256": "aabc3a8cc359c484ee7dea7050484ecc12ba9c34506a06a521ea15908bf60c51"
+  },
+  "sha256": "6b748eace296e71560b55d309f92a3ce9d70cc67b554a845429f2495c6b0f8f6"
+}

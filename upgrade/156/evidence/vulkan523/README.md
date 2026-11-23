@@ -93,3 +93,24 @@ and clients while matched-SDK V8 builds527 continue. They establish provisional
 CEF527/host541 graphics integration, not a complete matched-build release.
 Memory values are whole-guest samples for these particular pages and include
 the software driver; neither browser RSS nor memory-plateau acceptance.
+
+
+## Matched engine and boot packaging follow-up
+
+Both V8-527 archives and native shared libraries now build successfully against
+the refreshed SDKs. All ten x64 facade, host, client and test targets532 pass.
+Run545 uses these matched engine/app binaries and passes browser WebGL1 and
+WebGL2 shader/link/draw/readback through ANGLE/Vulkan. The screenshot and raw
+console evidence are retained. Its boot modules remain the retained control.
+
+Run528's font-scan fault was an ISO overlay packaging mismatch: no fresh
+`diskfont.library` had been built, so the old base ISO's module remained. Its
+12-byte segment header conflicted with current DOS's 16-byte header. Explicit
+build548 supplies the matching library. Run549 restores the normal startup,
+including FixFonts, reaches the fresh-master desktop and passes both Vulkan
+loader and ANGLE pixel probes. No OS source workaround is required for this
+failure. A full browser run on this corrected fresh boot is next.
+
+Run544's normal browser close also drained callbacks, closed the session and
+returned both renderer children with exit0. This does not establish resident
+host termination, repeated-session memory plateau or full RC acceptance.
