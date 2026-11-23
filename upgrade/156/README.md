@@ -7,7 +7,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-23 UTC
 
-The published snapshot is **572**, replay-checked across all 21 modified repositories. It retains native ANGLE Vulkan and GPU cache locking and adds owner-scoped native resolver cancellation before final worker-pool join. Both CEF archives573 and native libraries574 build. X64 run581 passes synthetic cookie/localStorage persistence across a cold boot, with full host exit on both boots and no persistent-cache errors. ARM576 paints the full New Tab page and passes RAM/FAT descriptor-alias locking. [Resolver and cold-boot evidence](evidence/resolver572/README.md) records the exact scope and retained failures. The two-app replay remains pending.
+The published snapshot is **572**, replay-checked across all 21 modified repositories. It retains native ANGLE Vulkan and GPU cache locking and adds owner-scoped native resolver cancellation before final worker-pool join. Both CEF archives573 and native libraries574 build. X64 run581 passes synthetic cookie/localStorage persistence across a cold boot, with full host exit on both boots and no persistent-cache errors. ARM576 paints the full New Tab page and passes RAM/FAT descriptor-alias locking. [Resolver and cold-boot evidence](evidence/resolver572/README.md) records the exact scope and retained failures. Run582 also passes two-app isolation, app B survival and full host exit, with four child pairs confirmed by its independent native FAT ledger.
 
 Earlier native566 run567 passes WebGL1/2 readback and two full browser sessions. [Cache locking evidence](evidence/cache564/README.md) retains those results; hardware GPU rendering is not qualified.
 
