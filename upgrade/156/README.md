@@ -5,9 +5,11 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
-## Current validation status — 2026-11-22 UTC
+## Current validation status — 2026-11-23 UTC
 
-The published snapshot is **523**, replay-checked across all 21 modified repositories. It adds source519 native AROS ANGLE Vulkan surfaces, native Vulkan linkage and Ozone backend selection. Mesa and Vulkan are required AROS infrastructure; device capabilities determine the available rendering features. [Vulkan build evidence and limits](evidence/vulkan523/README.md) records successful targeted backend compilation on x64 and ARM (source511), plus a native x64 ANGLE pbuffer probe link (source519). Full CEF522 archives are building on both architectures. Hardware GPU rendering is not yet qualified.
+The published snapshot is **564**, replay-checked across all 21 modified repositories. It includes native AROS ANGLE Vulkan support and the Chromium-private native GPU cache lock. Both CEF archives compile. Native image 566 x64 passes two full browser sessions using a writable FAT profile, WebGL 1/2 readback and host exit with no persistent-cache errors. [Cache locking and retained evidence](evidence/cache564/README.md) separates current results from earlier builds. ARM566 validation is pending; ARM 560 paints the full New Tab page using automatic software fallback when no Vulkan 1.1 device is available.
+
+Matched image 527 run 552 passes 100 browser sessions and 102 native child entry/exit pairs, but memory grows 154.49 MiB from cycle 30 to 100. Memory stability, final profile/isolation replays, packaging and RC publication remain open. Hardware GPU rendering is not qualified.
 
 The preceding source489/native490 libraries link on both architectures. X64 run497 now passes 100 pages, 100 renderer retirements, zero deferrals and independent native child entry/exit accounting. Whole-guest memory still grows **150.830 MiB** between cycles 30 and 100. Profile493 passes synthetic cookie/localStorage close/reopen persistence. Sibling491 passes page isolation and app B survival, but host shutdown stalls waiting for a system resolver worker. [Retained native490 evidence](evidence/candidate508/status.json) contains the earlier results; its hundred-cycle pending status is superseded by [run497 summary](evidence/vulkan523/compact497-summary516.json).
 
@@ -15,7 +17,7 @@ The preceding source489/native490 libraries link on both architectures. X64 run4
 
 The prior source468/native469 thirty-cycle474 crash at cycle16 and its exact owner-registry diagnosis remain in [renderer evidence](evidence/renderer481/README.md).
 
-The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles30 and100. Those are not measurements of469.
+The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and 102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles 30 and100. Those are not measurements of469.
 
 [ARM448 New Tab/About AROS rendering](evidence/arm460/README.md) belongs to source444/native445 and used1574.64MiB for the whole guest with403.29MiB free. These are native AROS QEMU results. Memory stability and full release gates remain open; no RC binary is released. Earlier observations below retain their own source and engine identities.
 
@@ -26,7 +28,7 @@ installed-icon keyboard launch, four tabs, version, closure/reopen, two-app
 storage/DOM/worker isolation, and profile close/reopen persistence. Source287
 and engine288 pass30 lifecycle cycles, but memory still grows205.44MiB between
 cycles10 and30; memory plateau remains open. [Cold-boot profile persistence](evidence/cold317-profile/README.md) now passes for synthetic cookies and localStorage.
-The current snapshot is421. [Renderer retirement and production configuration](evidence/retirement389/README.md) pass both native engine links, x64 two-app isolation and browser profile close/reopen. Production profiles now exclude Chromium developer field-trial experiments; rebuilt ARM acceptance remains pending. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
+The snapshot at this earlier stage was421. [Renderer retirement and production configuration](evidence/retirement389/README.md) pass both native engine links, x64 two-app isolation and browser profile close/reopen. Production profiles now exclude Chromium developer field-trial experiments; rebuilt ARM acceptance remains pending. [Feature-provider lifetime and current regressions](evidence/lifetime364/README.md) pass native x64 lifecycle and two-app isolation; whole-guest memory growth remains unresolved. [Stable owner identity and profile startup](evidence/owner342/README.md) pass both native links, x64 application isolation and profile close/reopen. [Native tracing-task retirement](evidence/trace333/README.md) removes the per-cycle task growth in a ten-cycle x64 run; whole-guest memory still grows. Older results retain their build identities.
 
 [Native credentials on fresh master](evidence/credentials307-master/README.md)
 pass on x64 and ARM. Both SDKs include the generated prerequisites.

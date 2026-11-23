@@ -39876,6 +39876,103 @@ index b137139d3719cc4f257842883f310724ba073da9..2c9fa5c545ad93f830ef6dad051d1443
    return static_cast<TokenServiceTable*>(db->GetTable(GetKey()));
  }
  
+diff --git a/components/sqlite_vfs/sandboxed_file.cc b/components/sqlite_vfs/sandboxed_file.cc
+index db1c883aa542a780dd879e2717fbcc4c4bb09819..01550ae6bb584ca8262cbfdc919147c994dcc687 100644
+--- a/components/sqlite_vfs/sandboxed_file.cc
++++ b/components/sqlite_vfs/sandboxed_file.cc
+@@ -21,6 +21,15 @@
+ #include "components/sqlite_vfs/metrics_util.h"
+ #include "third_party/sqlite/sqlite3.h"
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/logging.h"
++extern "C" {
++void* chromiumArosLockOpenFile(int fd);
++int chromiumArosLock(void* context, int level);
++void chromiumArosLockClose(void* context);
++}
++#endif
++
+ namespace sqlite_vfs {
+ 
+ SandboxedFile::SandboxedFile(Client client,
+@@ -48,7 +57,12 @@ SandboxedFile::SandboxedFile(Client client,
+   }
+ }
+ 
+-SandboxedFile::~SandboxedFile() = default;
++SandboxedFile::~SandboxedFile() {
++#if BUILDFLAG(IS_AROS)
++  // Also cover open failures before SQLite can call Close().
++  chromiumArosLockClose(native_exclusive_lock_);
++#endif
++}
+ 
+ base::File SandboxedFile::TakeUnderlyingFile(FileType file_type) {
+   CHECK_EQ(file_type, file_type_);
+@@ -435,7 +449,25 @@ int SandboxedFile::Unfetch(sqlite3_int64 offset, void* fetch_result) {
+ 
+ bool SandboxedFile::AcquireSingleConnectionlock() {
+   CHECK(underlying_file_.IsValid());
++#if BUILDFLAG(IS_AROS)
++  CHECK(!native_exclusive_lock_);
++  auto error = base::File::FILE_ERROR_FAILED;
++  native_exclusive_lock_ = chromiumArosLockOpenFile(underlying_file_.GetPlatformFile());
++  if (native_exclusive_lock_) {
++    int rc = chromiumArosLock(native_exclusive_lock_, SQLITE_LOCK_SHARED);
++    if (rc == SQLITE_OK)
++      rc = chromiumArosLock(native_exclusive_lock_, SQLITE_LOCK_EXCLUSIVE);
++    error = rc == SQLITE_OK ? base::File::FILE_OK : base::File::FILE_ERROR_IN_USE;
++    if (rc != SQLITE_OK) {
++      chromiumArosLockClose(native_exclusive_lock_);
++      native_exclusive_lock_ = nullptr;
++    }
++  }
++  LOG_IF(ERROR, error != base::File::FILE_OK)
++      << "[Chromium:AROS:CacheLock] exclusive acquisition failed: " << error;
++#else
+   const auto error = underlying_file_.Lock(base::File::LockMode::kExclusive);
++#endif
+   base::UmaHistogramExactLinear(GetHistogramName(client_, "LockResult"), -error,
+                                 -base::File::FILE_ERROR_MAX);
+   return error == base::File::FILE_OK;
+@@ -443,7 +475,12 @@ bool SandboxedFile::AcquireSingleConnectionlock() {
+ 
+ void SandboxedFile::ReleaseSingleConnectionlock() {
+   CHECK(underlying_file_.IsValid());
++#if BUILDFLAG(IS_AROS)
++  chromiumArosLockClose(native_exclusive_lock_);
++  native_exclusive_lock_ = nullptr;
++#else
+   underlying_file_.Unlock();
++#endif
+ }
+ 
+ }  // namespace sqlite_vfs
+diff --git a/components/sqlite_vfs/sandboxed_file.h b/components/sqlite_vfs/sandboxed_file.h
+index da250aa9fce7b3eee7fb1cf79823e63a072335f7..5953ed73686de7de81fe5448c753563bb8847369 100644
+--- a/components/sqlite_vfs/sandboxed_file.h
++++ b/components/sqlite_vfs/sandboxed_file.h
+@@ -11,6 +11,7 @@
+ #include <optional>
+ #include <vector>
+ 
++#include "build/build_config.h"
+ #include "base/component_export.h"
+ #include "base/files/file.h"
+ #include "base/files/memory_mapped_file.h"
+@@ -136,6 +137,11 @@ class COMPONENT_EXPORT(SQLITE_VFS) SandboxedFile
+   bool AcquireSingleConnectionlock();
+   void ReleaseSingleConnectionlock();
+ 
++#if BUILDFLAG(IS_AROS)
++  // Exclusive cache ownership through the native DOS-identity lock registry.
++  void* native_exclusive_lock_ = nullptr;
++#endif
++
+   const Client client_;
+ 
+   // The type of database file this represents.
 diff --git a/components/sqlite_vfs/sqlite_sandboxed_vfs.cc b/components/sqlite_vfs/sqlite_sandboxed_vfs.cc
 index e35f835345f580300a4a4ad706fc4928a1155dca..948ea8b0e95f4f2c22611b54bd0417f8c92bec67 100644
 --- a/components/sqlite_vfs/sqlite_sandboxed_vfs.cc
@@ -66647,10 +66744,10 @@ index 0baf0d297fa7d79ac8223765a8ae27f257ecf5c7..bcb18f0a6d14c8eff1ec3e36bf0acac3
    include_dirs = [
 diff --git a/third_party/sqlite/sqlite3_aros_locks.c b/third_party/sqlite/sqlite3_aros_locks.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709bb1723c4a
+index 0000000000000000000000000000000000000000..220d47750a4cd247fac902f2a86dec91cd6457d3
 --- /dev/null
 +++ b/third_party/sqlite/sqlite3_aros_locks.c
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,165 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -66663,6 +66760,7 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +#include <exec/memory.h>
 +#include <stdatomic.h>
 +#include <stdint.h>
++#include <stdio.h>
 +
 +// One data-only registry shared by native SQLite consumers. No code pointers
 +// or client allocator storage may escape into this OS-owned object. Database
@@ -66685,12 +66783,12 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +  int level;
 +};
 +static _Atomic(uintptr_t) registry_address;
-+static struct ArosSqlRegistry *registry(void) {
-+  uintptr_t value=atomic_load_explicit(&registry_address,memory_order_acquire);
++static _Atomic(uintptr_t) fh_registry_address;
++static struct ArosSqlRegistry *registry_for(_Atomic(uintptr_t) *address, const char *name) {
++  uintptr_t value=atomic_load_explicit(address,memory_order_acquire);
 +  if(value>1)return (void*)value;
 +  uintptr_t empty=0;
-+  if(atomic_compare_exchange_strong(&registry_address,&empty,1)) {
-+    const char *name="AROS.SQLite.NativeLockRegistry.v1";
++  if(atomic_compare_exchange_strong(address,&empty,1)) {
 +    struct NamedObject *object=FindNamedObject(NULL,name,NULL);
 +    if(!object) {
 +      struct TagItem tags[]={{ANO_UserSpace,sizeof(struct ArosSqlRegistry)},{TAG_DONE,0}};
@@ -66714,29 +66812,53 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +    value=object?(uintptr_t)object->no_Object:0;
 +    // Retain the registry reference. ReleaseNamedObject currently uses Forbid
 +    // rather than an SMP lock; this permanent object is never removed.
-+    atomic_store_explicit(&registry_address,value,memory_order_release);
++    atomic_store_explicit(address,value,memory_order_release);
 +    return (void*)value;
 +  }
-+  do {Delay(1);value=atomic_load_explicit(&registry_address,memory_order_acquire);}while(value==1);
++  do {Delay(1);value=atomic_load_explicit(address,memory_order_acquire);}while(value==1);
 +  return (void*)value;
 +}
-+void *chromiumArosLockOpen(const char *path) {
-+  struct ArosSqlRegistry *r=registry(); if(!r)return NULL;
-+  BPTR identity=Lock(path,SHARED_LOCK); if(!identity)return NULL;
++static void *open_identity(BPTR identity, int borrowed_fh) {
++  if(!identity)return NULL;
++  struct ArosSqlRegistry *r=registry_for(
++      borrowed_fh ? &fh_registry_address : &registry_address,
++      borrowed_fh ? "AROS.Chromium.SQLite.ExclusiveFHRegistry.v1"
++                  : "AROS.SQLite.NativeLockRegistry.v1");
++  if(!r){if(!borrowed_fh)UnLock(identity);return NULL;}
 +  struct ArosSqlConnection *c=AllocVec(sizeof(*c),MEMF_PUBLIC|MEMF_CLEAR);
 +  struct ArosSqlDatabase *fresh=AllocVec(sizeof(*fresh),MEMF_PUBLIC|MEMF_CLEAR);
-+  if(!c || !fresh){if(c)FreeVec(c);if(fresh)FreeVec(fresh);UnLock(identity);return NULL;}
++  if(!c || !fresh){if(c)FreeVec(c);if(fresh)FreeVec(fresh);if(!borrowed_fh)UnLock(identity);return NULL;}
 +  ObtainSemaphore(&r->mutex);
 +  struct ArosSqlDatabase *d=r->databases;
-+  while(d && SameLock(d->identity,identity)!=LOCK_SAME)d=d->next;
++  while(d && (borrowed_fh ? d->identity!=identity : SameLock(d->identity,identity)!=LOCK_SAME))d=d->next;
 +  if(!d){d=fresh;fresh=NULL;d->identity=identity;identity=0;d->next=r->databases;r->databases=d;}
 +  ++d->references;c->database=d;c->registry=r;
 +  ReleaseSemaphore(&r->mutex);
-+  if(fresh)FreeVec(fresh);if(identity)UnLock(identity);
++  if(fresh)FreeVec(fresh);if(identity && !borrowed_fh)UnLock(identity);
 +  return c;
 +}
++void *chromiumArosLockOpen(const char *path) {
++  return open_identity(Lock(path,SHARED_LOCK),0);
++}
++/* Chromium's sandboxed cache receives descriptors, not native path names.
++   Resolve the already-open DOS object so aliases and renames share identity.
++   This bridge stays private to Chromium; it does not add SDK fcntl semantics. */
++void *chromiumArosLockOpenFile(int fd) {
++  long handle=0;
++  if(__get_default_file(fd,&handle)!=0 || !handle)return NULL;
++  BPTR identity=DupLockFromFH((BPTR)handle);
++  if(identity)return open_identity(identity,0);
++  /* DupLockFromFH copies shared locks only. ERROR_OBJECT_IN_USE means
++     this handle holds an exclusive DOS lock (FAT writable opens do this).
++     Keep that ownership unchanged. The separate FH registry arbitrates dup()
++     aliases; DOS excludes independent opens. The caller retains the handle
++     until this context closes, so its identity cannot be recycled meanwhile. */
++  if(IoErr()!=ERROR_OBJECT_IN_USE)return NULL;
++  return open_identity((BPTR)handle,1);
++}
 +int chromiumArosLock(void *context,int level) {
-+  struct ArosSqlConnection *c=context;struct ArosSqlDatabase *d=c->database;
++  struct ArosSqlConnection *c=context;
++  struct ArosSqlDatabase *d=c->database;
 +  int rc=0; ObtainSemaphore(&c->registry->mutex);
 +  if(level>c->level) {
 +    if(level==1) {
@@ -66758,7 +66880,8 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +}
 +int chromiumArosLockLevel(void *context) {return ((struct ArosSqlConnection*)context)->level;}
 +int chromiumArosUnlock(void *context,int level) {
-+  struct ArosSqlConnection *c=context;struct ArosSqlDatabase *d=c->database;
++  struct ArosSqlConnection *c=context;
++  struct ArosSqlDatabase *d=c->database;
 +  ObtainSemaphore(&c->registry->mutex);
 +  if(c->level>level) {
 +    if(d->reserved==c)d->reserved=NULL;
@@ -66783,7 +66906,11 @@ index 0000000000000000000000000000000000000000..879f8ab6267a5d2d3097c29221e9709b
 +  int last=--d->references==0;
 +  if(last){struct ArosSqlDatabase **link=&r->databases;while(*link!=d)link=&(*link)->next;*link=d->next;}
 +  ReleaseSemaphore(&r->mutex);
-+  if(last){UnLock(d->identity);FreeVec(d);}FreeVec(c);
++  if(last){
++    if((uintptr_t)r!=atomic_load_explicit(&fh_registry_address,memory_order_acquire))
++      UnLock(d->identity);
++    FreeVec(d);
++  }FreeVec(c);
 +}
 +#endif
 diff --git a/third_party/sqlite/sqlite3_aros_vfs.c b/third_party/sqlite/sqlite3_aros_vfs.c
