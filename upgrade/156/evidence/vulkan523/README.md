@@ -24,8 +24,8 @@ The GN standalone shared-library test target reaches only an unresolved main: AR
 uses its native library packaging instead. Probe521 supplies a real EGL/pbuffer
 entry point and links successfully. Full CEF526 archives pass on both architectures after generating the missing
 credentials-library SDK exports (native module builds525 also pass). Native Mesa,
-Vulkan and EGL module builds524 pass on both architectures. Native Vulkan engine linking,
-presentation, physical RADV/NVK rendering and performance are not yet validated.
+Vulkan and EGL module builds524 pass on both architectures. Native CEF527 linking now passes on both architectures. Full-browser Vulkan,
+physical RADV/NVK rendering and performance are not yet validated.
 This is development source, not an RC or binary release.
 
 ## Separate existing software-rendering results
@@ -49,4 +49,23 @@ fault appears in the captured serial. The standard VGA QEMU setup has no qualifi
 Vulkan device. This is negative capability/error handling evidence, not successful
 Vulkan rendering or qualification of the new OS build.
 
-Matching refreshed-SDK V8 archives and native CEF/V8 images are being built as527.
+Matching refreshed-SDK V8 archives and native V8 images are being built as527.
+
+## Native software Vulkan execution
+
+Run533 adds the retained native Lavapipe module from packed198's OS staging
+tree (Mesa26.2.7, LLVM20.1.0) to the diagnostic runtime. The loader exposes Vulkan
+1.4.354, enumerates one CPU device and 165 device extensions, and completes
+instance creation/destruction. ANGLE initializes EGL1.5 and reads the expected
+RGBA pixel (64,128,191,255). Both probes return and the script finishes.
+
+Run536 additionally renders four colour bars through ANGLE's Vulkan window
+surface into a real Intuition window; SwapBuffers succeeds, the screenshot
+captures the output, and normal cleanup returns after the 60-second display.
+The retained driver and retained boot modules make this a diagnostic software
+Vulkan result, not a fresh whole-platform build or hardware GPU qualification.
+
+Companion aros-web commit `9507685` removes CEFHost's unconditional GPU-disable
+flags. Native Ozone capability selection is the default; `--software-rendering`
+retains an explicit diagnostic override. Both native host cross-links pass.
+The rebuilt full browser with this default still requires runtime validation.
