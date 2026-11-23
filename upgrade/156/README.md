@@ -7,7 +7,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-23 UTC
 
-The published snapshot is **564**, replay-checked across all 21 modified repositories. It includes native AROS ANGLE Vulkan support and the Chromium-private native GPU cache lock. Both CEF archives compile. Native image 566 x64 passes two full browser sessions using a writable FAT profile, WebGL 1/2 readback and host exit with no persistent-cache errors. [Cache locking and retained evidence](evidence/cache564/README.md) separates current results from earlier builds. ARM566 validation is pending; ARM 560 paints the full New Tab page using automatic software fallback when no Vulkan 1.1 device is available.
+The published snapshot is **564**, replay-checked across all 21 modified repositories. It includes native AROS ANGLE Vulkan support and the Chromium-private native GPU cache lock. Both CEF archives compile. Native image 566 x64 passes two full browser sessions using a writable FAT profile, WebGL 1/2 readback and host exit with no persistent-cache errors. [Cache locking and retained evidence](evidence/cache564/README.md) separates current results from earlier builds. ARM image 566 passes RAM/FAT alias-lock probes and full New Tab rendering in run 568; ARM 560 also paints the full New Tab page using automatic software fallback when no Vulkan 1.1 device is available.
 
 Matched image 527 run 552 passes 100 browser sessions and 102 native child entry/exit pairs, but memory grows 154.49 MiB from cycle 30 to 100. Memory stability, final profile/isolation replays, packaging and RC publication remain open. Hardware GPU rendering is not qualified.
 
