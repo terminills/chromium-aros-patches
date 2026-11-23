@@ -69,3 +69,27 @@ Companion aros-web commit `9507685` removes CEFHost's unconditional GPU-disable
 flags. Native Ozone capability selection is the default; `--software-rendering`
 retains an explicit diagnostic override. Both native host cross-links pass.
 The rebuilt full browser with this default still requires runtime validation.
+
+## Provisional full browser Vulkan checks
+
+Companion `4cd6088` additionally selects ANGLE/Vulkan and passes the existing
+AROS compositing opt-in, avoiding the separate legacy process-model GPU-disable
+default. Both host541 cross-links pass. Software rendering remains explicit.
+
+Run542 renders Chromium's New Tab page. Its GPU report identifies
+`(gl=egl-angle,angle=vulkan)`, `ANGLE_VULKAN`, and Vulkan1.4.354 on llvmpipe26.2.7.
+Compositing, Canvas and WebGL are enabled. The report's hardware-accelerated
+labels describe Chromium's graphics path; this CPU Lavapipe run does not prove
+physical GPU acceleration. Its separate Vulkan status is disabled because
+the direct Vulkan path is not selected; ANGLE uses Vulkan underneath GL.
+
+Run544 passes browser WebGL1 and WebGL2 shader compilation, linking, draw and
+readPixels checks, each returning RGBA32/191/96/255. The fixture, console output
+and screenshot are retained. The first fixture attempt543 exceeded the existing
+2047-character launcher URL limit;544 uses a native file URL instead.
+
+These browser runs intentionally use retained native490 V8 and master229 facade
+and clients while matched-SDK V8 builds527 continue. They establish provisional
+CEF527/host541 graphics integration, not a complete matched-build release.
+Memory values are whole-guest samples for these particular pages and include
+the software driver; neither browser RSS nor memory-plateau acceptance.
