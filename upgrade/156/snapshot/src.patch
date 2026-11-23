@@ -3246,10 +3246,10 @@ index 0000000000000000000000000000000000000000..c4fc94eaa8e9b734eaf22640ee483410
 +#endif
 diff --git a/base/aros/socket_library.cc b/base/aros/socket_library.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0d700b85c
+index 0000000000000000000000000000000000000000..7c66359b9c84675d379237da7faf4c7151b8ba04
 --- /dev/null
 +++ b/base/aros/socket_library.cc
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,754 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3264,6 +3264,7 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +#include <vector>
 +
 +#include "base/no_destructor.h"
++#include "base/aros/process_local.h"
 +#include "base/synchronization/lock.h"
 +
 +#define __CONFIG_ROADSHOW__ 1
@@ -3277,6 +3278,7 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +#include <netinet/in.h>
 +#include <netinet/in_var.h>
 +#include <proto/exec.h>
++#include <proto/dos.h>
 +#include <proto/bsdsocket.h>
 +#include <sys/ioctl.h>
 +
@@ -3351,6 +3353,8 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +struct SocketLibraryEntry {
 +  Task* task;
 +  Library* library;
++  uint64_t lookup_owner = 0;
++  ULONG lookup_interrupt = 0;
 +};
 +
 +class SocketLibraryManager {
@@ -3401,6 +3405,69 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +    CloseLibrary(library);
 +  }
 +
++  bool BeginLookup(Task* task, uint64_t owner, ULONG interrupt) {
++    AutoLock guard(lock_);
++    if (std::find(stopping_owners_.begin(), stopping_owners_.end(), owner) !=
++        stopping_owners_.end()) {
++      return false;
++    }
++    for (auto& entry : entries_) {
++      if (entry.task == task) {
++        entry.lookup_owner = owner;
++        entry.lookup_interrupt = interrupt;
++        return true;
++      }
++    }
++    return false;
++  }
++
++  void EndLookup(Task* task) {
++    AutoLock guard(lock_);
++    for (auto& entry : entries_) {
++      if (entry.task == task) {
++        entry.lookup_interrupt = 0;
++        entry.lookup_owner = 0;
++        return;
++      }
++    }
++  }
++
++  void CancelLookups(uint64_t owner) {
++    {
++      AutoLock guard(lock_);
++      if (std::find(stopping_owners_.begin(), stopping_owners_.end(), owner) ==
++          stopping_owners_.end()) {
++        stopping_owners_.push_back(owner);
++      }
++    }
++    for (;;) {
++      bool pending = false;
++      {
++        AutoLock guard(lock_);
++        for (const auto& entry : entries_) {
++          if (entry.lookup_owner == owner && entry.lookup_interrupt) {
++            // EndLookup and task teardown use this same lock, so neither the
++            // task nor its allocated interrupt bit can disappear here.
++            Signal(entry.task, entry.lookup_interrupt);
++            pending = true;
++          }
++        }
++      }
++      if (!pending) {
++        return;
++      }
++      // A native resolver may try another address family after interruption.
++      // Cooperatively interrupt until its call returns; never detach a worker
++      // which could still execute code from the shared engine.
++      Delay(1);
++    }
++  }
++
++  void FinishLookups(uint64_t owner) {
++    AutoLock guard(lock_);
++    std::erase(stopping_owners_, owner);
++  }
++
 + private:
 +  // AROSTCP hands out socket descriptor numbers from the process-wide
 +  // fd.library table (shared with every file the process has open) and fails
@@ -3424,6 +3491,7 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +
 +  Lock lock_;
 +  std::vector<SocketLibraryEntry> entries_;
++  std::vector<uint64_t> stopping_owners_;
 +};
 +
 +SocketLibraryManager& Manager() {
@@ -3434,6 +3502,61 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +Library* CurrentSocketLibrary() {
 +  return Manager().GetForCurrentTask();
 +}
++
++// A private Exec signal leaves the task's existing break signals unchanged.
++// Register before entering the blocking native resolver so cancellation also
++// covers the interval between registration and its first WaitSelect().
++class ScopedNameLookup {
++ public:
++  explicit ScopedNameLookup(Library* library) : library_(library) {
++    signal_ = AllocSignal(-1);
++    if (signal_ < 0) {
++      return;
++    }
++    TagItem get[] = {
++        {SBTM_GETREF(SBTC_BREAKMASK), reinterpret_cast<IPTR>(&old_mask_)},
++        {TAG_END, 0}};
++    if (__SocketBaseTagList_WB(library_, get) != 0) {
++      FreeSignal(signal_);
++      signal_ = -1;
++      return;
++    }
++    TagItem set[] = {
++        {SBTM_SETVAL(SBTC_BREAKMASK), old_mask_ | (ULONG{1} << signal_)},
++        {TAG_END, 0}};
++    if (__SocketBaseTagList_WB(library_, set) != 0) {
++      FreeSignal(signal_);
++      signal_ = -1;
++      return;
++    }
++    active_ = Manager().BeginLookup(FindTask(nullptr), CurrentProcessIdentity(),
++                                    ULONG{1} << signal_);
++  }
++
++  ~ScopedNameLookup() {
++    if (signal_ < 0) {
++      return;
++    }
++    const int saved_errno = errno;
++    if (active_) {
++      Manager().EndLookup(FindTask(nullptr));
++    }
++    TagItem restore[] = {
++        {SBTM_SETVAL(SBTC_BREAKMASK), old_mask_}, {TAG_END, 0}};
++    __SocketBaseTagList_WB(library_, restore);
++    SetSignal(0, ULONG{1} << signal_);
++    FreeSignal(signal_);
++    errno = saved_errno;
++  }
++
++  bool active() const { return active_; }
++
++ private:
++  Library* library_;
++  IPTR old_mask_ = 0;
++  BYTE signal_ = -1;
++  bool active_ = false;
++};
 +
 +// The interface probes run on a ThreadPool task with no logging of their own;
 +// a failing socket() there used to vanish without a trace.
@@ -3658,9 +3781,23 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +                   const struct addrinfo* hints,
 +                   struct addrinfo** result) {
 +  Library* const library = CurrentSocketLibrary();
-+  return library
-+             ? BASE_AROS_GETADDRINFO_WB(library, host, service, hints, result)
-+             : EAI_SYSTEM;
++  if (!library) {
++    return EAI_SYSTEM;
++  }
++  ScopedNameLookup lookup(library);
++  if (!lookup.active()) {
++    *result = nullptr;
++    return EAI_AGAIN;
++  }
++  return BASE_AROS_GETADDRINFO_WB(library, host, service, hints, result);
++}
++
++void CancelNameLookupsForCurrentProcess() {
++  Manager().CancelLookups(CurrentProcessIdentity());
++}
++
++void FinishNameLookupCancellationForCurrentProcess() {
++  Manager().FinishLookups(CurrentProcessIdentity());
 +}
 +
 +void FreeAddressInfo(struct addrinfo* address_info) {
@@ -3687,11 +3824,17 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +                socklen_t service_length,
 +                int flags) {
 +  Library* const library = CurrentSocketLibrary();
-+  return library ? BASE_AROS_GETNAMEINFO_WB(
++  if (!library) {
++    return EAI_SYSTEM;
++  }
++  ScopedNameLookup lookup(library);
++  if (!lookup.active()) {
++    return EAI_AGAIN;
++  }
++  return BASE_AROS_GETNAMEINFO_WB(
 +                       library, const_cast<struct sockaddr*>(address),
 +                       address_length, host, host_length, service,
-+                       service_length, flags)
-+                 : EAI_SYSTEM;
++                       service_length, flags);
 +}
 +
 +bool HaveOnlyLoopbackNetworkInterfaces(bool* only_loopback) {
@@ -3863,10 +4006,10 @@ index 0000000000000000000000000000000000000000..ef9fc809149b2ce392e083e5dafe59c0
 +}  // namespace base::aros
 diff --git a/base/aros/socket_library.h b/base/aros/socket_library.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..0cfe466a4381a68583e4763ba7f9d68c91783a88
+index 0000000000000000000000000000000000000000..2e9b574493d047d69d90a51d256d85b7dca8fab2
 --- /dev/null
 +++ b/base/aros/socket_library.h
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,153 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3888,6 +4031,11 @@ index 0000000000000000000000000000000000000000..0cfe466a4381a68583e4763ba7f9d68c
 +struct addrinfo;
 +
 +namespace base::aros {
++
++// Stop and drain this logical process's native resolver calls before joining
++// its workers. Keep new calls rejected until the worker join has completed.
++BASE_EXPORT void CancelNameLookupsForCurrentProcess();
++BASE_EXPORT void FinishNameLookupCancellationForCurrentProcess();
 +
 +// Socket descriptor table size requested from every bsdsocket.library base
 +// Chromium opens. Descriptor numbers are shared with the process's files, so
@@ -42330,10 +42478,20 @@ index aa89fb2cbb1a35652eae4aef37ad30794ac5d3aa..86295e24a8c04a4faf073741924ad4e5
    // whether the child process can use pre-warmed up connection for better
    // performance.
 diff --git a/content/browser/browser_main_loop.cc b/content/browser/browser_main_loop.cc
-index 0559ec1a959fd57d16442c0999b6995429227c46..038683b362d4dacace1b578a9f54c4e0fc7fcdac 100644
+index 0559ec1a959fd57d16442c0999b6995429227c46..3ad4827461bae507020cf8ae5b0ffc7088864728 100644
 --- a/content/browser/browser_main_loop.cc
 +++ b/content/browser/browser_main_loop.cc
-@@ -720,7 +720,8 @@ void BrowserMainLoop::PostCreateMainMessageLoop() {
+@@ -58,6 +58,9 @@
+ #include "build/android_buildflags.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/socket_library.h"
++#endif
+ #include "build/chromecast_buildflags.h"
+ #include "cc/base/histograms.h"
+ #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
+@@ -720,7 +723,8 @@ void BrowserMainLoop::PostCreateMainMessageLoop() {
    // TODO(boliu): kSingleProcess check is a temporary workaround for
    // in-process Android WebView. crbug.com/503724 tracks proper fix.
    // Also check to see if a discardable memory manager was set (e.g. unit tests)
@@ -42343,7 +42501,7 @@ index 0559ec1a959fd57d16442c0999b6995429227c46..038683b362d4dacace1b578a9f54c4e0
        !base::DiscardableMemoryAllocator::HasInstance()) {
      base::DiscardableMemoryAllocator::SetInstance(
          discardable_memory::DiscardableSharedMemoryManager::Get());
-@@ -1349,6 +1350,20 @@ void BrowserMainLoop::ShutdownThreadsAndCleanUp() {
+@@ -1349,6 +1353,22 @@ void BrowserMainLoop::ShutdownThreadsAndCleanUp() {
      TRACE_EVENT0("shutdown", "BrowserMainLoop::Subsystem:PostDestroyThreads");
      parts_->PostDestroyThreads();
    }
@@ -42355,7 +42513,9 @@ index 0559ec1a959fd57d16442c0999b6995429227c46..038683b362d4dacace1b578a9f54c4e0
 +  // work. This also drains its single-thread task runners before pthread's
 +  // process-exit hook verifies that no task can execute unloaded code.
 +  LOG(INFO) << "[Chromium:shutdown] joining AROS ThreadPool workers";
++  base::aros::CancelNameLookupsForCurrentProcess();
 +  base::ThreadPoolInstance::Get()->JoinForTesting();
++  base::aros::FinishNameLookupCancellationForCurrentProcess();
 +  LOG(INFO) << "[Chromium:shutdown] AROS ThreadPool workers joined";
 +  LOG(INFO) << "[Chromium:shutdown] stopping AROS MemoryInfra thread";
 +  base::trace_event::MemoryDumpManager::GetInstance()->ShutdownForProcessExit();
