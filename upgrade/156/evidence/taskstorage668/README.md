@@ -15,7 +15,7 @@ Each row reports three runs, each measuring 20 lifecycle operations:
 | x64 native task storage | 5152, 5120, 5120 | 0, 0, 0 |
 | ARM native task storage | 5120, 5120, 5120 | 0, 0, 0 |
 | x64 settled thread lifecycle | 2576, 2592, 2624 | 0, 0, 0 |
-| ARM settled thread lifecycle | 2592, 2592, 2592 | 0, 0, 0 |
+| ARM settled thread lifecycle | 2592, 2592, 2560 | 0, 0, 0 |
 | x64 settled Vulkan device lifecycle | 12864, 12832, 12816 | 0, 0, 0 |
 
 The task-storage probe's slot 16 allocates 32 eight-byte slots, explaining the 256-byte-per-process loss. The thread control uses a smaller slot array. The fixed x64 run also passes native Vulkan device enumeration and queue submission: Vulkan 1.4.354, llvmpipe (LLVM 20.1.0), all 1024 buffer words correct. This is software Vulkan in QEMU, not physical RADV/NVK qualification.
