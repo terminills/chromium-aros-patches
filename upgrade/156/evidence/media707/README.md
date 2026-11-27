@@ -37,3 +37,13 @@ QEMU evidence only: no physical hardware, ARM playback, performance qualificatio
 or protected Widevine playback claim. Dropped frames remain significant. An
 older VM without a sound card stalled Opus at metadata. H264/AAC integration is
 a separate unfinished build and is not part of this fix. No RC is claimed.
+
+## Subsequent stability finding
+
+After the recorded passes, two public Widevine license endpoints rejected the
+request (Shaka6007; the first returned HTTP400). A later navigation triggered
+a privilege violation in graphics.library TOF_VBlank -> Exec Signal. The first
+fault is retained in later-graphics-fault.txt and a full guest-memory capture is
+retained privately. Cause is not established. This is distinct from the fixed
+Mojo media-sequence fatal and prevents treating this session as overall stability
+qualification. The VM was stopped and retired after capture.

@@ -1,0 +1,65 @@
+000000622f320 dead=0 deleting=1 caller=0000000118135286
+000001c623c90b36 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+
+��������������������������������������������������������������������������������
+�                               Software Failure!                              �
+�                        IRQ : #32 - 0x00000001004752F0                        �
+�                 Error: 0x80000008 - Privilege violation error                �
+��������������������������������������������������������������������������������
+PC   : 0x0000000001AD016A
+Module Kickstart ELF Segment 1 .text (0x0000000001AA6000) Offset 0x000000000002A16A
+Function Exec_54_Signal (0x0000000001AD00F0) Offset 0x000000000000007A
+CPU context:
+RAX=F000D43DF000EF57  RBX=0000000000000000  RCX=0000000000000000  RDX=0000000100002AA0
+RSI=0000000000000010  RDI=00000001003E21C0  RSP=0000000001F419A0  RBP=0000000001F419E0
+R8 =0000000001AB221A  R9 =00000000000000FE  R10=0000000000000001  R11=0000000000000001
+R12=0000000100002AA0  R13=0000000000000010  R14=0000000100006328  R15=00000001003B5670
+RIP=0000000001AD016A  RSP=0000000001F419A0  RFLAGS=0000000000013006
+CS=0008  SS=0000  DS=0023
+ES=0023  FS=0023  GS=0030
+
+Disassembly:
+
+0000000001ad00f0 <Exec_54_Signal>:
+<skipping 102 bytes>
+
+0000000001ad0156:
+ -20 : 7466                            - jz Exec_54_Signal+52
+ -18 : 488b4338                        - mov 0x38(%rbx), %rax
+ -14 : 4183f902                        - cmp $0x2, %r9d
+ -10 : 0f842a010000                    - jz Exec_54_Signal+262
+  -4 : 44894dc8                        - mov %r9d, -0x38(%rbp)
+   0*: 488bb018030000                  - mov 0x318(%rax), %rsi
+   7 : 894dcc                          - mov %ecx, -0x34(%rbp)
+  10 : 89cf                            - mov %ecx, %edi
+  12 : 4c89f2                          - mov %r14, %rdx
+  15 : 41ff9690feffff                  - call -0x170(%r14)
+
+Stack trace:
+0x0000000001D044E4 graphics.library Function TOF_VBlank + 0x00000000000000D4
+0x0000000001AD3C4F Kickstart ELF Function IntServer + 0x000000000000006F
+0x0000000001C1246D timer.device Function TimerProcessMicroHZ + 0x000000000000016D
+0x0000000001C11719 timer.device Segment 1 .text + 0x0000000000000799
+0x0000000001AAB96E Kickstart ELF Function krnRunIRQHandlers + 0x00000000000000F4
+0x0000000001AB19EA Kickstart ELF Function core_IRQHandle + 0x0000000000000604
+0x0000000000000000 Address not found
+0x0000000001ABF109 Kickstart ELF Function core_SysCallHandler + 0x0000000000000063
+0x0000000001AC4B1D Kickstart ELF Function krnRunExceptionHandlers + 0x000000000000012D
+0x0000000001AB2079 Kickstart ELF Function cpu_Trap + 0x000000000000003F
+��������������������������������������������������������������������������������
+000001c6363e674d 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c636be56c4 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c6373f5bf7 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c637bfb9fa 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63844f5fc 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c638c74ebc 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c639475445 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c639c6b172 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63a48a75e 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63ac851ca 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63b481ee1 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63bc8453a 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63c484bd6 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63cc86370 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+000001c63d496b91 0x00000001003b5670 | 000 | [Kernel] core_IRQHandle(13): Exception error code 00000000
+0
