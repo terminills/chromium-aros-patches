@@ -7,13 +7,15 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Current validation status — 2026-11-27 UTC
 
-The published snapshot is **585**, replay-checked across all 21 modified repositories. It packs four independently protected 2 MiB PartitionAlloc superpages into a shared 10 MiB Exec allocation, reducing alignment overhead. Both full archives586 and native libraries587 build. [Native results and reproducible host test](evidence/superpage585/README.md) retain the exact evidence and limits.
+The published snapshot is **602**, replay-checked across all21 modified repositories. It retains585's four2 MiB superpages per10 MiB Exec allocation and adds native TLS cleanup for Blink's per-task SmallStringCache. Both full CEF archives and native603 libraries build. [Cache retirement and native regression evidence](evidence/cache602/README.md) records the exact controls and limits.
 
-X64 run588 passes 100 browser sessions, 100 renderer retirements, 102 child-owned entry/exit pairs and full host shutdown. An interleaved serial DETAIL record is explicitly reconciled against its complete event and native ledger; the original strict failure reports remain. Whole-guest memory at cycle 100 is 1334.40 MiB, about 94.96 MiB below prior run552. Growth from cycles 30–100 is 95.57 MiB versus 154.49 MiB previously: **memory still grows; no plateau or RC is claimed**.
+X64 run604 passes100 browser sessions,100 renderer retirements,102 child-owned zero entry/exit pairs and full host shutdown. A missing utility83 entry in the serial-only parser is explicitly reconciled using its native ledger; the original failed report remains. At cycle100, whole-guest memory is1294.33 MiB, **40.06 MiB below588**. Growth from cycles30–100 falls from95.57 to71.88 MiB. The final allocator sample contains zero allocated256 KiB cache slots. **Memory still grows; no plateau or RC is claimed.**
 
-ARM600 renders the full New Tab page with the normal host and unchanged refreshed583b OS boot files. A test-script run-number substitution had accidentally changed the stack size by eight bytes; correcting that command resolves the observed PNG startup fault without an OS patch or extra host stack. ARM uses software rendering; physical Pi and hardware GPU rendering remain unqualified.
+Native603 also passes sibling isolation606, synthetic coldboot profile persistence607, and installed icon launch on x64/ARM609/610. X64 closes and relaunches with one resident host. ARM605 shows New Tab and About AROS. These are QEMU controls on preserved matched OS inputs; ARM uses software rendering and native input.device injection.
 
-Source572's [resolver and cold-boot profile evidence](evidence/resolver572/README.md) includes full host exit and synthetic cookie/localStorage persistence across reboot. Run582 passes two-app isolation, app B survival and host exit. [Earlier cache/WebGL evidence](evidence/cache564/README.md) remains separate. Memory stability, final candidate profile/isolation replays, packaging and RC publication remain open.
+The current AROS master refresh changes Task/Process ABI. Clean622 builds now validate architecture flags under Bash before rebuilding SDK623 and both engines. Earlier refresh611–621 artifacts are excluded after configure silently dropped Bash syntax under /bin/sh. Current-master runtime qualification, remaining memory retention, hardware GPU/CDM validation, final packaging and RC publication remain open.
+
+[Earlier superpage evidence](evidence/superpage585/README.md), [resolver/coldboot evidence](evidence/resolver572/README.md), and [cache/WebGL evidence](evidence/cache564/README.md) retain their original build identities.
 
 ## Earlier validation status — 2026-11-20 UTC
 

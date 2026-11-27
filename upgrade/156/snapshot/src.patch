@@ -65141,6 +65141,50 @@ index f2351cf2d020782220cae8d6a6924d33f67fcb81..392c30083524ea83372450076c986049
  // Use this to declare and define a static local pointer to a ref-counted object
  // so that it is leaked so that the object's destructors are not called at
  // exit.  This macro should be used with ref-counted objects rather than
+diff --git a/third_party/blink/renderer/platform/wtf/text/atomic_string_table.cc b/third_party/blink/renderer/platform/wtf/text/atomic_string_table.cc
+index 28d669cb7150744e1c369f296c99e50598a551b9..8e73e82971112d8708a423f1b44a304dcb2fcded 100644
+--- a/third_party/blink/renderer/platform/wtf/text/atomic_string_table.cc
++++ b/third_party/blink/renderer/platform/wtf/text/atomic_string_table.cc
+@@ -58,13 +58,37 @@ struct alignas(64) SmallStringCache {
+   alignas(64) std::array<Entry, kSize> entries;
+ };
+ 
++constinit thread_local SmallStringCache* g_small_string_cache = nullptr;
++
+ NOINLINE SmallStringCache* SmallStringCacheInstance() {
++#if BUILDFLAG(IS_AROS)
++  // Renderer main tasks exit independently of the resident engine. Blink's
++  // ThreadSpecific intentionally skips main-thread destructors, which would
++  // retain this 256 KiB cache and its strong string references for every task.
++  // Only this cache opts into main-task destruction; other Blink TLS objects
++  // retain their existing lifetime rules. AtomicStringTable outlives the cache.
++  DEFINE_THREAD_SAFE_STATIC_LOCAL(
++      base::ThreadLocalStorage::Slot, slot,
++      (+[](void* value) {
++        g_small_string_cache = nullptr;
++        auto* cache = static_cast<SmallStringCache*>(value);
++        cache->~SmallStringCache();
++        Partitions::FastFree(cache);
++      }));
++  auto* cache = static_cast<SmallStringCache*>(slot.Get());
++  if (!cache) {
++    cache = static_cast<SmallStringCache*>(Partitions::FastZeroedMalloc(
++        sizeof(SmallStringCache), WTF_HEAP_PROFILER_TYPE_NAME(SmallStringCache)));
++    slot.Set(cache);
++    ::new (base::NotNullTag::kNotNull, cache) SmallStringCache;
++  }
++  return cache;
++#else
+   DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<SmallStringCache>, cache, ());
+   return cache;
++#endif
+ }
+ 
+-constinit thread_local SmallStringCache* g_small_string_cache = nullptr;
+-
+ template <typename Generator>
+ ALWAYS_INLINE String SmallStringCacheGetOrInsert(uint64_t sig_low,
+                                                  uint64_t sig_high,
 diff --git a/third_party/blink/renderer/platform/wtf/text/string_impl.cc b/third_party/blink/renderer/platform/wtf/text/string_impl.cc
 index bb8b17dc97c0d61c4ae14a7dddf741e175d8d4f7..1607a39a3eee26e022e620a12b746a458823ddf3 100644
 --- a/third_party/blink/renderer/platform/wtf/text/string_impl.cc
