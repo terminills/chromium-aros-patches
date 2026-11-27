@@ -16,7 +16,7 @@ The ARM test build uses `AROS_BOOT_CPU_LIMIT=2`; its QEMU RAM setup is a separat
 
 ## Validation boundary
 
-This publication is a source prerequisite and exact replay result, not an RC binary release. Both fresh SDKs and stock desktop builds pass; the ARM production boot package passes. [Native ARM desktop637](desktop637/desktop637-result.json) now visibly paints Wanderer and About AROS at the pinned revision. Full CEF/V8 rebuilds and the fresh x64 graphics driver are in progress; matched browser runtime qualification remains pending. Earlier native603 browser controls use their retained matching OS and do not qualify this newer ABI.
+This publication is a source prerequisite and exact replay result, not an RC binary release. Both fresh SDKs and stock desktop builds pass; the ARM production boot package passes. [Native ARM desktop637](desktop637/desktop637-result.json) now visibly paints Wanderer and About AROS at the pinned revision. The fresh x64 LLVM20.1/Lavapipe driver also builds and links successfully. [Native x64 desktop639](desktop639/desktop639-result.json) visibly paints Wanderer and About AROS on two QEMU CPUs, and the synthetic credentials isolation probe passes. Full CEF/V8 rebuilds are in progress; matched browser runtime qualification remains pending. Earlier native603 browser controls use their retained matching OS and do not qualify this newer ABI.
 
 LinuxSO is retained for the prior x86-64 Widevine path. Its presence is not proof of CDM playback or an ARM Linux-object loader. Chromium-local memory allocation remains in the Chromium snapshot; no general SDK mmap implementation is introduced here.
 
@@ -33,3 +33,13 @@ For the FAT test image, the host copy tool rejects the reserved filename AUX. Re
 ![Fresh current-master ARM desktop and About AROS](desktop637/desktop637-arm.png)
 
 This is QEMU desktop evidence with the retained two-core cap, upper-RAM device-tree adjustment and disabled hardware audio modes. It does not qualify Chromium on this ABI, physical Raspberry Pi hardware, USB input or hardware GPU acceleration. The preceding black-screen controls and their serial output remain beside the accepted result.
+
+## Fresh x64 desktop and boot packaging
+
+The x64 runtime-module build also changes zero files in its frozen SDK. The native credentials probe passes collection isolation, readonly behavior, explicit locking and corrupt-seed preservation using synthetic data in a private RAM directory. Whole-guest used memory before About AROS and Chromium launch is 33,936,705 bytes (32.36 MiB); this is a desktop baseline, not browser memory usage.
+
+For the private BIOS ISO, use the fresh build's `bin/linux-x86_64/tools/grub-mkrescue` with its `tools/lib/grub/i386-pc` module directory. The staged runtime module directory lacks `modinfo.sh`. The generated test configuration must explicitly load `xzio` before reading the compressed bootstrap and packages; retain the stock `all_video` setup. Without `xzio`, this test reports no Multiboot header, while the same live GRUB command succeeds after loading that module. The decompressed bootstrap has its valid Multiboot2 header at offset 128. This is test-image packaging, not a kernel source change.
+
+![Fresh current-master x64 desktop and About AROS](desktop639/desktop639-x64.png)
+
+This is native x64 QEMU desktop and credentials evidence at private AROS revision 0072a061. It does not qualify the rebuilt Chromium engine, physical GPUs or a release candidate.
