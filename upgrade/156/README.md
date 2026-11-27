@@ -5,23 +5,15 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
-## Current validation status — 2026-11-23 UTC
+## Current validation status — 2026-11-27 UTC
 
-The published snapshot is **572**, replay-checked across all 21 modified repositories. It retains native ANGLE Vulkan and GPU cache locking and adds owner-scoped native resolver cancellation before final worker-pool join. Both CEF archives573 and native libraries574 build. X64 run581 passes synthetic cookie/localStorage persistence across a cold boot, with full host exit on both boots and no persistent-cache errors. ARM576 paints the full New Tab page and passes RAM/FAT descriptor-alias locking. [Resolver and cold-boot evidence](evidence/resolver572/README.md) records the exact scope and retained failures. Run582 also passes two-app isolation, app B survival and full host exit, with four child pairs confirmed by its independent native FAT ledger.
+The published snapshot is **585**, replay-checked across all 21 modified repositories. It packs four independently protected 2 MiB PartitionAlloc superpages into a shared 10 MiB Exec allocation, reducing alignment overhead. Both full archives586 and native libraries587 build. [Native results and reproducible host test](evidence/superpage585/README.md) retain the exact evidence and limits.
 
-Earlier native566 run567 passes WebGL1/2 readback and two full browser sessions. [Cache locking evidence](evidence/cache564/README.md) retains those results; hardware GPU rendering is not qualified.
+X64 run588 passes 100 browser sessions, 100 renderer retirements, 102 child-owned entry/exit pairs and full host shutdown. An interleaved serial DETAIL record is explicitly reconciled against its complete event and native ledger; the original strict failure reports remain. Whole-guest memory at cycle 100 is 1334.40 MiB, about 94.96 MiB below prior run552. Growth from cycles 30–100 is 95.57 MiB versus 154.49 MiB previously: **memory still grows; no plateau or RC is claimed**.
 
-Matched image 527 run 552 passes 100 browser sessions and 102 native child entry/exit pairs, but memory grows 154.49 MiB from cycle 30 to 100. Memory stability, final profile/isolation replays, packaging and RC publication remain open. Hardware GPU rendering is not qualified.
+ARM600 renders the full New Tab page with the normal host and unchanged refreshed583b OS boot files. A test-script run-number substitution had accidentally changed the stack size by eight bytes; correcting that command resolves the observed PNG startup fault without an OS patch or extra host stack. ARM uses software rendering; physical Pi and hardware GPU rendering remain unqualified.
 
-The preceding source489/native490 libraries link on both architectures. X64 run497 now passes 100 pages, 100 renderer retirements, zero deferrals and independent native child entry/exit accounting. Whole-guest memory still grows **150.830 MiB** between cycles 30 and 100. Profile493 passes synthetic cookie/localStorage close/reopen persistence. Sibling491 passes page isolation and app B survival, but host shutdown stalls waiting for a system resolver worker. [Retained native490 evidence](evidence/candidate508/status.json) contains the earlier results; its hundred-cycle pending status is superseded by [run497 summary](evidence/vulkan523/compact497-summary516.json).
-
-[ARM494 renders Chromium New Tab and About AROS](evidence/candidate508/master494-progress-later.png), using **1574.597 MiB** for the whole guest. The later ARM501 repeated-session test times out without a recorded native fault. These native490 runtime results use the retained229 OS/SDK. SDKs and Workbench rebuild against newer upstream742f4d74 have passed; the refreshed x64 kernel now builds, while Vulkan runtime qualification remains pending. No memory plateau, physical Pi qualification or RC release is claimed.
-
-The prior source468/native469 thirty-cycle474 crash at cycle16 and its exact owner-registry diagnosis remain in [renderer evidence](evidence/renderer481/README.md).
-
-The preceding [source462/native463](evidence/permissions478/README.md) passed thirty-cycle465 with all30 retirements and no deferrals, but memory still grew36.705MiB between cycles10 and30. Older [source444/native445 hundred-cycle450](evidence/longrun480/README.md) completed100 retirements and 102 child pairs after correcting one precisely identified serial interleaving; guest memory grew161.315MiB between cycles 30 and100. Those are not measurements of469.
-
-[ARM448 New Tab/About AROS rendering](evidence/arm460/README.md) belongs to source444/native445 and used1574.64MiB for the whole guest with403.29MiB free. These are native AROS QEMU results. Memory stability and full release gates remain open; no RC binary is released. Earlier observations below retain their own source and engine identities.
+Source572's [resolver and cold-boot profile evidence](evidence/resolver572/README.md) includes full host exit and synthetic cookie/localStorage persistence across reboot. Run582 passes two-app isolation, app B survival and host exit. [Earlier cache/WebGL evidence](evidence/cache564/README.md) remains separate. Memory stability, final candidate profile/isolation replays, packaging and RC publication remain open.
 
 ## Earlier validation status — 2026-11-20 UTC
 

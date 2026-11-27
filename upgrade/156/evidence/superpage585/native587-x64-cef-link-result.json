@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "source": "superpage585-source-manifest.json",
+  "configuration": "Vulkan510/514 refreshed SDK",
+  "archive": {
+    "exit_code": 0,
+    "args": [
+      "ninja",
+      "-C",
+      "<chromium-src>/out/aros-vulkan510",
+      "-j8",
+      "obj/cef/libcef.a"
+    ],
+    "source": "superpage585-source-manifest.json",
+    "scope": "CEF archive with Vulkan; native image link and runtime unverified",
+    "sha256": "ade955d1781deac78e802fb588fd9958c783ec7a4bcb7b1065ed97a581666187"
+  },
+  "args": [
+    "make",
+    "-C",
+    "<native-build>/master504/x64-build",
+    "-j1",
+    "CHROMIUM_SRC=<chromium-src>",
+    "CEF_OUTPUT=<chromium-src>/out/aros-vulkan510",
+    "V8_OUTPUT=<chromium-src>/out/aros-v8-527-x64",
+    "workbench-libs-cef-blink-quick"
+  ],
+  "scope": "Native Vulkan CEF585 superpage arena image link; runtime pending.",
+  "sha256": "6a093e2948f389f60938b7febaff23f137c6a1bb7dbb2a3e8cb25966db0e86aa",
+  "symbols_sha256": "ff6252d4bafbeba28880ac59a680ca09549b71432c1ceff533c54e01e480c643",
+  "retained_map": {
+    "path": "<native-build>/native587/x64-image574/native-final.map.zst",
+    "original_sha256": "ce35428c7620ca8c99db7017d8ea52176f270d5db35a37e373f519f95e4b2063",
+    "packed_sha256": "8859fe6ae279e2c76950a1f07743f43ef2851c1e954607c3d55d4bf9167dbac4"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "functional_pass": true,
+  "raw_serial_audit_pass": false,
+  "native_ledger_pairs": 102,
+  "child_types": {
+    "renderer": 100,
+    "gpu-process": 1,
+    "utility": 1
+  },
+  "page_passes": 100,
+  "retire_complete": 100,
+  "retire_deferred": 0,
+  "gates_after_explicit_serial_reconciliation": {
+    "all_native_records_zero": true,
+    "entry_exit_pairs": true,
+    "all_observed_children_covered": true,
+    "at_least100_renderers": true,
+    "no_ledger_io_failure": true,
+    "no_native_fault": true,
+    "terminal_markers": true,
+    "hundred_pages": true,
+    "not_timed_out": true,
+    "hundred_retirements": true
+  },
+  "reconciliation": {
+    "phantom_id": "1",
+    "actual_id": "119",
+    "source_line_1based": 129,
+    "interleaved_line": "[CEF-CHILD-DETAIL] type=renderer subtype=none task=00000000010aa9c0 id=1..<chromium-src>/base/process/launch_aros.cc:302] [Chromium:AROS:Launch] spawned pid=119 program='ISOIMAGE:System/CEFSubprocess' argc=20 type=renderer detail=4 stack=4194304 free-before=3208781664 free-after=3208759904",
+    "continuation_line": "19",
+    "independent_entry_exit": "child-ledger588/Ledger588/119.enter and119.exit",
+    "reason": "Serial DETAIL id119 split by concurrent launch log after first digit; complete E119 plus native119 ledger corroborate. Original strict failures retained."
+  },
+  "disk_sha256": "4d71d936b9cb050d94961e790e78ed4dfc0947f2b84098dd3d5b76e544d7245c",
+  "scope": "Native QEMU 100-cycle functional/child-ledger validation; no memory plateau or hardware GPU qualification."
+}

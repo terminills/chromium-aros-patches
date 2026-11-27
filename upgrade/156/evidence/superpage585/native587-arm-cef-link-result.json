@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "source": "superpage585-source-manifest.json",
+  "configuration": "Vulkan510/514 refreshed SDK",
+  "archive": {
+    "exit_code": 0,
+    "args": [
+      "ninja",
+      "-C",
+      "<chromium-src>/out/aros-vulkan514-arm64",
+      "-j8",
+      "obj/cef/libcef.a"
+    ],
+    "source": "superpage585-source-manifest.json",
+    "scope": "CEF archive with Vulkan; native image link and runtime unverified",
+    "sha256": "53843060d0e131f3440b29968596cc65745f7362d17bf7bef6f6a34e0048a99a"
+  },
+  "args": [
+    "make",
+    "-C",
+    "<native-build>/master504/arm-build",
+    "-j1",
+    "CHROMIUM_SRC=<chromium-src>",
+    "CEF_OUTPUT=<chromium-src>/out/aros-vulkan514-arm64",
+    "V8_OUTPUT=<chromium-src>/out/aros-v8-527-arm64",
+    "workbench-libs-cef-blink-quick"
+  ],
+  "scope": "Native Vulkan CEF585 superpage arena image link; runtime pending.",
+  "sha256": "62fc1cde1269cdb7d926c65be5e184a295a20b047f63b46f855ce815523a4d3c",
+  "symbols_sha256": "f950a65cba09d51d3f7969b5cd614a3d3fd0808be4d331081de830808d19a3d7",
+  "retained_map": {
+    "path": "<native-build>/native587/arm-image574/native-final.map.zst",
+    "original_sha256": "df252dcb4f4212477ec9c03e8d429ac16bb6c24a138b2010ab41436ca397e29c",
+    "packed_sha256": "f07677b72148f98863189f6cee1621f9087c12ac79fe981fc6c4e7cb1288cfda"
+  }
+}

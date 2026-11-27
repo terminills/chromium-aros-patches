@@ -918,7 +918,7 @@ index 0db8407182a854ba01d1700624c58dbb0c985d50..01c61eaa476da80ac7f1acd584482bf9
  }  // namespace internal
  
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
-index e7ab4f97f730a215afe8e68249b3042d62aec219..cf4da3b6695ce8b551e08dce0aba11b37892370d 100644
+index e7ab4f97f730a215afe8e68249b3042d62aec219..6c3a7f685d413b42f9204259330e042bea0f615f 100644
 --- a/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
 +++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator.cc
 @@ -25,6 +25,8 @@
@@ -979,12 +979,38 @@ index e7ab4f97f730a215afe8e68249b3042d62aec219..cf4da3b6695ce8b551e08dce0aba11b3
      }
  
  #if PA_BUILDFLAG(PA_ARCH_CPU_32_BITS)
+@@ -251,6 +277,25 @@ uintptr_t AllocPagesWithAlignOffset(
+ #endif
+   }
+ 
++#if PA_BUILDFLAG(IS_AROS)
++  // Amortize native physical alignment slack only for ordinary PA superpages.
++  // Hints have already been tried above; shared mappings, JIT and other
++  // sizes retain their old path.
++  if (length == internal::kArosArenaSlotSize &&
++      align == internal::kArosArenaSlotSize && !align_offset &&
++      page_tag == PageTag::kPartitionAlloc &&
++      file_descriptor_for_shared_alloc == -1 &&
++      accessibility.permissions ==
++          PageAccessibilityConfiguration::kInaccessible) {
++    uintptr_t arena_page = internal::AllocateArenaSuperPage(accessibility);
++    if (arena_page) {
++      g_total_mapped_address_space.fetch_add(length, std::memory_order_relaxed);
++      return arena_page;
++    }
++    // A fragmented/low-memory machine can still try one ordinary allocation.
++  }
++#endif
++
+   // Make a larger allocation so we can force alignment.
+   size_t try_length = length + (align - internal::PageAllocationGranularity());
+   PA_CHECK(try_length >= length);
 diff --git a/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..e591be63fc09c441c867d577b4637cb0174554ff
+index 0000000000000000000000000000000000000000..61a6e2c34ef39b3f6942691df12d1b1570d83ac9
 --- /dev/null
 +++ b/base/allocator/partition_allocator/src/partition_alloc/page_allocator_internals_aros.h
-@@ -0,0 +1,663 @@
+@@ -0,0 +1,783 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1079,6 +1105,19 @@ index 0000000000000000000000000000000000000000..e591be63fc09c441c867d577b4637cb0
 +  }
 +}
 +
++// Four independently protected superpages share one aligned Exec block.
++// No part of a live backing block is ever returned through FreeMem/AllocAbs.
++constexpr size_t kArosArenaSlotSize = 2 * 1024 * 1024;
++constexpr unsigned kArosArenaSlots = 4;
++struct SuperPageArena {
++  SuperPageArena* next;
++  void* backing;
++  size_t backing_length;
++  uintptr_t slots_base;
++  unsigned used_slots;
++};
++SuperPageArena* s_superPageArenas = nullptr;
++
 +struct PageAllocationRecord {
 +  PageAllocationRecord* next;
 +  uintptr_t exposed_base;
@@ -1088,6 +1127,8 @@ index 0000000000000000000000000000000000000000..e591be63fc09c441c867d577b4637cb0
 +  void* allocation_base;
 +  size_t allocation_length;
 +  bool exec_owned;
++  SuperPageArena* arena;
++  unsigned arena_slot;
 +};
 +
 +enum class PageAllocationReleaseKind {
@@ -1118,6 +1159,106 @@ index 0000000000000000000000000000000000000000..e591be63fc09c441c867d577b4637cb0
 +
 +void UnlockPageAllocations() {
 +  pthread_mutex_unlock(&s_pageAllocationLock);
++}
++
++// Only the ordinary, unhinted PartitionAlloc superpage path calls this.
++// Reserving a slot under the same sleeping lock as the ownership list keeps
++// concurrent frees from releasing its arena while permissions are changed.
++uintptr_t AllocateArenaSuperPage(PageAccessibilityConfiguration accessibility) {
++  APTR KernelBase = OpenKernelResource();
++  if (!KernelBase) {
++    return 0;
++  }
++  auto* record = static_cast<PageAllocationRecord*>(
++      AllocMem(sizeof(PageAllocationRecord), MEMF_PUBLIC | MEMF_CLEAR));
++  if (!record) {
++    return 0;
++  }
++  LockPageAllocations();
++  SuperPageArena* arena = s_superPageArenas;
++  constexpr unsigned kFull = (1u << kArosArenaSlots) - 1;
++  while (arena && arena->used_slots == kFull) {
++    arena = arena->next;
++  }
++  if (!arena) {
++    arena = static_cast<SuperPageArena*>(
++        AllocMem(sizeof(SuperPageArena), MEMF_PUBLIC | MEMF_CLEAR));
++    if (arena) {
++      arena->backing_length = (kArosArenaSlots + 1) * kArosArenaSlotSize;
++      arena->backing = AllocMem(arena->backing_length, MEMF_PUBLIC | MEMF_CLEAR);
++      if (!arena->backing) {
++        FreeMem(arena, sizeof(SuperPageArena));
++        arena = nullptr;
++      } else {
++        arena->slots_base =
++            (reinterpret_cast<uintptr_t>(arena->backing) +
++             kArosArenaSlotSize - 1) & ~(kArosArenaSlotSize - 1);
++        arena->next = s_superPageArenas;
++        s_superPageArenas = arena;
++      }
++    }
++  }
++  if (!arena) {
++    UnlockPageAllocations();
++    FreeMem(record, sizeof(PageAllocationRecord));
++    return 0;
++  }
++  unsigned slot = 0;
++  while (arena->used_slots & (1u << slot)) {
++    ++slot;
++  }
++  PA_CHECK(slot < kArosArenaSlots);
++  arena->used_slots |= 1u << slot;
++  const uintptr_t address = arena->slots_base + slot * kArosArenaSlotSize;
++  record->exposed_base = record->protected_base = address;
++  record->exposed_length = record->protected_length = kArosArenaSlotSize;
++  record->allocation_base = arena->backing;
++  record->allocation_length = arena->backing_length;
++  record->exec_owned = true;
++  record->arena = arena;
++  record->arena_slot = slot;
++  record->next = s_pageAllocations;
++  s_pageAllocations = record;
++  UnlockPageAllocations();
++  // A reused slot must have fresh anonymous-page contents. Touch only this
++  // slot, never a live sibling's inaccessible metadata/guard pages.
++  SetProtection(KernelBase, address, kArosArenaSlotSize,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable));
++  std::memset(reinterpret_cast<void*>(address), 0, kArosArenaSlotSize);
++  SetProtection(KernelBase, address, kArosArenaSlotSize,
++                GetAccessFlags(accessibility));
++  s_allocPageErrorCode = 0;
++  return address;
++}
++
++void ReleaseArenaSuperPage(APTR KernelBase, PageAllocationRecord* record) {
++  SuperPageArena* arena = record->arena;
++  // The slot remains reserved until its protection is restored. In
++  // particular, do not restore protection over other live arena slots.
++  SetProtection(KernelBase,
++                arena->slots_base + record->arena_slot * kArosArenaSlotSize,
++                kArosArenaSlotSize,
++                static_cast<KRN_MapAttr>(MAP_Readable | MAP_Writable |
++                                        MAP_Executable));
++  LockPageAllocations();
++  PA_CHECK(arena->used_slots & (1u << record->arena_slot));
++  arena->used_slots &= ~(1u << record->arena_slot);
++  const bool empty = arena->used_slots == 0;
++  if (empty) {
++    SuperPageArena** link = &s_superPageArenas;
++    while (*link && *link != arena) {
++      link = &(*link)->next;
++    }
++    PA_CHECK(*link == arena);
++    *link = arena->next;
++  }
++  UnlockPageAllocations();
++  if (empty) {
++    // Every slot is now restored; the alignment slack was never protected.
++    FreeMem(arena->backing, arena->backing_length);
++    FreeMem(arena, sizeof(SuperPageArena));
++  }
++  FreeMem(record, sizeof(PageAllocationRecord));
 +}
 +
 +bool TrackPageAllocation(uintptr_t exposed_base,
@@ -1531,6 +1672,11 @@ index 0000000000000000000000000000000000000000..e591be63fc09c441c867d577b4637cb0
 +    // PartitionAlloc failure instead of crossing that ownership boundary.
 +    LogInvalidPageFree(address, length);
 +    PA_CHECK(record);
++    return;
++  }
++
++  if (record->arena) {
++    ReleaseArenaSuperPage(KernelBase, record);
 +    return;
 +  }
 +
