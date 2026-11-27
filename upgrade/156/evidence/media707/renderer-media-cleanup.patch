@@ -1,0 +1,32 @@
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -731,11 +731,27 @@
+   }
+   if (main_thread_scheduler_) {
+     LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
+-    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([] {
++    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([](RenderThreadImpl* self) {
+       // Queue deletion must precede isolate retirement; clocks and helper
+       // state must survive the synchronous Oilpan finalizers it triggers.
+       blink::RetireMainThreadIsolateForAros();
+-    }));
++      // Media factories bind their Mojo endpoints on the media sequence.
++      // Native AROS returns through the renderer destructor, unlike platforms
++      // which exit the process here. Release these endpoints on their owner
++      // sequence while both its runner and the main-thread scheduler survive.
++      if (!self->gpu_factories_.empty()) {
++        base::WaitableEvent released;
++        CHECK(self->GetMediaSequencedTaskRunner()->PostTask(
++            FROM_HERE, base::BindOnce(
++                [](decltype(gpu_factories_) factories,
++                   base::WaitableEvent* released) {
++                  factories.clear();
++                  released->Signal();
++                }, std::move(self->gpu_factories_), &released)));
++        released.Wait();
++        LOG(INFO) << "[Chromium:AROS:MediaShutdown] factories released on media sequence";
++      }
++    }, base::Unretained(this)));
+     LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
+   }
+   // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.

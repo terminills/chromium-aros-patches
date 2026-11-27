@@ -5,6 +5,10 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
+## Native video and audio — 2026-11-27 UTC
+
+[Media cleanup and playback evidence](evidence/media707/README.md) records native x64 VP8/VP9 playback, seeking and replay, Opus audio output, and corrected renderer media-object destruction. H264/AAC integration and protected Widevine playback remain open.
+
 ## Native DNS correction — 2026-11-27 UTC
 
 [Resolver high-descriptor overflow fix](evidence/dns700/README.md) restores fresh browser name resolution. Native high-descriptor probes, HTTPS page loading, and the Shaka media-manifest download pass. A separate pcnet32 transmit fault remains recorded; the e1000 replacement passes fresh media-manifest download and external-CDM initialization with normal QEMU DNS.
