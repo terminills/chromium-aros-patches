@@ -1,0 +1,77 @@
+{
+  "pid": 3783349,
+  "command": [
+    "/run/media/terminills/Amiwest/job0254-01a1e62b/arm-runtime/qemu-package/matching/usr/bin/qemu-system-aarch64",
+    "-name",
+    "job0254-master633-arm",
+    "-M",
+    "raspi4b",
+    "-m",
+    "2G",
+    "-smp",
+    "4",
+    "-kernel",
+    "/home/terminills/job0254-release-staging/master633-arm-vm/aros-aarch64-raspi.img",
+    "-initrd",
+    "/home/terminills/job0254-release-staging/master633-arm-vm/aros-aarch64-bsp.rom",
+    "-dtb",
+    "/home/terminills/job0254-release-staging/master633-arm-vm/bcm2711-rpi-4-b.dtb",
+    "-drive",
+    "file=/home/terminills/job0254-release-staging/master633-arm-vm/aros-sd.img,if=sd,format=raw",
+    "-display",
+    "none",
+    "-serial",
+    "file:/home/terminills/job0254-release-staging/master633-arm-vm/serial.log",
+    "-qmp",
+    "unix:/home/terminills/job0254-release-staging/master633-arm-vm/qmp.sock,server=on,wait=off",
+    "-device",
+    "usb-kbd",
+    "-device",
+    "usb-mouse",
+    "-no-reboot",
+    "-serial",
+    "file:/home/terminills/job0254-release-staging/master633-arm-vm/aux-serial.log",
+    "-no-shutdown",
+    "-daemonize",
+    "-pidfile",
+    "/home/terminills/job0254-release-staging/master633-arm-vm/qemu.pid",
+    "-S",
+    ""
+  ],
+  "status": {
+    "status": "paused",
+    "running": false
+  },
+  "cpus": [
+    {
+      "thread-id": 3783352,
+      "qom-type": "cortex-a72-arm-cpu",
+      "qom-path": "/machine/soc/cpu[0]",
+      "cpu-index": 0,
+      "target": "aarch64"
+    },
+    {
+      "thread-id": 3783353,
+      "qom-type": "cortex-a72-arm-cpu",
+      "qom-path": "/machine/soc/cpu[1]",
+      "cpu-index": 1,
+      "target": "aarch64"
+    },
+    {
+      "thread-id": 3783354,
+      "qom-type": "cortex-a72-arm-cpu",
+      "qom-path": "/machine/soc/cpu[2]",
+      "cpu-index": 2,
+      "target": "aarch64"
+    },
+    {
+      "thread-id": 3783355,
+      "qom-type": "cortex-a72-arm-cpu",
+      "qom-path": "/machine/soc/cpu[3]",
+      "cpu-index": 3,
+      "target": "aarch64"
+    }
+  ],
+  "registers": "\r\nCPU#0\r\n PC=00000000f80132ac X00=0000000000010c98 X01=00000000f80132a0\r\nX02=0000000000000008 X03=0000000000000000 X04=0000000000000000\r\nX05=00000000f8026248 X06=0000000000000000 X07=00000000000000ea\r\nX08=00000000009d1760 X09=00000000009d1a30 X10=00000000009d1760\r\nX11=0000000000000014 X12=00000000009d1a20 X13=0000000000000050\r\nX14=0000000000000000 X15=0000000000000014 X16=00000000f82bd500\r\nX17=0000000000000000 X18=0000000000000006 X19=0000000000075410\r\nX20=0000000000000000 X21=0000000000031000 X22=0000000000000008\r\nX23=000000000000f900 X24=00000000ffffffff X25=000000000005ffd0\r\nX26=00000000000683e8 X27=0000000000000000 X28=000000000007a120\r\nX29=000000000007f3e0 X30=00000000f801cf80  SP=000000000007f3e0\r\nPSTATE=00000000400000c4 -Z-- NS EL1t     FPCR=00000000 FPSR=00000000\r\nQ00=0000000000000000:0007a12000000000 Q01=0029737075706f50:206e6f646965736f\r\nQ02=0000000000000000:0000000000000000 Q03=0000000000000000:0000000000000000\r\nQ04=0000000000000000:0000000000000000 Q05=0000000000000000:0000000000000000\r\nQ06=0000000000000000:0000000000000000 Q07=0000000000000000:0000000000000000\r\nQ08=0000000000000000:0000000000000000 Q09=0000000000000000:0000000000000000\r\nQ10=0000000000000000:0000000000000000 Q11=0000000000000000:0000000000000000\r\nQ12=0000000000000000:0000000000000000 Q13=0000000000000000:0000000000000000\r\nQ14=0000000000000000:0000000000000000 Q15=0000000000000000:0000000000000000\r\nQ16=0000000000000000:0000000000000000 Q17=0000000000000000:0000000000000000\r\nQ18=0000000000000000:0000000000000000 Q19=0000000000000000:0000000000000000\r\nQ20=0000000000000000:0000000000000000 Q21=0000000000000000:0000000000000000\r\nQ22=0000000000000000:0000000000000000 Q23=0000000000000000:0000000000000000\r\nQ24=0000000000000000:0000000000000000 Q25=0000000000000000:0000000000000000\r\nQ26=0000000000000000:0000000000000000 Q27=0000000000000000:0000000000000000\r\nQ28=0000000000000000:0000000000000000 Q29=0000000000000000:fff0bdc000000001\r\nQ30=0000000000000000:0008049d000000ea Q31=0000000000000000:fff0bdc000000001\r\n",
+  "reason": "Black framebuffer, empty serial, PC maps to Exec IdleTask. Retry separate identical image with explicit debug=serial."
+}

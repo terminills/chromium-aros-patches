@@ -16,6 +16,20 @@ The ARM test build uses `AROS_BOOT_CPU_LIMIT=2`; its QEMU RAM setup is a separat
 
 ## Validation boundary
 
-This publication is a source prerequisite and exact replay result, not an RC binary release. The fresh ARM SDK/kernel/production boot targets have passed. Full desktop completion, frozen SDKs, engine rebuilds, fresh drivers and matched browser runtime qualification remain in progress. Earlier native603 browser controls use their retained matching OS and do not qualify this newer ABI.
+This publication is a source prerequisite and exact replay result, not an RC binary release. Both fresh SDKs and stock desktop builds pass; the ARM production boot package passes. [Native ARM desktop637](desktop637/desktop637-result.json) now visibly paints Wanderer and About AROS at the pinned revision. Full CEF/V8 rebuilds and the fresh x64 graphics driver are in progress; matched browser runtime qualification remains pending. Earlier native603 browser controls use their retained matching OS and do not qualify this newer ABI.
 
 LinuxSO is retained for the prior x86-64 Widevine path. Its presence is not proof of CDM playback or an ARM Linux-object loader. Chromium-local memory allocation remains in the Chromium snapshot; no general SDK mmap implementation is introduced here.
+
+## Fresh desktop packaging requirements
+
+The architecture `workbench` target is only a subset. Build the stock `workbench-complete` target for the desktop, startup scripts, fonts and other runtime files. In this build the separately linked `aros-web` tree also contributes optional ConsoleNG targets, whose independent core prerequisites are outside this Chromium baseline. The stock desktop pass temporarily adds `ignoredir aros-web` to the build-local `mmake.config`, regenerates its MetaMake cache, then restores the exact configuration and regenerates the cache before the explicit shared-engine targets. No source exclusions are committed.
+
+Also build **compiler-stdcio**, **compiler-posixc**, and **kernel-debug**. The SDK and Workbench aggregates alone did not install stdcio.library or posixc.library. A controlled fresh ARM image without those two modules booted to its startup script but displayed black; adding the newly built modules to the same boot/image baseline produced the desktop below. This was a packaging failure, not an established scheduler or graphics defect. The final runtime-module build changed zero files in the frozen ARM SDK.
+
+Before freezing the engine SDK, run `workbench-libs-cef-public-includes` and `workbench-libs-cef-blink-public-includes` before the corresponding `-linklib` targets, and build `workbench-libs-v8-linklib`. A direct fresh Blink import-library build otherwise lacks its public header.
+
+For the FAT test image, the host copy tool rejects the reserved filename AUX. Retain the stock mountlist as S:AUX-Mountlist and copy it to DEVS:DOSDrivers/AUX in the native Startup-Sequence. This is an image-building workaround. The fresh Pi device tree routes diagnostics to the second QEMU serial channel, so capture both UARTs.
+
+![Fresh current-master ARM desktop and About AROS](desktop637/desktop637-arm.png)
+
+This is QEMU desktop evidence with the retained two-core cap, upper-RAM device-tree adjustment and disabled hardware audio modes. It does not qualify Chromium on this ABI, physical Raspberry Pi hardware, USB input or hardware GPU acceleration. The preceding black-screen controls and their serial output remain beside the accepted result.
