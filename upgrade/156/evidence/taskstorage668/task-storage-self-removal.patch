@@ -1,0 +1,115 @@
+diff --git a/developer/debug/test/taskres/mmakefile.src b/developer/debug/test/taskres/mmakefile.src
+index 7dc97a5f9f366389ffe99ab48589c806b31f7493..0a346cd75ef05a106b524d9cc3aca354ec6420ae 100644
+--- a/developer/debug/test/taskres/mmakefile.src
++++ b/developer/debug/test/taskres/mmakefile.src
+@@ -6,7 +6,8 @@ include $(SRCDIR)/config/aros.cfg
+ EXEDIR := $(AROS_TESTS)/taskres
+ 
+ TESTPUBLICFILES :=		\
+-    taskstorage
++    taskstorage \
++    taskstorage_exit
+ 
+ #MM- test : test-taskres
+ #MM- test-quick : test-taskres-quick
+diff --git a/developer/debug/test/taskres/taskstorage_exit.c b/developer/debug/test/taskres/taskstorage_exit.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d05852bd7a66ae856ad706205670331bf33cbfe
+--- /dev/null
++++ b/developer/debug/test/taskres/taskstorage_exit.c
+@@ -0,0 +1,69 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    Self-removal must release the task's slot array. Run on an otherwise
++    quiet system: AvailMem measures the whole machine. Both measurements
++    follow a settling interval because SMP task-stack reclamation is deferred.
++*/
++#include <exec/memory.h>
++#include <dos/dostags.h>
++#include <proto/exec.h>
++#include <proto/dos.h>
++#include <proto/task.h>
++#include <stdio.h>
++
++#define WARM_CYCLES 2
++#define MEASURED_CYCLES 20
++
++APTR TaskResBase;
++static LONG slot;
++static volatile ULONG allocation_failed;
++
++static void worker(void)
++{
++    struct Task *parent = (struct Task *)FindTask(NULL)->tc_UserData;
++
++    if (!SetTaskStorageSlot(slot, 0x658))
++        allocation_failed = TRUE;
++    Forbid();
++    Signal(parent, SIGBREAKF_CTRL_F);
++}
++
++int main(void)
++{
++    ULONG before = 0;
++    LONG lost;
++    int i, result = RETURN_FAIL;
++
++    TaskResBase = OpenResource("task.resource");
++    if (!TaskResBase || (slot = AllocTaskStorageSlot()) < 1)
++        return RETURN_FAIL;
++
++    for (i = 0; i < WARM_CYCLES + MEASURED_CYCLES; i++)
++    {
++        if (i == WARM_CYCLES)
++        {
++            Delay(50);
++            before = AvailMem(MEMF_ANY);
++        }
++        SetSignal(0, SIGBREAKF_CTRL_F);
++        if (!CreateNewProcTags(NP_Entry, (IPTR)worker,
++                               NP_Name, (IPTR)"storage-exit",
++                               NP_StackSize, 65536,
++                               NP_UserData, (IPTR)FindTask(NULL), TAG_DONE))
++        {
++            printf("taskstorage_exit: process creation failed\n");
++            goto out;
++        }
++        Wait(SIGBREAKF_CTRL_F);
++    }
++    Delay(50);
++    lost = (LONG)(before - AvailMem(MEMF_ANY));
++    printf("taskstorage_exit: slot=%ld lost=%ld over %d exits; allocation_failed=%lu\n",
++           (long)slot, (long)lost, MEASURED_CYCLES,
++           (unsigned long)allocation_failed);
++    result = lost > 0 || allocation_failed ? RETURN_FAIL : RETURN_OK;
++out:
++    FreeTaskStorageSlot(slot);
++    return result;
++}
+diff --git a/rom/task/task_execfuncs.c b/rom/task/task_execfuncs.c
+index 0e0b371dcf5f437dd01213d3800a6fe692967918..f3fb12d5e08b4ce4c8bd36214ffc22e6330e1c1e 100644
+--- a/rom/task/task_execfuncs.c
++++ b/rom/task/task_execfuncs.c
+@@ -167,6 +167,21 @@ AROS_LH1(void, RemTask,
+ 
+     if (TaskResBase->trb_RemTask)
+     {
++        /* Self-removal never returns. Detach the slot array while this task
++         * still owns its ETask, after removal observers have finished. A
++         * child may read our slots, so use the same lock as slot replacement.
++         * Foreign-task removal keeps the post-RemTask release below: that
++         * task must stop before its storage can be freed.
++         */
++        if (tsstorage && findTask == FindTask(NULL))
++        {
++            task_SlotsLock(findTask, TRUE, TaskResBase);
++            et->et_Reserved[ETASK_RSVD_SLOTID] = NULL;
++            task_SlotsUnlock(findTask, TaskResBase);
++            FreeMem(tsstorage, tsstorage[__TS_FIRSTSLOT] * sizeof(tsstorage[0]));
++            tsstorage = NULL;
++        }
++
+         AROS_CALL1(void, TaskResBase->trb_RemTask,
+                     AROS_LCA(struct Task *,     findTask,      A1),
+                     struct ExecBase *, SysBase);

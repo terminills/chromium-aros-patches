@@ -2,7 +2,7 @@
 
 This is the complete private AROS delta for Chromium 156/CEF8078 against upstream **ca69713ae7f4d0c8de632f9552e74b7b59c58140**. Applying it reproduces tree **2f696ea69bc20965ca1f91413d25e598be3fb468**, corresponding to private commit **0072a0613f224ce91aaad46e2aaf351b45c0b706**. The patch was replayed into an independent index and its tree compared exactly.
 
-Apply `aros-prerequisites.patch` once to that clean upstream commit. Do not stack the older master229, credentials, LinuxSO or other historical prerequisite patches on top. This consolidated delta already includes them and the retained ARM boot and loader prerequisites. The separate Chromium snapshot and matching aros-web source are still required.
+Apply `aros-prerequisites.patch` once to that clean upstream commit. Do not stack the older master229, credentials, LinuxSO or other historical prerequisite patches on top. This consolidated delta already includes them and the retained ARM boot and loader prerequisites. The separate Chromium snapshot and matching aros-web source are still required. Then apply the [task-storage self-removal followup](../taskstorage668/README.md), verified on x64 and ARM with unchanged SDK manifests.
 
 ## Configure and ABI requirements
 
