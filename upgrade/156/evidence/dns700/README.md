@@ -1,0 +1,11 @@
+# Native resolver high-descriptor overflow — 2026-11-27
+
+The external-CDM test initially loaded only names already resolved by startup probes. New browser hostnames failed, so that earlier screenshot was not general internet acceptance. Packet capture showed positive DNS replies arriving promptly while the guest immediately retried. Changing from QEMU DNS to the LAN resolver did not fix it.
+
+A private resolver trace found WaitSelect returning EBADF for descriptors103,127,149 and higher. The fixed-size local fd_set was too small: FD_SET overwrote adjacent stack data, including timeout.tv_usec (observed128 and2147483648). Standalone native low-descriptor controls passed, including the browser's descriptor-table growth and cancellation-mask settings.
+
+The patch allocates a cleared mask sized to the actual resolver descriptor, then releases it after WaitSelect. Allocation failure follows the existing error handling. This is a native AROSTCP resolver fix, not a generic SDK mmap change or a browser-only DNS bypass. Apply after master682 prerequisites and widevine693's LinuxSO patch; exact replay is recorded.
+
+Both x64 and ARM resolver modules compile and link. Native x64 controls pass with64,128,192 and256 held sockets (highest descriptors71,136,200,264), using normal QEMU DNS10.0.2.3. Native Chromium loads a fresh BBC HTTPS page with styles/images through the LAN resolver and downloads the previously failing Shaka HLS manifest:1331 bytes, Done. See screenshots and probe results.
+
+Limits: ARM networking is not runtime-qualified. Protected playback remains unverified. The subsequent runtime699 browser run hit a distinct PCN32_TX_Int privilege violation at its transmit callback; its high-descriptor probe PASS is retained separately from browser stability. Replacement runtime701 uses the already-built e1000 driver, two CPUs, and normal QEMU DNS. All four high-descriptor controls pass again; the Shaka demo loads external images, six external-CDM initializations pass, and the HLS manifest download completes. No native fault was observed in this capture. This does not qualify sustained traffic or protected playback. No RC release is claimed. The proprietary Widevine CDM is not included.

@@ -1,0 +1,39 @@
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/api/res_send.c b/workbench/network/stacks/AROSTCP/bsdsocket/api/res_send.c
+index c12d8615..c1c45bf9 100644
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/api/res_send.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/api/res_send.c
+@@ -90,7 +90,7 @@ res_send(struct SocketBase 	*libPtr,
+     int connreset = 0;
+     u_short id, len;
+     char *cp;
+-    fd_set dsmask;
++    fd_set *dsmask;
+     struct timeval timeout;
+     struct sockaddr_storage *ns;   /* current nameserver (AF_INET or AF_INET6) */
+     socklen_t hlen;                /* length of the sockaddr ns points at */
+@@ -386,10 +386,21 @@ usevc:
+                                 timeout.tv_sec = 1;
+                             timeout.tv_usec = 0;
+ wait:
+-                            FD_ZERO(&dsmask);
+-                            FD_SET(res_sock, &dsmask);
+-                            n = __WaitSelect(res_sock + 1, &dsmask, NULL,
+-                                             NULL, &timeout, NULL, libPtr);
++                            /* Socket tables may grow beyond FD_SETSIZE. A fixed
++                             * fd_set would overwrite the adjacent timeout when
++                             * the resolver receives a high descriptor. */
++                            dsmask = AllocVec(howmany(res_sock + 1, NFDBITS) *
++                                              sizeof(fd_mask),
++                                              MEMF_PUBLIC | MEMF_CLEAR);
++                            if(dsmask == NULL) {
++                                writeErrnoValue(libPtr, ENOMEM);
++                                n = -1;
++                            } else {
++                                FD_SET(res_sock, dsmask);
++                                n = __WaitSelect(res_sock + 1, dsmask, NULL,
++                                                 NULL, &timeout, NULL, libPtr);
++                                FreeVec(dsmask);
++                            }
+                             if(n < 0) {
+ #if defined(__AROS__)
+                                 D(bug("[AROSTCP](res_send.c) res_send: [__WaitSelect] Error\n"));
