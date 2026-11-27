@@ -5,11 +5,15 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
+## External Widevine initialization — 2026-11-27 UTC
+
+[Native external CDM initialization](evidence/widevine693/README.md) now passes on x64 through LinuxSO. Discovery and mapping fixes, native build results, and the HTTPS support screenshot are published. Protected playback remains unverified; the proprietary module is not redistributed.
+
 ## Latest build and SMP refresh — 2026-11-27 UTC
 
 [Consolidated current-master prerequisites and build evidence](evidence/master682/README.md) supersede the master632/taskstorage668 stack for upstream `28fbd1d6`. Both CEF and V8 builds and native browser packages are complete. Native x64 WebGL1/2 through Mesa Vulkan and ARM New Tab rendering pass on the preceding fixed kernels. Latest-SMP runtime, lifecycle, persistence, memory, external Widevine and release qualification remain open. No RC is published.
 
-## Current validation status — 2026-11-27 UTC
+## Earlier source602 validation — 2026-11-27 UTC
 
 The published snapshot is **602**, replay-checked across all21 modified repositories. It retains585's four2 MiB superpages per10 MiB Exec allocation and adds native TLS cleanup for Blink's per-task SmallStringCache. Both full CEF archives and native603 libraries build. [Cache retirement and native regression evidence](evidence/cache602/README.md) records the exact controls and limits.
 
@@ -17,7 +21,7 @@ X64 run604 passes100 browser sessions,100 renderer retirements,102 child-owned z
 
 Native603 also passes sibling isolation606, synthetic coldboot profile persistence607, and installed icon launch on x64/ARM609/610. X64 closes and relaunches with one resident host. ARM605 shows New Tab and About AROS. These are QEMU controls on preserved matched OS inputs; ARM uses software rendering and native input.device injection.
 
-[Current-master prerequisites and exact replay](evidence/master632/README.md) pin the complete AROS delta and required Bash configuration. The current AROS master refresh changes Task/Process ABI. Clean622 builds validate architecture flags under Bash; both frozen SDK623 builds pass, and [fresh ARM desktop637](evidence/master632/README.md#fresh-desktop-packaging-requirements) paints Wanderer and About AROS. Both V8 archives now pass. The [task-storage self-removal followup](evidence/taskstorage668/README.md) fixes a native OS lifecycle leak, with paired x64/ARM tests and zero settled loss in the fixed controls. CEF/Blink rebuilds remain in progress. Earlier refresh611–621 artifacts are excluded after configure silently dropped Bash syntax under /bin/sh. Current-master runtime qualification, remaining memory retention, hardware GPU/CDM validation, final packaging and RC publication remain open.
+[Current-master prerequisites and exact replay](evidence/master632/README.md) pin the complete AROS delta and required Bash configuration. The current AROS master refresh changes Task/Process ABI. Clean622 builds validate architecture flags under Bash; both frozen SDK623 builds pass, and [fresh ARM desktop637](evidence/master632/README.md#fresh-desktop-packaging-requirements) paints Wanderer and About AROS. Both V8 archives now pass. The [task-storage self-removal followup](evidence/taskstorage668/README.md) fixes a native OS lifecycle leak, with paired x64/ARM tests and zero settled loss in the fixed controls. CEF/Blink rebuilds were still in progress at this earlier checkpoint; the latest build section above records their completion. Earlier refresh611–621 artifacts are excluded after configure silently dropped Bash syntax under /bin/sh. Current-master runtime qualification, remaining memory retention, hardware GPU/CDM validation, final packaging and RC publication remain open.
 
 [Earlier superpage evidence](evidence/superpage585/README.md), [resolver/coldboot evidence](evidence/resolver572/README.md), and [cache/WebGL evidence](evidence/cache564/README.md) retain their original build identities.
 

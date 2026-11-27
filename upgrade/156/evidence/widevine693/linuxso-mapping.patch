@@ -1,0 +1,14 @@
+diff --git a/compiler/linuxso/lso_mem.c b/compiler/linuxso/lso_mem.c
+index 6e4f8811..fc8111c3 100644
+--- a/compiler/linuxso/lso_mem.c
++++ b/compiler/linuxso/lso_mem.c
+@@ -303,7 +303,8 @@ static int window_commit(struct lso_reserve *r, uintptr_t addr, size_t len)
+             return -1;
+         }
+         phys = KrnVirtualToPhysical(chunk);
+-        if (KrnMapGlobal(virt, phys, LSO_CHUNK, MAP_Readable | MAP_Writable | MAP_Executable) != 0)
++        /* kernel.resource returns nonzero on a successful mapping. */
++        if (KrnMapGlobal(virt, phys, LSO_CHUNK, MAP_Readable | MAP_Writable | MAP_Executable) == 0)
+         {
+             LSO_DEBUG("window %p: KrnMapGlobal(%p <- %p) failed", (void *)r->base, virt, phys);
+             chunk_release(chunk);

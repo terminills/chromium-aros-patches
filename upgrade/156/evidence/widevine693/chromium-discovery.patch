@@ -1,0 +1,37 @@
+--- a/chrome/common/media/cdm_registration.cc
++++ b/chrome/common/media/cdm_registration.cc
+@@ -63,8 +63,9 @@
+ using Robustness = content::CdmInfo::Robustness;
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+-#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||            \
+-     BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && \
++#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++     BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) || \
++     (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ // Create a CdmInfo for a Widevine CDM, using |version|, |cdm_library_path|, and
+ // |capability|.
+@@ -131,7 +132,8 @@
+         // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && (BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ 
+-#if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && \
++#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++     (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
+ // On Linux/ChromeOS we have to preload the CDM since it uses the zygote
+ // sandbox. On Windows and Mac, CDM registration is handled by Component
+@@ -230,7 +232,11 @@
+   // We should still use the version selected by Component Update (except for
+   // case #3 above).
+   std::unique_ptr<content::CdmInfo> bundled_widevine = nullptr;
+-#if BUILDFLAG(BUNDLE_WIDEVINE_CDM)
++// Native AROS accepts a user-installed CDM beside the host executable.
++  // Discovery does not require distributing the proprietary module or enabling
++  // a component updater. The LinuxSO loader currently supports x64 only.
++#if BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++    (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))
+   bundled_widevine = GetBundledWidevine();
+ #endif
+ 
