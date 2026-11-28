@@ -36,7 +36,7 @@ signal delivery or Exec signal masks.
 Native run 723 accepts license updates, reports usable keys and displays frames
 from the DRM sample. The trace confirms CDM decode-success callbacks, but does
 not identify whether each input frame was encrypted or in the clear lead. However it repeatedly buffers and has delayed UI input.
-Run 727 with detailed tracing off stalls near 0.3 seconds; a subsequent MP4 test
+Run 727 with Chromium detailed tracing off (loader tracing was still enabled: LINUXSO_DEBUG is enabled by presence, even when set to0) stalls near 0.3 seconds; a subsequent MP4 test
 also stalls, while VP8 play/seek/replay passes. Fresh MP4-only run 728 passes.
 **Sustained Widevine playback and session transitions remain unresolved.**
 

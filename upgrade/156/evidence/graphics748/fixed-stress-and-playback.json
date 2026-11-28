@@ -1,0 +1,29 @@
+{
+  "status": "encrypted playback followed by allocator double-free trap",
+  "last_progress": {
+    "event": "progress",
+    "time": 216.019948,
+    "frames": 5497,
+    "dropped": 169,
+    "ready": 4,
+    "paused": false
+  },
+  "stress_lines": [
+    "0000000c77133895 0x000000000107e530 | 000 | TOF741 start workers=16 cpus=2 frames=3000",
+    "0000000c7837c9a7 0x000000000107e530 | 000 | TOF741 progress ticks=0 done=0 count=0 cpu_mask=0",
+    "00000011e52ba4ac 0x000000000107e530 | 000 | TOF741 progress ticks=250 done=0 count=7438 cpu_mask=3",
+    "0000001797d7dacb 0x000000000107e530 | 000 | TOF741 progress ticks=500 done=0 count=15248 cpu_mask=3",
+    "0000001d44cfc095 0x000000000107e530 | 000 | TOF741 progress ticks=750 done=0 count=23024 cpu_mask=3",
+    "00000022fb563425 0x000000000107e530 | 000 | TOF741 progress ticks=1000 done=0 count=30848 cpu_mask=3",
+    "00000028ab5ac70f 0x000000000107e530 | 000 | TOF741 progress ticks=1250 done=0 count=38640 cpu_mask=3",
+    "0000002e3e6fca09 0x000000000107e530 | 000 | TOF741 progress ticks=1500 done=0 count=46288 cpu_mask=3",
+    "0000002f810cab10 0x000000000107e530 | 000 | TOF741 progress ticks=1555 done=16 count=48000 cpu_mask=3",
+    "0000002f8a02d8a2 0x000000000107e530 | 000 | TOF741 PASS"
+  ],
+  "audio_pcm_nonzero_samples": 2940036,
+  "audio_peak": 16384,
+  "audio_note": "Guest paused; WAV header may be unfinalized, payload decoded as little-endian signed16 from data chunk. Nonzero samples indicate generated PCM, not audible-output qualification.",
+  "fault_symbols": "fault-symbols.json",
+  "private_dump": "guest-crash.kdump",
+  "dump_completed_bytes": 8606908416
+}

@@ -1,0 +1,105 @@
+diff --git a/rom/graphics/graphics_init.c b/rom/graphics/graphics_init.c
+index 8831cb1e..28cc3f69 100644
+--- a/rom/graphics/graphics_init.c
++++ b/rom/graphics/graphics_init.c
+@@ -45,6 +45,14 @@ static int GfxInit(struct GfxBase *LIBBASE)
+ {
+     D(bug("[graphics.library] %s()\n", __func__));
+ 
++#if defined(__AROSEXEC_SMP__)
++    PrivGBase(LIBBASE)->tof_ExecLockBase = OpenResource("execlock.resource");
++    if (!PrivGBase(LIBBASE)->tof_ExecLockBase)
++        return FALSE;
++    PrivGBase(LIBBASE)->tof_lock.lock = SPINLOCK_UNLOCKED;
++    PrivGBase(LIBBASE)->tof_lock.s_Owner = NULL;
++#endif
++
+     driver_GetMethodBases(LIBBASE);
+ 
+     D(bug("[graphics.library] %s: obtained method bases\n", __func__));
+@@ -190,11 +198,13 @@ AROS_INTH1(TOF_VBlank, struct GfxBase *, GfxBase)
+             link = (struct DBufInfo **)&db->dbi_Link1;
+     }
+ 
++    gfx_LockTOF(GfxBase);
+     if(!IsListEmpty(&GfxBase->TOF_WaitQ)) {
+         ForeachNode(&GfxBase->TOF_WaitQ, tNode) {
+             Signal((struct Task *)tNode->ln_Name, SIGF_SINGLE);
+         }
+     }
++    gfx_UnlockTOF(GfxBase);
+ 
+     return 0;
+ 
+diff --git a/rom/graphics/graphics_intern.h b/rom/graphics/graphics_intern.h
+index 8fd958d8..57a01e75 100644
+--- a/rom/graphics/graphics_intern.h
++++ b/rom/graphics/graphics_intern.h
+@@ -31,6 +31,9 @@
+ #include <hidd/gfx.h>
+ #include <exec/memory.h>
+ #include <proto/exec.h>
++#if defined(__AROSEXEC_SMP__)
++#include <proto/execlock.h>
++#endif
+ #include <graphics/scale.h>
+ 
+ #include LC_LIBDEFS_FILE
+@@ -296,6 +299,10 @@ struct GfxBase_intern {
+      */
+     struct MinList              alphapixtabs;
+     struct SignalSemaphore      alphapixtabs_sema;
++#if defined(__AROSEXEC_SMP__)
++    struct ExecLockBase          *tof_ExecLockBase;
++    spinlock_t                   tof_lock;
++#endif
+ };
+ 
+ struct AlphaPixTabNode
+@@ -318,6 +325,24 @@ void internal_QueueDBufInfo(struct DBufInfo *db, struct GfxBase *GfxBase);
+ /* Macros */
+ 
+ #define PrivGBase(x)   	    	((struct GfxBase_intern *)x)
++/* Caller disables local interrupts before taking this cross-CPU lock.
++ * Keep stack-based WaitTOF nodes alive throughout interrupt traversal. */
++static inline void gfx_LockTOF(struct GfxBase *base)
++{
++#if defined(__AROSEXEC_SMP__)
++    struct ExecLockBase *ExecLockBase = PrivGBase(base)->tof_ExecLockBase;
++    ObtainLock(&PrivGBase(base)->tof_lock, SPINLOCK_MODE_WRITE, 0);
++#endif
++}
++
++static inline void gfx_UnlockTOF(struct GfxBase *base)
++{
++#if defined(__AROSEXEC_SMP__)
++    struct ExecLockBase *ExecLockBase = PrivGBase(base)->tof_ExecLockBase;
++    ReleaseLock(&PrivGBase(base)->tof_lock, 0);
++#endif
++}
++
+ /* FIXME: Remove these #define xxxBase hacks
+    Do not use this in new code !
+ */
+diff --git a/rom/graphics/waittof.c b/rom/graphics/waittof.c
+index 6fac1d75..038f0906 100644
+--- a/rom/graphics/waittof.c
++++ b/rom/graphics/waittof.c
+@@ -56,9 +56,17 @@
+ 
+     Disable();
+ 
++    gfx_LockTOF(GfxBase);
+     AddTail((struct List *)&GfxBase->TOF_WaitQ, (struct Node *)&wait);
++    gfx_UnlockTOF(GfxBase);
++
++    /* Wait() releases local interrupt exclusion; never hold the spinlock
++     * while sleeping, since the VBlank server needs it to wake us. */
+     Wait(SIGF_SINGLE);
++
++    gfx_LockTOF(GfxBase);
+     Remove((struct Node *)&wait);
++    gfx_UnlockTOF(GfxBase);
+ 
+     Enable();
+ 
