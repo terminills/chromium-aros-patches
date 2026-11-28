@@ -33,13 +33,14 @@ thread queries, arithmetic, and CDM initialize/deinitialize/close. The
 styles for this loader. Guest signal masks are private bookkeeping, not POSIX
 signal delivery or Exec signal masks.
 
-Native run 723 accepts license updates, reports usable keys and produces decoded
-protected video frames. However it repeatedly buffers and has delayed UI input.
+Native run 723 accepts license updates, reports usable keys and displays frames
+from the DRM sample. The trace confirms CDM decode-success callbacks, but does
+not identify whether each input frame was encrypted or in the clear lead. However it repeatedly buffers and has delayed UI input.
 Run 727 with detailed tracing off stalls near 0.3 seconds; a subsequent MP4 test
 also stalls, while VP8 play/seek/replay passes. Fresh MP4-only run 728 passes.
 **Sustained Widevine playback and session transitions remain unresolved.**
 
-![Protected frame displayed with full tracing](widevine-decrypted-frame.png)
+![Widevine sample frame displayed with full tracing](widevine-decrypted-frame.png)
 
 The current CDM remains an external privately installed module. No proprietary
 module, license response, decrypted content buffer or key is redistributed here.

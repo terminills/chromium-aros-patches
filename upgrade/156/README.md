@@ -7,7 +7,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Native H.264/AAC and current external CDM — 2026-11-28 UTC
 
-[Source724 and native media evidence](evidence/media729/README.md) record a complete x64 build, native H.264/AAC playback/seek/replay and PCM output, loader ABI tests for the current external CDM, and usable Widevine keys with displayed protected frames. Widevine buffering/session stalls remain unresolved. ARM archive/native builds and offline H.264/AAC play/seek/replay now pass; ARM audio output and release qualification remain open. The current snapshot covers22 repositories and is not an RC.
+[Source724 and native media evidence](evidence/media729/README.md) record a complete x64 build, native H.264/AAC playback/seek/replay and PCM output, loader ABI tests for the current external CDM, and usable Widevine keys and displayed sample frames. Playback through encrypted sections and Widevine buffering/session stalls remain unresolved. ARM archive/native builds and offline H.264/AAC play/seek/replay now pass; ARM audio output and release qualification remain open. The current snapshot covers22 repositories and is not an RC.
 
 ## Native encrypted media control — 2026-11-28 UTC
 
