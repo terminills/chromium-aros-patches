@@ -13,7 +13,9 @@ The live audio capture contains 75,835,054 nonzero signed 16-bit samples across 
 ## Other checks and limits
 
 - The independent native HTTP range/cache fixture completed 40 content-verified requests, including overlapping ranges and concurrent requests.
-- ARM751 completes the full archive and native link for source749. Its new runtime test is still pending; this is build proof only.
+- ARM751 completes the full archive and native link for source749. Runtime753 completes native ARM offline H.264/AAC playback, seeking and replay: 152 frames, zero dropped. Audio hardware modes were disabled, and neither networking nor ARM Widevine is qualified. Startup was slow; this is not a performance qualification.
 - Intermittent real-stream cache errors remain. A later private diagnostic build identifies a blockfile range query while another sparse operation is active; the fix is still under investigation.
 - Encrypted H.264 playback is under separate testing and is not included in this full-film result.
 - No proprietary CDM, profiles, audio or RAM dumps are redistributed. This is validation evidence for an in-progress port, not an RC release.
+
+![Native ARM local codec test](arm753.png)

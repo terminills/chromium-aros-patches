@@ -11,7 +11,7 @@ The updated snapshot also includes opt-in numeric pipe/decode watchdogs and the 
 - Source749 exports and exactly replays22 repositories against their pinned upstream commits.
 - Media746 x86-64 archive, native final link and packaging pass. Installed library SHA256: `eb4a791842e73c8cb2563091d362c827fd013572e365c476a090484ce921508e`.
 - [Native flag probe](../../tests/debug-flag746-probe.cpp): eight cases,7,001 reads, zero failures on native AROS. It covers absent, empty, zero, one, longer values and a newline suffix.
-- ARM751 now passes its full archive and native link; see [playback760](../playback760/README.md). Its fresh runtime regression remains pending.
+- ARM751 now passes its full archive and native link; see [playback760](../playback760/README.md). The native ARM local H.264/AAC play, seek and replay regression also passes; network and audio output remain unqualified.
 - Runtime747 now completes an uninterrupted encrypted 733.999-second replay with audio enabled; [playback760](../playback760/README.md) records the bounded result and screenshots. Cache errors and broader stability qualification remain open.
 
 This remains an in-progress source snapshot, not an RC. The external proprietary CDM is not included.
