@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "command": [
+        "ninja",
+        "-C",
+        "out/aros-vulkan624-arm64",
+        "-j16",
+        "obj/cef/libcef.a"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "make",
+        "-j1",
+        "SHELL=/bin/bash",
+        "CHROMIUM_SRC=/mnt/short-term/job0254-01a1e62b/src",
+        "CEF_OUTPUT=/mnt/short-term/job0254-01a1e62b/src/out/aros-vulkan624-arm64",
+        "V8_OUTPUT=/mnt/short-term/job0254-01a1e62b/src/out/aros-v8-624-arm64",
+        "workbench-libs-cef-blink-quick"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "native_sha256": "0673e34d945580d866f3b33cdbe8feb03ed6eff3bf2092d4868b6991dc31ea84"
+}

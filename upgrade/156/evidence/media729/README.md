@@ -47,7 +47,17 @@ Full numeric stage tracing remains available through AROS_WIDEVINE_DEBUG.
 
 ## Remaining scope
 
-ARM 712 archive compilation passes; its native link and the sequential 726 update
-were pending at publication. These results do not qualify ARM playback, memory
-plateau, long-session stability, hardware GPU paths or an RC release. Earlier
+Both ARM 712 and the sequential 726 archive/native builds pass. Fresh ARM run 732
+passes the same short H.264/AAC fixture, embedded in a local page: play, seek and
+replay produce 152 frames with zero reported drops using two native codec workers.
+Whole-guest memory after playback is 1614.32 MiB out of 1977.93 MiB usable.
+The offsets for the read-only memory measurement were regenerated with the
+current master622 ARM SDK, and the total matches the native startup sample.
+
+![ARM native H.264/AAC playback](arm-h264-aac.png)
+
+This is QEMU raspi4b emulation with the documented private preboot DTB upper-RAM
+workaround. Audio hardware modes were disabled, so ARM audio output remains
+unqualified. The result does not establish real-time performance, ARM networking,
+physical-Pi readiness, memory plateau, long-session stability or an RC release. Earlier
 ClearKey and lifecycle results retain their original build identities.
