@@ -5,6 +5,10 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
+## Native encrypted media control — 2026-11-28 UTC
+
+[ClearKey playback and Widevine comparison](evidence/media715/README.md) records a complete native60-second VP9/Opus encrypted sample, host-side reproduction of public Widevine license failures, and a subsequent native DevTools memory failure. Protected Widevine playback and stability remain open.
+
 ## Native video and audio — 2026-11-27 UTC
 
 [Media cleanup and playback evidence](evidence/media707/README.md) records native x64 VP8/VP9 playback, seeking and replay, Opus audio output, and corrected renderer media-object destruction. H264/AAC integration and protected Widevine playback remain open.
