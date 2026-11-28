@@ -34974,7 +34974,7 @@ index bc73d6fe724c9c3ce8a94a06244ba84d6c00335c..737fa4dc45a8980eb7a51fa7457dbb9b
    } else if (is_mac) {
      sources += [
 diff --git a/chrome/common/media/cdm_registration.cc b/chrome/common/media/cdm_registration.cc
-index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23dfa212b4 100644
+index 60a79ace428e9c9479097593165e7dec921b7f5c..1ade856de456c541163be91a5efcc807e53e04b3 100644
 --- a/chrome/common/media/cdm_registration.cc
 +++ b/chrome/common/media/cdm_registration.cc
 @@ -17,6 +17,9 @@
@@ -34996,16 +34996,21 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
  #include "base/native_library.h"
  #include "chrome/common/chrome_paths.h"
  #include "chrome/common/media/component_widevine_cdm_hint_file_linux.h"
-@@ -62,7 +65,7 @@ using Robustness = content::CdmInfo::Robustness;
+@@ -60,9 +63,10 @@ namespace {
+ using Robustness = content::CdmInfo::Robustness;
+ 
  #if BUILDFLAG(ENABLE_WIDEVINE)
- #if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||            \
-      BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && \
+-#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||            \
+-     BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && \
 -    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++     BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) || \
++     (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))) && \
 +    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
  // Create a CdmInfo for a Widevine CDM, using |version|, |cdm_library_path|, and
  // |capability|.
  std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
-@@ -80,10 +83,31 @@ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
+@@ -80,10 +84,31 @@ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
  // CdmInfo. If not, return nullptr.
  std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
      const base::FilePath& cdm_base_path) {
@@ -35037,7 +35042,7 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
    if (!base::PathExists(cdm_library_path)) {
      DLOG(ERROR) << __func__ << " no directory: " << cdm_library_path;
      return nullptr;
-@@ -92,7 +116,11 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+@@ -92,7 +117,11 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
    // Manifest should be at the top level.
    auto manifest_path = cdm_base_path.Append(FILE_PATH_LITERAL("manifest.json"));
    media::CdmCapability capability;
@@ -35050,20 +35055,22 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
      DLOG(ERROR) << __func__ << " no manifest: " << manifest_path;
      return nullptr;
    }
-@@ -101,10 +129,10 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+@@ -101,10 +130,11 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
  }
  #endif  // (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||
          // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && (BUILDFLAG(IS_LINUX) ||
 -        // BUILDFLAG(IS_CHROMEOS))
 +        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
  
- #if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && \
+-#if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && \
 -    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++     (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))) && \
 +    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_AROS))
  // On Linux/ChromeOS we have to preload the CDM since it uses the zygote
  // sandbox. On Windows and Mac, CDM registration is handled by Component
  // Update (as the CDM can be loaded only when needed).
-@@ -125,7 +153,7 @@ std::unique_ptr<content::CdmInfo> GetBundledWidevine() {
+@@ -125,7 +155,7 @@ std::unique_ptr<content::CdmInfo> GetBundledWidevine() {
    return CreateCdmInfoFromWidevineDirectory(install_dir);
  }
  #endif  // BUILDFLAG(BUNDLE_WIDEVINE_CDM) &&
@@ -35072,7 +35079,7 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
  
  #if (BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) && \
       (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)))
-@@ -159,6 +187,11 @@ std::unique_ptr<content::CdmInfo> GetHintedWidevine() {
+@@ -159,6 +189,11 @@ std::unique_ptr<content::CdmInfo> GetHintedWidevine() {
          // BUILDFLAG(IS_CHROMEOS)))
  
  void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
@@ -35084,7 +35091,7 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
    DVLOG(1) << __func__;
  
  #if BUILDFLAG(IS_ANDROID)
-@@ -170,7 +203,7 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
+@@ -170,7 +205,7 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
        /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
        kWidevineCdmType, base::FilePath());
  
@@ -35093,6 +35100,19 @@ index 60a79ace428e9c9479097593165e7dec921b7f5c..bdf92375a725a3c6ed1b0c46d1c5aa23
    // The Widevine CDM on Linux/ChromeOS needs to be registered (and loaded)
    // before the zygote is locked down. The CDM can be found from the version
    // bundled with Chrome (if BUNDLE_WIDEVINE_CDM = true) and/or the version
+@@ -197,7 +232,11 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
+   // We should still use the version selected by Component Update (except for
+   // case #3 above).
+   std::unique_ptr<content::CdmInfo> bundled_widevine = nullptr;
+-#if BUILDFLAG(BUNDLE_WIDEVINE_CDM)
++// Native AROS accepts a user-installed CDM beside the host executable.
++  // Discovery does not require distributing the proprietary module or enabling
++  // a component updater. The LinuxSO loader currently supports x64 only.
++#if BUILDFLAG(BUNDLE_WIDEVINE_CDM) || \
++    (BUILDFLAG(IS_AROS) && defined(ARCH_CPU_X86_64))
+   bundled_widevine = GetBundledWidevine();
+ #endif
+ 
 diff --git a/chrome/common/media/component_widevine_cdm_hint_file_linux.cc b/chrome/common/media/component_widevine_cdm_hint_file_linux.cc
 index 5cffcdac812a0943143a7bc0943ef8a931af2302..4e4724963c537c6a37f2023fb4cae99dc822ca2c 100644
 --- a/chrome/common/media/component_widevine_cdm_hint_file_linux.cc
@@ -46279,7 +46299,7 @@ index 8d7c579bafe1b0a9dfd9a7496246228c8bbf8730..8896f43ce41b3e4e7956f5243ed1d8e6
    }
  
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..46394c3a4b52464a669080f1da48f2d0666c5b34 100644
+index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..c0b077ab91a26855f7462e8588bb2a2faf91c8ef 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
 @@ -23,6 +23,9 @@
@@ -46389,7 +46409,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..46394c3a4b52464a669080f1da48f2d0
  }
  
  void RenderThreadImpl::Shutdown() {
-@@ -683,13 +717,62 @@ void RenderThreadImpl::Shutdown() {
+@@ -683,13 +717,78 @@ void RenderThreadImpl::Shutdown() {
    fflush(stdout);
    fflush(stderr);
  
@@ -46407,11 +46427,27 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..46394c3a4b52464a669080f1da48f2d0
 +  }
 +  if (main_thread_scheduler_) {
 +    LOG(INFO) << "[Chromium:shutdown] stopping AROS renderer scheduler";
-+    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([] {
++    main_thread_scheduler_->ShutdownWithCleanup(base::BindOnce([](RenderThreadImpl* self) {
 +      // Queue deletion must precede isolate retirement; clocks and helper
 +      // state must survive the synchronous Oilpan finalizers it triggers.
 +      blink::RetireMainThreadIsolateForAros();
-+    }));
++      // Media factories bind their Mojo endpoints on the media sequence.
++      // Native AROS returns through the renderer destructor, unlike platforms
++      // which exit the process here. Release these endpoints on their owner
++      // sequence while both its runner and the main-thread scheduler survive.
++      if (!self->gpu_factories_.empty()) {
++        base::WaitableEvent released;
++        CHECK(self->GetMediaSequencedTaskRunner()->PostTask(
++            FROM_HERE, base::BindOnce(
++                [](decltype(gpu_factories_) factories,
++                   base::WaitableEvent* released) {
++                  factories.clear();
++                  released->Signal();
++                }, std::move(self->gpu_factories_), &released)));
++        released.Wait();
++        LOG(INFO) << "[Chromium:AROS:MediaShutdown] factories released on media sequence";
++      }
++    }, base::Unretained(this)));
 +    LOG(INFO) << "[Chromium:shutdown] AROS renderer scheduler stopped";
 +  }
 +  // Queue destruction releases deferred WidgetBase/LayerTreeView cleanup.
@@ -46453,7 +46489,7 @@ index fe688f282a3c394b9f8ad52c9c6c7e7441c54e8f..46394c3a4b52464a669080f1da48f2d0
    DCHECK(IsSingleProcess());
    // In a single-process mode, it is unsafe to destruct this renderer thread
    // because we haven't run the shutdown sequence. Hence we leak the render
-@@ -700,6 +783,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
+@@ -700,6 +799,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
    // has been destructed.
    base::AtExitManager::DisableAllAtExitManagers();
    return false;
@@ -50962,7 +50998,7 @@ index 8de444a6be9f907db5e56ef3b702fc0675980ffe..07af6f8827550fd6a3358f5bb23cc122
    last_read_file_size_kb_ = file_size_bytes / 1024;
  
 diff --git a/media/cdm/cdm_module.cc b/media/cdm/cdm_module.cc
-index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951a2ea5c35 100644
+index 11841a5fb7774e8bc62d95e272843734a9f34636..1afea91b356a7c8c3d6566015f546d432a98fe2e 100644
 --- a/media/cdm/cdm_module.cc
 +++ b/media/cdm/cdm_module.cc
 @@ -4,6 +4,7 @@
@@ -50973,7 +51009,51 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
  #include "base/files/file_util.h"
  #include "base/logging.h"
  #include "base/memory/ptr_util.h"
-@@ -84,6 +85,7 @@ void CdmModule::ResetInstanceForTesting() {
+@@ -31,11 +32,22 @@
+ #define STRINGIFY(X) #X
+ #define MAKE_STRING(X) STRINGIFY(X)
+ 
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/process_local.h"
++#include "base/at_exit.h"
++#endif
++
+ namespace media {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_AROS)
++struct CdmModuleProcessTag;
++#define g_cdm_module \
++  (base::aros::ProcessLocalValue<CdmModule*, CdmModuleProcessTag>())
++#else
+ static CdmModule* g_cdm_module = nullptr;
++#endif
+ 
+ // UMA report prefix
+ const char kUmaPrefix[] = "Media.EME.Cdm";
+@@ -66,8 +78,19 @@ CdmModule* CdmModule::GetInstance() {
+   // to be called, e.g. in the fast shutdown case.
+   // TODO(xhwang): Find a better ownership model to make sure |cdm_module| is
+   // destructed properly whenever possible (e.g. in non-fast-shutdown case).
+-  if (!g_cdm_module)
++  if (!g_cdm_module) {
+     g_cdm_module = new CdmModule();
++#if BUILDFLAG(IS_AROS)
++    // Native children share the engine image, not their CDM state. Retire the
++    // module with its logical process after the utility services have closed.
++    // The small process-local pointer slot itself has resident-engine lifetime.
++    base::AtExitManager::RegisterCallback([](void* context) {
++      auto** slot = static_cast<CdmModule**>(context);
++      delete *slot;
++      *slot = nullptr;
++    }, &g_cdm_module);
++#endif
++  }
+ 
+   return g_cdm_module;
+ }
+@@ -84,6 +107,7 @@ void CdmModule::ResetInstanceForTesting() {
  CdmModule::CdmModule() = default;
  
  CdmModule::~CdmModule() {
@@ -50981,7 +51061,7 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
    if (deinitialize_cdm_module_func_)
      deinitialize_cdm_module_func_();
  }
-@@ -112,6 +114,7 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path,
+@@ -112,6 +136,7 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path,
  #else
  bool CdmModule::Initialize(const base::FilePath& cdm_path) {
  #endif  // BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
@@ -50989,7 +51069,7 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
    DVLOG(1) << __func__ << ": cdm_path = " << cdm_path.value();
    CHECK(!initialized_) << "CdmModule can only be initialized once!";
  
-@@ -120,9 +123,16 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+@@ -120,9 +145,16 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
  
    // Load the CDM.
    base::TimeTicks start = base::TimeTicks::Now();
@@ -51006,7 +51086,7 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
      LOG(ERROR) << "CDM at " << cdm_path.value() << " could not be loaded.";
      LOG(ERROR) << "Error: " << library_.GetError()->ToString();
      ReportLoadResult(kUmaPrefix, base::PathExists(cdm_path)
-@@ -146,8 +156,22 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+@@ -146,8 +178,22 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
    get_cdm_version_func_ = reinterpret_cast<GetCdmVersionFunc>(
        library_.GetFunctionPointer("GetCdmVersion"));
  
@@ -51029,7 +51109,7 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
      LOG(ERROR) << "Missing entry function in CDM at " << cdm_path.value();
      initialize_cdm_module_func_ = nullptr;
      deinitialize_cdm_module_func_ = nullptr;
-@@ -162,6 +186,11 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+@@ -162,6 +208,11 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
    std::string cdm_version = get_cdm_version_func_();
    DVLOG(2) << __func__ << ": cdm_version = " << cdm_version;
    TRACE_EVENT1("media", "CdmModule::Initialize", "cdm_version", cdm_version);
@@ -51041,7 +51121,7 @@ index 11841a5fb7774e8bc62d95e272843734a9f34636..a4c82fcb500b608853b5b245f063a951
  
    static crash_reporter::CrashKeyString<32> cdm_version_key("cdm-version");
    cdm_version_key.Set(cdm_version);
-@@ -182,10 +211,19 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
+@@ -182,10 +233,19 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
  }
  
  void CdmModule::InitializeCdmModule() {

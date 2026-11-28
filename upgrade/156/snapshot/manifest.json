@@ -1,17 +1,17 @@
 {
   "status": "in-progress, not release-ready",
   "chromium_version": "156.0.8078.96",
-  "recorded_utc": "2026-11-27T03:24:25.746585+00:00",
-  "validation": "Source602 replay verified across21 repositories; both full archives/native603 links pass. Run604100sessions/retirements,102nativeledgerpairs,hostexit pass; missing serial utility83 entry explicitly reconciled. Zero retained256KiBcache slots; memory still grows. ARM605/610 paint,606isolation,607coldboot,609installedlaunch pass on retained matched OS. New-master622 rebuild pending; noRC.",
+  "recorded_utc": "2026-11-28T00:51:59.382268+00:00",
+  "validation": "Snapshot724: exact independent-index replay of 22 repositories. Combined x64 media720 archive and native link PASS; native728 short H264/AAC play, seek, replay and PCM output PASS. ARM712 archive PASS, native link and followup726 pending. Widevine usable keys and decrypted frames observed in723; repeated buffering and quiet727 stall unresolved. Not RC.",
   "repositories": [
     {
       "path": "src",
       "base": "2ad9b7f5a86846e0b264090723a6a78964bb84c4",
       "upstream_url": "https://github.com/chromium/chromium.git",
       "patch": "src.patch",
-      "sha256": "ff6730f68a8d99fe8dbfc69838e0bfe1c8797fd17e93cf6e83ed4d9e493e3eab",
-      "applied_tree": "599fe1a361ffdbd485d6c032e1edac88fa7ef0b1",
-      "bytes": 3158656
+      "sha256": "4b7310264e5fd114fb5ca84c3b0d5c0730016a21532cc73c8b0260b342e75ae7",
+      "applied_tree": "14c6eec768c3618c4354506c4df554ede907b055",
+      "bytes": 3161865
     },
     {
       "path": "net/third_party/quiche/src",
@@ -192,6 +192,15 @@
       "sha256": "45966ee07ef59101ec81048800c85835c3c91892a19c6cefd265026ca26447bf",
       "applied_tree": "fce44d3496f773dd0300424331ee658977aa5b74",
       "bytes": 63950
+    },
+    {
+      "path": "third_party/ffmpeg",
+      "base": "9db86ce5b5b454dfc96c435f9f0723012980c37f",
+      "upstream_url": "https://chromium.googlesource.com/chromium/third_party/ffmpeg.git",
+      "patch": "third_party--ffmpeg.patch",
+      "sha256": "3e8bff800d1e9b0323a67ff6ef79229ca491e7af94730099853814338f81ea34",
+      "applied_tree": "4d61d1801d93c6f9fe64326f1a2daca9e28bc53b",
+      "bytes": 656505
     }
   ]
 }

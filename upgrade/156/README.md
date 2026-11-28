@@ -5,13 +5,17 @@ contains reproducible prerequisites while the main AROS patch queue is migrated.
 It is not a finished browser or CEF binary release. The root `PINS`, `EXPORT.json`
 and patch queues still describe the retained Chromium 124 baseline.
 
+## Native H.264/AAC and current external CDM — 2026-11-28 UTC
+
+[Source724 and native media evidence](evidence/media729/README.md) record a complete x64 build, native H.264/AAC playback/seek/replay and PCM output, loader ABI tests for the current external CDM, and usable Widevine keys with displayed protected frames. Widevine buffering/session stalls remain unresolved. ARM archive compilation passes; native followup and release qualification remain open. The current snapshot covers22 repositories and is not an RC.
+
 ## Native encrypted media control — 2026-11-28 UTC
 
-[ClearKey playback and Widevine comparison](evidence/media715/README.md) records a complete native60-second VP9/Opus encrypted sample, host-side reproduction of public Widevine license failures, and a subsequent native DevTools memory failure. Protected Widevine playback and stability remain open.
+[ClearKey playback and Widevine comparison](evidence/media715/README.md) records a complete native 60-second VP9/Opus encrypted sample, host-side reproduction of public Widevine license failures, and a subsequent native DevTools memory failure. Protected Widevine playback and stability remain open.
 
 ## Native video and audio — 2026-11-27 UTC
 
-[Media cleanup and playback evidence](evidence/media707/README.md) records native x64 VP8/VP9 playback, seeking and replay, Opus audio output, and corrected renderer media-object destruction. H264/AAC integration and protected Widevine playback remain open.
+[Media cleanup and playback evidence](evidence/media707/README.md) records native x64 VP8/VP9 playback, seeking and replay, Opus audio output, and corrected renderer media-object destruction. That earlier build predates the H.264/AAC integration above; sustained protected Widevine playback remains open.
 
 ## Native DNS correction — 2026-11-27 UTC
 
@@ -27,7 +31,7 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Earlier source602 validation — 2026-11-27 UTC
 
-The published snapshot is **602**, replay-checked across all21 modified repositories. It retains585's four2 MiB superpages per10 MiB Exec allocation and adds native TLS cleanup for Blink's per-task SmallStringCache. Both full CEF archives and native603 libraries build. [Cache retirement and native regression evidence](evidence/cache602/README.md) records the exact controls and limits.
+The earlier snapshot **602** was replay-checked across all21 modified repositories. It retains585's four2 MiB superpages per10 MiB Exec allocation and adds native TLS cleanup for Blink's per-task SmallStringCache. Both full CEF archives and native603 libraries build. [Cache retirement and native regression evidence](evidence/cache602/README.md) records the exact controls and limits.
 
 X64 run604 passes100 browser sessions,100 renderer retirements,102 child-owned zero entry/exit pairs and full host shutdown. A missing utility83 entry in the serial-only parser is explicitly reconciled using its native ledger; the original failed report remains. At cycle100, whole-guest memory is1294.33 MiB, **40.06 MiB below588**. Growth from cycles30–100 falls from95.57 to71.88 MiB. The final allocator sample contains zero allocated256 KiB cache slots. **Memory still grows; no plateau or RC is claimed.**
 

@@ -1,0 +1,295 @@
+diff --git a/compiler/linuxso/linuxso_intern.h b/compiler/linuxso/linuxso_intern.h
+index 7917e7a74b8aba0b94feec0697bb5988176fef13..ee8d817e06b562d34cabd49ae60b7f4187e720ff 100644
+--- a/compiler/linuxso/linuxso_intern.h
++++ b/compiler/linuxso/linuxso_intern.h
+@@ -175,6 +175,8 @@ struct lso_task {
+     void *tls[LSO_MAX_TLS_MODULES]; /* per-module TLS blocks, lazily created */
+     struct Task *task;
+     char thread_name[32];
++    uint64_t guest_signal_mask;     /* Linux mask, never an Exec signal mask */
++    char strerror_buffer[64];
+ };
+ 
+ struct lso_task *lso_task_get(void);   /* create on first use */
+diff --git a/compiler/linuxso/lso_file.c b/compiler/linuxso/lso_file.c
+index f075b9df542fc6fe29eb04c5950cd98cb255ebd7..9fdfefccbd2ce445d694d1db8bb6e06d2ab0f8c4 100644
+--- a/compiler/linuxso/lso_file.c
++++ b/compiler/linuxso/lso_file.c
+@@ -319,6 +319,50 @@ int lx_close(int fd)
+     return r;
+ }
+ 
++/* fcntl command numbers and status flags differ between Linux and AROS. */
++int lx_fcntl(int fd, int command, ...)
++{
++    int arg = 0, native_command, result, i;
++    if (command == 0 || command == 2 || command == 4 || command == 1030) {
++        __builtin_va_list ap;
++        __builtin_va_start(ap, command);
++        arg = __builtin_va_arg(ap, int);
++        __builtin_va_end(ap);
++    }
++    switch (command) {
++    case 0: native_command = F_DUPFD; break;
++    case 1: native_command = F_GETFD; break;
++    case 2: native_command = F_SETFD; arg = (arg & 1) ? FD_CLOEXEC : 0; break;
++    case 3: native_command = F_GETFL; break;
++    case 4:
++        native_command = F_SETFL;
++        arg = ((arg & LX_O_APPEND) ? O_APPEND : 0) |
++              ((arg & LX_O_NONBLOCK) ? O_NONBLOCK : 0);
++        break;
++    case 1030: native_command = F_DUPFD_CLOEXEC; break;
++    default: lso_set_errno(LX_EINVAL); return -1;
++    }
++    result = fcntl(fd, native_command, arg);
++    if (result < 0) { lso_set_errno_from_aros(); return -1; }
++    if (command == 1) return (result & FD_CLOEXEC) ? 1 : 0;
++    if (command == 3) {
++        int flags = 0;
++        if ((result & O_ACCMODE) == O_WRONLY) flags = LX_O_WRONLY;
++        else if ((result & O_ACCMODE) == O_RDWR) flags = LX_O_RDWR;
++        if (result & O_APPEND) flags |= LX_O_APPEND;
++        if (result & O_NONBLOCK) flags |= LX_O_NONBLOCK;
++        return flags;
++    }
++    if ((command == 0 || command == 1030) && random_slot(fd) >= 0) {
++        for (i = 0; i < LSO_MAX_RANDOM_FDS; ++i) {
++            if (__sync_bool_compare_and_swap(&random_fds[i], 0, result + 1))
++                return result;
++        }
++        close(result); lso_set_errno(LX_EMFILE); return -1;
++    }
++    return result;
++}
++
+ long lx_read(int fd, void *buf, size_t n)
+ {
+     ssize_t r;
+diff --git a/compiler/linuxso/lso_lx.h b/compiler/linuxso/lso_lx.h
+index 50d08311daec224cef71f6c18f4f76b4352e2e4a..b0d1cf8251fe36804e9dccb83385c95eb9eecbbb 100644
+--- a/compiler/linuxso/lso_lx.h
++++ b/compiler/linuxso/lso_lx.h
+@@ -67,6 +67,9 @@ unsigned long lx_pthread_self(void);
+ int lx_pthread_equal(unsigned long a, unsigned long b);
+ void lx_pthread_exit(void *ret);
+ int lx_pthread_setname_np(unsigned long thread, const char *name);
++int lx_pthread_getname_np(unsigned long thread, char *name, size_t len);
++int lx_pthread_getschedparam(unsigned long thread, int *policy, int *priority);
++int lx_pthread_sigmask(int how, const void *set, void *oldset);
+ int lx_pthread_getaffinity_np(unsigned long thread, size_t setsize, unsigned long *set);
+ int lx_sched_getaffinity(int pid, size_t setsize, unsigned long *set);
+ int lx_sched_cpucount(size_t setsize, const unsigned long *set);
+@@ -86,6 +89,7 @@ int lx_fstat64(int fd, void *buf);
+ int lx_open64(const char *path, int flags, ...);
+ int lx_creat64(const char *path, int mode);
+ int lx_close(int fd);
++int lx_fcntl(int fd, int command, ...);
+ long lx_read(int fd, void *buf, size_t n);
+ long lx_write(int fd, const void *buf, size_t n);
+ long lx_pread64(int fd, void *buf, size_t n, int64_t off);
+diff --git a/compiler/linuxso/lso_pthread.c b/compiler/linuxso/lso_pthread.c
+index 5a9718ecebbb8dea6ffc3180c400bd7ee276fd84..89b67ad2f24738197c66f1b25a5f78658d27be1e 100644
+--- a/compiler/linuxso/lso_pthread.c
++++ b/compiler/linuxso/lso_pthread.c
+@@ -512,6 +512,49 @@ int lx_pthread_setname_np(unsigned long thread, const char *name)
+     return lso_pthread_ret(pthread_setname_np((pthread_t)thread, name));
+ }
+ 
++/* Linux sched_param is one int; do not expose the larger AROS layout. */
++int lx_pthread_getschedparam(unsigned long thread, int *policy, int *priority)
++{
++    struct sched_param native = {0};
++    int native_policy, result;
++    if (!policy || !priority) return LX_EINVAL;
++    result = pthread_getschedparam((pthread_t)thread, &native_policy, &native);
++    if (result) return lso_pthread_ret(result);
++    /* The AROS implementation reports its normal Exec scheduling policy. */
++    *policy = 0; /* Linux SCHED_OTHER */
++    *priority = 0; /* SCHED_OTHER has no realtime scheduling priority. */
++    return 0;
++}
++
++int lx_pthread_getname_np(unsigned long thread, char *name, size_t len)
++{
++    return lso_pthread_ret(pthread_getname_np((pthread_t)thread, name, len));
++}
++
++/* LinuxSO does not deliver POSIX signals. Preserve the guest's per-thread
++ * mask for query/restore operations without modifying AROS Exec signals.
++ * glibc sigset_t is 128 bytes; Linux currently uses its first 64 bits. */
++int lx_pthread_sigmask(int how, const void *set, void *oldset)
++{
++    struct lso_task *task = lso_task_get();
++    uint64_t value = 0, previous;
++    if (!task) return LX_ENOMEM;
++    if (set && (how < 0 || how > 2)) return LX_EINVAL;
++    if (set) memcpy(&value, set, sizeof(value));
++    previous = task->guest_signal_mask;
++    if (set) {
++        value &= ~((1ULL << (9 - 1)) | (1ULL << (19 - 1)));
++        if (how == 0) task->guest_signal_mask |= value;
++        else if (how == 1) task->guest_signal_mask &= ~value;
++        else task->guest_signal_mask = value;
++    }
++    if (oldset) {
++        memset(oldset, 0, 128);
++        memcpy(oldset, &previous, sizeof(previous));
++    }
++    return 0;
++}
++
+ int lx_pthread_getaffinity_np(unsigned long thread, size_t setsize, unsigned long *set)
+ {
+     unsigned int n = lso_ncpus(), i;
+diff --git a/compiler/linuxso/lso_shim.c b/compiler/linuxso/lso_shim.c
+index 278d7604b88749bddd9e2915170af7d7c022fd8d..866b783dbdcea9386f12e8385c50dec669b0f4ad 100644
+--- a/compiler/linuxso/lso_shim.c
++++ b/compiler/linuxso/lso_shim.c
+@@ -35,6 +35,8 @@
+ #include "linuxso_intern.h"
+ #include "lso_lx.h"
+ 
++extern unsigned __int128 __udivti3(unsigned __int128, unsigned __int128);
++
+ /* the program's libgcc unwinder */
+ extern void _Unwind_DeleteException(void *);
+ extern unsigned long _Unwind_GetIP(void *);
+@@ -459,6 +461,26 @@ static char *lx_strerror_r(int lx, char *buf, size_t len)
+     return buf;
+ }
+ 
++static char *lx_strerror(int error)
++{
++    const char *text = lx_strerror_text(error);
++    struct lso_task *task;
++    if (text) return (char *)text;
++    task = lso_task_get();
++    if (!task) return "Unknown error";
++    snprintf(task->strerror_buffer, sizeof(task->strerror_buffer),
++             "Unknown error %d", error);
++    return task->strerror_buffer;
++}
++
++static int lx_getpagesize(void) { return LSO_PAGE; }
++static int lx_sigfillset(void *set)
++{
++    if (!set) { lso_set_errno(LX_EINVAL); return -1; }
++    memset(set, 0xff, 128);
++    return 0;
++}
++
+ static void lx_perror(const char *s)
+ {
+     char buf[64];
+@@ -644,8 +666,10 @@ static const struct lso_symbol shim_table[] = {
+     { "__stack_chk_fail",       (void *)lx_stack_chk_fail },
+     { "__strncat_chk",          (void *)lx_strncat_chk },
+     { "__tls_get_addr",         (void *)lso_tls_get_addr },
++    { "__udivti3", (void *)__udivti3 },
+     { "__vsnprintf_chk",        (void *)lx_vsnprintf_chk },
+     { "__xstat64",              (void *)lx_xstat64 },
++    { "_exit", (void *)_exit },
+     { "_setjmp",                (void *)setjmp },
+     { "abort",                  (void *)lx_abort },
+     { "bcmp",                   (void *)lx_bcmp },
+@@ -663,6 +687,7 @@ static const struct lso_symbol shim_table[] = {
+     { "dlsym",                  (void *)lx_dlsym },
+     { "exp",                    (void *)exp },
+     { "fclose",                 (void *)fclose },
++    { "fcntl", (void *)lx_fcntl },
+     { "fflush",                 (void *)fflush },
+     { "fgets",                  (void *)fgets },
+     { "floor",                  (void *)floor },
+@@ -678,6 +703,7 @@ static const struct lso_symbol shim_table[] = {
+     { "getc",                   (void *)getc },
+     { "getenv",                 (void *)lx_getenv },
+     { "geteuid",                (void *)lx_geteuid },
++    { "getpagesize", (void *)lx_getpagesize },
+     { "getpid",                 (void *)lx_getpid },
+     { "getrlimit64",            (void *)lx_getrlimit64 },
+     { "gettimeofday",           (void *)lx_gettimeofday },
+@@ -729,6 +755,8 @@ static const struct lso_symbol shim_table[] = {
+     { "pthread_equal",          (void *)lx_pthread_equal },
+     { "pthread_exit",           (void *)lx_pthread_exit },
+     { "pthread_getaffinity_np", (void *)lx_pthread_getaffinity_np },
++    { "pthread_getname_np", (void *)lx_pthread_getname_np },
++    { "pthread_getschedparam", (void *)lx_pthread_getschedparam },
+     { "pthread_getspecific",    (void *)lx_pthread_getspecific },
+     { "pthread_join",           (void *)lx_pthread_join },
+     { "pthread_key_create",     (void *)lx_pthread_key_create },
+@@ -752,9 +780,11 @@ static const struct lso_symbol shim_table[] = {
+     { "pthread_self",           (void *)lx_pthread_self },
+     { "pthread_setname_np",     (void *)lx_pthread_setname_np },
+     { "pthread_setspecific",    (void *)lx_pthread_setspecific },
++    { "pthread_sigmask", (void *)lx_pthread_sigmask },
+     { "qsort",                  (void *)qsort },
+     { "rand",                   (void *)rand },
+     { "read",                   (void *)lx_read },
++    { "rint", (void *)rint },
+     { "round",                  (void *)round },
+     { "sched_getaffinity",      (void *)lx_sched_getaffinity },
+     { "sched_setscheduler",     (void *)lx_sched_setscheduler },
+@@ -765,6 +795,7 @@ static const struct lso_symbol shim_table[] = {
+     { "sem_trywait",            (void *)lx_sem_trywait },
+     { "sem_wait",               (void *)lx_sem_wait },
+     { "setpriority",            (void *)lx_setpriority },
++    { "sigfillset", (void *)lx_sigfillset },
+     { "snprintf",               (void *)snprintf },
+     { "stat64",                 (void *)lx_stat64 },
+     { "stderr",                 &lx_stderr },
+@@ -772,6 +803,7 @@ static const struct lso_symbol shim_table[] = {
+     { "stdout",                 &lx_stdout },
+     { "strchr",                 (void *)strchr },
+     { "strcmp",                 (void *)strcmp },
++    { "strerror", (void *)lx_strerror },
+     { "strerror_r",             (void *)lx_strerror_r },
+     { "strftime_l",             (void *)lx_strftime_l },
+     { "strlen",                 (void *)strlen },
+@@ -784,6 +816,7 @@ static const struct lso_symbol shim_table[] = {
+     { "strtold_l",              (void *)lx_strtold_l },
+     { "strtoll_l",              (void *)lx_strtoll_l },
+     { "strtoul",                (void *)strtoul },
++    { "strtoull", (void *)strtoull },
+     { "strtoull_l",             (void *)lx_strtoull_l },
+     { "syscall",                (void *)lx_syscall },
+     { "sysconf",                (void *)lx_sysconf },
+diff --git a/compiler/linuxso/lso_syscall.c b/compiler/linuxso/lso_syscall.c
+index 67a37177db9352e2aa23ef39b3561992178bd3aa..9c3095cc7c88f383a9b0de24dbc0f10176dedbeb 100644
+--- a/compiler/linuxso/lso_syscall.c
++++ b/compiler/linuxso/lso_syscall.c
+@@ -436,21 +436,25 @@ long lso_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
+     case SYS_madvise:   r = ret_or_errno(lx_madvise((void *)a1, (size_t)a2, (int)a3)); break;
+     case SYS_brk:       r = -LX_ENOMEM; break;
+     case SYS_rt_sigaction:
+-    case SYS_rt_sigprocmask:
+     case SYS_sigaltstack:
+     case SYS_set_robust_list:
+         r = 0; break;
++    case SYS_rt_sigprocmask:
++    {
++        uint64_t input[16] = {0}, output[16] = {0};
++        int result;
++        if (a4 != sizeof(uint64_t)) { r = -LX_EINVAL; break; }
++        if (a2) memcpy(input, (void *)a2, sizeof(uint64_t));
++        result = lx_pthread_sigmask((int)a1, a2 ? input : NULL,
++                                   a3 ? output : NULL);
++        if (!result && a3) memcpy((void *)a3, output, sizeof(uint64_t));
++        r = -result;
++        break;
++    }
+     case SYS_rseq:      r = -LX_ENOSYS; break;
+     case SYS_ioctl:     r = -LX_ENOTTY; break;
+     case SYS_fcntl:
+-        switch (a2)
+-        {
+-        case 1: /* F_GETFD */ r = 0; break;
+-        case 2: /* F_SETFD */ r = 0; break;
+-        case 3: /* F_GETFL */ r = 0; break;
+-        case 4: /* F_SETFL */ r = 0; break;
+-        default: r = -LX_EINVAL; break;
+-        }
++        r = ret_or_errno(lx_fcntl((int)a1, (int)a2, (int)a3));
+         break;
+     case SYS_sched_yield: r = 0; sched_yield(); break;
+     case SYS_nanosleep:
