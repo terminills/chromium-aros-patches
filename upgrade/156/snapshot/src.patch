@@ -3216,6 +3216,24 @@ index 0000000000000000000000000000000000000000..327effaefaf2b0f03cfe7d579953bd77
 +}  // namespace base::aros
 +
 +#endif  // BASE_AROS_CRASH_ANNOTATIONS_H_
+diff --git a/base/aros/debug_flag.h b/base/aros/debug_flag.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..758158807fc9d717ac074a61cb6bb2e66362772c
+--- /dev/null
++++ b/base/aros/debug_flag.h
+@@ -0,0 +1,12 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef BASE_AROS_DEBUG_FLAG_H_
++#define BASE_AROS_DEBUG_FLAG_H_
++#include "base/base_export.h"
++namespace base::aros {
++// Read dynamically for resident-engine clients, without libc's shared cache.
++// Only an exact value of "1" enables the flag.
++BASE_EXPORT bool DebugFlagEnabled(const char* name);
++}
++#endif
 diff --git a/base/aros/in6addr.cc b/base/aros/in6addr.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..bd4bb0e20932f719f607a7e06ba42855daee930e
@@ -4311,10 +4329,10 @@ index 0000000000000000000000000000000000000000..2e9b574493d047d69d90a51d256d85b7
 +#endif  // BASE_AROS_SOCKET_LIBRARY_H_
 diff --git a/base/aros/widevine_debug.h b/base/aros/widevine_debug.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..b81b47eac6e882d7f91d1324270ffc44097b9e95
+index 0000000000000000000000000000000000000000..9b3f073ea13fdee309307f53ad636e5181c6e7c7
 --- /dev/null
 +++ b/base/aros/widevine_debug.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,75 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4324,9 +4342,8 @@ index 0000000000000000000000000000000000000000..b81b47eac6e882d7f91d1324270ffc44
 +
 +#include <atomic>
 +#include <cstdint>
-+#include <cstdlib>
-+#include <cstring>
 +
++#include "base/aros/debug_flag.h"
 +#include "base/command_line.h"
 +#include "base/logging.h"
 +#include "base/process/process_handle.h"
@@ -4338,8 +4355,7 @@ index 0000000000000000000000000000000000000000..b81b47eac6e882d7f91d1324270ffc44
 +// Checked dynamically: a resident engine may outlive its launching application.
 +inline bool WidevineDebugEnabled() {
 +#if BUILDFLAG(IS_AROS)
-+  const char* value = std::getenv("AROS_WIDEVINE_DEBUG");
-+  if (value && std::strcmp(value, "1") == 0) {
++  if (DebugFlagEnabled("AROS_WIDEVINE_DEBUG")) {
 +    return true;
 +  }
 +  return CommandLine::InitializedForCurrentProcess() &&
@@ -4392,6 +4408,77 @@ index 0000000000000000000000000000000000000000..b81b47eac6e882d7f91d1324270ffc44
 +}  // namespace base::aros
 +
 +#endif  // BASE_AROS_WIDEVINE_DEBUG_H_
+diff --git a/base/aros/widevine_pipe_watchdog.h b/base/aros/widevine_pipe_watchdog.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..90c9bfd2586b941b927ed60b56c86584fe37d848
+--- /dev/null
++++ b/base/aros/widevine_pipe_watchdog.h
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef BASE_AROS_WIDEVINE_PIPE_WATCHDOG_H_
++#define BASE_AROS_WIDEVINE_PIPE_WATCHDOG_H_
++#include <cstdint>
++#include "base/aros/debug_flag.h"
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/logging.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++namespace base::aros {
++// Opt-in diagnostics only: never cancel, retry or modify a decrypt request.
++// Record numeric transport metadata, never keys, session IDs or buffer data.
++class WidevinePipeWatchdog {
++ public:
++  void Begin(const char* side, int stream, int64_t timestamp, uint32_t bytes,
++             const char* stage, int encrypted = -1) {
++    if (!DebugFlagEnabled("AROS_CDM_PIPE_DEBUG")) return;
++    side_ = side; stream_ = stream; timestamp_ = timestamp;
++    bytes_ = bytes; stage_ = stage; encrypted_ = encrypted; ++sequence_;
++    if (sequence_ <= 2) LogCompletion("begin", -1);
++    timer_.Start(FROM_HERE, base::Seconds(5), base::BindOnce(
++        &WidevinePipeWatchdog::Report, base::Unretained(this)));
++  }
++  void Frame(int64_t timestamp, int width, int height) {
++    if (sequence_ && (sequence_ <= 2 || sequence_ % 128 == 0))
++      LOG(INFO) << "[AROS:CDMPipe] event=frame side=" << side_
++                << " stream=" << stream_ << " sequence=" << sequence_
++                << " frame_timestamp_us=" << timestamp
++                << " width=" << width << " height=" << height;
++  }
++  void Stage(const char* stage) { stage_ = stage; }
++  void Stop() { timer_.Stop(); }
++  void Complete(int status) {
++    timer_.Stop();
++    if (sequence_ && (status != 0 || sequence_ <= 2 || sequence_ % 128 == 0))
++      LogCompletion("complete", status);
++  }
++ private:
++  void LogCompletion(const char* event, int status) {
++    LOG(INFO) << "[AROS:CDMPipe] event=" << event << " side=" << side_
++              << " stream=" << stream_ << " sequence=" << sequence_
++              << " timestamp_us=" << timestamp_ << " bytes=" << bytes_
++              << " encrypted=" << encrypted_ << " status=" << status
++              << " stage=" << stage_;
++  }
++  void Report() {
++    LOG(WARNING) << "[AROS:CDMPipe] waited_ms=5000 side=" << side_
++                 << " stream=" << stream_ << " sequence=" << sequence_
++                 << " timestamp_us=" << timestamp_ << " bytes=" << bytes_
++                 << " stage=" << stage_;
++  }
++  const char* side_ = "";
++  const char* stage_ = "";
++  int stream_ = 0;
++  int encrypted_ = -1;
++  int64_t timestamp_ = 0;
++  uint32_t bytes_ = 0;
++  uint64_t sequence_ = 0;
++  base::OneShotTimer timer_;
++};
++}  // namespace base::aros
++#endif  // BASE_AROS_WIDEVINE_PIPE_WATCHDOG_H_
 diff --git a/base/at_exit.cc b/base/at_exit.cc
 index 0d042e54d1e9734b7bd80f529021f93bec2e6689..0ec38cdd3e47d7fd44d3515473ae8f01d880d75f 100644
 --- a/base/at_exit.cc
@@ -9586,10 +9673,10 @@ index c68f41832c9036256d5a57364e6680f0d2cb664a..f7007be55bca18af66491a8419b1aab2
  }  // namespace base
 diff --git a/base/native_library_aros.cc b/base/native_library_aros.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..48964ecc1c2470b14e13b8f5680610cd5a491344
+index 0000000000000000000000000000000000000000..3e15d3d13e52937dc7d680df60a022b922d8eb14
 --- /dev/null
 +++ b/base/native_library_aros.cc
-@@ -0,0 +1,560 @@
+@@ -0,0 +1,571 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -9597,6 +9684,7 @@ index 0000000000000000000000000000000000000000..48964ecc1c2470b14e13b8f5680610cd
 +#include "base/native_library.h"
 +
 +#include "base/logging.h"
++#include "base/aros/debug_flag.h"
 +#include "base/aros/widevine_debug.h"
 +#include "base/strings/strcat.h"
 +#include "base/strings/string_util.h"
@@ -9628,6 +9716,16 @@ index 0000000000000000000000000000000000000000..48964ecc1c2470b14e13b8f5680610cd
 +#if defined(ARCH_CPU_X86_64)
 +#include <linuxso.h>
 +#endif
++
++namespace base::aros {
++bool DebugFlagEnabled(const char* name) {
++  // getenv() reallocates the shared stdcio cache even for unchanged values.
++  // Concurrent media threads must not share that temporary storage.
++  char value[3] = {};
++  return GetVar(name, value, sizeof(value), GVF_BINARY_VAR) == 1 &&
++         value[0] == '1';
++}
++}  // namespace base::aros
 +
 +namespace base {
 +
@@ -51314,6 +51412,406 @@ index f3313ea46763209530a589af52038ea2811b991d..b5cec2f13da920ed417069af156a4a4d
  }
  
  # Use another declare_args() to allow dependence on args defined above.
+diff --git a/media/mojo/clients/mojo_decryptor.cc b/media/mojo/clients/mojo_decryptor.cc
+index 9db1b5faa29d4b58cb0d5a366c06b60e5b5304d1..7589c181d8ac2c8c56536221ce26a42a3c851297 100644
+--- a/media/mojo/clients/mojo_decryptor.cc
++++ b/media/mojo/clients/mojo_decryptor.cc
+@@ -88,9 +88,19 @@ void MojoDecryptor::Decrypt(StreamType stream_type,
+   DVLOG(3) << __func__;
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  decrypt_watchdogs_[stream_type].Begin(
++      "client", stream_type,
++      encrypted->end_of_stream() ? 0 : encrypted->timestamp().InMicroseconds(),
++      encrypted->end_of_stream() ? 0 : encrypted->size(), "remote-reply",
++      encrypted->end_of_stream() ? 0 : encrypted->is_encrypted());
++#endif
+   mojom::DecoderBufferPtr mojo_buffer =
+       decrypt_buffer_writer_->WriteDecoderBuffer(std::move(encrypted));
+   if (!mojo_buffer) {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdogs_[stream_type].Stop();
++#endif
+     std::move(decrypt_cb).Run(kError, nullptr);
+     return;
+   }
+@@ -98,7 +108,7 @@ void MojoDecryptor::Decrypt(StreamType stream_type,
+   remote_decryptor_->Decrypt(
+       stream_type, std::move(mojo_buffer),
+       base::BindOnce(&MojoDecryptor::OnBufferDecrypted,
+-                     weak_factory_.GetWeakPtr(),
++                     weak_factory_.GetWeakPtr(), stream_type,
+                      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                          std::move(decrypt_cb), kError, nullptr)));
+ }
+@@ -107,6 +117,9 @@ void MojoDecryptor::CancelDecrypt(StreamType stream_type) {
+   DVLOG(1) << __func__;
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  decrypt_watchdogs_[stream_type].Stop();
++#endif
+   remote_decryptor_->CancelDecrypt(stream_type);
+ }
+ 
+@@ -125,6 +138,14 @@ void MojoDecryptor::InitializeVideoDecoder(const VideoDecoderConfig& config,
+   DVLOG(1) << __func__;
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  video_decode_watchdog_.Begin("client-video", kVideo, 0, 0, "initialize");
++  init_cb = base::BindOnce(
++      [](base::WeakPtr<MojoDecryptor> self, DecoderInitCB callback, bool success) {
++        if (self) self->video_decode_watchdog_.Complete(success ? 0 : 3);
++        std::move(callback).Run(success);
++      }, weak_factory_.GetWeakPtr(), std::move(init_cb));
++#endif
+   remote_decryptor_->InitializeVideoDecoder(
+       config,
+       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(init_cb), false));
+@@ -156,9 +177,18 @@ void MojoDecryptor::DecryptAndDecodeVideo(
+   DVLOG(3) << __func__ << ": " << encrypted->AsHumanReadableString();
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  video_decode_watchdog_.Begin("client-video", kVideo,
++      encrypted->end_of_stream() ? 0 : encrypted->timestamp().InMicroseconds(),
++      encrypted->end_of_stream() ? 0 : encrypted->size(), "video-reply",
++      encrypted->end_of_stream() ? 0 : encrypted->is_encrypted());
++#endif
+   mojom::DecoderBufferPtr mojo_buffer =
+       video_buffer_writer_->WriteDecoderBuffer(std::move(encrypted));
+   if (!mojo_buffer) {
++#if BUILDFLAG(IS_AROS)
++    video_decode_watchdog_.Complete(3);
++#endif
+     std::move(video_decode_cb).Run(kError, nullptr);
+     return;
+   }
+@@ -174,6 +204,9 @@ void MojoDecryptor::ResetDecoder(StreamType stream_type) {
+   DVLOG(1) << __func__ << ": stream_type = " << stream_type;
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  if (stream_type == kVideo) video_decode_watchdog_.Stop();
++#endif
+   remote_decryptor_->ResetDecoder(stream_type);
+ }
+ 
+@@ -181,10 +214,13 @@ void MojoDecryptor::DeinitializeDecoder(StreamType stream_type) {
+   DVLOG(1) << __func__;
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
++#if BUILDFLAG(IS_AROS)
++  if (stream_type == kVideo) video_decode_watchdog_.Stop();
++#endif
+   remote_decryptor_->DeinitializeDecoder(stream_type);
+ }
+ 
+-void MojoDecryptor::OnBufferDecrypted(DecryptCB decrypt_cb,
++void MojoDecryptor::OnBufferDecrypted(StreamType stream_type, DecryptCB decrypt_cb,
+                                       Status status,
+                                       mojom::DecoderBufferPtr buffer) {
+   DVLOG_IF(1, status != kSuccess) << __func__ << "(" << status << ")";
+@@ -192,19 +228,28 @@ void MojoDecryptor::OnBufferDecrypted(DecryptCB decrypt_cb,
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
+   if (buffer.is_null()) {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdogs_[stream_type].Complete(static_cast<int>(status));
++#endif
+     std::move(decrypt_cb).Run(status, nullptr);
+     return;
+   }
+ 
++#if BUILDFLAG(IS_AROS)
++  decrypt_watchdogs_[stream_type].Stage("decrypted-buffer-read");
++#endif
+   decrypted_buffer_reader_->ReadDecoderBuffer(
+       std::move(buffer),
+       base::BindOnce(&MojoDecryptor::OnBufferRead, weak_factory_.GetWeakPtr(),
+-                     std::move(decrypt_cb), status));
++                     stream_type, std::move(decrypt_cb), status));
+ }
+ 
+-void MojoDecryptor::OnBufferRead(DecryptCB decrypt_cb,
++void MojoDecryptor::OnBufferRead(StreamType stream_type, DecryptCB decrypt_cb,
+                                  Status status,
+                                  scoped_refptr<DecoderBuffer> buffer) {
++#if BUILDFLAG(IS_AROS)
++  decrypt_watchdogs_[stream_type].Complete(static_cast<int>(status));
++#endif
+   if (!buffer) {
+     std::move(decrypt_cb).Run(kError, nullptr);
+     return;
+@@ -236,6 +281,12 @@ void MojoDecryptor::OnVideoDecoded(
+   DVLOG_IF(1, status != kSuccess) << __func__ << ": status = " << status;
+   DVLOG_IF(3, status == kSuccess) << __func__;
+   DCHECK(thread_checker_.CalledOnValidThread());
++#if BUILDFLAG(IS_AROS)
++  video_decode_watchdog_.Complete(static_cast<int>(status));
++  if (video_frame) video_decode_watchdog_.Frame(
++      video_frame->timestamp().InMicroseconds(),
++      video_frame->coded_size().width(), video_frame->coded_size().height());
++#endif
+ 
+   // If using shared memory, ensure that |releaser| is closed when
+   // |frame| is destroyed.
+diff --git a/media/mojo/clients/mojo_decryptor.h b/media/mojo/clients/mojo_decryptor.h
+index 5ca3ee48689a04c75b1ba50bc58d4119b5fc7ff8..346456befb6c97ba991f9e9d75a09af6820abe3b 100644
+--- a/media/mojo/clients/mojo_decryptor.h
++++ b/media/mojo/clients/mojo_decryptor.h
+@@ -5,9 +5,14 @@
+ #ifndef MEDIA_MOJO_CLIENTS_MOJO_DECRYPTOR_H_
+ #define MEDIA_MOJO_CLIENTS_MOJO_DECRYPTOR_H_
+ 
++#include <array>
+ #include <memory>
+ #include <vector>
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/widevine_pipe_watchdog.h"
++#endif
+ #include "base/memory/weak_ptr.h"
+ #include "base/threading/thread_checker.h"
+ #include "media/base/decryptor.h"
+@@ -54,10 +59,10 @@ class MojoDecryptor final : public Decryptor {
+ 
+  private:
+   // Called when a buffer is decrypted.
+-  void OnBufferDecrypted(DecryptCB decrypt_cb,
++  void OnBufferDecrypted(StreamType stream_type, DecryptCB decrypt_cb,
+                          Status status,
+                          mojom::DecoderBufferPtr buffer);
+-  void OnBufferRead(DecryptCB decrypt_cb,
++  void OnBufferRead(StreamType stream_type, DecryptCB decrypt_cb,
+                     Status status,
+                     scoped_refptr<DecoderBuffer> buffer);
+   void OnAudioDecoded(AudioDecodeCB audio_decode_cb,
+@@ -89,6 +94,10 @@ class MojoDecryptor final : public Decryptor {
+   // |remote_decryptor_|, shared by audio and video.
+   std::unique_ptr<MojoDecoderBufferReader> decrypted_buffer_reader_;
+ 
++#if BUILDFLAG(IS_AROS)
++  std::array<base::aros::WidevinePipeWatchdog, 2> decrypt_watchdogs_;
++  base::aros::WidevinePipeWatchdog video_decode_watchdog_;
++#endif
+   base::WeakPtrFactory<MojoDecryptor> weak_factory_{this};
+ };
+ 
+diff --git a/media/mojo/services/mojo_decryptor_service.cc b/media/mojo/services/mojo_decryptor_service.cc
+index d43f18a23f9e80cdc85b5b0f015b45b8ba726108..a21c610c7c261a65927243f33bc38c0dc0645bf2 100644
+--- a/media/mojo/services/mojo_decryptor_service.cc
++++ b/media/mojo/services/mojo_decryptor_service.cc
+@@ -8,6 +8,10 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_AROS)
++#include "base/aros/widevine_pipe_watchdog.h"
++#endif
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/raw_ptr.h"
+@@ -103,6 +107,12 @@ class MojoDecryptorService::Stream {
+   }
+ 
+   void Decrypt(mojom::DecoderBufferPtr encrypted, DecryptCallback callback) {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdog_.Begin("service", StreamTypeParam,
++        encrypted->is_data() ? encrypted->get_data()->timestamp.InMicroseconds() : 0,
++        encrypted->is_data() ? encrypted->get_data()->data_size : 0,
++        "encrypted-buffer-read");
++#endif
+     decrypt_reader_->ReadDecoderBuffer(
+         std::move(encrypted),
+         base::BindOnce(&Stream::OnDecryptReadDone,
+@@ -113,6 +123,9 @@ class MojoDecryptorService::Stream {
+   }
+ 
+   void CancelDecrypt() {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdog_.Stop();
++#endif
+     decrypt_weak_factory_.InvalidateWeakPtrs();
+     decryptor_->CancelDecrypt(StreamTypeParam);
+   }
+@@ -120,6 +133,9 @@ class MojoDecryptorService::Stream {
+   void InitializeDecoder(const typename Traits::ConfigType& config,
+                          typename Traits::InitCallback callback) {
+     decode_weak_factory_.InvalidateWeakPtrs();
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Begin("service-decode", StreamTypeParam, 0, 0, "initialize");
++#endif
+ 
+     if constexpr (StreamTypeParam == StreamType::kVideo) {
+       if (!config.IsValidConfig()) {
+@@ -148,6 +164,11 @@ class MojoDecryptorService::Stream {
+       return;
+     }
+ 
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Begin("service-decode", StreamTypeParam,
++        encrypted->is_data() ? encrypted->get_data()->timestamp.InMicroseconds() : 0,
++        encrypted->is_data() ? encrypted->get_data()->data_size : 0, "decode-buffer-read");
++#endif
+     auto wrapped_callback = WrapDecodeCallback(std::move(callback));
+ 
+     decode_reader_->ReadDecoderBuffer(
+@@ -158,6 +179,9 @@ class MojoDecryptorService::Stream {
+   }
+ 
+   void ResetDecoder() {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Stop();
++#endif
+     if (!decode_reader_) {
+       mojo::ReportBadMessage(kInvalidStateMessage);
+       return;
+@@ -168,6 +192,9 @@ class MojoDecryptorService::Stream {
+   }
+ 
+   void DeinitializeDecoder() {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Stop();
++#endif
+     decode_weak_factory_.InvalidateWeakPtrs();
+     decryptor_->DeinitializeDecoder(StreamTypeParam);
+   }
+@@ -188,6 +215,10 @@ class MojoDecryptorService::Stream {
+   void OnDecryptReadDone(DecryptCallback callback,
+                          mojo::ReportBadMessageCallback bad_message_callback,
+                          scoped_refptr<DecoderBuffer> buffer) {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdog_.Stage("cdm-decrypt");
++    if (!buffer) decrypt_watchdog_.Stop();
++#endif
+     if (!buffer) {
+       std::move(callback).Run(Status::kError, nullptr);
+       return;
+@@ -195,6 +226,9 @@ class MojoDecryptorService::Stream {
+ 
+     if (!buffer->end_of_stream() && buffer->side_data() &&
+         buffer->side_data()->secure_handle) {
++#if BUILDFLAG(IS_AROS)
++      decrypt_watchdog_.Stop();
++#endif
+       std::move(callback).Run(Status::kError, nullptr);
+       std::move(bad_message_callback)
+           .Run("Renderer sent non-zero DecoderBufferSideData.secure_handle.");
+@@ -210,6 +244,9 @@ class MojoDecryptorService::Stream {
+   void OnDecryptDone(DecryptCallback callback,
+                      Status status,
+                      scoped_refptr<DecoderBuffer> buffer) {
++#if BUILDFLAG(IS_AROS)
++    decrypt_watchdog_.Complete(static_cast<int>(status));
++#endif
+     if (!buffer) {
+       std::move(callback).Run(status, nullptr);
+       return;
+@@ -227,19 +264,31 @@ class MojoDecryptorService::Stream {
+ 
+   void OnDecoderInitialized(base::OnceCallback<void(bool)> callback,
+                             bool success) {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Complete(success ? 0 : 3);
++#endif
+     std::move(callback).Run(success);
+   }
+ 
+   void OnDecodeReadDone(mojo::ReportBadMessageCallback bad_message_callback,
+                         typename Traits::DecodeCallback callback,
+                         scoped_refptr<DecoderBuffer> buffer) {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Stage("cdm-decode");
++#endif
+     if (!buffer) {
++#if BUILDFLAG(IS_AROS)
++      decode_watchdog_.Complete(3);
++#endif
+       Traits::RunDecodeCallbackWithError(std::move(callback));
+       return;
+     }
+ 
+     if (!buffer->end_of_stream() && buffer->side_data() &&
+         buffer->side_data()->secure_handle) {
++#if BUILDFLAG(IS_AROS)
++      decode_watchdog_.Complete(3);
++#endif
+       Traits::RunDecodeCallbackWithError(std::move(callback));
+       std::move(bad_message_callback)
+           .Run("Renderer sent non-zero DecoderBufferSideData.secure_handle.");
+@@ -262,6 +311,9 @@ class MojoDecryptorService::Stream {
+   void OnAudioDecoded(mojom::Decryptor::DecryptAndDecodeAudioCallback callback,
+                       Status status,
+                       const media::Decryptor::AudioFrames& frames) {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Complete(static_cast<int>(status));
++#endif
+     std::vector<mojom::AudioBufferPtr> audio_buffers;
+     for (const auto& frame : frames) {
+       audio_buffers.push_back(mojom::AudioBuffer::From(*frame));
+@@ -272,6 +324,11 @@ class MojoDecryptorService::Stream {
+   void OnVideoDecoded(mojom::Decryptor::DecryptAndDecodeVideoCallback callback,
+                       Status status,
+                       scoped_refptr<VideoFrame> frame) {
++#if BUILDFLAG(IS_AROS)
++    decode_watchdog_.Complete(static_cast<int>(status));
++    if (frame) decode_watchdog_.Frame(frame->timestamp().InMicroseconds(),
++        frame->coded_size().width(), frame->coded_size().height());
++#endif
+     if (!frame) {
+       DCHECK_NE(status, Status::kSuccess);
+       std::move(callback).Run(status, nullptr, mojo::NullRemote());
+@@ -295,6 +352,10 @@ class MojoDecryptorService::Stream {
+   const raw_ptr<MojoDecoderBufferWriter> decrypt_writer_;
+   std::unique_ptr<MojoDecoderBufferReader> decode_reader_;
+ 
++#if BUILDFLAG(IS_AROS)
++  base::aros::WidevinePipeWatchdog decrypt_watchdog_;
++  base::aros::WidevinePipeWatchdog decode_watchdog_;
++#endif
+   base::WeakPtrFactory<Stream> decrypt_weak_factory_{this};
+   base::WeakPtrFactory<Stream> decode_weak_factory_{this};
+ };
+diff --git a/media/renderers/default_decoder_factory.cc b/media/renderers/default_decoder_factory.cc
+index 3a21525799770a22c86d9811962bee5dcb1ed280..d3b2fa75b973eb1fdaf915d39143489b08fdbe07 100644
+--- a/media/renderers/default_decoder_factory.cc
++++ b/media/renderers/default_decoder_factory.cc
+@@ -5,6 +5,8 @@
+ #include "media/renderers/default_decoder_factory.h"
+ 
+ #include <memory>
++#include <cstdlib>
++#include <cstring>
+ 
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+@@ -127,8 +129,19 @@ void DefaultDecoderFactory::CreateVideoDecoders(
+   }
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+-  video_decoders->push_back(
+-      std::make_unique<DecryptingVideoDecoder>(task_runner, media_log));
++#if BUILDFLAG(IS_AROS)
++  // Diagnostic control: keep CDM license enforcement and decryption, but let
++  // DecoderSelector use DecryptingDemuxerStream with the native video decoders.
++  // The normal CDM decrypt-and-decode path remains the default.
++  const char* decrypt_only = std::getenv("AROS_CDM_DECRYPT_ONLY");
++  if (decrypt_only && std::strcmp(decrypt_only, "1") == 0) {
++    LOG(INFO) << "[Chromium:AROS:CDM] native decoder control selected";
++  } else
++#endif
++  {
++    video_decoders->push_back(
++        std::make_unique<DecryptingVideoDecoder>(task_runner, media_log));
++  }
+ #endif
+ 
+   // Prefer an external decoder since one will only exist if it is hardware
 diff --git a/media/webrtc/helpers.cc b/media/webrtc/helpers.cc
 index 2be0defec93b90474e274d3246a6194a1b696424..0c20385c534ca7a88fa449cfaf5e437602f727b9 100644
 --- a/media/webrtc/helpers.cc

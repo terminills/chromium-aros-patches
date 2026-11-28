@@ -7,6 +7,8 @@ and patch queues still describe the retained Chromium 124 baseline.
 
 ## Native H.264/AAC and current external CDM — 2026-11-28 UTC
 
+[Source749 and native debug-flag evidence](evidence/media752/README.md) publish the Chromium-specific environment-cache race correction, a complete x86-64 build and a native flag test. ARM native linking and sustained playback qualification continue.
+
 [Graphics SMP and encrypted playback evidence](evidence/graphics748/README.md) now proves encrypted video beyond the clear lead and a two-core graphics queue fix. Playback reached216 seconds before a separate diagnostic environment-cache double free; its correction and sustained stability remain under test. This is not an RC.
 
 [Source724 and native media evidence](evidence/media729/README.md) record a complete x64 build, native H.264/AAC playback/seek/replay and PCM output, loader ABI tests for the current external CDM, and usable Widevine keys and displayed sample frames. That earlier run did not prove playback through encrypted sections; the newer graphics748 record above does, with remaining stability failures. ARM archive/native builds and offline H.264/AAC play/seek/replay now pass; ARM audio output and release qualification remain open. The current snapshot covers22 repositories and is not an RC.
